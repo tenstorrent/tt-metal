@@ -85,7 +85,7 @@ def test_patch_embedding(
 
     tt_output = tt_model(tt_input_tensor)
 
-    tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=0).squeeze(1)[
+    tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=-1).squeeze(1)[
         :batch_size, :, :embedding_dim
     ]
 

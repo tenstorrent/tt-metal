@@ -7,13 +7,13 @@ from typing import TYPE_CHECKING
 import pytest
 import torch
 import ttnn
-
+import os
 from ..reference import SD3Transformer2DModel
 from ..tt.timestep_embedding import (
     TtCombinedTimestepTextProjEmbeddings,
     TtCombinedTimestepTextProjEmbeddingsParameters,
 )
-from ..tt.utils import assert_quality
+from ..tt.utils import assert_quality, to_torch
 
 if TYPE_CHECKING:
     from ..reference.timestep_embedding import CombinedTimestepTextProjEmbeddings
@@ -25,10 +25,19 @@ if TYPE_CHECKING:
         ("large", 100),
     ],
 )
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
 @pytest.mark.usefixtures("use_program_cache")
 def test_timestep_embedding(
     *,
-    device: ttnn.Device,
+    mesh_device: ttnn.MeshDevice,
     model_name,
     batch_size: int,
 ) -> None:
@@ -41,19 +50,23 @@ def test_timestep_embedding(
     torch_model.eval()
 
     parameters = TtCombinedTimestepTextProjEmbeddingsParameters.from_torch(
-        torch_model.state_dict(), device=device, dtype=ttnn.bfloat8_b
+        torch_model.state_dict(), device=mesh_device, dtype=ttnn.bfloat8_b
     )
-    tt_model = TtCombinedTimestepTextProjEmbeddings(parameters)
+    tt_model = TtCombinedTimestepTextProjEmbeddings(batch_size=batch_size, parameters=parameters, device=mesh_device)
 
     torch.manual_seed(0)
     timestep = torch.randint(1000, (batch_size,), dtype=torch.float32)
     pooled_projection = torch.randn((batch_size, 2048), dtype=dtype)
 
-    tt_timestep = ttnn.from_torch(timestep.unsqueeze(1), device=device, layout=ttnn.TILE_LAYOUT)
-    tt_pooled_projection = ttnn.from_torch(pooled_projection, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_timestep = ttnn.from_torch(timestep.unsqueeze(1), device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    tt_pooled_projection = ttnn.from_torch(pooled_projection, device=mesh_device, layout=ttnn.TILE_LAYOUT)
 
     torch_output = torch_model(timestep, pooled_projection)
 
     tt_output = tt_model(timestep=tt_timestep, pooled_projection=tt_pooled_projection)
 
-    assert_quality(torch_output, tt_output, pcc=0.999_900)
+    tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=0).squeeze()[
+        :batch_size, : torch_model.timestep_embedder.linear_1.out_features
+    ]
+
+    assert_quality(torch_output, tt_output_torch, pcc=0.999_900, num_devices=mesh_device.get_num_devices(), shard_dim=0)
