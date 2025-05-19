@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov10.tt.common import Conv, TtYolov10_Conv2D, deallocate_tensors
+from models.experimental.yolov10.tt.common import Conv, TtYolov10Conv2D, deallocate_tensors
 from models.experimental.yolo_common.yolo_utils import concat
 
 
@@ -26,19 +26,19 @@ class TtnnV10Detect:
             self.conv_pt.one2one_cv2[0][1],
             is_detect=True,
         )
-        self.cv2_0_2 = TtYolov10_Conv2D(
+        self.cv2_0_2 = TtYolov10Conv2D(
             parameters.one2one_cv2[0][2], self.conv_pt.one2one_cv2[0][2], device=device, is_detect=True
         )
 
         self.cv2_1_0 = Conv(device, parameters.one2one_cv2[1][0], self.conv_pt.one2one_cv2[1][0], is_detect=True)
         self.cv2_1_1 = Conv(device, parameters.one2one_cv2[1][1], self.conv_pt.one2one_cv2[1][1], is_detect=True)
-        self.cv2_1_2 = TtYolov10_Conv2D(
+        self.cv2_1_2 = TtYolov10Conv2D(
             parameters.one2one_cv2[1][2], self.conv_pt.one2one_cv2[1][2], device=device, is_detect=True
         )
 
         self.cv2_2_0 = Conv(device, parameters.one2one_cv2[2][0], self.conv_pt.one2one_cv2[2][0], is_detect=True)
         self.cv2_2_1 = Conv(device, parameters.one2one_cv2[2][1], self.conv_pt.one2one_cv2[2][1], is_detect=True)
-        self.cv2_2_2 = TtYolov10_Conv2D(
+        self.cv2_2_2 = TtYolov10Conv2D(
             parameters.one2one_cv2[2][2], self.conv_pt.one2one_cv2[2][2], device=device, is_detect=True
         )
 
@@ -61,7 +61,7 @@ class TtnnV10Detect:
             conv_pt.one2one_cv3[0][1][1],
             is_detect=True,
         )
-        self.cv3_0_2_0 = TtYolov10_Conv2D(
+        self.cv3_0_2_0 = TtYolov10Conv2D(
             parameters.one2one_cv3[0][2], conv_pt.one2one_cv3[0][2], device=device, is_detect=True
         )
 
@@ -85,7 +85,7 @@ class TtnnV10Detect:
             conv_pt.one2one_cv3[1][1][1],
             is_detect=True,
         )
-        self.cv3_1_2_0 = TtYolov10_Conv2D(
+        self.cv3_1_2_0 = TtYolov10Conv2D(
             parameters.one2one_cv3[1][2], conv_pt.one2one_cv3[1][2], device=device, is_detect=True
         )
 
@@ -100,7 +100,7 @@ class TtnnV10Detect:
         self.cv3_1_0_1 = Conv(device, parameters.one2one_cv3[1][0][1], conv_pt.one2one_cv3[1][0][1], is_detect=True)
         self.cv3_1_1_0 = Conv(device, parameters.one2one_cv3[1][1][0], conv_pt.one2one_cv3[1][1][0], is_detect=True)
         self.cv3_1_1_1 = Conv(device, parameters.one2one_cv3[1][1][1], conv_pt.one2one_cv3[1][1][1], is_detect=True)
-        self.cv3_1_2_0 = TtYolov10_Conv2D(
+        self.cv3_1_2_0 = TtYolov10Conv2D(
             parameters.one2one_cv3[1][2], conv_pt.one2one_cv3[1][2], device=device, is_detect=True
         )
 
@@ -115,7 +115,7 @@ class TtnnV10Detect:
         self.cv3_2_0_1 = Conv(device, parameters.one2one_cv3[2][0][1], conv_pt.one2one_cv3[2][0][1], is_detect=True)
         self.cv3_2_1_0 = Conv(device, parameters.one2one_cv3[2][1][0], conv_pt.one2one_cv3[2][1][0], is_detect=True)
         self.cv3_2_1_1 = Conv(device, parameters.one2one_cv3[2][1][1], conv_pt.one2one_cv3[2][1][1], is_detect=True)
-        self.cv3_2_2_0 = TtYolov10_Conv2D(
+        self.cv3_2_2_0 = TtYolov10Conv2D(
             parameters.one2one_cv3[2][2], conv_pt.one2one_cv3[2][2], device=device, is_detect=True
         )
         self.dfl = Conv(device, parameters.dfl, self.conv_pt.dfl, is_dfl=True)
