@@ -27,7 +27,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: node scripts/sort-issues.js
+        run: node .github/scripts/sort-issues.js
 
       - name: Upload HTML report as artifact
         uses: actions/upload-artifact@v4
