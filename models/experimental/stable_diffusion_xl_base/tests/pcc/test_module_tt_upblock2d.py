@@ -25,7 +25,7 @@ from models.utility_functions import torch_random
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 3 * 16384}], indirect=True)
 @pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
-def test_crossattnup(
+def test_upblock(
     device,
     input_shape,
     temb_shape,
