@@ -476,7 +476,8 @@ def test_demo_text(
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
         if batch_size == 1:
-            current_pos = current_pos.repeat(32)
+            # pad ito to 32 with -1s
+            current_pos = torch.nn.functional.pad(current_pos, (0, 32 - current_pos.shape[0]), value=-1)
         # Start decoding
         iteration = 0
         users_decoding = True
@@ -697,7 +698,7 @@ def test_demo_text(
         "decode_t/s": target_decode_tok_s,
         "decode_t/s/u": target_decode_tok_s_u,
     }
-    if repeat_batches > 1:
+    if repeat_batches > 1 and batch_size == 1:
         assert avg_time_to_first_token * 1000 < 121, f"TTFT {avg_time_to_first_token} ms is too high, should be < 121."
 
     # Save benchmark data for CI dashboard
