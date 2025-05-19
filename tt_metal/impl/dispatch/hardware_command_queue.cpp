@@ -699,7 +699,6 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
     this->manager_.set_bypass_mode(true, true);  // start trace capture
 }
 
-
 void HWCommandQueue::record_end() {
     const auto& hal = MetalContext::instance().hal();
     uint32_t worker_ringbuffer_start =
