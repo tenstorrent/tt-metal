@@ -152,6 +152,18 @@ operations_dict = {
         None,
         "exp",
     ),
+    "exp_alt": (
+        torch.exp,
+        ttnn.exp,
+        None,
+        "exp",
+    ),
+    "exp_hybrid": (
+        torch.exp,
+        ttnn.exp,
+        None,
+        "exp",
+    ),
     "exp_accurate_python": (
         torch.exp,
         exp_accurate_python,
@@ -408,7 +420,7 @@ def measure_op_accuracy(operation_name, target_dtype, dest_dir, samples=None):
         else:  # Launch scalar op (used to evaluate accuracy of torch)
             actual_torch_output = launch_scalar_op(torch_input_f32, python_unary_op)
 
-        # Flatten tensors for data analsis (we only used 2D for ttnn and TILE_LAYOUT)
+        # Flatten tensors for data analysis (we only used 2D for ttnn and TILE_LAYOUT)
         np_flat_input = torch_input_f32.to(torch.float32).flatten().numpy()
         np_flat_output = actual_torch_output.to(torch.float32).flatten().numpy()
         np_flat_ref = torch_output_ref.to(torch.float32).flatten().numpy()
@@ -431,7 +443,6 @@ def measure_op_accuracy(operation_name, target_dtype, dest_dir, samples=None):
             np_diff = np.abs(np_sub_ref - np_sub_output)
 
             # Compare actual and expected output
-            # TODO: Cast data to float32 or even float64 to reduce measurement errors
             # mse_value      = mse_loss(actual_sub_output, torch_sub_ref)
             np_diff_curated = np_diff[~np.isfinite(np_diff)]
             np_sub_ref_abs = np.abs(np_sub_ref[~np.isfinite(np_sub_ref)])
@@ -513,8 +524,9 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
     input_np = np.arange(0, 2**16, dtype=NUMPY_INT_TYPE)  # All possible bfloat16 values
     torch_value = torch.from_numpy(input_np).reshape(size)
     torch_input_bf16 = torch_value.view(TORCH_TYPE)  # reinterpret data as bfloat16
+    torch_input_f64 = torch_input_bf16.to(torch.float64)  # Convert to float64 for torch golden function
 
-    torch_output_ref = torch.zeros(size, dtype=TORCH_TYPE)
+    torch_output_ref = torch.zeros(size, dtype=torch.float64)
     ttnn_output = ttnn.zeros(size, dtype=TTNN_TYPE, device=device, layout=ttnn.TILE_LAYOUT)
 
     # Get the operations to test
@@ -531,7 +543,7 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         mean_ulp_error_array,
         max_rel_error_array,
         mean_rel_error_array,
-    ] = [np.zeros([sub_batches], dtype=NUMPY_TYPE) for _ in range(9)]
+    ] = [np.zeros([sub_batches], dtype=np.float64) for _ in range(9)]
 
     start_time = time.time()
 
@@ -542,25 +554,28 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         return ttnn.to_torch(ttnn_output)
 
     # Run reference and actual operations
-    torch_output_ref = torch_unary_op(torch_input_bf16, out=torch_output_ref)
-    actual_torch_output = launch_ttnn_op(torch_input_bf16, ttnn_unary_op, ttnn_output)
+    torch_golden_f64 = torch_unary_op(torch_input_f64, out=torch_output_ref)
+    torch_ttnn_output_bf16 = launch_ttnn_op(torch_input_bf16, ttnn_unary_op, ttnn_output)
+
+    torch_golden_bf16 = torch_golden_f64.to(torch.bfloat16)
+    torch_ttnn_output_f64 = torch_ttnn_output_bf16.to(torch.float64)
 
     # Compute errors
-    torch_diff = torch.abs(torch_output_ref - actual_torch_output)
-    torch_ulp_value = utils.ulp_bf16(actual_torch_output)
-    torch_eps = torch.full(torch_input_bf16.size(), EPSILON)
+    np_golden_f64 = torch_golden_f64.flatten().numpy()
+    np_ttnn_output_f64 = torch_ttnn_output_f64.flatten().numpy()
+    np_diff = np.abs(np_golden_f64 - np_ttnn_output_f64)
 
-    torch_rel_error = torch_diff / torch.max(torch.abs(torch_output_ref), torch_eps)
-    torch_ulp_error = torch_diff / torch_ulp_value
+    torch_ulp_value = utils.ulp_bf16(torch_golden_bf16).to(torch.float64)
+    torch_eps = torch.full(torch_input_bf16.size(), EPSILON, dtype=torch.float64)
+    np_eps = np.full(2**16, EPSILON)
+
+    np_rel_error = np_diff / np.maximum(np.abs(np_golden_f64), np_eps)
+    np_ulp_error = np_diff / torch_ulp_value.flatten().numpy()
 
     # Flatten tensors and convert to ndarray for analysis
-    np_flat_input = torch_input_bf16.to(torch.float32).flatten().numpy()
-    np_flat_output = actual_torch_output.to(torch.float32).flatten().numpy()
-    np_flat_ref = torch_output_ref.to(torch.float32).flatten().numpy()
-
-    np_flat_diff = torch_diff.to(torch.float32).flatten().numpy()
-    np_flat_rel_error = torch_rel_error.to(torch.float32).flatten().numpy()
-    np_flat_ulp_error = torch_ulp_error.to(torch.float32).flatten().numpy()
+    np_flat_input = torch_input_f64.flatten().numpy()
+    np_flat_output = torch_ttnn_output_f64.flatten().numpy()
+    np_flat_golden = torch_golden_f64.flatten().numpy()
 
     # Process each sub-batch
     for j in range(0, sub_batches):
@@ -570,10 +585,10 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
         # Get sub-range
         np_sub_input = np_flat_input[beg_index:end_index]
         np_sub_output = np_flat_output[beg_index:end_index]
-        np_sub_ref = np_flat_ref[beg_index:end_index]
-        np_sub_diff = np_flat_diff[beg_index:end_index]
-        np_sub_rel_error = np_flat_rel_error[beg_index:end_index]
-        np_sub_ulp_error = np_flat_ulp_error[beg_index:end_index]
+        np_sub_ref = np_flat_golden[beg_index:end_index]
+        np_sub_diff = np_diff[beg_index:end_index]
+        np_sub_rel_error = np_rel_error[beg_index:end_index]
+        np_sub_ulp_error = np_ulp_error[beg_index:end_index]
 
         # Calculate errors
 
@@ -654,9 +669,14 @@ def main(args):
     # Unused: atan2, logaddexp, logaddexp2
     all_operations = [
         "exp",
+        # "exp_hybrid",
         "exp_approx",
-        "exp_accurate_python",
-        "exp_python_alt1",
+        # "exp_accurate_python",
+        # "exp_python_alt1",
+        "pow_2",
+        "pow_3",
+        "pow_5",
+        "pow_10",
         "log",
         "tanh",
         "tanh_accurate",
@@ -689,10 +709,15 @@ def main(args):
     ]
 
     highres_operations = [
+        # "exp_hybrid",
         "exp",
         "exp_approx",
-        "exp_accurate_python",
-        "exp_python_alt1",
+        # "exp_accurate_python",
+        # "exp_python_alt1",
+        "pow_2",
+        "pow_3",
+        "pow_5",
+        "pow_10",
         "log",
         "log10",
         "log2",
@@ -715,13 +740,13 @@ def main(args):
         "selu",
         "softplus",
         "softsign",
-        "digamma",
-        "lgamma",
-        "tanhshrink",
         "sqrt",
         "rsqrt",
         "rsqrt_approx",
         "reciprocal",
+        "digamma",
+        "lgamma",
+        "tanhshrink",
     ]
 
     # all_operations += powers
