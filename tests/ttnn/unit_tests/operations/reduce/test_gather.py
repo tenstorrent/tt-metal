@@ -84,7 +84,6 @@ def test_gather_preallocated_output(input_shape, index_shape, dim, device):
     assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_output))
 
 
-# @skip_for_blackhole("Gather needs to be tested and is failing on BH. Issue #22147")
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim",
     [
