@@ -2,7 +2,7 @@ name: Aggregate Workflow Data
 on:
   push:
     branches:
-      - mchiou/0-aggregate-workflow-report
+      - mchiou/0-update-aggregate-workflow
   schedule:
     - cron: '0 * * * *' # every hour
   workflow_dispatch:
