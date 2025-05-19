@@ -60,6 +60,7 @@ void kernel_main() {
 
     auto scaler_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t *>(get_read_ptr(cb_scaler_idx));
     const float scaled_subtract = bfloat16_to_float(scaler_ptr[0]);  // 1.0F
+    DPRINT << "scaled_subtract: " << scaled_subtract << ENDL();
 
     for (uint32_t r = start_row; r < end_row; r++) {
         cb_wait_front(cb_target_idx, onetile);

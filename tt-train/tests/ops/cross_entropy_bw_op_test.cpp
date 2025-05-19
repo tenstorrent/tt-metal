@@ -17,6 +17,12 @@
 #include "metal/operations.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
+// TODO: remove this latter : used only for testing
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
+
 class CrossEntropyBackwardTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -30,30 +36,37 @@ protected:
 
 xt::xarray<float> calculate_cross_entropy_backward(
     const xt::xarray<float>& input, const xt::xarray<uint32_t>& target, const float scaler = 1.0F) {
-    const uint32_t N = target.shape(0);
-    const uint32_t C = 1U;
-    const uint32_t H = target.shape(1);
-    const uint32_t W = 1U;
+    // const uint32_t N = target.shape(0);
+    // const uint32_t C = 1U;
+    // const uint32_t H = target.shape(1);
+    // const uint32_t W = 1U;
 
-    const auto input_shape = input.shape();
-    xt::xarray<float> target_inputs = xt::zeros<float>(input_shape);
+    // const auto input_shape = input.shape();
+    // xt::xarray<float> target_inputs = xt::zeros<float>(input_shape);
 
-    for (size_t n = 0; n < N; ++n) {
-        for (size_t h = 0; h < H; ++h) {
-            size_t class_index = target(n, h);
-            target_inputs(n, 0, h, class_index) = 1.0F;
-        }
-    }
+    // for (size_t n = 0; n < N; ++n) {
+    //     for (size_t h = 0; h < H; ++h) {
+    //         size_t class_index = target(n, h);
+    //         target_inputs(n, 0, h, class_index) = 1.0F;
+    //     }
+    // }
 
-    xt::xarray<float> scaler_tensor(input_shape);
-    scaler_tensor.fill(scaler);
+    // xt::xarray<float> scaler_tensor(input_shape);
+    // scaler_tensor.fill(scaler);
 
-    xt::xarray<float> max_input = xt::amax(input, -1, xt::keep_dims);
-    xt::xarray<float> shifted_input = input - max_input;
+    // xt::xarray<float> max_input = xt::amax(input, -1, xt::keep_dims);
+    // xt::xarray<float> shifted_input = input - max_input;
+    // xt::xarray<float> exp_shifted_input = xt::exp(shifted_input);
+    // xt::xarray<float> exp_sum = xt::sum(exp_shifted_input, -1, xt::keep_dims);
+    // xt::xarray<float> result = exp_shifted_input / exp_sum - target_inputs;
+    // return result * scaler_tensor;
+
+    xt::xarray<float> shifted_input = input - xt::amax(input, -1, xt::keep_dims);
     xt::xarray<float> exp_shifted_input = xt::exp(shifted_input);
     xt::xarray<float> exp_sum = xt::sum(exp_shifted_input, -1, xt::keep_dims);
-    xt::xarray<float> result = exp_shifted_input / exp_sum - target_inputs;
-    return result * scaler_tensor;
+    xt::xarray<float> softmax_output = exp_shifted_input / exp_sum;
+
+    return softmax_output;
 }
 
 void printTensor(const xt::xarray<float>& tensor) {
@@ -318,10 +331,10 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Softmax_Test) {
     std::mt19937 gen(42);
     // xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
     xt::xarray<float> input_tensor = {
-        {{{-5.1250F, -4.5938F, -1.8906F, 0.1196F, -3.2188F, -0.1826F, -5.2188F, -2.2656F, 3.5312F, 0.7969F}}}};
+        {{{-21.6250, -15.5000, -7.8438, 2.8125, -28.3750, 0.2500, -31.8750, -16.3750, -15.0625, -12.0000}}}};
 
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
-    target_tensor(0, 0) = 8U;
+    target_tensor(0, 0) = 3U;
 
     xt::xarray<float> target_one_hot_tensor = xt::zeros<float>({N, 1U, 1U, W});
     target_one_hot_tensor(0, 0, 0, target_tensor(0, 0)) = 1.0F;
@@ -371,7 +384,84 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Softmax_Test) {
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result[0]);
+
+    fmt::print("Result:\n");
+    printTensor(result_xtensor);
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    EXPECT_TRUE(false);
+}
+
+// Helper: Convert vector to a JSON-like string
+std::string vector_to_json(const std::string& name, const std::vector<float>& vec) {
+    std::ostringstream oss;
+    oss << "\"" << name << "\": [";
+    for (size_t i = 0; i < vec.size(); ++i) {
+        oss << std::fixed << std::setprecision(6) << vec[i];
+        if (i + 1 < vec.size())
+            oss << ", ";
+    }
+    oss << "]";
+    return oss.str();
+}
+
+TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Print_Result) {
+    using namespace ttml;
+    const uint32_t N = 1U, C = 1U, H = 1U, W = 16U;
+
+    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    std::random_device rd;
+    std::mt19937 gen(42);  // gen(rd());
+    std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
+
+    const std::string output_path = "softmax_test_output.jsonl";
+    std::ofstream file(output_path);
+    if (!file.is_open()) {
+        fmt::print("Failed to open file: {}\n", output_path);
+    }
+    fmt::print("Writing to: {}\n ", std::filesystem::current_path());
+
+    auto write_result = [&](const std::vector<float>& input,
+                            const std::vector<float>& xtensor_res,
+                            const std::vector<float>& op_res,
+                            const std::vector<float>& custom_res) {
+        file << "{" << vector_to_json("input", input) << ", " << vector_to_json("xtensor_res", xtensor_res) << ", "
+             << vector_to_json("op_res", op_res) << ", " << vector_to_json("custom_res", custom_res) << "}\n";
+    };
+
+    const uint32_t test_size = 1000U;
+
+    for (uint32_t i = 0; i < test_size; ++i) {
+        xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
+        xt::xarray<float> target_tensor = xt::zeros<uint32_t>({N, H});
+        target_tensor(0, 0) = class_dist(gen);
+
+        auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
+        auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+            target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+
+        float scaler = 1.0F;
+
+        xt::xarray<float> xtensor_calc_res = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
+
+        auto result = ttml::metal::cross_entropy_bw(input, target, scaler);
+
+        auto custom_calculation = ttnn_fixed::softmax(input, 3);
+
+        auto input_view = xt::view(input_tensor, 0, 0, 0, xt::all());
+        std::vector<float> input_vec(input_view.begin(), input_view.end());
+
+        auto xtensor_res_vec = xt::view(xtensor_calc_res, 0, 0, 0, xt::all());
+        std::vector<float> xtensor_res(xtensor_res_vec.begin(), xtensor_res_vec.end());
+
+        auto op_res_vec = core::to_vector(result[1]);
+        auto custom_res_vec = core::to_vector(custom_calculation);
+
+        write_result(input_vec, xtensor_res, op_res_vec, custom_res_vec);
+    }
+
+    file.close();
+    fmt::print("Results written to {}\n", output_path);
+
     EXPECT_TRUE(false);
 }

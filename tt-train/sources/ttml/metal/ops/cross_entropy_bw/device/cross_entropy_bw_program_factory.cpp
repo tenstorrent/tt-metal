@@ -352,6 +352,9 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     auto cb_temp_output = create_circular_buffer(
         program, all_cores, tt::CBIndex::c_11, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
+    auto cb_mat_mul_reduce =
+        create_circular_buffer(program, all_cores, tt::CBIndex::c_12, data_format, bfloat16_single_tile_size_bytes, 1U);
+
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------

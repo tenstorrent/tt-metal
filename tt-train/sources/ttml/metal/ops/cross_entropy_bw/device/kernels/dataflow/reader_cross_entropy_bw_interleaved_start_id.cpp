@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <dataflow_api_addrgen.h>
+#include <hostdevcommon/kernel_structs.h>
 
 #include <cstdint>
 #include <cstring>
@@ -23,6 +24,28 @@ void generate_tile_with_value(uint32_t cb, uint32_t packed_value) {
     cb_push_back(cb, onetile);
 }
 
+void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
+    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_idx,
+                      tile_idx,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
     uint32_t input_address = get_arg_val<uint32_t>(runtime_args_counter++);        // input buffer address
@@ -37,6 +60,8 @@ void kernel_main() {
     constexpr uint32_t cb_max_mask_idx = tt::CBIndex::c_3;
     constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_4;
     constexpr uint32_t cb_reduction_scaler_idx = tt::CBIndex::c_9;  // used for reduction
+
+    constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_12;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -67,20 +92,31 @@ void kernel_main() {
         max_mask_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_max_mask_idx));  // write max mask tile
     }
 
+    // used only for testing
+    cb_reserve_back(cb_mat_mul_reduce, onetile);
+    uint16_t* mat_mul_reduce_ptr =
+        reinterpret_cast<uint16_t*>(get_write_ptr(cb_mat_mul_reduce));  // write mat mul reduce tile
+
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
-    constexpr uint16_t minus_inf = 0xFF80;          // (bfloat16)-inf -> uint16_t
-    constexpr uint16_t minus_one_hundred = 0xC47A;  // (bfloat16)-100 -> uint16_t
+    constexpr uint16_t minus_inf = 0xFF80;  // (bfloat16)-inf -> uint16_t
+    // constexpr uint16_t minus_one_hundred = 0xC47A;  // (bfloat16)-100 -> uint16_t
     for (uint32_t face = 0; face < 4; ++face) {
         uint32_t offset = (face & 1U) << 4U;
         for (uint32_t h = 0; h < 16; ++h) {
             for (uint32_t w = 0; w < 16; ++w) {
                 if constexpr (do_mask_w) {
                     *mask_ptr++ = (offset + w < mask_w) ? one : zero;  // how to create the proper mask?
-                    *max_mask_ptr++ = (offset + w < mask_w) ? zero : minus_one_hundred;
+                    *max_mask_ptr++ = (offset + w < mask_w) ? zero : minus_inf;
                 }
 
                 *reduction_scaler_ptr++ = one;
+
+                if (!(face & 1U) && (w == 0)) {
+                    *mat_mul_reduce_ptr++ = one;
+                } else {
+                    *mat_mul_reduce_ptr++ = zero;
+                }
             }
         }
     }
@@ -89,6 +125,10 @@ void kernel_main() {
         cb_push_back(cb_max_mask_idx, onetile);
     }
     cb_push_back(cb_reduction_scaler_idx, onetile);
+
+    // used only for testing
+    cb_push_back(cb_mat_mul_reduce, onetile);
+    // print_tile(cb_mat_mul_reduce, 0);
 
     cb_reserve_back(cb_scaler_idx, onetile);
     generate_tile_with_value(cb_scaler_idx, packed_scaler);
