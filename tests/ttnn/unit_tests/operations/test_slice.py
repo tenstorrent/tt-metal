@@ -1081,21 +1081,6 @@ def test_ttnn_slice_whisper(
         assert_with_pcc(torch_output, ttnn_output, 0.999)
 
 
-def num_to_core_range_set(x):
-    assert x < 8 or x % 8 == 0
-    num_x = min(x, 8)
-    num_y = x // num_x
-    assert num_x * num_y == x
-    return ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(num_x - 1, num_y - 1),
-            ),
-        }
-    )
-
-
 @pytest.mark.parametrize(
     "dims, slice_size, cores",
     [
@@ -1110,14 +1095,14 @@ def num_to_core_range_set(x):
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, orientation):
-    core_grid = device.core_grid
+    core_grid = device.compute_with_storage_grid_size()
     if core_grid.x * core_grid.y < cores:
         pytest.skip("Device does not have enough cores")
 
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
     torch_input = torch.randint(-10, 10, dims)
-    core_range = num_to_core_range_set(cores)
+    core_range = ttnn.num_cores_to_corerangeset(cores, core_grid, orientation == ttnn.ShardOrientation.ROW_MAJOR)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
         torch_input, device=device, layout=layout, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
