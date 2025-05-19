@@ -142,6 +142,11 @@ public:
     static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28;                                      // 256 MB;
     static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_CHANNEL_SIZE;  // 256 MB;
 
+    // Number of entries in the fabric header ring buffer
+    // This value was determined empirically to be big enough to rotate through in time for the last
+    // header to be flushed.
+    static constexpr uint32_t FABRIC_HEADER_RB_ENTRIES = 32;
+
     //
     // Configurable Settings
     //

@@ -8,9 +8,8 @@
 #include <optional>
 
 #include "assert.hpp"
-#include "core_coord.hpp"
+#include "dispatch/kernel_config/fabric_mux.hpp"
 #include "fd_kernel.hpp"
-#include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/tt_xy_pair.h>
@@ -47,11 +46,12 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> dev_completion_q_wr_ptr;
     std::optional<uint32_t> dev_completion_q_rd_ptr;
 
+    std::optional<uint32_t> fabric_header_rb_base;
+    std::optional<uint32_t> fabric_header_rb_entries;
+    std::optional<uint32_t> my_fabric_sync_status_addr;
+
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
-
-    // Populated if fabric is being used to talk to downstream
-    std::optional<uint32_t> client_interface_addr;
 };
 
 struct dispatch_dependent_config_t {
@@ -71,16 +71,23 @@ struct dispatch_dependent_config_t {
     std::optional<uint32_t> prefetch_h_noc_xy;                     // Dependent. Used if split_prefetch is true
     std::optional<uint32_t> prefetch_h_local_downstream_sem_addr;  // Dependent. Used if split_prefetch is true
 
-    // Populated if fabric is being used to talk to downstream
-    std::optional<uint32_t> fabric_router_noc_xy;
-    std::optional<uint32_t> upstream_mesh_id;
-    std::optional<uint32_t> upstream_dev_id;
-    std::optional<uint32_t> downstream_mesh_id;
-    std::optional<uint32_t> downstream_dev_id;
-    std::optional<uint32_t> outbound_eth_chan;
+    tt::tt_metal::fabric_mux_client_config fabric_mux_client_config;
 };
 
+//
+// Represents a cq_dispatch kernel
+//
+// Upstream kernels: Dispatcher will increment semaphores on the upstream to indicate it has pages free
+// Downstream kernels: Dispatcher will wait on semaphores on the downstream and send data to it. A fabric mux can be
+// specified
+//                     in the list of downstream kernels but the downstream dispatch kernel must be specified as well.
+//
 class DispatchKernel : public FDKernel {
+private:
+    dispatch_static_config_t static_config_;
+    dispatch_dependent_config_t dependent_config_;
+    FDKernelEdmConnectionAttributes edm_connection_attributes_;
+
 public:
     DispatchKernel(
         int node_id,
@@ -95,9 +102,9 @@ public:
         TT_FATAL(
             noc_selection.downstream_noc == tt::tt_metal::k_dispatch_downstream_noc,
             "Invalid downstream NOC specified for Dispatcher kernel");
-        TT_FATAL(
-            noc_selection.upstream_noc != noc_selection.downstream_noc,
-            "Dispatcher kernel cannot have identical upstream and downstream NOCs.");
+        // TT_FATAL(
+        //     noc_selection.upstream_noc != noc_selection.downstream_noc,
+        //     "Dispatcher kernel cannot have identical upstream and downstream NOCs.");
         static_config_.is_h_variant = h_variant;
         static_config_.is_d_variant = d_variant;
         uint16_t channel =
@@ -122,22 +129,10 @@ public:
 
     void ConfigureCore() override;
 
-    void UpdateArgsForFabric(
-        const CoreCoord& fabric_router,
-        uint32_t outbound_eth_chan,
-        tt::tt_fabric::mesh_id_t src_mesh_id,
-        chip_id_t src_chip_id,
-        tt::tt_fabric::mesh_id_t dst_mesh_id,
-        chip_id_t dst_chip_id) override;
-
     uint32_t GetDispatchBufferSize() const {
         return (1 << static_config_.dispatch_cb_log_page_size.value()) * static_config_.dispatch_cb_pages.value();
     }
     const dispatch_static_config_t& GetStaticConfig() { return static_config_; }
-
-private:
-    dispatch_static_config_t static_config_;
-    dispatch_dependent_config_t dependent_config_;
 };
 
 }  // namespace tt_metal

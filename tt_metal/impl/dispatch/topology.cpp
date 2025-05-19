@@ -137,6 +137,17 @@ constexpr noc_selection_t k_packet_queue_noc = {
     .downstream_noc = tt::tt_metal::NOC::NOC_0,
 };
 
+//
+// Fabric MUX NOC selections
+//
+// Must be NoC0
+//
+constexpr noc_selection_t k_fabric_mux_noc = {
+    .non_dispatch_noc = tt::tt_metal::NOC::NOC_0,
+    .upstream_noc = tt::tt_metal::NOC::NOC_0,
+    .downstream_noc = tt::tt_metal::NOC::NOC_0,
+};
+
 // clang-format off
 static const std::vector<DispatchKernelNode> single_chip_arch_1cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_prefetcher_noc},
@@ -181,25 +192,6 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
     {13, 1, x, 0, PACKET_ROUTER_DEMUX, {11, x, x, x}, {8, x, x, x}, k_packet_queue_noc},
 };
 
-static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
-    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, {NOC::NOC_1, NOC::NOC_1, NOC::NOC_1}},
-
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
-    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
-
-    // Sender path PREFETCH_H -> PREFETCH_D
-    {5, 0, x, 0, FABRIC_ROUTER_VC, {3, x, x, x}, {7, x, x, x}},
-
-    // Return path DISPATCH_D -> DISPATCH_H
-    {6, 0, x, 0, FABRIC_ROUTER_VC, {8, x, x, x}, {4, x, x, x}},
-
-    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
-    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
-    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, {NOC::NOC_1, NOC::NOC_1, NOC::NOC_1}},
-};
-
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, k_prefetcher_noc},
     {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, k_prefetcher_noc},
@@ -224,6 +216,25 @@ static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
     {16, 1, x, 0, MUX_D, {13, 14, x, x}, {15, x, x, x}, k_packet_queue_noc},
     {17, 1, x, 0, PACKET_ROUTER_DEMUX, {15, x, x, x}, {11, 12, x, x}, k_packet_queue_noc},
 
+};
+
+static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_prefetcher_noc},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_dispatcher_noc},
+    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_dispatcher_s_noc},
+
+    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {6, 5, x, x}, k_prefetcher_noc},
+    {4, 0, 1, 0, DISPATCH_H, {7, x, x, x}, {3, 5, x, x}, k_dispatcher_noc},
+
+    // H2D via MUX
+    {5, 0, 1, 0, FABRIC_MUX, /*Full size*/ {3}, /*Header Only*/ {4}, k_fabric_mux_noc},
+
+    {6, 1, x, 0, PREFETCH_D, {3, x, x, x}, {7, 8, 9, x}, k_prefetcher_noc},
+    {7, 1, x, 0, DISPATCH_D, {6, x, x, x}, {8, 4, 9, x}, k_dispatcher_noc},
+    {8, 1, x, 0, DISPATCH_S, {6, x, x, x}, {7, x, x, x}, k_dispatcher_s_noc},
+
+    // D2H via MUX
+    {9, 1, 0, 0, FABRIC_MUX, /*Full size*/ {7}, /*Header Only*/ {6}, k_fabric_mux_noc},
 };
 
 static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_1cq = {

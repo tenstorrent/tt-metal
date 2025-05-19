@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <map>
-#include <string>
 #include <vector>
 
 #include "assert.hpp"
@@ -14,7 +14,6 @@
 #include "device/device_impl.hpp"
 #include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
 
@@ -52,26 +51,37 @@ struct TerminationInfo {
 };
 
 static std::vector<string> dispatch_kernel_file_names = {
-    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",        // PREFETCH
-    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",        // PREFETCH_HD
-    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",        // PREFETCH_H
-    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",        // PREFETCH_D
-    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH
-    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_HD
-    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_H
-    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_D
+    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH
+    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_HD
+    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_H
+    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_D
+    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",              // DISPATCH
+    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",              // DISPATCH_HD
+    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",              // DISPATCH_H
+    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",              // DISPATCH_D
     "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp",  // DISPATCH_S
-    "",                                                      // MUX
-    "tt_metal/impl/dispatch/kernels/packet_mux.cpp",         // MUX_D
-    "tt_metal/impl/dispatch/kernels/packet_demux.cpp",       // DEMUX
-    "",                                                      // DEMUX_D
-    "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp",    // US_TUNNELER_LOCAL
-    "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp",    // US_TUNNELER_REMOTE
-    "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",   // PACKET_ROUTER_MUX
-    "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",   // PACKET_ROUTER_DEMUX
-    "",                                                      // FABRIC_ROUTER_VC
-    ""                                                       // COUNT
+    "",                                                            // MUX
+    "tt_metal/impl/dispatch/kernels/packet_mux.cpp",               // MUX_D
+    "tt_metal/impl/dispatch/kernels/packet_demux.cpp",             // DEMUX
+    "",                                                            // DEMUX_D
+    "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp",          // US_TUNNELER_LOCAL
+    "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp",          // US_TUNNELER_REMOTE
+    "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",         // PACKET_ROUTER_MUX
+    "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",         // PACKET_ROUTER_DEMUX
+    "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",              // FABRIC_MUX
+    ""                                                             // COUNT
 };
+
+inline uint32_t get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core = false) {
+    uint32_t programmable_core_type_index =
+        (dispatch_core_type == CoreType::WORKER)
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
+        : is_active_eth_core
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
+            : MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+
+    return programmable_core_type_index;
+}
 
 // Top-level class describing a Fast Dispatch Kernel (kernel running on a specific core). All FD kernels should inherit
 // from this class and implement the virtual functions as required.
@@ -133,26 +143,36 @@ public:
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
     void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
 
-    virtual CoreType GetCoreType() {
+    virtual CoreType GetCoreType() const {
         return tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     }
-    FDKernelType GetKernelType() { return kernel_type_; }
-    tt_cxy_pair GetLogicalCore() { return logical_core_; }
-    tt_cxy_pair GetVirtualCore() {
+    FDKernelType GetKernelType() const { return kernel_type_; }
+    tt_cxy_pair GetLogicalCore() const { return logical_core_; }
+    tt_cxy_pair GetVirtualCore() const {
         return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
             logical_core_, GetCoreType());
     }
     chip_id_t GetDeviceId() { return device_id_; }  // Since this->device may not exist yet
     virtual std::optional<tt::tt_metal::TerminationInfo> GetTerminationInfo() const { return std::nullopt; }
+    int GetNodeId() const { return node_id_; }
 
     // Get the port index for which a given kernel is upstream/downstream of this one
-    int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
-    int GetDownstreamPort(FDKernel* other) { return GetPort(other, this->downstream_kernels_); }
+    int GetUpstreamPort(FDKernel* other) const { return GetPort(other, this->upstream_kernels_); }
+    int GetDownstreamPort(FDKernel* other) const { return GetPort(other, this->downstream_kernels_); }
     void AddDevice(tt::tt_metal::IDevice* device) { device_ = device; }
     void AddProgram(tt::tt_metal::Program* program) { program_ = program; }
 
 protected:
-    void configure_kernel_variant(
+    // Attributes for an EDM client
+    struct FDKernelEdmConnectionAttributes {
+        size_t worker_flow_control_sem;
+        size_t worker_teardown_sem;
+        size_t worker_buffer_index_sem;  // aka buffer_slot_wrptr_ptr
+    };
+
+    void create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes);
+
+    [[maybe_unused]] tt::tt_metal::KernelHandle configure_kernel_variant(
         const string& path,
         const std::vector<uint32_t>& compile_args,
         std::map<string, string> defines_in,
@@ -160,7 +180,8 @@ protected:
         bool send_to_brisc,
         bool force_watcher_no_inline,
         tt::tt_metal::KernelBuildOptLevel opt_level = tt::tt_metal::KernelBuildOptLevel::Os);
-    int GetPort(FDKernel* other, std::vector<FDKernel*>& kernels) {
+
+    int GetPort(FDKernel* other, const std::vector<FDKernel*>& kernels) const {
         for (int idx = 0; idx < kernels.size(); idx++) {
             if (kernels[idx] == other) {
                 return idx;
