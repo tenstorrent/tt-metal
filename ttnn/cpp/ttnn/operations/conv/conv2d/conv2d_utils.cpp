@@ -63,7 +63,7 @@ uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, ui
     uint32_t divisor = start_divisor;
     uint32_t big_divisor = divisor * mult;
     uint32_t padded_num = round_up(num, big_divisor);
-    while ((padded_num - num) >= (int)(padded_num / big_divisor)) {
+    while ((padded_num - num) >= (int)(padded_num / big_divisor) && divisor > 1) {
         divisor = divisor - 1;
         big_divisor = divisor * mult;
         padded_num = round_up(num, big_divisor);
@@ -947,7 +947,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
             get_num_cores_channels_from_parallel_config(largest_parallel_config));
 
     uint32_t nhw_out_padded_ntile_per_core =
-        conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
+        tt::div_up(conv_out_memory_config.shard_spec().value().shape[0], tt::constants::TILE_HEIGHT);
 
     OptimizedConvBlockConfig opt_conv_op_block_config = determine_per_core_conv_block_config(
         input_parallel_config,

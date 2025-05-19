@@ -201,9 +201,9 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
             auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec().value().orientation};
             auto mem_config = this->memory_config.with_shard_spec(shard_spec);
             return {TensorSpec(
-                output_shape,
+                padded_output_shape,
                 TensorLayout::fromPaddedShape(
-                    dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
+                    dtype, PageConfig(output_layout), mem_config, padded_output_shape, padded_output_shape))};
         } else if (this->memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             auto shard_grid = this->memory_config.shard_spec().value().grid;
             auto shard_spec = ShardSpec{

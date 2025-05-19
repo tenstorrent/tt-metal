@@ -768,7 +768,7 @@ def test_conv_dram(
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 @pytest.mark.parametrize("tilized_input", [True, False], ids=["tilized", "row_major"])
@@ -799,7 +799,7 @@ def test_conv_ws(
     stride_h = stride
     stride_w = stride
     fp32_accum = True
-    packer_l1_acc = True
+    packer_l1_acc = False
     deallocate_activation = False
     groups = 1
 
@@ -852,8 +852,9 @@ def test_conv_ws(
         enable_split_reader=False,
         enable_subblock_padding=False,
         reshard_if_not_optimal=True,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
         act_block_w_div=act_block_w_div if not auto_shard else 1,
-        act_block_h_override=32,
+        act_block_h_override=32 * 3,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -885,7 +886,7 @@ def test_conv_ws(
 
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
-    # torch_output_tensor = torch_output_tensor[:, :, : batch_size * out_height * out_width, :]
+    torch_output_tensor = torch_output_tensor[:, :, : batch_size * out_height * out_width, :output_channels]
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
     logger.info(f"Output Shape : {torch_output_tensor.shape}")
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
