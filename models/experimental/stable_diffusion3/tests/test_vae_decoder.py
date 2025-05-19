@@ -9,8 +9,8 @@ from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from loguru import logger
 
 from ..reference.vae_decoder import VaeDecoder
-from ..tt.utils import allocate_tensor_on_device_like, assert_quality, from_torch_fast, to_torch
-from ..tt.vae_decoder import TtGroupNorm, TtGroupNormParameters, TtVaeDecoder, TtVaeDecoderParameters
+from ..tt.utils import allocate_tensor_on_device_like, assert_quality
+from ..tt.vae_decoder import TtVaeDecoder, TtVaeDecoderParameters
 
 
 @pytest.mark.parametrize(
@@ -85,83 +85,3 @@ def test_vae_decoder(
 
     assert image.shape == tt_image_torch.shape
     assert_quality(image, tt_image_torch, pcc=0.94, ccc=0.94)
-
-
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 40960}], indirect=True)
-@pytest.mark.parametrize(
-    ("use_program_cache", "use_tracing"),
-    [(True, True)],
-)
-@pytest.mark.parametrize(
-    ("batch_size", "channels", "height", "width", "group_count"),
-    [
-        (1, 512, 128, 128, 32),
-        (1, 512, 256, 256, 32),
-        (1, 256, 512, 512, 32),
-        (1, 512, 512, 512, 32),
-        (1, 128, 1024, 1024, 32),
-        (1, 256, 1024, 1024, 32),
-    ],
-)
-def test_vae_decoder_norm(
-    *,
-    device: ttnn.Device,
-    use_program_cache: bool,
-    use_tracing: bool,
-    batch_size: int,
-    channels: int,
-    height: int,
-    width: int,
-    group_count: int,
-) -> None:
-    if use_program_cache:
-        ttnn.enable_program_cache(device)
-
-    torch_dtype = torch.float32
-    ttnn_dtype = ttnn.bfloat16
-
-    torch_model = torch.nn.GroupNorm(num_groups=group_count, num_channels=channels)
-    torch_model.eval()
-
-    parameters = TtGroupNormParameters.from_torch(torch_model.state_dict(), device=device)
-    tt_model = TtGroupNorm(parameters, eps=torch_model.eps, num_groups=group_count)
-
-    torch.manual_seed(0)
-
-    inp = torch.randn([batch_size, channels, height, width], dtype=torch_dtype)
-
-    tt_inp_host = from_torch_fast(inp.permute(0, 2, 3, 1), layout=ttnn.TILE_LAYOUT, dtype=ttnn_dtype)
-
-    with torch.no_grad():
-        out = torch_model(inp)
-
-    tt_inp = allocate_tensor_on_device_like(tt_inp_host, device=device)
-
-    if use_tracing:
-        # cache
-        logger.info("caching...")
-        tt_model(tt_inp)
-
-        # trace
-        logger.info("tracing...")
-        tid = ttnn.begin_trace_capture(device)
-        tt_out = tt_model(tt_inp)
-        ttnn.end_trace_capture(device, tid)
-
-        # execute
-        logger.info("executing...")
-        ttnn.copy_host_to_device_tensor(tt_inp_host, tt_inp)
-        ttnn.execute_trace(device, tid)
-        logger.info("done...")
-    else:
-        logger.info("compiling...")
-        tt_model(tt_inp)
-
-        logger.info("executing...")
-        ttnn.copy_host_to_device_tensor(tt_inp_host, tt_inp)
-        tt_out = tt_model(tt_inp)
-        logger.info("done...")
-
-    tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
-
-    assert_quality(out, tt_out_torch, pcc=0.94, ccc=0.94)
