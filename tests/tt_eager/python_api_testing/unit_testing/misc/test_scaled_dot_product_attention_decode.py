@@ -849,6 +849,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     sharded_out=True,
     start_core=ttnn.CoreCoord(0, 0),
     sub_core_grids=None,
+    q_layout=ttnn.TILE_LAYOUT,
 ):
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -958,10 +959,9 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         Q[:, :, :nh],
         device=device,
         dtype=q_dtype,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=q_layout,
         memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
     )
-    breakpoint()
     start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
 
     tt_back = ttnn.transformer.paged_scaled_dot_product_attention_decode(

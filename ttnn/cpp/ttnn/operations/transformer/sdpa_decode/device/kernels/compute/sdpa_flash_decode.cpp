@@ -15,6 +15,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/tilize.h"
 
 #include "cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "compute_common.hpp"
@@ -133,6 +134,11 @@ void MAIN {
 
     mm_init(cb_q_in, cb_k_in, cb_out_final);
     cb_wait_front(cb_q_in, q_chunk_tiles);
+    // tilize_init_unpack(cb_q_in, q_chunk_tiles);
+    // UNPACK((llk_unpack_tilize_init(cb_q_in, q_chunk_tiles)));
+    // unpack_tilize_block(cb_q_in, q_chunk_tiles);
+    // UNPACK(llk_unpack_tilize_block(cb_q_in, q_chunk_tiles));
+    // UNPACK(llk_unpack_tilize_uninit(cb_q_in, q_chunk_tiles));
 
 #ifdef DYNAMIC_CHUNK_SIZE
     const uint32_t qk_subblock_h_dynamic = 1;

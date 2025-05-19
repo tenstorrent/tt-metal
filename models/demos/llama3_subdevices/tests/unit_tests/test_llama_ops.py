@@ -169,8 +169,9 @@ def test_llama_tg_LayerNorm(
         ),
     ],
 )
+@pytest.mark.parametrize("q_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
 def test_llama_tg_ScaledDotProductAttentionDecode(
-    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids
+    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
 ):
     run_test_sdpa_decode_paged_attention_single_iter(
         device,
@@ -190,6 +191,7 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
         sharded_out=True,
         start_core=start_core,
         sub_core_grids=sub_core_grids,
+        q_layout=q_layout,
     )
     assert device.num_program_cache_entries() == 1
 
