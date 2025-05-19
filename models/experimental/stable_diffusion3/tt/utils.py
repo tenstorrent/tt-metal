@@ -62,14 +62,18 @@ def from_torch_fast(
     memory_config: ttnn.MemoryConfig | None = None,
     to_host: bool = False,
     mesh_mapper: ttnn.TensorToMesh | None = None,
+    # The argument shard_dim is a bit problematic. If set, it creates a mesh mapper with the given
+    # device. But for a host tensor, the device is None, so a mesh mapper can not be created.
     shard_dim: int | None = None,
 ) -> ttnn.Tensor:
+    assert shard_dim is None or device is not None, "shard_dim requires device"
+
     if isinstance(device, ttnn.MeshDevice):
         if shard_dim is not None:
             mesh_mapper = ttnn.ShardTensorToMesh(device, dim=shard_dim)
         if mesh_mapper is None:
             mesh_mapper = ttnn.ReplicateTensorToMesh(device)
-    else:
+    elif isinstance(device, ttnn.Device):
         mesh_mapper = None
 
     float32_in = t.dtype == torch.float32
