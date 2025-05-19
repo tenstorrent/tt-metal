@@ -46,10 +46,10 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
     ttnn::Shape output_padded_shape = output.padded_shape();
     ttnn::Shape input_padded_shape = input_tensor.padded_shape();
 
-    tt::log_info("cb_data_format: {}", cb_data_format);
-    tt::log_info("single_tile_size: {}", single_tile_size);
-    tt::log_info("input_tensor_shape: {}", input_padded_shape);
-    tt::log_info("output_tensor_shape: {}", output_padded_shape);
+    tt::log_debug("cb_data_format: {}", cb_data_format);
+    tt::log_debug("single_tile_size: {}", single_tile_size);
+    tt::log_debug("input_tensor_shape: {}", input_padded_shape);
+    tt::log_debug("output_tensor_shape: {}", output_padded_shape);
 
     // Calculate memory layout parameters
     auto stick_nbytes =
@@ -313,11 +313,11 @@ Fold::MultiCoreTiledInterleaved::cached_program_t Fold::MultiCoreTiledInterleave
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     if (tensor_args.input_tensor.get_layout() == Layout::TILE) {
-        tt::log_debug("Fold operation with tiled input");
+        tt::log_info("Fold operation with DRAM tiled input");
         return fold_multi_core_tiled_interleaved(
             tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
     }
-    tt::log_debug("Fold operation with row major input");
+    tt::log_info("Fold operation with DRAM row major input");
     return fold_multi_core_row_major_interleaved(
         tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
 }

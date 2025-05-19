@@ -13,6 +13,7 @@
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/logger.hpp"
 #include "tt-metalium/math.hpp"
+#include "tt-metalium/small_vector.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -26,6 +27,7 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/fold/fold.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write.hpp"
@@ -379,7 +381,7 @@ template <typename T>
 Result conv2d_L1(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor_,
-    const ttnn::Tensor& weight_tensor,
+    const ttnn::Tensor& weight_tensor_,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -398,13 +400,26 @@ Result conv2d_L1(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     auto input_tensor = input_tensor_;
+    auto weight_tensor = weight_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     bool is_large_kernel = is_large_kernel_with_easy_matmul(
         input_tensor.layout(), input_height, input_width, kernel_size, stride, padding_n4, dilation);
-    if (is_large_kernel) {
+    if (is_large_kernel && !mm_conv) {
         // Fold the input tensor to reduce spatial dimensions by stride factors, effectively converting
         // a large kernel convolution into a matmul operation.
+        bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor_);
+        if (!input_tensor_on_device) {
+            input_tensor = ttnn::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
+        }
         input_tensor = ttnn::fold(input_tensor, stride[0], stride[1]);
+        if (!tt::tt_metal::is_device_tensor(weight_tensor_)) {
+            weight_tensor = ttnn::to_device(weight_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
+            weight_tensor = ttnn::permute(weight_tensor, ttnn::SmallVector<int64_t>({0, 2, 3, 1}));
+            weight_tensor = ttnn::fold(weight_tensor, stride[0], stride[1]);
+            weight_tensor = ttnn::permute(weight_tensor, ttnn::SmallVector<int64_t>({1, 2, 3, 0}));
+            weight_tensor =
+                ttnn::to_layout(weight_tensor, Layout::TILE, std::nullopt, std::nullopt, weight_tensor.device());
+        }
         input_height = input_height / stride[0];
         input_width = input_width / stride[1];
         stride = {1, 1};
@@ -505,7 +520,6 @@ Result conv2d_L1(
                 opt_conv_op_block_config.act_block_h_ntiles,
                 input_width,
                 bias_tensor.has_value(),
-                is_large_kernel,
                 true);
         } else {
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
@@ -521,8 +535,7 @@ Result conv2d_L1(
                 groups,
                 opt_conv_op_block_config.act_block_h_ntiles,
                 input_width,
-                bias_tensor.has_value(),
-                is_large_kernel);
+                bias_tensor.has_value());
         }
     }
 
