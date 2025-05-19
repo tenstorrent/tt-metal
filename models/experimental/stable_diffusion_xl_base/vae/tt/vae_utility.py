@@ -8,7 +8,7 @@ import ttnn
 def get_DRAM_GN_config(module_path, idx):
     if module_path is None:
         core_y = 4
-        num_out_blocks = 64
+        num_out_blocks = 128
     elif "mid_block" in module_path:
         core_y = 4
         num_out_blocks = 4

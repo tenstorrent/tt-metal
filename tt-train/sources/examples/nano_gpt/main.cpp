@@ -74,7 +74,7 @@ uint64_t get_number_of_parameters(Model &model, bool enable_tp) {
     uint64_t num_params = 0;
     for (const auto &[name, tensor_ptr] : parameters) {
         auto tensor = tensor_ptr->get_value();
-        auto params_in_tensor = tensor.get_logical_volume();
+        auto params_in_tensor = tensor.logical_volume();
         if (enable_tp && (contains(name, "fc") || contains(name, "linear"))) {
             num_params += params_in_tensor * num_devices;
         } else {
@@ -837,7 +837,7 @@ int main(int argc, char **argv) {
             loss->backward();
             ttml::autograd::ctx().reset_graph();
 
-            auto samples = features->get_value().get_logical_shape()[0];
+            auto samples = features->get_value().logical_shape()[0];
             gradient_accumulator_helper.update(loss_float, samples);
 
             if (gradient_accumulator_helper.should_step()) {
