@@ -412,10 +412,45 @@ void fabric_set_route(
 }
 
 void fabric_set_unicast_route(
+    MeshPacketHeader* packet_header,
+    eth_chan_directions outgoing_direction,  // Ignore this: Dynamic Routing does not need outgoing_direction specified
+    uint16_t my_dev_id,                      // Ignore this: Dynamic Routing does not need src chip ID
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint16_t ew_dim  // Ignore this: Dynamic Routing does not need mesh dimensions
+) {
+    packet_header->dst_start_chip_id = dst_dev_id;
+    packet_header->dst_start_mesh_id = dst_mesh_id;
+    packet_header->mcast_params[0] = 0;
+    packet_header->mcast_params[1] = 0;
+    packet_header->mcast_params[2] = 0;
+    packet_header->mcast_params[3] = 0;
+    packet_header->is_mcast_active = 0;
+}
+
+void fabric_set_mcast_route(
+    MeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint16_t e_num_hops,
+    uint16_t w_num_hops,
+    uint16_t n_num_hops,
+    uint16_t s_num_hops) {
+    packet_header->dst_start_chip_id = dst_dev_id;
+    packet_header->dst_start_mesh_id = dst_mesh_id;
+    packet_header->mcast_params[0] = e_num_hops;
+    packet_header->mcast_params[1] = w_num_hops;
+    packet_header->mcast_params[2] = n_num_hops;
+    packet_header->mcast_params[3] = s_num_hops;
+    packet_header->is_mcast_active = 0;
+}
+
+void fabric_set_unicast_route(
     LowLatencyMeshPacketHeader* packet_header,
     eth_chan_directions outgoing_direction,
     uint16_t my_dev_id,
     uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
     uint16_t ew_dim) {
     if (outgoing_direction == eth_chan_directions::EAST || outgoing_direction == eth_chan_directions::WEST) {
         uint32_t ew_hops = my_dev_id < dst_dev_id ? dst_dev_id - my_dev_id : my_dev_id - dst_dev_id;
@@ -451,8 +486,23 @@ void fabric_set_unicast_route(
     }
 }
 
-void fabric_set_mcast_route(LowLatencyMeshPacketHeader* packet_header, eth_chan_directions direction, uint32_t hops) {
-    fabric_set_route<true>(packet_header, (eth_chan_directions)direction, 0, hops);
+void fabric_set_mcast_route(
+    LowLatencyMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,   // Ignore this, since Low Latency Mesh Fabric does not support arbitrary 2D Mcasts yet
+    uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
+    uint16_t e_num_hops,
+    uint16_t w_num_hops,
+    uint16_t n_num_hops,
+    uint16_t s_num_hops) {
+    if (e_num_hops) {
+        fabric_set_route<true>(packet_header, eth_chan_directions::EAST, 0, e_num_hops);
+    } else if (w_num_hops) {
+        fabric_set_route<true>(packet_header, eth_chan_directions::WEST, 0, w_num_hops);
+    } else if (n_num_hops) {
+        fabric_set_route<true>(packet_header, eth_chan_directions::NORTH, 0, n_num_hops);
+    } else if (s_num_hops) {
+        fabric_set_route<true>(packet_header, eth_chan_directions::SOUTH, 0, s_num_hops);
+    }
 }
 
 inline void fabric_client_connect(

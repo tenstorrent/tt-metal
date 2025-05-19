@@ -6,7 +6,7 @@
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -84,7 +84,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
             .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-            .fw_launch_addr = SLAVE_IERISC_RESET_PC,
+            .fw_launch_addr = SUBORDINATE_IERISC_RESET_PC,
             .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
         };
         processor_classes[processor_class_idx] = processor_types;

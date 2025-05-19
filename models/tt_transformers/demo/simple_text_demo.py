@@ -561,7 +561,7 @@ def test_demo_text(
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt[::batch_size, :],  # Warmup prefill for each device
+            input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
@@ -793,60 +793,37 @@ def test_demo_text(
 
     # Benchmark targets
     supported_models = ["Llama3.2-1B", "Llama3.2-3B", "Llama3.1-8B", "Llama3.2-11B", "Llama3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
+    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
 
     tt_device_name = model_args[0].device_name
+    model_name = model_args[0].base_model_name
 
-    if model_args[0].base_model_name in supported_models:
+    if model_name in supported_models:
         assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
 
-        # Set the target times to first token for every combination of device and model
-        target_prefill_tok_s = {
-            "N150_Llama3.2-1B": 1050,  # TODO Update target
-            "N300_Llama3.2-1B": 1050,  # TODO Update target
-            "T3K_Llama3.2-1B": 1050,  # TODO Update target
-            "TG_Llama3.2-1B": 1050,  # TODO Update target
-            #
-            "N150_Llama3.2-3B": 1050,  # TODO Update target
-            "N300_Llama3.2-3B": 1050,  # TODO Update target
-            "T3K_Llama3.2-3B": 1050,  # TODO Update target
-            "TG_Llama3.2-3B": 1050,  # TODO Update target
-            #
-            "N150_Llama3.1-8B": 1050,
-            "P150_Llama3.1-8B": 1050,
-            "N300_Llama3.1-8B": 1050,
-            "P300_Llama3.1-8B": 1050,
-            "T3K_Llama3.1-8B": 1050,
-            "TG_Llama3.1-8B": 1050,
-            #
-            "N150_Llama3.2-11B": 1050,  # TODO Update target
-            "N300_Llama3.2-11B": 1050,  # TODO Update target
-            "T3K_Llama3.2-11B": 1050,  # TODO Update target
-            "TG_Llama3.2-11B": 1050,  # TODO Update target
-            #
-            "N150_Llama3.1-70B": 1050,  # TODO Update target
-            "N300_Llama3.1-70B": 1050,  # TODO Update target
-            "T3K_Llama3.1-70B": 1050,  # TODO Update target
-            "TG_Llama3.1-70B": 1050,  # TODO Update target
-            #
-            "N150_Mistral-7B": 1050,
-            "N300_Mistral-7B": 1050,
-            "T3K_Mistral-7B": 1050,
-        }[f"{tt_device_name}_{model_args[0].base_model_name}"]
+        model_device_key = f"{tt_device_name}_{model_name}"
 
-        # Set the target decode timesfor every combination of device and model
-        target_decode_tok_s_u = {
-            "N150_Llama3.2-1B": 160,  # TODO Update target
+        # Set the target prefill t/s for every combination of device and model (optional - for tracking benchmark data)
+        dict_target_prefill_tok_s = {}  # TODO: add prefill targets for model-device combinations
+        if model_device_key in dict_target_prefill_tok_s:
+            target_prefill_tok_s = dict_target_prefill_tok_s[model_device_key]
+        else:
+            target_prefill_tok_s = None
+            logger.info(f"Model {model_name} does not have prefill targets set for device {tt_device_name}")
+
+        # Set the target decode t/s/u for every combination of device and model (optional - for tracking benchmark data)
+        dict_target_decode_tok_s_u = {
+            "N150_Llama3.2-1B": 160,
             "N300_Llama3.2-1B": 250,  # TODO Update target
             "T3K_Llama3.2-1B": 300,  # TODO Update target
             "TG_Llama3.2-1B": 300,  # TODO Update target
             #
-            "N150_Llama3.2-3B": 60,  # TODO Update target
+            "N150_Llama3.2-3B": 60,
             "N300_Llama3.2-3B": 100,  # TODO Update target
             "T3K_Llama3.2-3B": 150,  # TODO Update target
             "TG_Llama3.2-3B": 150,  # TODO Update target
             #
-            "N150_Llama3.1-8B": 23,  # TODO Update target
+            "N150_Llama3.1-8B": 23,
             "P150_Llama3.1-8B": 23,  # TODO Update target
             "N300_Llama3.1-8B": 38,
             "P300_Llama3.1-8B": 38,
@@ -865,16 +842,21 @@ def test_demo_text(
             "N300_Mistral-7B": 38,  # TODO Update target
             "T3K_Mistral-7B": 45,  # TODO Update target
             "TG_Mistral-7B": 45,  # TODO Update target
-        }[f"{tt_device_name}_{model_args[0].base_model_name}"]
+        }
+        if model_device_key in dict_target_decode_tok_s_u:
+            target_decode_tok_s_u = dict_target_decode_tok_s_u[model_device_key]
+        else:
+            target_decode_tok_s_u = None
+            logger.info(f"Model {model_name} does not have decode targets set for device {tt_device_name}")
 
-        target_decode_tok_s = target_decode_tok_s_u * global_batch_size
+        target_decode_tok_s = target_decode_tok_s_u * global_batch_size if target_decode_tok_s_u else None
         targets = {
             "prefill_t/s": target_prefill_tok_s,
             "decode_t/s": target_decode_tok_s,
             "decode_t/s/u": target_decode_tok_s_u,
         }
     else:
-        logger.warning(f"Model {model_args[0].base_model_name} does not have performance targets set")
+        logger.info(f"Model {model_name} does not have performance targets set")
         targets = {}
 
     # Save benchmark data for CI dashboard
@@ -912,7 +894,7 @@ def test_demo_text(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
-            ml_model_name=model_args[0].base_model_name,
+            ml_model_name=model_name,
             ml_model_type="llm",
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,

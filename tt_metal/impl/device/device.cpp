@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <core_descriptor.hpp>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <device_impl.hpp>
 #include <device_pool.hpp>
 #include <host_api.hpp>
@@ -43,6 +43,7 @@
 #include "command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
+#include "program/program_impl.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
@@ -1160,8 +1161,8 @@ void Device::init_command_queue_device() {
         const auto& logical_dispatch_cores = logical_cores[index];
         CoreType core_type = hal.get_core_type(index);
         for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
-            launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
-            go_msg_t go_msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
+            launch_msg_t msg = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index)->launch_msg;
+            go_msg_t go_msg = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index)->go_msg;
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
             tt::llrt::write_launch_msg_to_core(this->id(), virtual_core, &msg, &go_msg, this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
         }
@@ -1198,8 +1199,9 @@ void Device::init_fabric() {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
             launch_msg_t* msg =
-                &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-            go_msg_t* go_msg = &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
+                &fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+            go_msg_t* go_msg =
+                &fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
             msg->kernel_config.host_assigned_id = fabric_program_->get_runtime_id();
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
@@ -1245,8 +1247,6 @@ bool Device::initialize(
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
             hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size,
         max_alignment);
-    BuildEnvManager::get_instance().add_build_env(this->id(), this->num_hw_cqs());
-    this->initialize_cluster();
     this->initialize_default_sub_device_state(
         l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
     this->generate_device_bank_to_noc_tables();

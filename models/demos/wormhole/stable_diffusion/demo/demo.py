@@ -26,7 +26,8 @@ from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMSched
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
-from models.utility_functions import enable_persistent_kernel_cache, profiler
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
+from models.utility_functions import enable_persistent_kernel_cache, is_blackhole, profiler
 
 
 def load_inputs(input_path):
@@ -96,7 +97,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
     vae.to(torch_device)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
-
+    tt_vae = Vae(torch_vae=vae, device=device)
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
     tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
     text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
@@ -218,16 +219,25 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
             iter += 1
 
-        latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
-
         # scale and decode the image latents with vae
-        latents = 1 / 0.18215 * latents
-        image = vae.decode(latents).sample
+        latents = 1 / 0.18215 * ttnn_latents
+
+        # on blackhole, we use the original vae decoder until #20760 is fixed
+        if not is_blackhole():
+            latents = ttnn.permute(latents, [0, 2, 3, 1])
+            ttnn_output = tt_vae.decode(latents)
+            ttnn_output = ttnn.reshape(ttnn_output, [1, image_size[0], image_size[1], ttnn_output.shape[3]])
+            ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
+            image = ttnn.to_torch(ttnn_output)
+        else:
+            latents = ttnn.to_torch(latents).to(torch.float32)
+            image = vae.decode(latents).sample
+
         profiler.end(f"inference_prompt_{i}")
 
         # Image post-processing
         image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
+        image = image.detach().cpu().float().permute(0, 2, 3, 1).numpy()
         images = (image * 255).round().astype("uint8")
         pil_images = [Image.fromarray(image) for image in images][0]
         ttnn_output_path = f"{experiment_name}_ttnn.png"
@@ -265,6 +275,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
     vae.to(torch_device)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+    tt_vae = Vae(torch_vae=vae, device=device)
 
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
     tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
@@ -330,7 +341,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
         new_prompt = input()
         if len(new_prompt) > 0:
             input_prompt = [new_prompt]
-        if input_prompt[0] == "q":
+        if new_prompt == "q":
             break
 
         experiment_name = f"interactive_{height}x{width}"
@@ -389,15 +400,23 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
             iter += 1
         print(f"Time taken for {iter} iterations: total: {total_accum:.3f}")
 
-        latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
-
         # scale and decode the image latents with vae
-        latents = 1 / 0.18215 * latents
-        image = vae.decode(latents).sample
+        latents = 1 / 0.18215 * ttnn_latents
+
+        # on blackhole, we use the original vae decoder until #20760 is fixed
+        if not is_blackhole():
+            latents = ttnn.permute(latents, [0, 2, 3, 1])
+            ttnn_output = tt_vae.decode(latents)
+            ttnn_output = ttnn.reshape(ttnn_output, [1, image_size[0], image_size[1], ttnn_output.shape[3]])
+            ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
+            image = ttnn.to_torch(ttnn_output)
+        else:
+            latents = ttnn.to_torch(latents).to(torch.float32)
+            image = vae.decode(latents).sample
 
         # Image post-processing
         image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
+        image = image.detach().cpu().float().permute(0, 2, 3, 1).numpy()
         images = (image * 255).round().astype("uint8")
         pil_images = [Image.fromarray(image) for image in images][0]
         ttnn_output_path = f"{experiment_name}_ttnn.png"
@@ -427,6 +446,7 @@ def run_demo_inference_diffusiondb(
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
     vae.to(torch_device)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+    tt_vae = Vae(torch_vae=vae, device=device)
 
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
     tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
@@ -548,14 +568,23 @@ def run_demo_inference_diffusiondb(
 
             iter += 1
 
-        latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
         # scale and decode the image latents with vae
-        latents = 1 / 0.18215 * latents
-        image = vae.decode(latents).sample
+        latents = 1 / 0.18215 * ttnn_latents
+
+        # on blackhole, we use the original vae decoder until #20760 is fixed
+        if not is_blackhole():
+            latents = ttnn.permute(latents, [0, 2, 3, 1])
+            ttnn_output = tt_vae.decode(latents)
+            ttnn_output = ttnn.reshape(ttnn_output, [1, image_size[0], image_size[1], ttnn_output.shape[3]])
+            ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
+            image = ttnn.to_torch(ttnn_output)
+        else:
+            latents = ttnn.to_torch(latents).to(torch.float32)
+            image = vae.decode(latents).sample
 
         # Image post-processing
         image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
+        image = image.detach().cpu().float().permute(0, 2, 3, 1).numpy()
         images = (image * 255).round().astype("uint8")
         pil_images = [Image.fromarray(image) for image in images][0]
         ttnn_output_path = f"{experiment_name}_ttnn.png"
@@ -578,7 +607,7 @@ def run_demo_inference_diffusiondb(
         logger.info(f"CLIP Score (TTNN): {clip_score_ttnn}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 11 * 8192}], indirect=True)
 @pytest.mark.parametrize(
     "input_path",
     (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),

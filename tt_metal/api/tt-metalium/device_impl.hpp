@@ -21,6 +21,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
+class go_msg_t;
+class launch_msg_t;
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 

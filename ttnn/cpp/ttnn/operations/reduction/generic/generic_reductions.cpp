@@ -320,7 +320,8 @@ static Tensor std_var_impl(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    const ttnn::SmallVector<int>& non_height_width_dims) {
+    const ttnn::SmallVector<int>& non_height_width_dims,
+    bool correction) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     auto input_shape = input_tensor_arg.get_logical_shape();
     auto rank = input_shape.size();
@@ -344,6 +345,13 @@ static Tensor std_var_impl(
     for (int axis : dim) {
         reduced_volume *= input_shape[axis];
     }
+
+    // Bessel's correction (i.e. divisor of N-1)
+    if (correction) {
+        reduced_volume -= 1;
+    }
+    TT_FATAL(reduced_volume > 0, "Reduction is performed on too few elements, yielding divisor of {}", reduced_volume);
+
     scalar /= reduced_volume;
 
     auto mean_tensor = reduce_impl<ReduceType::Sum>(
@@ -400,7 +408,8 @@ Tensor Reduce<reduce_type>::invoke(
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    float scalar) {
+    float scalar,
+    bool correction) {
     ttnn::SmallVector<int> dim = generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type);
     bool is_tiled = input_tensor_arg.get_layout() == TILE_LAYOUT;
@@ -429,7 +438,14 @@ Tensor Reduce<reduce_type>::invoke(
     }
     if constexpr (reduce_type == ReduceType::Std || reduce_type == ReduceType::Var) {
         return std_var_impl<reduce_type>(
-            input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, non_height_width_dims);
+            input_tensor,
+            dim,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            non_height_width_dims,
+            correction);
     }
     return reduce_impl<reduce_type>(
         input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, non_height_width_dims);

@@ -60,34 +60,36 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
                 for (std::size_t replicated_device_x = 0; replicated_device_x < num_devices_x; replicated_device_x++) {
                     for (std::size_t replicated_device_y = 0; replicated_device_y < num_devices_y;
                          replicated_device_y++) {
-                        auto device_shard_view =
-                            buffer.get_device_buffer(MeshCoordinate(replicated_device_y, replicated_device_x));
-                        const BufferRegion region(0, device_shard_view->size());
-                        this->write_shard_to_device(device_shard_view, shard_data.data(), region);
+                        this->write_shard_to_device(
+                            buffer,
+                            MeshCoordinate(replicated_device_y, replicated_device_x),
+                            shard_data.data(),
+                            /*region=*/std::nullopt);
                     }
                 }
             } else if (height_replicated or width_replicated) {
                 if (buffer.global_shard_spec().shard_orientation == ShardOrientation::ROW_MAJOR) {
                     for (auto replicated_device_y = 0; replicated_device_y < num_devices_y; replicated_device_y++) {
-                        auto device_shard_view =
-                            buffer.get_device_buffer(MeshCoordinate(replicated_device_y, device_x));
-                        const BufferRegion region(0, device_shard_view->size());
-                        this->write_shard_to_device(device_shard_view, shard_data.data(), region);
+                        this->write_shard_to_device(
+                            buffer,
+                            MeshCoordinate(replicated_device_y, device_x),
+                            shard_data.data(),
+                            /*region=*/std::nullopt);
                     }
                     device_x++;
                 } else {
                     for (auto replicated_device_x = 0; replicated_device_x < num_devices_x; replicated_device_x++) {
-                        auto device_shard_view =
-                            buffer.get_device_buffer(MeshCoordinate(device_y, replicated_device_x));
-                        const BufferRegion region(0, device_shard_view->size());
-                        this->write_shard_to_device(device_shard_view, shard_data.data(), region);
+                        this->write_shard_to_device(
+                            buffer,
+                            MeshCoordinate(device_y, replicated_device_x),
+                            shard_data.data(),
+                            /*region=*/std::nullopt);
                     }
                     device_y++;
                 }
             } else {
-                auto device_shard_view = buffer.get_device_buffer(MeshCoordinate(device_y, device_x));
-                const BufferRegion region(0, device_shard_view->size());
-                this->write_shard_to_device(device_shard_view, shard_data.data(), region);
+                this->write_shard_to_device(
+                    buffer, MeshCoordinate(device_y, device_x), shard_data.data(), /*region=*/std::nullopt);
                 if (buffer.global_shard_spec().shard_orientation == ShardOrientation::ROW_MAJOR) {
                     if (++device_x == num_devices_x) {
                         device_x = 0;
@@ -126,10 +128,13 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
     std::vector<uint32_t> shard_data = std::vector<uint32_t>(total_write_size_per_shard / sizeof(uint32_t), 0);
     for (std::size_t shard_y = 0; shard_y < num_shards_y; shard_y++) {
         for (std::size_t shard_x = 0; shard_x < num_shards_x; shard_x++) {
-            auto device_shard_view = buffer.get_device_buffer(MeshCoordinate(device_y, device_x));
-            const BufferRegion region(0, device_shard_view->size());
             std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
-            this->read_shard_from_device(device_shard_view, shard_data.data(), region, num_txns_per_device);
+            this->read_shard_from_device(
+                buffer,
+                MeshCoordinate(device_y, device_x),
+                shard_data.data(),
+                /*region=*/std::nullopt,
+                num_txns_per_device);
             this->submit_memcpy_request(num_txns_per_device, true);
             uint32_t write_offset = shard_x * single_write_size + shard_y * stride_size_bytes * shard_shape.height();
             uint32_t size_to_write = total_write_size_per_shard;
@@ -168,9 +173,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
         // Currently not supported when doing TT-Mesh Native sharding, since we
         // rely on TTNN to perform sharding and call enqueue_write_shards
         auto dispatch_lambda = [this, &buffer, host_data, &region](const MeshCoordinate& coord) {
-            auto device_shard_view = buffer.get_device_buffer(coord);
-            const BufferRegion buffer_region = region.value_or(BufferRegion(0, device_shard_view->size()));
-            this->write_shard_to_device(device_shard_view, host_data, buffer_region);
+            this->write_shard_to_device(buffer, coord, host_data, region);
         };
         for (const auto& coord : device_range) {
             dispatch_thread_pool_->enqueue(
@@ -209,11 +212,8 @@ void MeshCommandQueueBase::enqueue_write_shards(
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     auto dispatch_lambda = [&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
         auto& shard_data_transfer = shard_data_transfers[shard_idx];
-        auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
         this->write_shard_to_device(
-            device_shard_view,
-            shard_data_transfer.host_data,
-            shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
+            *buffer, shard_data_transfer.shard_coord, shard_data_transfer.host_data, shard_data_transfer.region);
     };
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
@@ -229,15 +229,11 @@ void MeshCommandQueueBase::enqueue_write_shards(
 }
 
 void MeshCommandQueueBase::enqueue_write(
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    const DistributedHostBuffer& host_buffer,
-    const MeshShape& host_buffer_shape,
-    bool blocking) {
+    const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
     // Iterate over global coordinates; skip host-remote coordinates, as per `host_buffer` configuration.
     std::vector<ShardDataTransfer> shard_data_transfers;
-    for (const auto& host_buffer_coord : MeshCoordinateRange(host_buffer_shape)) {
-        const int linear_index = to_linear_index(host_buffer_shape, host_buffer_coord);
-        auto buf = host_buffer.get_shard(linear_index);
+    for (const auto& host_buffer_coord : host_buffer.shard_coords()) {
+        auto buf = host_buffer.get_shard(host_buffer_coord);
         if (buf.has_value()) {
             shard_data_transfers.push_back(
                 {.shard_coord = host_buffer_coord,
@@ -257,22 +253,28 @@ void MeshCommandQueueBase::enqueue_read_shards(
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
     for (const auto& shard_data_transfer : shard_data_transfers) {
-        auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
         this->read_shard_from_device(
-            device_shard_view,
+            *buffer,
+            shard_data_transfer.shard_coord,
             shard_data_transfer.host_data,
-            shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())),
+            shard_data_transfer.region,
             num_txns_per_device);
     }
     this->submit_memcpy_request(num_txns_per_device, blocking);
 }
 
 void MeshCommandQueueBase::enqueue_read(
-    const std::shared_ptr<MeshBuffer>& buffer, DistributedHostBuffer& host_buffer, bool blocking) {
+    const std::shared_ptr<MeshBuffer>& buffer,
+    DistributedHostBuffer& host_buffer,
+    const std::optional<std::unordered_set<MeshCoordinate>>& shards,
+    bool blocking) {
     std::vector<ShardDataTransfer> shard_data_transfers;
     for (const auto& coord : MeshCoordinateRange(buffer->device()->shape())) {
-        const int linear_index = to_linear_index(buffer->device()->shape(), coord);
-        auto buf = host_buffer.get_shard(linear_index);
+        if (shards.has_value() && !shards->contains(coord)) {
+            continue;
+        }
+
+        auto buf = host_buffer.get_shard(coord);
         if (buf.has_value()) {
             shard_data_transfers.push_back(
                 {.shard_coord = coord,

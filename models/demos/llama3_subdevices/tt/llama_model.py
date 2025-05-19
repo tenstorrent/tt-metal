@@ -166,7 +166,9 @@ class TtTransformer(LightweightModule):
         else:
             self.tt_ccl = self.tt_ccl_decode
 
-    def prepare_prefill_inputs_host(self, tokens, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None):
+    def prepare_prefill_inputs_host(
+        self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
@@ -197,13 +199,20 @@ class TtTransformer(LightweightModule):
             tt_rot_mats_prefill = self.tt_rot_mats_prefill
 
         if page_table is not None:
+            # we only want to update the kv cache on the 8 devices (every fourth device starting at user_id//8 ) for a given user_id
+            # we are setting the page table to -1 for all other devices to skip the update
+            page_table_padded = torch.ones((128, page_table.shape[1]), dtype=torch.int32) * -1
+            page_table_padded[user_id // 8 * 32 : (user_id // 8 + 1) * 32, :] = page_table
             tt_page_table = ttnn.from_torch(
-                page_table,
+                page_table_padded,
                 device=None,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(None, 0), mesh_shape=self.args.cluster_shape
+                ),
             )
+
         else:
             tt_page_table = None
 
@@ -218,26 +227,39 @@ class TtTransformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens, tt_page_table, tt_chunk_page_table
+        user_id = ttnn.from_torch(
+            torch.tensor([user_id], dtype=torch.int32),
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        return tokens, user_id, tt_page_table, tt_chunk_page_table
 
     def transform_prefill_inputs_device(
         self,
         tokens,
+        user_id,
         page_table=None,
         chunk_page_table=None,
     ):
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, page_table, chunk_page_table
+        return tt_tokens, user_id, page_table, chunk_page_table
 
-    def prepare_inputs_prefill(self, tokens, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None):
+    def prepare_inputs_prefill(
+        self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
         Its implementation can take advantage of a few other functions which the
         model must implement.
         """
-        host_inputs = self.prepare_prefill_inputs_host(tokens, page_table, chunk_page_table, tt_rot_mats_prefill)
+        host_inputs = self.prepare_prefill_inputs_host(
+            tokens, user_id, page_table, chunk_page_table, tt_rot_mats_prefill
+        )
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
         transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
         return transformed_device_inputs
@@ -260,7 +282,7 @@ class TtTransformer(LightweightModule):
         """
         B = tokens.shape[0]
         # assert current_pos.shape[0] == B, "Batch size mismatch"
-        assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
+        assert B == self.args.max_batch_size, f"Batch size must be equal to max_batch_size {self.args.max_batch_size}"
 
         # Necessary padding to be full tile sized when on device
         tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
@@ -271,7 +293,6 @@ class TtTransformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         tokens = ttnn.unsqueeze_to_4D(tokens)
-        current_pos[:] = current_pos[0]
         rot_current_pos = torch.maximum(
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
@@ -359,27 +380,26 @@ class TtTransformer(LightweightModule):
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
         tt_out_cpu = tt_out.cpu(blocking=True, cq_id=0)
-        if is_tokens:
-            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_cpu)[0])[0, 0, 0, :]
-            return tt_out
 
-        if self.args.num_devices > 1:
-            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
+        if tt_out_cpu.shape[-1] == 32:
+            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_cpu)[0])[0, 0, 0, :]
+
         else:
-            tt_out = ttnn.to_torch(tt_out).float()
-        tt_out = tt_out[:, :, :B, : self.vocab_size].reshape(B, S, -1)
+            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_cpu)[0])[0, 0, :, :]
+            tt_out = torch.argmax(tt_out, dim=-1, keepdim=True)
+
         return tt_out
 
     def ttnn_prefill_forward(
         self,
         x,
+        user_id=0,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
         rot_mats=None,
-        user_id=0,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -440,20 +460,17 @@ class TtTransformer(LightweightModule):
         )
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=sub_core_grids)
-        tt_logits = ttnn.reshape(
-            tt_logits,
-            ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
-            ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
-        )
 
         if argmax_on_device:
+            tt_logits = ttnn.reshape(
+                tt_logits,
+                ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
+                ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
+            )
+
             tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
                 tt_logits, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids, output_tensor=x
             )
-        else:
-            # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-            if not self.args.is_galaxy:
-                tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         ttnn.plus_one(
             current_pos,

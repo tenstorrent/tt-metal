@@ -117,7 +117,7 @@ ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/ @
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/tracy/ @mo-tenstorrent
-ttnn/tools/profiler/ @mo-tenstorrent
+ttnn/api/tools/profiler/ @mo-tenstorrent
 tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
@@ -141,7 +141,6 @@ tests/sweep_framework/sweeps/matmul/  @bbradelTT @nsorabaTT @vsureshTT @edwinlee
 tests/sweep_framework/sweeps/reduction/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @aczajkowskiTT
 
 # TTNN Distributed
-ttnn/cpp/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 
@@ -187,9 +186,10 @@ models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
 models/experimental/ @sminakov-tt @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/demos/ufld_v2 @tenstorrent/cse-developer-ttnn
-models/experimental/functional_vgg_unet @tenstorrent/cse-developer-ttnn
+models/demos/vgg_unet @tenstorrent/cse-developer-ttnn
 models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn
 models/experimental/functional_vanilla_unet @tenstorrent/cse-developer-ttnn
+models/experimental/sentence_bert @tenstorrent/cse-developer-ttnn
 models/experimental/grok @yieldthought @uaydonat
 models/demos/wormhole/vit @mbahnasTT @dvartaniansTT @uaydonat
 models/demos/vit  @mbahnasTT @dvartaniansTT @uaydonat
@@ -199,11 +199,11 @@ models/perf/ @yieldthought @uaydonat
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat
 models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-developers-convolutions
-models/experimental/mobilenetv2 @tenstorrent/cse-developer-ttnn
+models/demos/mobilenetv2 @tenstorrent/cse-developer-ttnn
 models/experimental/yolov8s_world @tenstorrent/cse-developer-ttnn
 models/experimental/yolov10 @tenstorrent/cse-developer-ttnn
-models/experimental/functional_yolov9c @tenstorrent/cse-developer-ttnn
-models/experimental/yolov8x @tenstorrent/cse-developer-ttnn
+models/demos/yolov9c @tenstorrent/cse-developer-ttnn
+models/demos/yolov8x @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
