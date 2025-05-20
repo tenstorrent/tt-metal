@@ -96,6 +96,7 @@ Huggingface models specify their architecture in the `config.json` file. The fol
 
 - LlamaForCausalLM
 - Qwen2ForCausalLM
+- Qwen3ForCausalLM
 - MistralForCausalLM
 - Phi3ForCausalLM
 
