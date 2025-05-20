@@ -31,7 +31,6 @@ class TtStableDiffusion3Pipeline:
         self, *, checkpoint: str, device: ttnn.MeshDevice, enable_t5_text_encoder: bool = True, guidance_cond: int
     ) -> None:
         self._device = device
-        device.enable_async(True)
 
         logger.info("loading models...")
         self._tokenizer_1 = CLIPTokenizer.from_pretrained(checkpoint, subfolder="tokenizer")
