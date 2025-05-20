@@ -82,7 +82,7 @@ perf_targets = {
         "op_name": "QKV_MM",
         "kernel_duration": 10623,
         "op_to_op": 716.4444444444445,
-        "non-overlapped-dispatch-time": 6102.0,
+        "non-overlapped-dispatch-time": 6956.1,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
