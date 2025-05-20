@@ -16,6 +16,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/fold/fold.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 namespace ttnn {
@@ -25,6 +26,51 @@ using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
 namespace conv2d {
+
+// Common folding operation for both input and weight tensors
+template <typename T>
+ttnn::Tensor fold_tensor(
+    const ttnn::Tensor& tensor,
+    T* device,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 4> padding_n4,
+    DataType dtype,
+    bool is_weight_tensor) {
+    // Validation checks
+    TT_FATAL(
+        stride[0] == kernel_size[0] && stride[1] == kernel_size[1], "Stride must be equal to kernel size for folding");
+    if (is_weight_tensor) {
+        TT_FATAL(!tensor.memory_config().is_l1(), "Weight tensor must not be in L1 memory");
+    } else {
+        TT_FATAL(!tensor.memory_config().is_l1(), "Input tensor must not be in L1 memory for folding");
+    }
+    TT_FATAL(
+        padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0,
+        "Padding must be 0 for folding");
+    TT_FATAL(dtype != tt_metal::DataType::BFLOAT8_B, "Conv2D DRAM folding currently doesn't support BFLOAT8_B");
+
+    // Move to device if needed
+    ttnn::Tensor tensor_on_device = tensor;
+    if (!tt::tt_metal::is_device_tensor(tensor_on_device)) {
+        tensor_on_device = ttnn::to_device(tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
+    }
+
+    if (is_weight_tensor) {
+        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({0, 2, 3, 1}));
+    }
+
+    // Core folding operation
+    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1]);
+
+    if (is_weight_tensor) {
+        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({1, 2, 3, 0}));
+        tensor_on_device =
+            ttnn::to_layout(tensor_on_device, Layout::TILE, std::nullopt, std::nullopt, tensor_on_device.device());
+    }
+
+    return tensor_on_device;
+}
 
 template <typename T, typename compute_>
 Tensor convert_tensor(const Tensor& input_tensor, compute_& compute) {
@@ -1104,6 +1150,10 @@ ttnn::Tensor prepare_conv_weights(
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
 
+    // if folding is enabled, move the weight tensor to device DRAM, fold it and return the folded weight tensor
+    if (conv_config.enable_dram_fold) {
+        return fold_tensor(weight_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, true);
+    }
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 

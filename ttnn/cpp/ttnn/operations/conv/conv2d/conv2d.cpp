@@ -27,7 +27,6 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/fold/fold.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write.hpp"
@@ -403,22 +402,14 @@ Result conv2d_L1(
     auto weight_tensor = weight_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     if (conv_config.enable_dram_fold && !mm_conv) {
-        std::cout << "Folding input and weight tensors" << std::endl;
         // Fold the input tensor to reduce spatial dimensions by stride factors, effectively converting
         // a large kernel convolution into a matmul operation.
-        bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor_);
-        if (!input_tensor_on_device) {
-            input_tensor = ttnn::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
-        }
-        input_tensor = ttnn::fold(input_tensor, stride[0], stride[1]);
-        if (!tt::tt_metal::is_device_tensor(weight_tensor_)) {
-            weight_tensor = ttnn::to_device(weight_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
-            weight_tensor = ttnn::permute(weight_tensor, ttnn::SmallVector<int64_t>({0, 2, 3, 1}));
-            weight_tensor = ttnn::fold(weight_tensor, stride[0], stride[1]);
-            weight_tensor = ttnn::permute(weight_tensor, ttnn::SmallVector<int64_t>({1, 2, 3, 0}));
+        input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);
+        if (!tt::tt_metal::is_device_tensor(weight_tensor)) {
             weight_tensor =
-                ttnn::to_layout(weight_tensor, Layout::TILE, std::nullopt, std::nullopt, weight_tensor.device());
+                fold_tensor(weight_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, true);
         }
+        // Update the input height and width to the folded dimensions
         input_height = input_height / stride[0];
         input_width = input_width / stride[1];
         stride = {1, 1};
