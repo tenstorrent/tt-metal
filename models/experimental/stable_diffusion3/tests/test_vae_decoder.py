@@ -28,8 +28,6 @@ def test_vae_decoder(*, mesh_device: ttnn.MeshDevice, model_name: str, use_traci
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
-    device_count = mesh_device.get_num_devices()
-
     parent_torch_model = AutoencoderKL.from_pretrained(
         f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="vae", torch_dtype=torch_dtype
     )
@@ -43,16 +41,15 @@ def test_vae_decoder(*, mesh_device: ttnn.MeshDevice, model_name: str, use_traci
     torch.manual_seed(0)
     latent = torch.randn([1, 16, image_size // 8, image_size // 8], dtype=torch_dtype)
 
-    mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, 0)
     tt_latent_host = from_torch_fast(
-        latent.permute(0, 2, 3, 1).repeat(device_count, 1, 1, 1),
+        latent.permute(0, 2, 3, 1),
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn_dtype,
-        mesh_mapper=mesh_mapper,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     with torch.no_grad():
-        image = torch_model(latent).repeat(device_count, 1, 1, 1)
+        image = torch_model(latent)
 
     tt_latent = allocate_tensor_on_device_like(tt_latent_host, device=mesh_device)
 
@@ -81,6 +78,6 @@ def test_vae_decoder(*, mesh_device: ttnn.MeshDevice, model_name: str, use_traci
         tt_image = tt_model(tt_latent)
         logger.info("done...")
 
-    tt_image_torch = to_torch(tt_image, mesh_device=mesh_device, shard_dim=0).permute(0, 3, 1, 2)
+    tt_image_torch = to_torch(tt_image).permute(0, 3, 1, 2)
 
     assert_quality(image, tt_image_torch, pcc=0.94, ccc=0.94)
