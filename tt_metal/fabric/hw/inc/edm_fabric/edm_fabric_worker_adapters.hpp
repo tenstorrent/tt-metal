@@ -235,29 +235,36 @@ struct WorkerToFabricEdmSenderImpl {
     /*
      * No CB
      */
+    template <bool stateful_api = false>
     FORCE_INLINE void send_packet_header_and_notify_fabric_flush_blocking(uint32_t source_address) {
-        send_packet_header_and_notify_fabric<EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING>(source_address);
+        send_packet_header_and_notify_fabric<EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING, stateful_api>(source_address);
     }
+    template <bool stateful_api = false>
     FORCE_INLINE void send_payload_without_header_non_blocking_from_address(
         uint32_t source_address, size_t size_bytes) {
-        send_payload_without_header_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
+        send_payload_without_header_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING, stateful_api>(
+            source_address, size_bytes);
     }
+    template <bool stateful_api = false>
     FORCE_INLINE void send_payload_flush_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING>(source_address, size_bytes);
+        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING, stateful_api>(source_address, size_bytes);
     }
+    template <bool stateful_api = false>
     FORCE_INLINE void send_payload_flush_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
+        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING, stateful_api>(source_address, size_bytes);
     }
+    template <bool stateful_api = false>
     FORCE_INLINE void send_payload_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::BLOCKING>(source_address, size_bytes);
+        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::BLOCKING, stateful_api>(source_address, size_bytes);
     }
 
     /*
      * No CB
      */
     // Does not wait for CB. Assumes caller handles CB data availability
+    template <bool stateful_api = false>
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
+        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING, stateful_api>(source_address, size_bytes);
     }
     template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api>
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
@@ -469,30 +476,31 @@ private:
         this->advance_buffer_slot_wrptr();
         this->update_edm_buffer_slot_wrptr<stateful_api, enable_ring_support>(noc);
     }
-    template <EDM_IO_BLOCKING_MODE blocking_mode>
+    template <EDM_IO_BLOCKING_MODE blocking_mode, bool use_stateful_api = false>
     FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
-        send_chunk_from_address<blocking_mode>(source_address, 1, sizeof(PACKET_HEADER_TYPE), buffer_address);
+        send_chunk_from_address<blocking_mode, use_stateful_api>(
+            source_address, 1, sizeof(PACKET_HEADER_TYPE), buffer_address);
         post_send_payload_increment_pointers();
     }
 
-    template <EDM_IO_BLOCKING_MODE blocking_mode>
+    template <EDM_IO_BLOCKING_MODE blocking_mode, bool use_stateful_api = false>
     FORCE_INLINE void send_payload_without_header_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
         // skip past the first part of the buffer which will be occupied by the packet header
-        send_chunk_from_address<blocking_mode>(
+        send_chunk_from_address<blocking_mode, use_stateful_api>(
             source_address, 1, size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE));
     }
-    template <EDM_IO_BLOCKING_MODE blocking_mode>
+    template <EDM_IO_BLOCKING_MODE blocking_mode, bool use_stateful_api = false>
     FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
-        send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
+        send_chunk_from_address<blocking_mode, use_stateful_api>(source_address, 1, size_bytes, buffer_address);
         post_send_payload_increment_pointers();
     }
     template <

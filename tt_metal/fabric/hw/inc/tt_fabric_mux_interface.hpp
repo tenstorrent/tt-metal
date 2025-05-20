@@ -71,26 +71,34 @@ FORCE_INLINE void fabric_client_disconnect(WorkerToFabricMuxSender<FABRIC_MUX_CH
     connection_handle.close();
 }
 
-// assumes packet header is correctly populated
+// Set cmd buf NOC state to downstream
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
+FORCE_INLINE void fabric_set_noc_state(WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
+    noc_async_write_set_state(0, get_noc_addr(connection_handle.edm_noc_x, connection_handle.edm_noc_y, 0), 0);
+}
+
+// assumes packet header is correctly populated
+template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0, bool stateful_api = false>
 FORCE_INLINE void fabric_async_write(
     WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint32_t source_payload_address,
     uint32_t packet_payload_size_bytes) {
     connection_handle.wait_for_empty_write_slot();
-    connection_handle.send_payload_without_header_non_blocking_from_address(
+    connection_handle.template send_payload_without_header_non_blocking_from_address<stateful_api>(
         source_payload_address, packet_payload_size_bytes);
-    connection_handle.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    connection_handle.template send_payload_blocking_from_address<stateful_api>(
+        (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
 // assumes packet header is correctly populated
-template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
+template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0, bool stateful_api = false>
 FORCE_INLINE void fabric_atomic_inc(
     WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
     connection_handle.wait_for_empty_write_slot();
-    connection_handle.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    connection_handle.template send_payload_flush_non_blocking_from_address<stateful_api>(
+        (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
 }  // namespace tt::tt_fabric

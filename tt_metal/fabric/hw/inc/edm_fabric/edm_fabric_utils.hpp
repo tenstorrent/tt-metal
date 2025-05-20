@@ -44,13 +44,17 @@ FORCE_INLINE void send_chunk_from_address_with_trid(
     }
 }
 
-template <EDM_IO_BLOCKING_MODE blocking_mode = EDM_IO_BLOCKING_MODE::BLOCKING>
+template <EDM_IO_BLOCKING_MODE blocking_mode = EDM_IO_BLOCKING_MODE::BLOCKING, bool stateful_api = false>
 FORCE_INLINE void send_chunk_from_address(
     const uint32_t& local_l1_address,
     const uint32_t& num_pages,
     const uint32_t& page_size,
     uint64_t remote_l1_write_addr) {
-    noc_async_write(local_l1_address, remote_l1_write_addr, page_size * num_pages);
+    if constexpr (stateful_api) {
+        noc_async_write_with_state(local_l1_address, remote_l1_write_addr, page_size * num_pages);
+    } else {
+        noc_async_write(local_l1_address, remote_l1_write_addr, page_size * num_pages);
+    }
     if constexpr (blocking_mode == EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING) {
         noc_async_writes_flushed();
     } else if constexpr (blocking_mode == EDM_IO_BLOCKING_MODE::BLOCKING) {
