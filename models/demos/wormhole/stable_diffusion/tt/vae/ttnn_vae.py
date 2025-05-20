@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
-    GROUPNORM_NUM_BLOCKS,
+    GROUPNORM_DECODER_NUM_BLOCKS,
     MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
     UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
@@ -45,7 +45,7 @@ class Vae:
             upblock_norm_blocks=UPBLOCK_RESNET_NORM_NUM_BLOCKS,
             upblock_resnet_conv_channel_split_factors=UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
             upblock_upsample_conv_channel_split_factors=UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
-            norm_num_blocks=GROUPNORM_NUM_BLOCKS,
+            norm_num_blocks=GROUPNORM_DECODER_NUM_BLOCKS,
         )
 
         self.post_quant_conv = ConvBlock(

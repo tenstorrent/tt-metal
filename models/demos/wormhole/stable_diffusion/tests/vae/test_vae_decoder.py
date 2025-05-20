@@ -8,7 +8,7 @@ from diffusers import AutoencoderKL
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
-    GROUPNORM_NUM_BLOCKS,
+    GROUPNORM_DECODER_NUM_BLOCKS,
     MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
     UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
@@ -41,7 +41,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             UPBLOCK_RESNET_NORM_NUM_BLOCKS,
             UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
             UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
-            GROUPNORM_NUM_BLOCKS,
+            GROUPNORM_DECODER_NUM_BLOCKS,
         ),
     ],
 )
