@@ -134,7 +134,6 @@ void MAIN {
     }
 
     if constexpr (tilize_q) {
-        mm_init(cb_q_in, cb_k_in, cb_out_final);
         tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
         cb_wait_front(cb_q_rm, q_chunk_tiles);
     } else {
@@ -143,7 +142,11 @@ void MAIN {
     }
 
     if constexpr (tilize_q) {
+        cb_reserve_back(cb_q_in, q_chunk_tiles);
         tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
+        cb_push_back(cb_q_in, q_chunk_tiles);
+        cb_pop_front(cb_q_rm, q_chunk_tiles);
+        mm_init(cb_q_in, cb_k_in, cb_out_final);
     }
 
 #ifdef DYNAMIC_CHUNK_SIZE
