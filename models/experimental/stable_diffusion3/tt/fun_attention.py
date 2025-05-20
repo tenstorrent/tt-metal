@@ -91,6 +91,17 @@ class TtAttentionParameters:
         )
 
 
+def _merge_qkv_proj(
+    q_state: dict[str, torch.Tensor],
+    k_state: dict[str, torch.Tensor],
+    v_state: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    return {
+        "weight": torch.cat([q_state["weight"], k_state["weight"], v_state["weight"]]) if "weight" in q_state else None,
+        "bias": torch.cat([q_state["bias"], k_state["bias"], v_state["bias"]]) if "bias" in q_state else None,
+    }
+
+
 def sd_attention_qkv(
     x: ttnn.Tensor, parameters: TtAttentionPartParameters, *, num_heads: int, deallocate: bool
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -239,14 +250,3 @@ def sd_joint_attention(
     prompt = sd_attention_out_proj(prompt, parameters.prompt)
 
     return spatial, prompt
-
-
-def _merge_qkv_proj(
-    q_state: dict[str, torch.Tensor],
-    k_state: dict[str, torch.Tensor],
-    v_state: dict[str, torch.Tensor],
-) -> dict[str, torch.Tensor]:
-    return {
-        "weight": torch.cat([q_state["weight"], k_state["weight"], v_state["weight"]]) if "weight" in q_state else None,
-        "bias": torch.cat([q_state["bias"], k_state["bias"], v_state["bias"]]) if "bias" in q_state else None,
-    }
