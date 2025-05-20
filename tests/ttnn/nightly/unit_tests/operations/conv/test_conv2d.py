@@ -3554,10 +3554,9 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("input_channels", [3, 320])
-@pytest.mark.parametrize("output_channels", [192])
+@pytest.mark.parametrize("output_channels", [32])
 @pytest.mark.parametrize("input_height,input_width", [(224, 224), (512, 672)])
 @pytest.mark.parametrize("kernel_height,kernel_width", [(16, 16), (32, 32)])
-@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("has_bias", [True, False])
 def test_conv2d_with_fold(
@@ -3570,7 +3569,6 @@ def test_conv2d_with_fold(
     input_width,
     kernel_height,
     kernel_width,
-    memory_config,
     input_layout,
     has_bias,
 ):

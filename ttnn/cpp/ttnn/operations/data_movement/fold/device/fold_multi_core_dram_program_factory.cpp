@@ -24,7 +24,8 @@ namespace ttnn::operations::data_movement {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interleaved(
+
+Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     // Get device and create a new program
     auto device = input_tensor.device();
@@ -58,10 +59,18 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
     uint32_t ntiles = input_tensor.volume() / TILE_HW;
     uint32_t num_blocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_row);
 
+    tt::log_debug("ntiles_per_row: {}, ntiles: {}, num_blocks: {}", ntiles_per_row, ntiles, num_blocks);
+
     // Split work across cores for parallel processing
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, num_blocks);
+
+    tt::log_debug(
+        "ncores: {}, nblocks_per_core: {}, nblocks_per_core_cliff: {}",
+        ncores,
+        nblocks_per_core,
+        nblocks_per_core_cliff);
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = ntiles_per_row;
     uint32_t double_buffer = 2;  // Double buffering for improved performance
@@ -136,7 +145,7 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
         compute_kernel_name = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
 
-    tt::log_info("compute_kernel_name: {}", compute_kernel_name);
+    tt::log_debug("compute_kernel_name: {}", compute_kernel_name);
 
     // Create main compute kernel
     compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -218,7 +227,7 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_tiled_interlea
     return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cores_with_rtargs}};
 }
 
-Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_row_major_interleaved(
+Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
@@ -243,8 +252,17 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_row_major_inte
     uint32_t num_cores_y = compute_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
+    tt::log_debug("input_tensor_shape: {}", input_tensor.get_padded_shape());
+    tt::log_debug("output_tensor_shape: {}", output.get_padded_shape());
+
     // Calculate work per core based on input dimensions
     uint32_t work_per_core = (total_input_work + num_cores_total - 1) / num_cores_total;
+
+    tt::log_debug(
+        "total_input_work: {}, num_cores_total: {}, work_per_core: {}",
+        total_input_work,
+        num_cores_total,
+        work_per_core);
 
     // Create core ranges
     auto all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
@@ -258,6 +276,12 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_row_major_inte
     // align to DRAM read alignment.
     uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, hal::get_dram_alignment());
 
+    tt::log_debug(
+        "stick_nbytes: {}, aligned_stick_nbytes: {}, dram_alignment: {}",
+        stick_nbytes,
+        aligned_stick_nbytes,
+        hal::get_dram_alignment());
+
     int double_buffer = 2;
     // Create source circular buffer - sized for input work per core
     auto src_cb_config = CircularBufferConfig(double_buffer * aligned_stick_nbytes, {{cb_src0_index, cb_data_format}})
@@ -265,7 +289,7 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_row_major_inte
     auto cb_src0 = CreateCircularBuffer(program, all_cores, src_cb_config);
 
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_nbytes);
-    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(stick_nbytes) : 0;
+    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_nbytes) : 0;
     // Create reader kernel
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -308,21 +332,21 @@ Fold::MultiCoreTiledInterleaved::cached_program_t fold_multi_core_row_major_inte
     return {std::move(program), {reader_kernel_id, writer_kernel_id, cores_with_rtargs}};
 }
 
-Fold::MultiCoreTiledInterleaved::cached_program_t Fold::MultiCoreTiledInterleaved::create(
+Fold::MultiCoreDRAMFold::cached_program_t Fold::MultiCoreDRAMFold::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     if (tensor_args.input_tensor.get_layout() == Layout::TILE) {
-        tt::log_info("Fold operation with DRAM tiled input");
+        tt::log_debug("Fold operation with DRAM tiled input");
         return fold_multi_core_tiled_interleaved(
             tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
     }
-    tt::log_info("Fold operation with DRAM row major input");
+    tt::log_debug("Fold operation with DRAM row major input");
     return fold_multi_core_row_major_interleaved(
         tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
 }
 
-void Fold::MultiCoreTiledInterleaved::override_runtime_arguments(
+void Fold::MultiCoreDRAMFold::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

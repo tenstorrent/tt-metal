@@ -6,17 +6,6 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
-
 void kernel_main() {
     uint32_t batch_size = get_compile_time_arg_val(0);
     uint32_t input_width = get_compile_time_arg_val(1);

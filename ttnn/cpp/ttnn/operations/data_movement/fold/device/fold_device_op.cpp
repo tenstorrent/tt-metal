@@ -11,7 +11,7 @@ Fold::program_factory_t Fold::select_program_factory(
     if (op_attr.is_sharded) {
         return MultiCore{};
     } else if (op_attr.is_tiled_interleaved) {
-        return MultiCoreTiledInterleaved{};
+        return MultiCoreDRAMFold{};
     }
     return SingleCore{};
 }
