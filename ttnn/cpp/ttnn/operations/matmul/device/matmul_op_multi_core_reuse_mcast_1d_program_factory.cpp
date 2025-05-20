@@ -2019,6 +2019,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         (std::uint32_t)in1_shard_width_in_dram,
     };
 
+    /* compute kernel args */
+    const uint32_t out_block_num_subblocks = out_block_tiles / out_subblock_num_tiles;
+    TT_FATAL(
+        out_block_num_subblocks == 1 || !untilize_out,
+        "untilize_out is not supported for cases that out_block_num_subblocks > 1");
     std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks

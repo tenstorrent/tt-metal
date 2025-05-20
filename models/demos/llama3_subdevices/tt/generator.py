@@ -19,13 +19,26 @@ from llama_models.llama3.reference_impl.generation import (
 )
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
-    get_padded_prefill_len,
     num_blocks_in_seq,
     get_block_size,
     get_max_prefill_chunk_size,
 )
 
 from models.tt_transformers.tt.generator import SamplingParams
+
+
+def get_padded_prefill_len(seq_len):
+    """
+    Get the padded prefill length for a given sequence length.
+    This is used to pad the sequence length to the nearest power of 2.
+    """
+    if seq_len <= 128:
+        return 128
+    if seq_len <= 1024:
+        return 1024
+    else:
+        # return next power of 2 greater than seq_len
+        return 2 ** (seq_len - 1).bit_length()
 
 
 class Generator:
@@ -59,7 +72,7 @@ class Generator:
         page_table=None,
         kv_cache=None,
         prompt_lens=None,
-        enable_trace=False,
+        enable_trace=True,
         sampling_params=SamplingParams(temperature=0.0, top_k=-1, top_p=1.0),
     ):
         assert sampling_params.temperature == 0, "Currently only supporting greedy decoding (temperature=0) on device"
@@ -76,8 +89,7 @@ class Generator:
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
 
-            # only run 1 user prefill for now
-        for user_id in range(1):
+        for user_id in range(batch):
             logger.info(f"Prefilling User {user_id + 1}")
             seq_len = prompt_lens[user_id]
             last_token_idx = seq_len - 1
@@ -87,7 +99,7 @@ class Generator:
                 [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
             if page_table is not None:
-                page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, seq_len)
+                page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, prefill_seq_len)
             prefill_kwargs = {
                 "tokens": prefill_ids,
                 "page_table": page_table_user if page_table is not None else None,
@@ -100,8 +112,6 @@ class Generator:
             else:
                 tt_logits = self.prefill_forward_single_user_text(**prefill_kwargs)
 
-        for user_id in range(batch):
-            # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[user_id] = tt_logits
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
@@ -175,15 +185,15 @@ class Generator:
                 else:
                     del tt_logits
         else:
-            prefill_input, page_table_tt, _ = self.model.prepare_inputs_prefill(
+            prefill_input, tt_user_id, page_table_tt, _ = self.model.prepare_inputs_prefill(
                 tokens,
+                user_id=user_id,
                 page_table=page_table,
             )
-
             tt_logits = self.model.ttnn_prefill_forward(
                 prefill_input,
                 rot_mats=None,
-                user_id=user_id,
+                user_id=tt_user_id,
                 page_table=page_table_tt,
                 get_last_token=last_token_idx,  # (last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
@@ -211,6 +221,7 @@ class Generator:
             self.trace_inputs_prefill[prefill_seq_len],
             self.trace_output_prefill[prefill_seq_len],
             tokens,
+            user_id,
             page_table=page_table,
         )
         logits = self.model.process_output_prefill(tt_out_trace, last_token_idx=last_token_idx)
@@ -235,8 +246,9 @@ class Generator:
         host_inputs = self.model.prepare_prefill_inputs_host(tokens, page_table=page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
+
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, user_id=user_id
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx
         )
         ttnn.synchronize_device(self.mesh_device)
         logger.info("Done Compiling Model")
@@ -244,7 +256,7 @@ class Generator:
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, user_id=user_id
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx
         )
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
@@ -254,7 +266,7 @@ class Generator:
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, user_id=user_id
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
@@ -267,12 +279,13 @@ class Generator:
         device_inputs,
         tt_out_trace,
         tokens,
+        user_id,
         page_table=None,
     ):
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
-        host_inputs = self.model.prepare_prefill_inputs_host(tokens, page_table)
+        host_inputs = self.model.prepare_prefill_inputs_host(tokens, user_id, page_table)
 
         device_inputs = copy_host_to_device(
             host_tensors=host_inputs,
@@ -297,8 +310,9 @@ class Generator:
         assert (
             sampling_params is None or sampling_params.temperature == 0
         ), "Currently only supporting greedy decoding (temperature=0) on device"
-        argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
-
+        argmax_on_device = (
+            False if -1 not in start_pos else (sampling_params is not None and sampling_params.temperature == 0)
+        )
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
         kv_cache = kv_cache[0]
@@ -315,7 +329,7 @@ class Generator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            return self.read_decode_output(tt_logits, tokens.shape[0], is_tokens=(sampling_params is not None))
+            return self.read_decode_output(tt_logits, tokens.shape[0], is_tokens=(argmax_on_device))
         else:
             return tt_logits
 
@@ -404,6 +418,7 @@ class Generator:
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
+        tokens = tokens.view(-1, 1)
         if not hasattr(self, "trace_id_text"):
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_text(
                 tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
@@ -411,7 +426,6 @@ class Generator:
             self.trace_id_text = trace_id
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_trace
-
         if reset_inputs:
             host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
             device_inputs = copy_host_to_device(

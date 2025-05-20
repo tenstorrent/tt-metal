@@ -12,6 +12,16 @@ on:
       docker-image:
         required: true
         type: string
+      runner-label:
+        required: true
+        type: string
+        default: ''
+        description: '["P100"] (P100 only), ["P150"] (P150 only)'
+      arch_name:
+        required: false
+        type: string
+        default: 'blackhole'
+        description: 'Architecture name to use'
 
 jobs:
   nightly-bh-models:
@@ -21,16 +31,16 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-            { model: whisper, card: BH, owner_id: U05RWH3QUPM, arch: blackhole },  #Salar Hosseini
+            { model: whisper, owner_id: U05RWH3QUPM },  #Salar Hosseini
           ]
-    name: Nightly ${{ matrix.test-group.card }} ${{ matrix.test-group.model }}
-    runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.test-group.card }}"]
+    name: Nightly ${{ inputs.runner-label }} ${{ matrix.test-group.model }} #Salar Hosseini
+    runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}"]
     container:
       image: ${{ inputs.docker-image }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: ${{ inputs.arch_name }}
         LOGURU_LEVEL: INFO
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691

@@ -61,7 +61,7 @@ template <class T = float, ttnn::DataType TensorType = ttnn::DataType::BFLOAT16>
 template <class T = float>
 [[nodiscard]] xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     auto vec = tensor.to_vector<T>();
-    const auto& shape = tensor.get_logical_shape();
+    const auto& shape = tensor.logical_shape();
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     // adapt creates view of the vector, but return will copy this data anyway (by creation of xt::array)
     return xt::adapt(vec, shape_vec);

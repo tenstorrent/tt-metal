@@ -40,7 +40,7 @@ struct TrainingConfig {
 
 TrainingConfig parse_config(const YAML::Node &yaml_config);
 
-uint32_t get_steps_per_dataset(const TrainingConfig &config);
+std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config);
 
 std::vector<ttml::core::distributed::Rank> get_workers_and_aggregator_ranks(uint32_t workers);
 
