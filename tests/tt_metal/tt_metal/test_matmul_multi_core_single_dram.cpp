@@ -11,84 +11,13 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tilize_utils.hpp>
+#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
-
-// Transpose 2D matrix of tiles so that its column major of tiles instead of row major.
-// this is usually used for activation so that blocks data is contiguous in memory
-// until we have a more generalized read kernel that can read tiles from different
-// location in memory to make up a block in the activations CB
-std::vector<std::uint32_t> transpose_tiles(
-    std::vector<std::uint32_t> data, int row_tiles, int col_tiles, int in0_block_w) {
-    std::vector<std::uint32_t> result;
-    int tile_size = 512;
-    for (int c = 0; c < col_tiles; c += in0_block_w) {
-        for (int r = 0; r < row_tiles; r++) {
-            for (int k = 0; k < in0_block_w; k++) {
-                int offset = tile_size * col_tiles * r + c * tile_size + k * tile_size;
-                for (int i = 0; i < tile_size; i++) {
-                    result.push_back(data.at(offset + i));
-                }
-            }
-        }
-    }
-    return result;
-}
-
-void print_faces(std::vector<bfloat16> data, string name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-
-    int tile_index = 0;
-    int face_index = 0;
-    for (int i = 0; i < data.size(); i++) {
-        if (i % 256 == 0) {
-            std::cout << "Tile " << tile_index / 4 << std::endl;
-            std::cout << "Face = " << face_index << std::endl;
-            face_index++;
-            tile_index++;
-            if (face_index == 4) {
-                face_index = 0;
-            }
-        }
-        std::cout << data.at(i).to_float() << ", ";
-        if ((i + 1) % 16 == 0) {
-            std::cout << std::endl;
-        }
-    }
-    std::cout << std::endl;
-}
-
-std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
-    if (N == K) {
-        return data;
-    }
-    std::vector<bfloat16> result;
-    if (N > K) {
-        for (int i = 0; i < M * 32; i++) {
-            for (int j = 0; j < K * 32; j++) {
-                int offset = i * K * 32;
-                result.push_back(data.at(offset + j));
-            }
-            for (int j = 0; j < (N - K) * 32; j++) {
-                result.push_back((float)0);
-            }
-        }
-    } else {
-        for (int i = 0; i < M * 32; i++) {
-            for (int j = 0; j < N * 32; j++) {
-                int offset = i * K * 32;
-                result.push_back(data.at(offset + j));
-            }
-        }
-    }
-
-    return result;
-}
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
     tt_metal::IDevice* device,
@@ -202,27 +131,6 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
     return {std::move(program), mm_reader_kernel, unary_writer_kernel};
 }
 
-std::vector<bfloat16> get_row_slice(
-    std::vector<bfloat16> data, int total_row_slices, int row_slice_index, int rows, int cols) {
-    std::vector<bfloat16> result;
-    int rows_per_slice = rows / total_row_slices;
-    for (int i = rows_per_slice * row_slice_index * cols; i < rows_per_slice * (row_slice_index + 1) * cols; i++) {
-        result.push_back(data.at(i));
-    }
-    return result;
-}
-
-std::vector<bfloat16> get_col_slice(
-    std::vector<bfloat16> data, int total_col_slices, int col_slice_index, int rows, int cols) {
-    std::vector<bfloat16> result;
-    int cols_per_slice = cols / total_col_slices;
-    for (int r = 0; r < rows; r++) {
-        for (int c = cols_per_slice * col_slice_index; c < cols_per_slice * (col_slice_index + 1); c++) {
-            result.push_back(data.at(r * cols + c));
-        }
-    }
-    return result;
-}
 int main(int argc, char** argv) {
     bool pass = true;
 
@@ -275,7 +183,7 @@ int main(int argc, char** argv) {
             100,
             std::chrono::system_clock::now().time_since_epoch().count());
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 identity
-        auto golden = select_columns(tensor.get_values(), M, K, N);
+        auto golden = tt::tt_metal::select_columns(tensor.get_values(), M, K, N);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -292,9 +200,9 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         log_info(LogTest, "Slicing input tensors and copying them to dram along with sending runtime args to device");
         for (int i = 0; i < num_cores_r; i++) {
-            std::vector<bfloat16> activation_slice = get_row_slice(tensor.get_values(), num_cores_r, i, M * 32, K * 32);
+            std::vector<bfloat16> activation_slice = tt_metal::get_row_slice(tensor.get_values(), num_cores_r, i, M * 32, K * 32);
             for (int j = 0; j < num_cores_c; j++) {
-                std::vector<bfloat16> weights_slice = get_col_slice(identity, num_cores_c, j, K * 32, N * 32);
+                std::vector<bfloat16> weights_slice = tt_metal::get_col_slice(identity, num_cores_c, j, K * 32, N * 32);
                 int core_index = i * num_cores_c + j;
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
 
@@ -323,7 +231,7 @@ int main(int argc, char** argv) {
                 auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
                 auto activations_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(activations_tilized));
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-                auto activations_tile_transposed = transpose_tiles(activations, per_core_M, K, in0_block_w);
+                auto activations_tile_transposed = tt_metal::transpose_tiles(activations, per_core_M, K, in0_block_w);
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                     device, dram_src0_channel_id, dram_buffer_src0_addr, activations_tile_transposed);
 
@@ -370,9 +278,9 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Matmul test done");
         log_info(LogTest, "Gathering data back from dram and checking against golden");
         for (int i = 0; i < num_cores_r; i++) {
-            auto golden_row = get_row_slice(golden, num_cores_r, i, M * 32, N * 32);
+            auto golden_row = tt_metal::get_row_slice(golden, num_cores_r, i, M * 32, N * 32);
             for (int j = 0; j < num_cores_c; j++) {
-                auto per_core_golden = get_col_slice(golden_row, num_cores_c, j, per_core_M * 32, N * 32);
+                auto per_core_golden = tt_metal::get_col_slice(golden_row, num_cores_c, j, per_core_M * 32, N * 32);
                 std::vector<uint32_t> result_vec;
                 int core_index = i * num_cores_c + j;
                 uint32_t dram_buffer_dst_addr =

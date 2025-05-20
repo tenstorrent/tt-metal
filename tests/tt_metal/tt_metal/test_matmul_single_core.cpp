@@ -11,74 +11,13 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tilize_utils.hpp>
+#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
-
-// Transpose 2D matrix of tiles so that its column major of tiles instead of row major.
-// this is usually used for activation so that blocks data is contiguous in memory
-// until we have a more generalized read kernel that can read tiles from different
-// location in memory to make up a block in the activations CB
-std::vector<std::uint32_t> transpose_tiles(
-    std::vector<std::uint32_t> data, int row_tiles, int col_tiles, int in0_block_w) {
-    std::vector<std::uint32_t> result;
-    int tile_size = 512;
-    for (int c = 0; c < col_tiles; c += in0_block_w) {
-        for (int r = 0; r < row_tiles; r++) {
-            for (int k = 0; k < in0_block_w; k++) {
-                int offset = tile_size * col_tiles * r + c * tile_size + k * tile_size;
-                for (int i = 0; i < tile_size; i++) {
-                    result.push_back(data.at(offset + i));
-                }
-            }
-        }
-    }
-    return result;
-}
-
-void print_faces(std::vector<bfloat16> data, string name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-
-    int tile_index = 0;
-    int face_index = 0;
-    for (int i = 0; i < data.size(); i++) {
-        if (i % 256 == 0) {
-            std::cout << "Tile " << tile_index / 4 << std::endl;
-            std::cout << "Face = " << face_index << std::endl;
-            face_index++;
-            tile_index++;
-            if (face_index == 4) {
-                face_index = 0;
-            }
-        }
-        std::cout << data.at(i).to_float() << ", ";
-        if ((i + 1) % 16 == 0) {
-            std::cout << std::endl;
-        }
-    }
-    std::cout << std::endl;
-}
-
-std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int min_K_N) {
-    if (min_K_N == K) {
-        return data;
-    }
-    if (min_K_N > K) {
-        TT_FATAL(false, "Error");
-    }
-    std::vector<bfloat16> result;
-    for (int i = 0; i < M * 32; i++) {
-        for (int j = 0; j < min_K_N * 32; j++) {
-            int offset = i * K * 32;
-            result.push_back(data.at(offset + j));
-        }
-    }
-    return result;
-}
 
 int main(int argc, char** argv) {
     bool pass = true;
@@ -269,7 +208,7 @@ int main(int argc, char** argv) {
         auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
         auto activations_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-        auto activations_tile_transposed = transpose_tiles(activations, M, K, in0_block_w);
+        auto activations_tile_transposed = tt_metal::transpose_tiles(activations, M, K, in0_block_w);
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations_tile_transposed);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
@@ -292,16 +231,16 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
         auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
-        auto result_untilized = untilize(result_flat_layout, M * 32, N * 32);
+        auto result_untilized = untilize_swizzled(result_flat_layout, M * 32, N * 32);
         
         // print_vec_of_bfloat16(result_bfp16, 16, "Result bfp16");
-        // print_faces(unpack_uint32_vec_into_bfloat16_vec(activations_tile_transposed), "Activations tile transpose");
-        // print_faces(unpack_uint32_vec_into_bfloat16_vec(weights), "Weights tile transposed");
-        // print_faces(result_bfp16, "Result bfp16");
+        // tt_metal::print_faces(unpack_uint32_vec_into_bfloat16_vec(activations_tile_transposed), "Activations tile transpose");
+        // tt_metal::print_faces(unpack_uint32_vec_into_bfloat16_vec(weights), "Weights tile transposed");
+        // tt_metal::print_faces(result_bfp16, "Result bfp16");
         // print_vec_of_uint32_as_packed_bfloat16(weights, 16, "weights tile transposed");
         // print_vec_of_bfloat16(result_untilized, M*N, "Result");
         // print_vec_of_bfloat16(tensor.get_values(), 16, "Golden");
-        auto golden = select_columns(tensor.get_values(), M, K, std::min(K, N));
+        auto golden = tt::tt_metal::select_columns(tensor.get_values(), M, K, std::min(K, N));
         // auto golden = tensor.get_values();
         pass &= (golden == result_untilized);
         pass &= tt_metal::CloseDevice(device);

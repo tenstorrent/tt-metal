@@ -39,82 +39,12 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 
 #define LAUNCH
 
 using std::vector;
 using namespace tt;
-
-std::vector<bfloat16> get_row_slice(
-    std::vector<bfloat16> data, int total_row_slices, int row_slice_index, int rows, int cols) {
-    std::vector<bfloat16> result;
-    int rows_per_slice = rows / total_row_slices;
-
-    for (int i = rows_per_slice * row_slice_index * cols; i < rows_per_slice * (row_slice_index + 1) * cols; i++) {
-        result.push_back(data.at(i));
-    }
-    return result;
-}
-
-std::vector<bfloat16> get_col_slice(
-    std::vector<bfloat16> data, int total_col_slices, int col_slice_index, int rows, int cols) {
-    std::vector<bfloat16> result;
-    int cols_per_slice = cols / total_col_slices;
-
-    for (int r = 0; r < rows; r++) {
-        for (int c = cols_per_slice * col_slice_index; c < cols_per_slice * (col_slice_index + 1); c++) {
-            result.push_back(data.at(r * cols + c));
-        }
-    }
-    return result;
-}
-
-// Transpose 2D matrix of tiles so that its column major of tiles instead of row
-// major. this is usually used for activation so that blocks data is contiguous
-// in memory until we have a more generalized read kernel that can read tiles
-// from different location in memory to make up a block in the activations CB
-std::vector<std::uint32_t> transpose_tiles(
-    std::vector<std::uint32_t> data, int row_tiles, int col_tiles, int in0_block_w) {
-    std::vector<std::uint32_t> result;
-    int tile_size = 512;
-    for (int c = 0; c < col_tiles; c += in0_block_w) {
-        for (int r = 0; r < row_tiles; r++) {
-            for (int k = 0; k < in0_block_w; k++) {
-                int offset = tile_size * col_tiles * r + c * tile_size + k * tile_size;
-                for (int i = 0; i < tile_size; i++) {
-                    result.push_back(data.at(offset + i));
-                }
-            }
-        }
-    }
-    return result;
-}
-
-std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
-    if (N == K) {
-        return data;
-    }
-    std::vector<bfloat16> result;
-    if (N > K) {
-        for (int i = 0; i < M * 32; i++) {
-            for (int j = 0; j < K * 32; j++) {
-                int offset = i * K * 32;
-                result.push_back(data.at(offset + j));
-            }
-            for (int j = 0; j < (N - K) * 32; j++) {
-                result.push_back((float)0);
-            }
-        }
-    } else {
-        for (int i = 0; i < M * 32; i++) {
-            for (int j = 0; j < N * 32; j++) {
-                int offset = i * K * 32;
-                result.push_back(data.at(offset + j));
-            }
-        }
-    }
-    return result;
-}
 
 template <typename T>
 std::vector<T> slice(std::vector<T> const& v, int m, int n) {
@@ -240,9 +170,9 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Slicing input tensors and copying them to L1");
         for (int r = 0; r < num_cores_r; r++) {
             std::vector<bfloat16> activation_slice =
-                get_row_slice(tensor.get_values(), num_cores_r, r, Mt * 32, Kt * 32);
+                tt_metal::get_row_slice(tensor.get_values(), num_cores_r, r, Mt * 32, Kt * 32);
             for (int c = 0; c < num_cores_c; c++) {
-                std::vector<bfloat16> weights_slice = get_col_slice(identity, num_cores_c, c, Kt * 32, Nt * 32);
+                std::vector<bfloat16> weights_slice = tt_metal::get_col_slice(identity, num_cores_c, c, Kt * 32, Nt * 32);
 
                 CoreCoord core = {(std::size_t)c, (std::size_t)r};
                 auto activations_tilized = tilize_swizzled(activation_slice, per_core_Mt * 32, Kt * 32);
@@ -256,7 +186,7 @@ int main(int argc, char** argv) {
                 auto weights_tile_layout =
                     convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-                auto weights_tile_transposed = transpose_tiles(weights, Kt, per_core_Nt, 1);
+                auto weights_tile_transposed = tt_metal::transpose_tiles(weights, Kt, per_core_Nt, 1);
                 pass &= tt_metal::detail::WriteToDeviceL1(device, core, weights_addr, weights_tile_transposed);
                 TT_FATAL(pass, "Error");
             }
@@ -331,13 +261,13 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        auto golden = select_columns(tensor.get_values(), Mt, Kt, Nt);
+        auto golden = tt::tt_metal::select_columns(tensor.get_values(), Mt, Kt, Nt);
         if (validation) {
             log_info(LogTest, "Validation");
             for (int r = 0; r < num_cores_r; ++r) {
-                auto golden_row = get_row_slice(golden, num_cores_r, r, Mt * 32, Nt * 32);
+                auto golden_row = tt_metal::get_row_slice(golden, num_cores_r, r, Mt * 32, Nt * 32);
                 for (int c = 0; c < num_cores_c; ++c) {
-                    auto per_core_golden = get_col_slice(golden_row, num_cores_c, c, per_core_Mt * 32, Nt * 32);
+                    auto per_core_golden = tt_metal::get_col_slice(golden_row, num_cores_c, c, per_core_Mt * 32, Nt * 32);
 
                     CoreCoord core = {(size_t)c, (size_t)r};
 

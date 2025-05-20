@@ -45,6 +45,7 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 
 using std::vector;
 using namespace tt;
@@ -901,32 +902,6 @@ tt_metal::Program create_program_mcast_in0_in1(
     return program;
 }
 
-std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
-    if (N == K) {
-        return data;
-    }
-    std::vector<bfloat16> result;
-    if (N > K) {
-        for (int i = 0; i < M * 32; i++) {
-            for (int j = 0; j < K * 32; j++) {
-                int offset = i * K * 32;
-                result.push_back(data.at(offset + j));
-            }
-            for (int j = 0; j < (N - K) * 32; j++) {
-                result.push_back((float)0);
-            }
-        }
-    } else {
-        for (int i = 0; i < M * 32; i++) {
-            for (int j = 0; j < N * 32; j++) {
-                int offset = i * K * 32;
-                result.push_back(data.at(offset + j));
-            }
-        }
-    }
-    return result;
-}
-
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
@@ -1129,7 +1104,7 @@ int main(int argc, char** argv) {
         auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
         auto result_untilized = untilize_swizzled(result_flat_layout, Mt * 32, Nt * 32);
 
-        auto golden = select_columns(tensor.get_values(), Mt, Kt, Nt);
+        auto golden = tt::tt_metal::select_columns(tensor.get_values(), Mt, Kt, Nt);
         pass &= (golden == result_untilized);
         pass &= tt_metal::CloseDevice(device);
 

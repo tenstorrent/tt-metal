@@ -12,7 +12,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
-
+#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 #include "test_common.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -21,33 +21,6 @@
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
-
-std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
-    if (N == K) {
-        return data;
-    }
-    std::vector<bfloat16> result;
-    if (N > K) {
-        for (int i = 0; i < M * 32; i++) {
-            for (int j = 0; j < K * 32; j++) {
-                int offset = i * K * 32;
-                result.push_back(data.at(offset + j));
-            }
-            for (int j = 0; j < (N - K) * 32; j++) {
-                result.push_back((float)0);
-            }
-        }
-    } else {
-        for (int i = 0; i < M * 32; i++) {
-            for (int j = 0; j < N * 32; j++) {
-                int offset = i * K * 32;
-                result.push_back(data.at(offset + j));
-            }
-        }
-    }
-
-    return result;
-}
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
     tt_metal::IDevice* device,
@@ -237,28 +210,6 @@ bool assign_runtime_args_to_program(
     return pass;
 }
 
-std::vector<bfloat16> get_row_slice(
-    std::vector<bfloat16> data, int total_row_slices, int row_slice_index, int rows, int cols) {
-    std::vector<bfloat16> result;
-    int rows_per_slice = rows / total_row_slices;
-    for (int i = rows_per_slice * row_slice_index * cols; i < rows_per_slice * (row_slice_index + 1) * cols; i++) {
-        result.push_back(data.at(i));
-    }
-    return result;
-}
-
-std::vector<bfloat16> get_col_slice(
-    std::vector<bfloat16> data, int total_col_slices, int col_slice_index, int rows, int cols) {
-    std::vector<bfloat16> result;
-    int cols_per_slice = cols / total_col_slices;
-    for (int r = 0; r < rows; r++) {
-        for (int c = cols_per_slice * col_slice_index; c < cols_per_slice * (col_slice_index + 1); c++) {
-            result.push_back(data.at(r * cols + c));
-        }
-    }
-    return result;
-}
-
 bool move_tiles_to_dram(CommandQueue& cq, Buffer& buffer, std::vector<uint32_t> tensor, int tiles_r, int tiles_c) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
@@ -406,15 +357,15 @@ int main(int argc, char** argv) {
 
         vector<uint32_t> result;
         EnqueueReadBuffer(cq, out_buffer, result, true);
-        auto golden = select_columns(tensor.get_values(), M, K, N);
+        auto golden = tt::tt_metal::select_columns(tensor.get_values(), M, K, N);
 
         // Keeping this old code because took me too long to decipher. Matmul
         // owner can refactor at a later time
         auto result_iter = result.begin();
         for (int i = 0; i < M; i++) {
-            auto row = get_row_slice(golden, M, i, M * 32, N * 32);
+            auto row = tt_metal::get_row_slice(golden, M, i, M * 32, N * 32);
             for (int j = 0; j < N; j++) {
-                auto golden_tile = get_col_slice(row, N, j, 32, N * 32);
+                auto golden_tile = tt_metal::get_col_slice(row, N, j, 32, N * 32);
                 std::vector<uint32_t> result_vec;
                 result_vec.insert(result_vec.end(), result_iter, result_iter + 512);
                 result_iter += 512;
