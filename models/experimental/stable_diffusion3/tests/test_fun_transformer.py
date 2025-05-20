@@ -11,6 +11,7 @@ import ttnn
 from ..reference.transformer import SD3Transformer2DModel
 from ..tt.fun_transformer import sd_transformer, TtSD3Transformer2DModelParameters
 from ..tt.utils import assert_quality
+from ..tt.parallel_config import create_dit_parallel_config, ParallelConfig
 
 TILE_SIZE = 32
 
@@ -42,6 +43,12 @@ def test_transformer(
     height: int,
     width: int,
 ) -> None:
+    mesh_shape = tuple(mesh_device.shape)
+    cfg_parallel = ParallelConfig(mesh_shape=mesh_shape, factor=1, mesh_axis=0)
+    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1], mesh_axis=1)
+    dit_parallel_config = create_dit_parallel_config(
+        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel
+    )
     mesh_device.enable_async(True)
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
@@ -80,6 +87,7 @@ def test_transformer(
         device=mesh_device,
         dtype=ttnn_dtype,
         guidance_cond=guidance_cond,
+        parallel_config=dit_parallel_config,
     )
 
     torch.manual_seed(0)
@@ -130,6 +138,7 @@ def test_transformer(
         pooled_projection=tt_pooled_projection,
         timestep=tt_timestep,
         parameters=parameters,
+        parallel_config=dit_parallel_config,
         num_heads=num_heads,
         N=spatial_sequence_length,
         L=prompt_sequence_length,

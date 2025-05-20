@@ -11,6 +11,7 @@ import ttnn
 
 from ..tt.fun_conv2d import TtConv2dParameters, sd_conv2d
 from ..tt.utils import assert_quality, to_torch
+from ..tt.parallel_config import create_dit_parallel_config, ParallelConfig
 
 TILE_SIZE = 32
 
@@ -58,6 +59,13 @@ def test_conv2d(
     height: int,
     width: int,
 ) -> None:
+    mesh_shape = tuple(mesh_device.shape)
+    cfg_parallel = ParallelConfig(mesh_shape=mesh_shape, factor=1, mesh_axis=0)
+    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1], mesh_axis=1)
+    dit_parallel_config = create_dit_parallel_config(
+        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel
+    )
+
     dtype = ttnn.bfloat16
 
     torch_model = torch.nn.Conv2d(
@@ -82,6 +90,7 @@ def test_conv2d(
         hidden_dim_padding=hidden_dim_padding,
         out_channels=out_channels,
         device=mesh_device,
+        parallel_config=dit_parallel_config,
     )
 
     torch_input_tensor = torch.randn((batch_size, in_channels, height, width))
@@ -97,7 +106,7 @@ def test_conv2d(
         dtype=dtype,
     )
 
-    tt_output = sd_conv2d(tt_input_tensor, parameters)
+    tt_output = sd_conv2d(tt_input_tensor, parameters, dit_parallel_config)
     tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=-1)[
         0:batch_size, :, :, 0:out_channels
     ]

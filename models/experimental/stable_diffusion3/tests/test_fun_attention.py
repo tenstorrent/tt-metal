@@ -12,6 +12,7 @@ import ttnn
 from ..reference import SD3Transformer2DModel
 from ..tt.fun_attention import sd_joint_attention, TtAttentionParameters
 from ..tt.utils import assert_quality, from_torch_fast
+from ..tt.parallel_config import create_dit_parallel_config, ParallelConfig
 
 if TYPE_CHECKING:
     from ..reference.attention import Attention
@@ -50,6 +51,12 @@ def test_attention(
     joint_attention: bool,
 ) -> None:
     mesh_device.enable_async(True)
+    mesh_shape = tuple(mesh_device.shape)
+    cfg_parallel = ParallelConfig(mesh_shape=mesh_shape, factor=1, mesh_axis=0)
+    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1], mesh_axis=1)
+    dit_parallel_config = create_dit_parallel_config(
+        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel
+    )
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
@@ -80,6 +87,7 @@ def test_attention(
         hidden_dim_padding=hidden_dim_padding,
         device=mesh_device,
         dtype=ttnn_dtype,
+        parallel_config=dit_parallel_config,
     )
 
     torch.manual_seed(0)
@@ -113,6 +121,7 @@ def test_attention(
         spatial=tt_spatial,
         prompt=tt_prompt,
         parameters=parameters,
+        parallel_config=dit_parallel_config,
         num_heads=num_heads,
         N=spatial_sequence_length,
         L=prompt_sequence_length,

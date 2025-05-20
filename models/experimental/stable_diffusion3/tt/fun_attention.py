@@ -13,6 +13,7 @@ from .fun_linear import sd_linear, TtLinearParameters
 from .fun_normalization import sd_rms_norm, TtRmsNormParameters
 from .substate import has_substate, substate
 from .utils import all_gather
+from .parallel_config import DiTParallelConfig
 
 
 @dataclass
@@ -39,7 +40,9 @@ class TtAttentionParameters:
         hidden_dim_padding: int,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_config: DiTParallelConfig,
     ) -> TtAttentionParameters:
+        # TODO: Use parallel_config
         spatial_qkv_proj = _merge_qkv_proj(substate(state, "to_q"), substate(state, "to_k"), substate(state, "to_v"))
         prompt_qkv_proj = _merge_qkv_proj(
             substate(state, "add_q_proj"), substate(state, "add_k_proj"), substate(state, "add_v_proj")
@@ -161,6 +164,7 @@ def sd_joint_attention(
     spatial: ttnn.Tensor,
     prompt: ttnn.Tensor | None = None,
     parameters: TtAttentionParameters,
+    parallel_config: DiTParallelConfig,
     deallocate: bool = False,
     num_heads: int,  # TODO: should be a model parameter
     N: int,
@@ -242,7 +246,7 @@ def sd_joint_attention(
     spatial = ttnn.unsqueeze(spatial, 1)
     prompt = ttnn.unsqueeze(prompt, 1)
 
-    if len(spatial.devices()) > 1:
+    if parallel_config.tensor_parallel.factor > 1:
         spatial = all_gather(spatial, dim=-1)
         prompt = all_gather(prompt, dim=-1)
 
