@@ -20,15 +20,23 @@ from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
 
 from ..tt.utils import from_torch_fast, to_torch
+from .substate import substate
 from .t5_encoder import TtT5Encoder, TtT5EncoderParameters
 from .transformer import TtSD3Transformer2DModel, TtSD3Transformer2DModelParameters
+from .vae_decoder import TtVaeDecoder, TtVaeDecoderParameters
 
 TILE_SIZE = 32
 
 
 class TtStableDiffusion3Pipeline:
     def __init__(
-        self, *, checkpoint: str, device: ttnn.MeshDevice, enable_t5_text_encoder: bool = True, guidance_cond: int
+        self,
+        *,
+        checkpoint: str,
+        device: ttnn.MeshDevice,
+        enable_t5_text_encoder: bool = True,
+        vae_cpu_fallback: bool = False,
+        guidance_cond: int,
     ) -> None:
         self._device = device
 
@@ -45,7 +53,11 @@ class TtStableDiffusion3Pipeline:
                 dtype=torch.bfloat16,
             )
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint, subfolder="scheduler")
-        self._vae = AutoencoderKL.from_pretrained(checkpoint, subfolder="vae")
+        vae = AutoencoderKL.from_pretrained(
+            checkpoint,
+            subfolder="vae",
+            torch_dtype=None if vae_cpu_fallback else torch.bfloat16,
+        )
         torch_transformer = SD3Transformer2DModel.from_pretrained(
             checkpoint,
             subfolder="transformer",
@@ -59,7 +71,7 @@ class TtStableDiffusion3Pipeline:
         assert isinstance(self._text_encoder_1, CLIPTextModelWithProjection)
         assert isinstance(self._text_encoder_2, CLIPTextModelWithProjection)
         assert isinstance(self._scheduler, FlowMatchEulerDiscreteScheduler)
-        assert isinstance(self._vae, AutoencoderKL)
+        assert isinstance(vae, AutoencoderKL)
         assert isinstance(torch_transformer, SD3Transformer2DModel)
 
         logger.info("creating TT-NN transformer...")
@@ -98,9 +110,9 @@ class TtStableDiffusion3Pipeline:
         self._num_channels_latents = torch_transformer.config.in_channels
         self._joint_attention_dim = torch_transformer.config.joint_attention_dim
 
-        self._block_out_channels = self._vae.config.block_out_channels
-        self._vae_scaling_factor = self._vae.config.scaling_factor
-        self._vae_shift_factor = self._vae.config.shift_factor
+        self._block_out_channels = vae.config.block_out_channels
+        self._vae_scaling_factor = vae.config.scaling_factor
+        self._vae_shift_factor = vae.config.shift_factor
 
         self._vae_scale_factor = 2 ** (len(self._block_out_channels) - 1)
         self._image_processor = VaeImageProcessor(vae_scale_factor=self._vae_scale_factor)
@@ -122,6 +134,18 @@ class TtStableDiffusion3Pipeline:
             )
         else:
             self._text_encoder_3 = None
+
+        if not vae_cpu_fallback:
+            logger.info("creating VAE decoder...")
+
+            parameters = TtVaeDecoderParameters.from_torch(
+                vae.decoder.state_dict(),
+                device=self._device,
+                dtype=ttnn.bfloat16,
+            )
+            self._vae = TtVaeDecoder(parameters, norm_num_groups=vae.config.norm_num_groups)
+        else:
+            self._vae = vae
 
     def prepare(
         self,
@@ -354,7 +378,7 @@ class TtStableDiffusion3Pipeline:
             # ttnn.copy_host_to_device_tensor(tt_sigma_difference, self._trace.sigma_difference_input)
             # self._trace.execute()
 
-            latents_step = self._step(
+            self._step(
                 timestep=tt_timestep,
                 latents=latents_step,  # tt_latents,
                 do_classifier_free_guidance=do_classifier_free_guidance,
@@ -372,20 +396,24 @@ class TtStableDiffusion3Pipeline:
 
         image_decoding_start_time = time.time()
 
-        # latents = ttnn.to_torch(self._trace.spatial_input_output).to(torch.float32)
-        latents = to_torch(latents_step, mesh_device=latents_step.device(), dtype=torch.float32, shard_dim=-1).to(
-            torch.float32
-        )[..., : latents_step.shape[-1]]
-        latents = (latents.permute([0, 3, 1, 2]) / self._vae_scaling_factor) + self._vae_shift_factor
+        # scaled_latents = 1 / self._vae_scaling_factor * self._trace.spatial_input_output + self._vae_shift_factor
+        scaled_latents = 1 / self._vae_scaling_factor * latents_step + self._vae_shift_factor
+
+        if isinstance(self._vae, TtVaeDecoder):
+            images = self._vae(scaled_latents)
+            torch_images = to_torch(images, dtype=torch.float32).permute(0, 3, 1, 2)
+        else:
+            torch_latents = to_torch(scaled_latents, dtype=torch.float32).permute([0, 3, 1, 2])
+            with torch.no_grad():
+                torch_images = self._vae.decoder(torch_latents)
 
         with torch.no_grad():
-            image = self._vae.decoder(latents)
-            image = self._image_processor.postprocess(image, output_type="pt")
-            assert isinstance(image, torch.Tensor)
+            torch_images = self._image_processor.postprocess(torch_images, output_type="pt")
+            assert isinstance(torch_images, torch.Tensor)
 
         image_decoding_end_time = time.time()
 
-        output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
+        output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(torch_images))
 
         end_time = time.time()
 
@@ -434,8 +462,6 @@ class TtStableDiffusion3Pipeline:
             noise_pred = uncond + guidance_scale * (cond - uncond)
 
         ttnn.add_(latents, sigma_difference * noise_pred)
-
-        return latents
 
     def _encode_prompts(
         self,
