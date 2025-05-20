@@ -103,6 +103,15 @@ void append_fabric_connection_rt_args(
         link_idx,
         candidate_eth_chans.size());
 
+    const auto forwarding_links =
+        get_forwarding_link_indices_in_direction(src_chip_id, dst_chip_id, forwarding_direction.value());
+    TT_FATAL(
+        std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
+        "requested link idx {}, cannot be used for forwarding b/w src {} and dst {}",
+        link_idx,
+        src_chip_id,
+        dst_chip_id);
+
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
     const auto router_direction = control_plane->routing_direction_to_eth_direction(forwarding_direction.value());
 

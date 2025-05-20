@@ -58,6 +58,30 @@ FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::Cluster
     return FabricType::MESH;
 }
 
+std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+    chip_id_t src_chip_id, chip_id_t dst_chip_id, RoutingDirection direction) {
+    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    const auto [src_mesh_id, src_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(src_chip_id);
+    const auto [dst_mesh_id, dst_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dst_chip_id);
+
+    // the subset of routers that support forwarding b/w those chips
+    const std::vector<chan_id_t>& forwarding_channels = control_plane->get_forwarding_eth_chans_to_chip(
+        src_mesh_id, src_logical_chip_id, dst_mesh_id, dst_logical_chip_id);
+
+    const std::vector<chan_id_t>& fabric_channels =
+        control_plane->get_active_fabric_eth_channels_in_direction(src_mesh_id, src_logical_chip_id, direction);
+
+    std::vector<uint32_t> link_indices;
+    for (uint32_t i = 0; i < fabric_channels.size(); i++) {
+        if (std::find(forwarding_channels.begin(), forwarding_channels.end(), fabric_channels[i]) !=
+            forwarding_channels.end()) {
+            link_indices.push_back(i);
+        }
+    }
+
+    return link_indices;
+}
+
 std::vector<uint32_t> get_forwarding_link_indices(chip_id_t src_chip_id, chip_id_t dst_chip_id) {
     const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     const auto [src_mesh_id, src_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(src_chip_id);
@@ -70,22 +94,7 @@ std::vector<uint32_t> get_forwarding_link_indices(chip_id_t src_chip_id, chip_id
         return {};
     }
 
-    // the subset of routers that support forwarding b/w those chips
-    const std::vector<chan_id_t>& forwarding_channels = control_plane->get_forwarding_eth_chans_to_chip(
-        src_mesh_id, src_logical_chip_id, dst_mesh_id, dst_logical_chip_id);
-
-    const std::vector<chan_id_t>& fabric_channels = control_plane->get_active_fabric_eth_channels_in_direction(
-        src_mesh_id, src_logical_chip_id, forwarding_direction.value());
-
-    std::vector<uint32_t> link_indices;
-    for (uint32_t i = 0; i < fabric_channels.size(); i++) {
-        if (std::find(forwarding_channels.begin(), forwarding_channels.end(), fabric_channels[i]) !=
-            forwarding_channels.end()) {
-            link_indices.push_back(i);
-        }
-    }
-
-    return link_indices;
+    return get_forwarding_link_indices_in_direction(src_chip_id, dst_chip_id, forwarding_direction.value());
 }
 
 void set_routing_mode(uint16_t routing_mode) {
