@@ -56,6 +56,7 @@
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
+#include <tt-metalium/device_pool.hpp>
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -181,7 +182,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             .defines = kernel_defines});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
-    if (device->dispatch_firmware_active()) {
+    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             auto device_coord = mesh_device->get_view().find_device(device_id);
             distributed::MeshWorkload workload;
@@ -220,7 +221,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             &sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
-    if (device->dispatch_firmware_active()) {
+    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             mesh_device->mesh_command_queue().finish();
         } else {
@@ -750,7 +751,7 @@ void InitDeviceProfiler(IDevice* device) {
 
         std::vector<uint32_t> inputs_DRAM(output_dram_buffer_ptr->size() / sizeof(uint32_t), 0);
 
-        if (device->dispatch_firmware_active()) {
+        if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
             issue_fd_write_to_profiler_buffer(profiler.output_dram_buffer, device, inputs_DRAM);
         } else {
             tt_metal::detail::WriteToBuffer(*(profiler.output_dram_buffer.get_buffer()), inputs_DRAM);

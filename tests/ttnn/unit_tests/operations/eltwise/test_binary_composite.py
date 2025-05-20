@@ -501,7 +501,6 @@ def test_remainder_ttnn(input_shapes, scalar, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod")
 def test_binary_fmod_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
@@ -522,7 +521,6 @@ def test_binary_fmod_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod")
 # Input with more than two decimal places experience precision loss in bfloat16. use FP32 for better precision.
 def test_binary_fmod_decimal_ttnn(input_shapes, device):
     in_data1 = torch.randn(input_shapes, dtype=torch.float32) * 9
@@ -549,7 +547,6 @@ def test_binary_fmod_decimal_ttnn(input_shapes, device):
     "scalar",
     {random.randint(-100, 100) + 0.5 for _ in range(5)},
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod")
 def test_fmod_ttnn(input_shapes, scalar, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
 

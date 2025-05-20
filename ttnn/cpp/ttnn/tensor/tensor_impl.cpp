@@ -502,10 +502,10 @@ std::string to_string<bfloat4_b>(
 
 template <typename T>
 Tensor to_host_helper(const Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
-    TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
+    TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     auto device_buffer = tensor.buffer();
     auto device = tensor.device();
-    TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
+    TT_FATAL(device != nullptr, "Need device to be set copy data from device to host!");
     uint32_t size_in_bytes = device_buffer->size();
     std::vector<T> data_vec;
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -547,7 +547,7 @@ Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_
 
 template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
-    TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
+    TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = std::get<DeviceStorage>(tensor.get_storage());
     const auto& mesh_buffer = storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
@@ -687,7 +687,6 @@ Tensor to_device(const Tensor& tensor, IDevice* target_device, const MemoryConfi
     }
     TT_FATAL(tensor.storage_type() != StorageType::DEVICE, "Tensor is already on device!");
     TT_FATAL(target_device != nullptr, "Need target device in order to move tensor to device!");
-    TT_FATAL(tensor.is_allocated(), "Need data to exist in order to move it to device");
 
     TensorSpec tensor_spec(
         tensor.get_logical_shape(), tensor.get_tensor_spec().tensor_layout().with_memory_config(memory_config));
@@ -832,7 +831,6 @@ Tensor to_device_mesh_tensor(
     }
 
     TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
-    TT_FATAL(tensor.is_allocated(), "Need data to exist in order to move it to device");
 
     TensorSpec tensor_spec(
         tensor.get_logical_shape(), tensor.get_tensor_spec().tensor_layout().with_memory_config(memory_config));
@@ -847,7 +845,7 @@ template <typename T>
 void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
     TT_FATAL(host_tensor.storage_type() != StorageType::DEVICE, "Host tensor is on device.");
     TT_FATAL(mesh_tensor.storage_type() == StorageType::DEVICE, "Mesh tensor is not on device.");
-    TT_FATAL(mesh_tensor.is_allocated(), "Need data to exist in order to move it to device");
+    TT_FATAL(mesh_tensor.is_allocated(), "Buffer must be allocated on device.");
 
     TT_FATAL(host_tensor.get_logical_shape() == mesh_tensor.get_logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.get_dtype() == mesh_tensor.get_dtype(), "Host tensor has different dtype");
@@ -995,7 +993,7 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
 }  // namespace
 
 template <typename T>
-std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec) {
+std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec, T pad_value) {
     if (logical_data.size() == 0) {
         return {};
     }
@@ -1009,14 +1007,14 @@ std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpe
 
     const auto& physical_shape = tensor_spec.physical_shape();
 
-    auto row_major_physical_data = [&tensor_spec, &physical_shape](auto&& logical_data) {
+    auto row_major_physical_data = [&tensor_spec, &physical_shape, pad_value](auto&& logical_data) {
         const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
 
         if (logical_2d_shape != physical_shape) {
             auto [logical_shard_shape, physical_shard_shape] =
                 CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
 
-            auto row_major_physical_data = std::vector<T>(physical_shape.height() * physical_shape.width(), 0);
+            auto row_major_physical_data = std::vector<T>(physical_shape.height() * physical_shape.width(), pad_value);
 
             size_t physical_stride = physical_shape.width();
 
@@ -1050,16 +1048,17 @@ std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpe
 }
 
 template std::vector<bfloat16> encode_tensor_data<bfloat16>(
-    std::vector<bfloat16>&& logical_data, const TensorSpec& tensor_spec);
-template std::vector<float> encode_tensor_data<float>(std::vector<float>&& logical_data, const TensorSpec& tensor_spec);
+    std::vector<bfloat16>&& logical_data, const TensorSpec& tensor_spec, bfloat16 pad_value);
+template std::vector<float> encode_tensor_data<float>(
+    std::vector<float>&& logical_data, const TensorSpec& tensor_spec, float pad_value);
 template std::vector<int32_t> encode_tensor_data<int32_t>(
-    std::vector<int32_t>&& logical_data, const TensorSpec& tensor_spec);
+    std::vector<int32_t>&& logical_data, const TensorSpec& tensor_spec, int32_t pad_value);
 template std::vector<uint32_t> encode_tensor_data<uint32_t>(
-    std::vector<uint32_t>&& logical_data, const TensorSpec& tensor_spec);
+    std::vector<uint32_t>&& logical_data, const TensorSpec& tensor_spec, uint32_t pad_value);
 template std::vector<uint16_t> encode_tensor_data<uint16_t>(
-    std::vector<uint16_t>&& logical_data, const TensorSpec& tensor_spec);
+    std::vector<uint16_t>&& logical_data, const TensorSpec& tensor_spec, uint16_t pad_value);
 template std::vector<uint8_t> encode_tensor_data<uint8_t>(
-    std::vector<uint8_t>&& logical_data, const TensorSpec& tensor_spec);
+    std::vector<uint8_t>&& logical_data, const TensorSpec& tensor_spec, uint8_t pad_value);
 
 template <typename T>
 std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec) {

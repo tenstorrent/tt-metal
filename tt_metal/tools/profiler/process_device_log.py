@@ -318,10 +318,10 @@ def get_ops(timeseries):
 
 def get_dispatch_core_ops(timeseries):
     masterRisc = "BRISC"
-    slaveRisc = "NCRISC"
+    subordinateRisc = "NCRISC"
     riscData = {
         masterRisc: {"zone": [], "opID": 0, "cmdType": "", "ops": {}, "orderedOpIDs": [], "opFinished": False},
-        slaveRisc: {"zone": [], "opID": 0, "cmdType": "", "ops": {}, "orderedOpIDs": [], "opFinished": False},
+        subordinateRisc: {"zone": [], "opID": 0, "cmdType": "", "ops": {}, "orderedOpIDs": [], "opFinished": False},
     }
     for ts in timeseries:
         timerID, tsValue, attachedData, risc = ts
@@ -336,7 +336,7 @@ def get_dispatch_core_ops(timeseries):
 
         if "meta_data" in timerID and "dispatch_command_type" in timerID["meta_data"]:
             riscData[risc]["cmdType"] = eval(timerID["meta_data"])["dispatch_command_type"]
-            if "CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL" in riscData[risc]["cmdType"]:
+            if "CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL" in riscData[risc]["cmdType"]:
                 riscData[risc]["opFinished"] = True
 
             if "CQ_DISPATCH_CMD_SEND_GO_SIGNAL" in riscData[risc]["cmdType"]:
@@ -359,8 +359,13 @@ def get_dispatch_core_ops(timeseries):
         data["orderedOpIDs"].sort(key=lambda x: data["ops"][x][0][1])
 
     opsDict = {}
-    for masterOpID, slaveOpID in zip(riscData[masterRisc]["orderedOpIDs"], riscData[slaveRisc]["orderedOpIDs"]):
-        opsDict[masterOpID] = riscData[masterRisc]["ops"][masterOpID] + riscData[slaveRisc]["ops"][slaveOpID]
+    for masterOpID, subordinateOpID in zip(
+        riscData[masterRisc]["orderedOpIDs"], riscData[subordinateRisc]["orderedOpIDs"]
+    ):
+        opsDict[masterOpID] = (
+            riscData[masterRisc]["ops"][masterOpID] + riscData[subordinateRisc]["ops"][subordinateOpID]
+        )
+
         opsDict[masterOpID].sort(key=lambda x: x[1])
 
     ops = []

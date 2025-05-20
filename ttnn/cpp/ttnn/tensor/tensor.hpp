@@ -46,9 +46,10 @@ public:
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
 
-    // Tensor gets worker queue handle through the device
+    // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
+    // If not set, the tensor can either be on host or allocated on a single device.
+    // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
     std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
-    std::vector<IDevice*> workers = {};
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -90,7 +91,8 @@ public:
         tt::stl::Span<const T> buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        T pad_value = 0);
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
@@ -118,8 +120,9 @@ public:
         const std::vector<T>& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
-        return from_span(tt::stl::Span<const T>(buffer), spec, device);
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        T pad_value = 0) {
+        return from_span(tt::stl::Span<const T>(buffer), spec, device, cq_id, pad_value);
     }
 
     // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major,
@@ -129,7 +132,8 @@ public:
         std::vector<T>&& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        T pad_value = 0);
 
     // Converts a `Tensor` to a `std::vector<T>`.
     // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
@@ -166,9 +170,9 @@ public:
     std::string write_to_string() const;
     void print() const;
 
+    // Deallocates device-side Tensor storage.
+    // If the tensor is on host, does nothing.
     void deallocate(bool force = false);
-
-    std::vector<IDevice*> get_workers(bool blocking = false) const;
 
     Tensor extract_shard(const CoreCoord& core) const;
     Tensor extract_shard(const uint32_t& core_id) const;
@@ -232,6 +236,8 @@ public:
     // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
     distributed::MeshDevice* mesh_device() const;
 
+    // Returns the device the tensor is allocated on.
+    // Throws if the tensor is not allocated on a device.
     IDevice* device() const;
 
     std::vector<IDevice*> active_physical_devices() const;
