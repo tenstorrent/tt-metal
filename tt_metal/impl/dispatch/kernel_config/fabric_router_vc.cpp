@@ -42,7 +42,7 @@ void FabricRouterVC::GenerateDependentConfigs() {
         const auto& router_chans =
             control_plane->get_forwarding_eth_chans_to_chip(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id);
         TT_ASSERT(
-            !routers.empty(),
+            !router_chans.empty(),
             "No routers for (mesh {}, chip {}) to (mesh {}, chip{})",
             src_mesh_id,
             src_chip_id,
@@ -55,7 +55,7 @@ void FabricRouterVC::GenerateDependentConfigs() {
         const auto& router_chans_rev =
             control_plane->get_forwarding_eth_chans_to_chip(dst_mesh_id, dst_chip_id, src_mesh_id, src_chip_id);
         TT_ASSERT(
-            !routers_rev.empty(),
+            !router_chans_rev.empty(),
             "No routers for return path (mesh {}, chip {}) to (mesh {}, chip{})",
             dst_mesh_id,
             dst_chip_id,

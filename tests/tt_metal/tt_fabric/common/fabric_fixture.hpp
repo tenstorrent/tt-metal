@@ -107,6 +107,8 @@ void RunTestUnicastRaw(
 void RunTestUnicastConnAPI(
     BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
 
+void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture);
+
 void RunTestMCastConnAPI(
     BaseFabricFixture* fixture,
     RoutingDirection fwd_dir = RoutingDirection::W,

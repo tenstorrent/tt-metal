@@ -710,6 +710,12 @@ TEST_F(Fabric2DFixture, TestUnicastRaw) {
 
 TEST_F(Fabric2DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 
+TEST_F(Fabric2DFixture, TestUnicastConnAPIRandom) {
+    for (uint32_t i = 0; i < 10; i++) {
+        RunTestUnicastConnAPIRandom(this);
+    }
+}
+
 TEST_F(Fabric2DFixture, TestMCastConnAPI_1W1E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 1, RoutingDirection::E, 1);
 }
