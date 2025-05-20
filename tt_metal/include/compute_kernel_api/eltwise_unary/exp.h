@@ -26,16 +26,17 @@ ALWI void exp_tile_init() {
 // clang-format off
 /**
  * Performs element-wise computation of exponential on each element of a tile
- * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * in the DST register. The DST register buffer must be in an
+ * acquired state via an *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | fast_and_approx | Computation to be done faster and approximate                              | bool     |                                                       | False    |
+ * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst        | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | int      | Subject to specific hardware/kernel limits          | False    |
+ * | scale       | Scale factor to apply if `scale_en` is true. (default: 0x3F80, which is 1.0f in FP16b) | uint16_t | Valid FP16b representation                          | False    |
  */
 // clang-format on
 template <
