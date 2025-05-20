@@ -73,21 +73,16 @@ void kernel_main() {
             uint32_t length_left_t = Wt;
             uint32_t cur_cb_length_t = cb_length_t;
 
-            for (uint32_t wt = 0; wt < Wt; wt += cb_length_t) {
-                // We read in the cur_cb_length amount by the number of destination registers
-                for (uint32_t blk_i = 0; blk_i < cb_length_t; blk_i += blk) {
-                    cb_reserve_back(cb_id_in0, blk);
-                    uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                    for (uint32_t regs = 0; regs < blk; regs++) {
-                        noc_async_read_tile(tile_index, src_a, l1_write_addr);  // TODO(AP): data type size
-                        tile_index++;
-                        l1_write_addr += src0_tile_bytes;
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_id_in0, blk);
+            for (uint32_t wt = 0; wt < Wt; wt += blk) {
+                cb_reserve_back(cb_id_in0, blk);
+                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+                for (uint32_t regs = 0; regs < blk; regs++) {
+                    noc_async_read_tile(tile_index, src_a, l1_write_addr);  // TODO(AP): data type size
+                    tile_index++;
+                    l1_write_addr += src0_tile_bytes;
                 }
-                length_left_t -= cur_cb_length_t;
-                cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_in0, blk);
             }
         }
     }
