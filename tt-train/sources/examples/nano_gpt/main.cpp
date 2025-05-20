@@ -672,6 +672,11 @@ int main(int argc, char **argv) {
                 // and just write the significant parts of the tensor.
                 auto host_targets =
                     ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(targets_xt, ttnn::Layout::ROW_MAJOR);
+
+                // NOTE: data *does* get updated.
+                // fmt::println("Copying data with fifth elt {}", xt::flatten(data_xt)[4]);
+                // fmt::println("Copying target with fifth elt {}", xt::flatten(data_xt)[4]);
+
                 host_targets = host_targets.pad_to_tile(0.0F);
                 host_targets = host_targets.to_layout(ttnn::Layout::TILE);
 
@@ -679,13 +684,13 @@ int main(int argc, char **argv) {
                 // this is what ttnn uses, but unclear on whether it's applicable to our configs.
                 auto device_data_tensor = sample_tensor_ptrs.data->get_value();
                 auto device_targets_tensor = sample_tensor_ptrs.targets->get_value();
-                fmt::println("host data tensor info {}", host_data.get_tensor_spec());
-                fmt::println("device data tensor info {}", device_data_tensor.get_tensor_spec());
-                fmt::println("device data tensor storage {}", device_data_tensor.get_storage());
+                // fmt::println("host data tensor info {}", host_data.get_tensor_spec());
+                // fmt::println("device data tensor info {}", device_data_tensor.get_tensor_spec());
+                // fmt::println("device data tensor storage {}", device_data_tensor.get_storage());
 
-                fmt::println("host targets tensor info {}", host_targets.get_tensor_spec());
-                fmt::println("device targets tensor info {}", device_targets_tensor.get_tensor_spec());
-                fmt::println("device targets tensor storage {}", device_targets_tensor.get_storage());
+                // fmt::println("host targets tensor info {}", host_targets.get_tensor_spec());
+                // fmt::println("device targets tensor info {}", device_targets_tensor.get_tensor_spec());
+                // fmt::println("device targets tensor storage {}", device_targets_tensor.get_storage());
 
                 const auto device_packed_buffer_size_bytes =
                     device_data_tensor.get_tensor_spec().compute_packed_buffer_size_bytes();
@@ -702,6 +707,16 @@ int main(int argc, char **argv) {
                     device_targets_tensor.get_tensor_spec().compute_packed_buffer_size_bytes());
                 tt::tt_metal::write_tensor(host_data, device_data_tensor);
                 tt::tt_metal::write_tensor(host_targets, device_targets_tensor);
+
+                auto xt_data_back =
+                    ttml::core::to_xtensor(ttnn::to_dtype(device_data_tensor.cpu(), ttnn::DataType::FLOAT32));
+                auto xt_targets_back =
+                    ttml::core::to_xtensor(ttnn::to_dtype(device_targets_tensor.cpu(), ttnn::DataType::FLOAT32));
+                // NOTE: this never throws; we are getting the data/targets into the right place.
+                if (!(xt::allclose(xt_data_back, xt::cast<float>(data_xt)) &&
+                      xt::allclose(xt_targets_back, xt::cast<float>(targets_xt)))) {
+                    throw std::runtime_error("back data doesn't match.");
+                }
             }
 
             end_timer = std::chrono::high_resolution_clock::now();
@@ -814,16 +829,36 @@ int main(int argc, char **argv) {
 
     std::optional<ttnn::MeshTraceId> trace_id;
     ttml::autograd::TensorPtr output = nullptr;
+    // precompile the model and allocate output
+    // for (auto [features, target, masks] : train_dataloader) {
+    //     fmt::println("compiling model!");
+    //     output = run_model(model,features,masks);
+    //     fmt::println("compiled model!");
+    //     // FIXME: need?
+    //     // ttml::autograd::ctx().reset_graph();
+    //     break;
+    // }
+
+    std::unordered_set<uint32_t> observed_output_addrs{};
+
+    auto get_all_named_param_addrs = [&]() {
+        std::unordered_set<void *> addrs{};
+        for (const auto &[name, param] : model->parameters()) {
+            addrs.insert((void *)param.get());
+        }
+        return addrs;
+    };
+    std::unordered_set<void *> all_named_param_addrs = get_all_named_param_addrs();
 
     const uint32_t num_epochs = config.num_epochs;
     auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
             auto start_timer = std::chrono::high_resolution_clock::now();
+            fmt::println("beginning step {}", optimizer->get_steps());
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer->zero_grad();
             }
-
             // I hypothesize that all of the autograd ptrs will be created and
             // linked in the first pass; we save a reference to the loss tensor
             // with run_fwd on the first pass as well, so we should have the
@@ -834,38 +869,66 @@ int main(int argc, char **argv) {
 
             auto run_fwd = [&]() {
                 namespace trace = ttnn::operations::trace;
+                if (optimizer->get_steps() == 0) {
+                    fmt::println("compiling model prior to trace");
+                    output = run_model(model, features, masks);
+                    fmt::println("compiled model");
+                }
                 if (!trace_id.has_value()) {
                     fmt::println("tracing");
                     trace_id = trace::begin_trace_capture(device, ttnn::DefaultQueueId);
-                    // assert that everything is on device
-                    fmt::println("Features storage type {}", features->get_value().storage_type());
-                    fmt::println("Masks storage type {}", masks->get_value().storage_type());
+                    fmt::println("done tracing");
                     output = run_model(model, features, masks);
+                    // auto fwd_value = run_model(model, features, masks)->get_value();
+                    // ttnn::copy(fwd_value, output->get_value()); // explicitly copy into the autograd output tensor.
                     trace::end_trace_capture(device, *trace_id, ttnn::DefaultQueueId);
-
-                    fmt::println("testing out trace execution immediately-post-trace");
-                    trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
-                    fmt::println("executed test trace");
-                    trace::release_trace(device, *trace_id);
-                    fmt::println("released trace");
-                    trace_id = std::nullopt;
-                    fmt::println("completed trace");
                 } else {
+                    auto output_value_pre = output->get_value();
                     fmt::println("executing trace");
-                    // FIXME: hangs: why?
                     trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
                     fmt::println("executed trace");
+                    auto output_value_post = output->get_value();
+                    if (xt::allclose(
+                            ttml::core::to_xtensor(output_value_pre.cpu()),
+                            ttml::core::to_xtensor(output_value_post.cpu()))) {
+                        fmt::println("pre address {}", output_value_pre.buffer()->address());
+                        fmt::println("post address {}", output_value_post.buffer()->address());
+                        fmt::println("output value didn't update!");
+                    } else {
+                        fmt::println("output updated!");
+                    }
                 }
             };
 
+            auto dump_observed_addrs = [&](std::string_view pfx, const auto &addrs) {
+                fmt::print("{} addrs so far: ", pfx);
+                for (const auto &addr : addrs) {
+                    fmt::print("{}, ", addr);
+                }
+                fmt::println("");
+            };
+            if (output)
+                observed_output_addrs.insert(output->get_value().buffer()->address());
             run_fwd();
+            if (output)
+                observed_output_addrs.insert(output->get_value().buffer()->address());
 
+            dump_observed_addrs("output", observed_output_addrs);
+
+            if (all_named_param_addrs != get_all_named_param_addrs()) {
+                fmt::println("param addrs changed!!!");
+            }
+
+            auto output_value = output->get_value();
+            fmt::println("output mean value {}", ttml::core::to_xtensor(ttnn::mean(output_value).cpu())[0]);
+
+            auto features_value = features->get_value();
             auto loss = ttml::ops::nll_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
 
             float loss_float = get_loss_value(loss);
-            loss->backward();
-            ttml::autograd::ctx().reset_graph();
+            loss->backward(/*retain_graph=*/true);
+            // ttml::autograd::ctx().reset_graph();
 
             auto samples = features->get_value().get_logical_shape()[0];
             gradient_accumulator_helper.update(loss_float, samples);
