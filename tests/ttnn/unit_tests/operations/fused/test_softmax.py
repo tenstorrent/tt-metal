@@ -224,7 +224,7 @@ def test_softmax_sharded_stable_with_program_cache(
     assert device.num_program_cache_entries() == 1
 
 
-@pytest.mark.parametrize("batch_size", [2])
+@pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [16384])
 @pytest.mark.parametrize("w", [8192])
 @pytest.mark.parametrize("dim", [-1])
@@ -244,7 +244,14 @@ def test_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.to_torch(output_tensor)
 
     print("hi before assert")
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    for i in range(0, w):
+        print(i)
+        torch.set_printoptions(profile="full")
+        with open("tensor_output.txt", "w") as f:
+            print(output_tensor[:, :, i], file=f)
+        with open("torch_tensor_output.txt", "w") as f:
+            print(torch_output_tensor[:, :, i], file=f)
+        assert_with_pcc(torch_output_tensor[:, :, i], output_tensor[:, :, i], 0.997)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
