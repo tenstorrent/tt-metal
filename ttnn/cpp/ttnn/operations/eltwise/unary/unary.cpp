@@ -109,6 +109,7 @@ template struct ExecuteUnary<UnaryOpType::SIGN>;
 template struct ExecuteUnary<UnaryOpType::SIGNBIT>;
 template struct ExecuteUnary<UnaryOpType::SILU>;
 template struct ExecuteUnary<UnaryOpType::SIN>;
+template struct ExecuteUnary<UnaryOpType::SINH>;
 template struct ExecuteUnary<UnaryOpType::SQRT>;
 template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;

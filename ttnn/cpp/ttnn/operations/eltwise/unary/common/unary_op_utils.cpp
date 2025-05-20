@@ -50,6 +50,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::I1: return "SFPU_OP_I1_INCLUDE";
         case UnaryOpType::COS:
         case UnaryOpType::SIN:
+        case UnaryOpType::SINH:
         case UnaryOpType::TAN: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
         case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         case UnaryOpType::SOFTPLUS: return "SFPU_OP_SOFTPLUS_INCLUDE";
@@ -313,6 +314,7 @@ std::pair<string, string> get_op_init_and_func_default(
             op_init_and_name = {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)};
             break;
         case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
+        case UnaryOpType::SINH: op_init_and_name = {"sinh_tile_init();", fmt::format("sinh_tile({});", idst)}; break;
         case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
         case UnaryOpType::ISFINITE:
             op_init_and_name = {"isfinite_tile_init();", fmt::format("isfinite_tile({});", idst)};
@@ -496,6 +498,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::LOG10);
     } else if (name == "sin") {
         return UnaryWithParam(UnaryOpType::SIN);
+    } else if (name == "sinh") {
+        return UnaryWithParam(UnaryOpType::SINH);
     } else if (name == "cos") {
         return UnaryWithParam(UnaryOpType::COS);
     } else if (name == "abs") {

@@ -201,9 +201,6 @@ constexpr auto lgamma = ttnn::register_operation<
 constexpr auto multigammaln = ttnn::register_operation<
     "ttnn::multigammaln",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>();
-constexpr auto sinh = ttnn::register_operation<
-    "ttnn::sinh",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SINH>>();
 constexpr auto softsign = ttnn::register_operation<
     "ttnn::softsign",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SOFTSIGN>>();

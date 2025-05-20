@@ -81,4 +81,16 @@ inline void llk_math_eltwise_unary_sfpu_atan(uint dst_index, int vector_mode = (
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_atan<APPROXIMATE>, dst_index, vector_mode);
 }
 
+// sinh
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_sinh_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::sinh, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_sinh_op(uint dst_index) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::_calculate_sinh_<APPROXIMATE, ITERATIONS>, dst_index, (int)VectorMode::RC);
+}
+
 }  // namespace ckernel
