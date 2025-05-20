@@ -922,16 +922,25 @@ void DeviceProfiler::dumpResults(
         }
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
-            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE || state == ProfilerDumpState::FORCE_UMD_READ) {
-                if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
+            if (state == ProfilerDumpState::FORCE_UMD_READ ||
+                (state == ProfilerDumpState::LAST_CLOSE_DEVICE && rtoptions.get_profiler_do_dispatch_cores())) {
+                if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 &&
+                    device->is_mmio_capable()) {
+                    tt_metal::detail::ReadFromBufferUsingDMA(*output_dram_buffer_ptr, profile_buffer);
+                } else {
                     tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
                 }
-            } else {
+            } else if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 issue_fd_read_from_profiler_buffer(output_dram_buffer, device, profile_buffer);
             }
         } else {
             if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
+                if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 &&
+                    device->is_mmio_capable()) {
+                    tt_metal::detail::ReadFromBufferUsingDMA(*output_dram_buffer_ptr, profile_buffer);
+                } else {
+                    tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
+                }
             }
         }
         for (const auto& worker_core : worker_cores) {
