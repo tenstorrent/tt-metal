@@ -60,16 +60,12 @@ void validate_supported_arch_dtype(
             break;
         case UnaryOpType::FMOD:
             TT_FATAL(
-                arch != tt::ARCH::GRAYSKULL,
-                "UnaryOpType '{}' (FMOD operation) is not supported on Grayskull architecture.",
-                static_cast<int>(op_type));
-            TT_FATAL(
-                input_datatype == DataType::BFLOAT16,
+                (input_datatype == DataType::BFLOAT16 || input_datatype == DataType::FLOAT32),
                 "Unsupported input data type '{}' for UnaryOpType '{}' (FMOD operation).",
                 static_cast<int>(input_datatype),
                 static_cast<int>(op_type));
             TT_FATAL(
-                output_datatype == DataType::BFLOAT16,
+                (output_datatype == DataType::BFLOAT16 || output_datatype == DataType::FLOAT32),
                 "Unsupported output data type '{}' for UnaryOpType '{}' (FMOD operation).",
                 static_cast<int>(output_datatype),
                 static_cast<int>(op_type));
