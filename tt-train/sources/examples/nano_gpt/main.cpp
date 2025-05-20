@@ -830,14 +830,14 @@ int main(int argc, char **argv) {
     std::optional<ttnn::MeshTraceId> trace_id;
     ttml::autograd::TensorPtr output = nullptr;
     // precompile the model and allocate output
-    // for (auto [features, target, masks] : train_dataloader) {
-    //     fmt::println("compiling model!");
-    //     output = run_model(model,features,masks);
-    //     fmt::println("compiled model!");
-    //     // FIXME: need?
-    //     // ttml::autograd::ctx().reset_graph();
-    //     break;
-    // }
+    for (auto [features, target, masks] : train_dataloader) {
+        fmt::println("compiling model!");
+        output = run_model(model, features, masks);
+        fmt::println("compiled model!");
+        // FIXME: need?
+        // ttml::autograd::ctx().reset_graph();
+        break;
+    }
 
     std::unordered_set<uint32_t> observed_output_addrs{};
 
@@ -869,11 +869,11 @@ int main(int argc, char **argv) {
 
             auto run_fwd = [&]() {
                 namespace trace = ttnn::operations::trace;
-                if (optimizer->get_steps() == 0) {
-                    fmt::println("compiling model prior to trace");
-                    output = run_model(model, features, masks);
-                    fmt::println("compiled model");
-                }
+                // if (optimizer->get_steps() == 0) {
+                //     fmt::println("compiling model prior to trace");
+                //     output = run_model(model, features, masks);
+                //     fmt::println("compiled model");
+                // }
                 if (!trace_id.has_value()) {
                     fmt::println("tracing");
                     trace_id = trace::begin_trace_capture(device, ttnn::DefaultQueueId);
