@@ -1763,7 +1763,7 @@ void kernel_main() {
                 is_2d_fabric ? local_sem_for_teardown_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]
                              : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
                                    local_sem_for_teardown_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]);
-            if constexpr (is_2d_fabric && enable_handshake) {
+            if constexpr (is_2d_fabric) {
                 // reset the handshake addresses to 0
                 *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
                 *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
