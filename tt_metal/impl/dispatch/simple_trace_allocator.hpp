@@ -28,6 +28,7 @@ public:
 
 private:
     struct ExtraData {
+        enum { kNonBinary, kBinary };
         // The index of the trace node When each type of data from this trace node is next used.
         std::array<std::optional<uint32_t>, 2> next_use_idx;
         // The sync value reached when this trace node finishes executing.
@@ -93,6 +94,9 @@ private:
         std::vector<ExtraData>& extra_data_;
         std::vector<TraceNode>* trace_nodes_ = nullptr;
     };
+
+    void allocate_trace_programs_on_subdevice(
+        IDevice* device, std::vector<TraceNode>& trace_nodes, SubDeviceId sub_device_id);
 
     RegionAllocator worker_region_allocator_;
     RegionAllocator active_eth_region_allocator_;

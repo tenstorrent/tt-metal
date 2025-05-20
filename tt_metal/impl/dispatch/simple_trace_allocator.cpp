@@ -96,28 +96,42 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
 
 void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<TraceNode>& trace_nodes) {
     const auto& hal = MetalContext::instance().hal();
-    uint32_t expected_workers_completed = 0;
     worker_region_allocator_.set_trace_nodes(&trace_nodes);
     active_eth_region_allocator_.set_trace_nodes(&trace_nodes);
     std::map<uint64_t, uint32_t> program_ids_use_map;
     extra_data_.resize(trace_nodes.size());
-    enum { kNonBinary, kBinary };
+
+    std::set<SubDeviceId> sub_device_ids;
     for (int i = trace_nodes.size() - 1; i >= 0; i--) {
         auto& node = trace_nodes[i];
         auto it = program_ids_use_map.find(node.program->get_id());
         if (it != program_ids_use_map.end()) {
             // Binary is reused, but the nonbinary is not.
-            extra_data_[i].next_use_idx[kBinary] = it->second;
+            extra_data_[i].next_use_idx[ExtraData::kBinary] = it->second;
         }
         program_ids_use_map[node.program->get_id()] = i;
+        sub_device_ids.insert(node.sub_device_id);
     }
+    for (auto& sub_device_id : sub_device_ids) {
+        worker_region_allocator_.reset_allocator();
+        active_eth_region_allocator_.reset_allocator();
+        allocate_trace_programs_on_subdevice(device, trace_nodes, sub_device_id);
+    }
+}
 
+void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
+    IDevice* device, std::vector<TraceNode>& trace_nodes, SubDeviceId sub_device_id) {
+    const auto& hal = MetalContext::instance().hal();
+
+    uint32_t expected_workers_completed = 0;
     std::optional<uint32_t> last_active_eth_sync_idx;
     for (size_t i = 0; i < trace_nodes.size(); i++) {
         auto& node = trace_nodes[i];
         auto& program = *node.program;
+        if (node.sub_device_id != sub_device_id) {
+            continue;
+        }
         auto sub_device_id = node.sub_device_id;
-        auto sub_device_index = *sub_device_id;
 
         std::optional<uint32_t> sync_idx;
         uint32_t programmable_core_count_ = hal.get_programmable_core_type_count();
@@ -134,7 +148,7 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
             auto& allocator =
                 core_type == HalProgrammableCoreType::TENSIX ? worker_region_allocator_ : active_eth_region_allocator_;
 
-            auto [rta_sync_idx, rta_addr] = allocator.allocate_region(non_binary_size, i, kNonBinary);
+            auto [rta_sync_idx, rta_addr] = allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary);
 
             sync_idx = merge_syncs(sync_idx, rta_sync_idx);
 
@@ -148,13 +162,14 @@ void SimpleTraceAllocator::allocate_trace_programs(IDevice* device, std::vector<
                     node.dispatch_metadata.send_binary = false;
                     allocator.update_region_trace_idx(*mem_addr, i);
                 } else {
-                    auto res = allocator.allocate_region(binary_size, i, kBinary);
+                    auto res = allocator.allocate_region(binary_size, i, ExtraData::kBinary);
                     if (!res.second.has_value()) {
                         // Clear the allocator and try again. Should succeed unless the total size of the program is
                         // larger than the config buffer.
                         allocator.reset_allocator();
-                        std::tie(rta_sync_idx, rta_addr) = allocator.allocate_region(non_binary_size, i, kNonBinary);
-                        res = allocator.allocate_region(binary_size, i, kBinary);
+                        std::tie(rta_sync_idx, rta_addr) =
+                            allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary);
+                        res = allocator.allocate_region(binary_size, i, ExtraData::kBinary);
                         TT_ASSERT(res.second.has_value(), "Failed to allocate binary region");
                         TT_ASSERT(i > 0, "Failed to allocate binary region on first program");
                         sync_idx = merge_syncs(sync_idx, i - 1);
