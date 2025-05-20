@@ -243,6 +243,7 @@ def test_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    print("hi before assert")
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
