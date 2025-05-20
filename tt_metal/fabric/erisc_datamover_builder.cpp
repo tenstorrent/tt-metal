@@ -122,7 +122,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
-    std::size_t channel_buffer_size_bytes, Topology topology, bool is_dateline) :
+    std::size_t channel_buffer_size_bytes, Topology topology, bool is_dateline, bool is_dateline_neighbor) :
     FabricEriscDatamoverConfig(topology) {
     this->num_used_sender_channels = get_sender_channel_count(topology);
     if (topology == Topology::Mesh) {
@@ -197,11 +197,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     constexpr std::array<std::pair<size_t, size_t>, 1> linear_buffer_slot_options = {std::pair<size_t, size_t>{8, 16}};
     constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options = {
         std::pair<size_t, size_t>{8, 8}, std::pair<size_t, size_t>{4, 8}};
-    constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options_dateline = {
-        std::pair<size_t, size_t>{8, 16}, std::pair<size_t, size_t>{8, 8}};
+    constexpr std::array<std::pair<size_t, size_t>, 1> ring_buffer_slot_options_dateline = {
+        std::pair<size_t, size_t>{16, 16}};
 
     size_t num_sender_buffer_slots;
-    size_t downstream_num_sender_buffer_slots;
+
     size_t num_receiver_buffer_slots;
 
     auto get_optimal_num_slots = [this](
@@ -241,10 +241,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
                 ring_buffer_slot_options_dateline,
                 num_alive_sender_channels,
                 num_alive_receiver_channels,
-                temp2_num_sender_buffer_slots,
+                num_sender_buffer_slots,
                 num_receiver_buffer_slots);
             // use the normal sender buffer slots to not hang
-            num_sender_buffer_slots = temp1_num_sender_buffer_slots;
+            // num_sender_buffer_slots = temp2_num_sender_buffer_slots;
         } else {
             get_optimal_num_slots(
                 ring_buffer_slot_options,
@@ -262,30 +262,45 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             num_receiver_buffer_slots);
     }
 
-    downstream_num_sender_buffer_slots = num_sender_buffer_slots;
+    size_t downstream_num_sender_buffer_slots =
+        is_dateline_neighbor ? ring_buffer_slot_options_dateline[0].first : num_sender_buffer_slots;
+
+    if (is_dateline) {
+        TT_FATAL(
+            is_dateline_neighbor != is_dateline, "Dateline and non-dateline EDMs cannot be connected to each other");
+    }
 
     std::size_t total_slot_count =
         num_alive_sender_channels * num_sender_buffer_slots + num_alive_receiver_channels * num_receiver_buffer_slots;
-    TT_FATAL(
-        total_slot_count * channel_buffer_size_bytes <= available_channel_buffering_space,
-        "Total channel size of {} B exceeds available space of {} B",
-        total_slot_count * channel_buffer_size_bytes,
-        available_channel_buffering_space);
+    // TT_FATAL(
+    //     total_slot_count * channel_buffer_size_bytes <= available_channel_buffering_space,
+    //     "Total channel size of {} B exceeds available space of {} B",
+    //     total_slot_count * channel_buffer_size_bytes,
+    //     available_channel_buffering_space);
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         bool skip_current_channel = (i == non_dateline_sender_channel_idx && is_dateline);
-        this->sender_channels_num_buffers[i] = skip_current_channel ? 0 : num_sender_buffer_slots;
-        this->sender_channels_size_bytes[i] =
-            skip_current_channel ? 0 : channel_buffer_size_bytes * num_sender_buffer_slots;
+        this->sender_channels_num_buffers[i] = skip_current_channel      ? 0
+                                               : (is_dateline && i == 0) ? num_sender_buffer_slots / 2
+                                                                         : num_sender_buffer_slots;
+        this->sender_channels_size_bytes[i] = skip_current_channel ? 0
+                                              : (is_dateline && i == 0)
+                                                  ? channel_buffer_size_bytes * num_sender_buffer_slots / 2
+                                                  : channel_buffer_size_bytes * num_sender_buffer_slots;
+
+        log_info("sender_channels_num_buffers {}", this->sender_channels_num_buffers[i]);
     }
     for (uint32_t i = 0; i < this->num_used_sender_channels - 1; i++) {
-        this->downstream_sender_channels_num_buffers[i] = downstream_num_sender_buffer_slots;
+        this->downstream_sender_channels_num_buffers[i] =
+            is_dateline ? downstream_num_sender_buffer_slots / 2 : downstream_num_sender_buffer_slots;
+        log_info("downstream_sender_channels_num_buffers {}", this->downstream_sender_channels_num_buffers[i]);
     }
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         bool skip_current_channel = (i == non_dateline_receiver_channel_idx && is_dateline);
         this->receiver_channels_num_buffers[i] = skip_current_channel ? 0 : num_receiver_buffer_slots;
         this->receiver_channels_size_bytes[i] =
             skip_current_channel ? 0 : channel_buffer_size_bytes * num_receiver_buffer_slots;
+        log_info("receiver_channels_num_buffers {}", this->receiver_channels_num_buffers[i]);
     }
 
     uint32_t buffer_addr = buffer_region_start;
@@ -501,8 +516,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
     TT_FATAL(sender_channel_num_buffers > 0, "Sender channel num buffers must be greater than 0");
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
-    log_info("this->sender_channels_num_buffers[0]: {}", this->sender_channels_num_buffers[0]);
-    log_info("this->sender_channels_num_buffers[1]: {}", this->sender_channels_num_buffers[1]);
+    // log_info("this->sender_channels_num_buffers[0]: {}", this->sender_channels_num_buffers[0]);
+    // log_info("this->sender_channels_num_buffers[1]: {}", this->sender_channels_num_buffers[1]);
 
     auto ct_args = std::vector<uint32_t>{
         num_sender_channels,

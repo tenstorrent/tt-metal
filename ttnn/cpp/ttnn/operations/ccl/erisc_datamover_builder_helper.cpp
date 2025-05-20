@@ -120,19 +120,40 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 dest_device->id() == device_sequence.front()->id()) {
                 dateline = true;
             }
+            bool src_edm_is_dateline_neighbor = false;
+            if (src_device->id() == device_sequence.front()->id() &&
+                dest_device->id() != device_sequence.back()->id()) {
+                src_edm_is_dateline_neighbor = true;
+            }
+            bool dest_edm_is_dateline_neighbor = false;
+            if (src_device->id() != device_sequence.front()->id() &&
+                dest_device->id() == device_sequence.back()->id()) {
+                dest_edm_is_dateline_neighbor = true;
+            }
 
             edm_builders_forward_direction[src_device->id()].reserve(local_link_cores.size());
             edm_builders_backward_direction[dest_device->id()].reserve(local_link_cores.size());
             for (size_t l = 0; l < this->num_links; l++) {
-                const auto curr_edm_config =
-                    tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dateline);
+                // const auto curr_edm_config =
+                //     tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dateline,
+                //     is_dateline_neighbor);
+                const auto src_curr_edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(
+                    edm_buffer_size, topology, dateline, src_edm_is_dateline_neighbor);
+                const auto dest_curr_edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(
+                    edm_buffer_size, topology, dateline, dest_edm_is_dateline_neighbor);
                 log_trace(
                     tt::LogOp,
                     "Building forward direction EDM on chip {} on link {}",
                     src_device->id(),
                     edm_builders_forward_direction[src_device->id()].size());
-                tt::log_debug(
-                    "src_device {}, dest_device {}, is_dateline {}", src_device->id(), dest_device->id(), dateline);
+                tt::log_info(
+                    "src_device {}, dest_device {}, is_dateline {}, src_edm_is_dateline_neighbor {}, "
+                    "dest_edm_is_dateline_neighbor {}",
+                    src_device->id(),
+                    dest_device->id(),
+                    dateline,
+                    src_edm_is_dateline_neighbor,
+                    dest_edm_is_dateline_neighbor);
                 edm_builders_forward_direction[src_device->id()].push_back(
                     tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                         src_device,
@@ -140,7 +161,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         local_link_cores[l],
                         src_device->id(),
                         dest_device->id(),
-                        curr_edm_config,
+                        src_curr_edm_config,
                         enable_persistent_mode,
                         build_in_worker_connection_mode,
                         dateline));
@@ -157,7 +178,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         remote_link_cores[l],
                         dest_device->id(),
                         src_device->id(),
-                        curr_edm_config,
+                        dest_curr_edm_config,
                         enable_persistent_mode,
                         build_in_worker_connection_mode,
                         dateline));
