@@ -9,7 +9,9 @@
 // H-bcast mask
 FORCE_INLINE void generate_bcast_row_mask(
     const uint32_t cb_id, const uint32_t num_datum_padded, const uint16_t mask_val) {
+    DPRINT << "Stuck" << ENDL();
     cb_reserve_back(cb_id, 1);
+    DPRINT << "Stuck 2" << ENDL();
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
 
     if (num_datum_padded > 16) {
@@ -87,7 +89,6 @@ void kernel_main() {
 
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         for (uint32_t j = 0; j < blk; j++) {
-            print_full_tile(cb_id_out0, j, true);
             noc_async_write_tile(tile_id, s, l1_read_addr);
             tile_id++;
             l1_read_addr += tile_bytes;
