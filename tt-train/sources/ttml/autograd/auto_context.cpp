@@ -90,7 +90,8 @@ void AutoContext::initialize_distributed_context(int argc, char** argv) {
     if (m_distributed_context) {
         throw std::runtime_error("MPIContext is already initialized.");
     }
-    m_distributed_context = DistributedContext::create(argc, argv);
+    DistributedContext::create(argc, argv);
+    m_distributed_context = DistributedContext::get_current_world();
 }
 
 }  // namespace ttml::autograd

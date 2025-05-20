@@ -17,13 +17,13 @@ TEST(FaultTolerance, shrink_after_rank_failure) {
     auto ctx = DistributedContext::get_current_world();
 
     const int world = *ctx->size();
-    const int me = *ctx->rank();
+    const int self_rank = *ctx->rank();
     const int victim_rank = 1;  // rank to kill (if exists)
 
     //----------------------------------------------------------------------
     // 1 · Simulate a hard failure on one rank
     //----------------------------------------------------------------------
-    if (world > 1 && me == victim_rank) {
+    if (world > 1 && self_rank == victim_rank) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         // Use SIGKILL so only *this* process dies; MPI_Abort would kill all
         raise(SIGKILL);  // never returns
