@@ -70,8 +70,10 @@ void kernel_main() {
     uint32_t scalar_index = 0;
     uint32_t scalars_cnt = 1;
     uint32_t runtime_args_before = 1;
+    uint32_t time_for_change = 0;
     if (!one_scalar_per_core) {
         scalars_cnt = get_arg_val<uint32_t>(0);
+        time_for_change = get_arg_val<uint32_t>(runtime_args_before);
     }
 
     DPRINT << "reader_nindices" << reader_nindices << ENDL();
@@ -107,11 +109,12 @@ void kernel_main() {
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
     while (counter < reader_nindices || (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core)) {
-        if (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core) {
-            uint32_t scalar_val = get_arg_val<uint32_t>(scalar_index + runtime_args_before);
+        if (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core && counter >= time_for_change) {
+            uint32_t scalar_val = get_arg_val<uint32_t>(2 * scalar_index + runtime_args_before + 1);
             cb_reserve_back(in_scalar_cb_id, 1);
             fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
             scalar_index++;
+            time_for_change = get_arg_val<uint32_t>(runtime_args_before + 2 * scalar_index);
             cb_push_back(in_scalar_cb_id, 1);
         }
         if (counter < reader_nindices || one_scalar_per_core) {
