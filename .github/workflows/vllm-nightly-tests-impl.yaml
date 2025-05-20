@@ -34,7 +34,6 @@ jobs:
       - arch-${{ matrix.test-group.arch }}
       - ${{ matrix.test-group.runner-label }}
       - in-service
-      - bare-metal
       - pipeline-functional
     container:
       image: ${{ inputs.docker-image }}
