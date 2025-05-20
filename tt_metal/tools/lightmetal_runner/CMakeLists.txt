@@ -21,3 +21,5 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/tools
 )
+
+target_precompile_headers(lightmetal_runner REUSE_FROM TT::CommonPCH)
