@@ -6,8 +6,10 @@ mcast_FullRing,noc_unicast_write,2048,4,1,False,False,False,3.8789005970924775,1
 mcast_FullRing,noc_unicast_write,4096,4,1,False,False,False,6.463968526701578,1578117.3160892525
 mcast_FullRing,noc_unicast_write,4096,4,2,False,False,False,6.369396195780156,1555028.3681103897
 mcast_FullRing,noc_unicast_write,16,8,1,False,False,False,0.02798334424354788,None
-mcast_FullRing,noc_unicast_write,2048,8,1,False,False,False,2.775,None
+mcast_FullRing,noc_unicast_write,2048,8,1,False,False,False,2.567435108686534,None
 mcast_FullRing,noc_unicast_write,4096,8,1,False,False,False,5.193611184406907,1267971.4805680925
+unicast_FullRing,noc_unicast_write,4096,4,1,False,False,False,6.860580766139613,1674946.476108304
+unicast_FullRing,noc_unicast_write,4096,4,2,False,False,False,6.808208705105963,1662160.3283950107
 mcast_SaturateChipToChipRing,noc_unicast_write,16,4,1,False,False,False,0.03719374481643661,2324609.0510272877
 mcast_SaturateChipToChipRing,noc_unicast_write,2048,4,1,False,False,False,4.319495779858247,2109128.7987589096
 mcast_SaturateChipToChipRing,noc_unicast_write,4096,4,1,False,False,False,7.714125507353006,1883331.422693605
