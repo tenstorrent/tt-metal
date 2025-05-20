@@ -593,18 +593,16 @@ EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest(
 
 void EdmLineFabricOpInterface::teardown_from_host(tt::tt_fabric::TerminationSignal termination_signal) const {
     for (tt::tt_metal::IDevice* d : this->device_sequence) {
+        // TODO: teardown for each risc core.
+        //       check edm_builder->shared_buffer_mode whether the termination address is shared or not
         if (edm_builders_forward_direction.find(d->id()) != edm_builders_forward_direction.end()) {
             for (auto& edm_builders_for_link : edm_builders_forward_direction.at(d->id())) {
-                for (auto& emd_builder : edm_builders_for_link) {
-                    emd_builder.teardown_from_host(d, termination_signal);
-                }
+                edm_builders_for_link.front().teardown_from_host(d, termination_signal);
             }
         }
         if (edm_builders_backward_direction.find(d->id()) != edm_builders_backward_direction.end()) {
             for (auto& edm_builders_for_link : edm_builders_backward_direction.at(d->id())) {
-                for (auto& edm_builder : edm_builders_for_link) {
-                    edm_builder.teardown_from_host(d, termination_signal);
-                }
+                edm_builders_for_link.front().teardown_from_host(d, termination_signal);
             }
         }
     }
