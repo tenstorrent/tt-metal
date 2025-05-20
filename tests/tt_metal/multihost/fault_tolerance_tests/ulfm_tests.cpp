@@ -7,11 +7,13 @@
 #include "common/multihost_test_tools.hpp"
 #include <thread>
 
-TEST(FaultTolerance, shrink_after_rank_failure) {
-    using tt::tt_metal::distributed::multihost::DistributedContext;
-    using tt::tt_metal::distributed::multihost::DistributedException;
-    using tt::tt_metal::distributed::multihost::Rank;
+using tt::tt_metal::distributed::multihost::Color;
+using tt::tt_metal::distributed::multihost::DistributedContext;
+using tt::tt_metal::distributed::multihost::DistributedException;
+using tt::tt_metal::distributed::multihost::Key;
+using tt::tt_metal::distributed::multihost::Rank;
 
+TEST(FaultTolerance, ShrinkAfterRankFailure) {
     //----------------------------------------------------------------------
     // 0 · Create world communicator and install MPI_ERRORS_RETURN
     //----------------------------------------------------------------------
@@ -59,5 +61,76 @@ TEST(FaultTolerance, shrink_after_rank_failure) {
     //----------------------------------------------------------------------
     // 4 · Final barrier on the repaired communicator
     //----------------------------------------------------------------------
+    ctx->barrier();
+}
+
+TEST(FaultTolerance, DisableBrokenBlock) {
+    // ‑‑ configuration ------------------------------------------------------
+    constexpr int ranks_per_block = 2;  // two ranks share one machine / block
+    constexpr int victim_block = 1;     // second block (ranks 2 & 3) – adjust at will
+
+    auto ctx = DistributedContext::get_current_world();
+    const int world = *ctx->size();
+    const int rank = *ctx->rank();
+
+    if (world < ranks_per_block * 2) {
+        GTEST_SKIP() << "Need at least " << ranks_per_block * 2 << " processes";
+    }
+
+    const int victim_rank = victim_block * ranks_per_block;  // first rank in that block
+
+    // ‑‑ 1 · Simulate a hard failure on one rank ---------------------------
+    if (rank == victim_rank) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        raise(SIGKILL);  // never returns
+    }
+
+    // ‑‑ 2 · First collective detects failure ------------------------------
+    try {
+        ctx->barrier();  // will throw / error out on surviving ranks
+    } catch (const DistributedException&) {
+        ctx->revoke_and_shrink();
+    }
+
+    // After shrink the failed rank is gone but its partner (same block)
+    // may still be alive. We want to disable the entire block.
+
+    // ‑‑ 3 · Build sub‑communicator for our logical block ------------------
+    const int block_id = rank / ranks_per_block;
+    auto block_ctx = ctx->split(Color{block_id}, Key{0});
+
+    const bool is_block_healthy = (*block_ctx->size() == ranks_per_block);
+
+    // ‑‑ 4 · Split off unhealthy blocks (color 0 = healthy, 1 = unhealthy) -
+    auto filtered_ctx = ctx->split(Color{is_block_healthy ? 0 : 1}, Key{0});
+
+    if (!is_block_healthy) {
+        // This rank is in a disabled block – no further collectives.
+        SUCCEED();
+        return;
+    }
+
+    ctx = filtered_ctx;  // continue with communicator containing only healthy blocks
+
+    // ‑‑ 5 · Verify global properties -------------------------------------
+    const int expected_blocks = world / ranks_per_block - 1;  // one block lost
+    const int expected_ranks = expected_blocks * ranks_per_block;
+    const int new_world = *ctx->size();
+
+    EXPECT_EQ(new_world, expected_ranks);
+
+    // All surviving ranks should agree on the new size
+    ctx->barrier();
+
+    int size_val = new_world;
+    std::vector<int> gathered(expected_ranks);
+    ctx->all_gather(
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&size_val), sizeof(int)),
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(gathered.data()), gathered.size() * sizeof(int)));
+    for (int v : gathered) {
+        EXPECT_EQ(v, new_world);
+    }
+
+    // ‑‑ 6 · Final collective sanity check --------------------------------
     ctx->barrier();
 }
