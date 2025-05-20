@@ -6,6 +6,7 @@
 
 #include <device_pool.hpp>
 #include <host_api.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <map>
+#include <typeinfo>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -508,6 +510,9 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq = {
 
 std::vector<FDKernel*> node_id_to_kernel;
 std::unordered_map<chip_id_t, std::unique_ptr<Program>> command_queue_pgms;
+std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores;
+std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> routing_cores;
+std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> empty_cores;
 
 // Helper function to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
 std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
@@ -861,6 +866,7 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
         "Tried to create and compile CQ program on device {} without static args populated (need to run "
         "populate_cq_static_args())",
         device->id());
+    empty_cores.clear();
     std::unique_ptr<Program> cq_program = std::move(command_queue_pgms[device->id()]);
     // Third pass, populate dependent configs and create kernels for each node
     for (auto node_and_kernel : node_id_to_kernel) {
@@ -872,6 +878,28 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
     for (auto node_and_kernel : node_id_to_kernel) {
         if (node_and_kernel->GetDeviceId() == device->id()) {
             node_and_kernel->CreateKernel();
+        }
+    }
+
+    // Register core coordinates for this device
+    for (auto node_and_kernel : node_id_to_kernel) {
+        if (node_and_kernel->GetDeviceId() != device->id()) {
+            continue;
+        }
+
+        switch (node_and_kernel->GetKernelType()) {
+            case FDKernelType::DISPATCH: dispatch_cores[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
+            case FDKernelType::ROUTING: routing_cores[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
+            case FDKernelType::VIRTUAL:
+                // Not a real kernel
+                break;
+            case FDKernelType::UNSET:
+                TT_THROW(
+                    "Unknown kernel type {} {} on Device {}",
+                    magic_enum::enum_name(node_and_kernel->GetKernelType()),
+                    typeid(*node_and_kernel).name(),
+                    device->id());
+                break;
         }
     }
 
@@ -1313,6 +1341,20 @@ void configure_fabric_cores(IDevice* device) {
             tt::tt_metal::detail::WriteToDeviceL1(device, router_logical_core, address, router_zero_buf, CoreType::ETH);
         }
     }
+}
+
+const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(chip_id_t dev_id) {
+    if (!dispatch_cores.contains(dev_id)) {
+        return empty_cores[dev_id];
+    }
+    return dispatch_cores[dev_id];
+}
+
+const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_t dev_id) {
+    if (!routing_cores.contains(dev_id)) {
+        return empty_cores[dev_id];
+    }
+    return routing_cores[dev_id];
 }
 
 }  // namespace tt::tt_metal
