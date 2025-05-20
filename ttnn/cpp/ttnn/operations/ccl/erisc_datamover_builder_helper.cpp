@@ -304,30 +304,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             auto& backward_direction_edm = edm_builders_backward_direction.at(device_sequence[i]->id());
 
             for (size_t l = 0; l < num_links; l++) {
-                using namespace tt::tt_metal;
-                if (device_sequence.front()->arch() == tt::ARCH::BLACKHOLE) {
-                    forward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_0)
-                        .connect_to_downstream_edm(
-                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_1));
-                    backward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_0)
-                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_1));
-                    forward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_1)
-                        .connect_to_downstream_edm(
-                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
-                    backward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_1)
-                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
-                } else {
-                    forward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_0)
-                        .connect_to_downstream_edm(
-                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
-                    backward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_0)
-                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
+                for (size_t risc_id = 0; risc_id < forward_direction_edm[l].size(); risc_id++) {
+                    forward_direction_edm[l][risc_id].connect_to_downstream_edm(backward_direction_edm[l][risc_id]);
+                    backward_direction_edm[l][risc_id].connect_to_downstream_edm(forward_direction_edm[l][risc_id]);
                 }
             }
         }
@@ -444,30 +423,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             auto& backward_direction_edm = edm_builders_backward_direction.at(local_device->id());
 
             for (size_t l = 0; l < this->num_links; l++) {
-                using namespace tt::tt_metal;
-                if (local_device->arch() == tt::ARCH::BLACKHOLE) {
-                    forward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_0)
-                        .connect_to_downstream_edm(
-                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_1));
-                    backward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_0)
-                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_1));
-                    forward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_1)
-                        .connect_to_downstream_edm(
-                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
-                    backward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_1)
-                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
-                } else {
-                    forward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_0)
-                        .connect_to_downstream_edm(
-                            backward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
-                    backward_direction_edm.at(l)
-                        .at((int)DataMovementProcessor::RISCV_0)
-                        .connect_to_downstream_edm(forward_direction_edm.at(l).at((int)DataMovementProcessor::RISCV_0));
+                for (size_t risc_id = 0; risc_id < forward_direction_edm[l].size(); risc_id++) {
+                    forward_direction_edm[l][risc_id].connect_to_downstream_edm(backward_direction_edm[l][risc_id]);
+                    backward_direction_edm[l][risc_id].connect_to_downstream_edm(forward_direction_edm[l][risc_id]);
                 }
             }
         }

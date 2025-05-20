@@ -140,7 +140,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->enable_handshake[risc_id] = true;
         this->enable_interrupts[risc_id] = true;
         this->sender_txq_id[risc_id] = risc_id;
-        this->receiver_rxq_id[risc_id] = risc_id;
+        this->receiver_txq_id[risc_id] = risc_id;
         this->iterations_between_ctx_switch_and_teardown_checks[risc_id] =
             FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks;
 
@@ -567,7 +567,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(const s
         config.enable_context_switch[risc_id],
         config.enable_interrupts[risc_id],
         config.sender_txq_id[risc_id],
-        config.receiver_rxq_id[risc_id],
+        config.receiver_txq_id[risc_id],
         config.iterations_between_ctx_switch_and_teardown_checks[risc_id],
         config.topology == Topology::Mesh,
         this->direction,

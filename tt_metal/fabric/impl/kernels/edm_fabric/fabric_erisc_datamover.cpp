@@ -271,14 +271,15 @@ FORCE_INLINE void increment_local_update_ptr_val(uint8_t stream_id, int32_t val)
         stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX, REMOTE_DEST_BUF_WORDS_FREE_INC, val);
 }
 
-template <uint32_t stream_id>
+template <uint32_t stream_id, uint32_t txq_id>
 FORCE_INLINE void remote_update_ptr_val(int32_t val) {
     constexpr uint32_t addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
-    internal_::eth_write_remote_reg_no_txq_check(sender_txq_id, addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    internal_::eth_write_remote_reg_no_txq_check(txq_id, addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
 }
+template <uint32_t txq_id>
 FORCE_INLINE void remote_update_ptr_val(uint32_t stream_id, int32_t val) {
     const uint32_t addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
-    internal_::eth_write_remote_reg_no_txq_check(sender_txq_id, addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    internal_::eth_write_remote_reg_no_txq_check(txq_id, addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
 }
 
 template <uint32_t stream_id>
@@ -397,7 +398,7 @@ FORCE_INLINE void send_next_data(
     static constexpr uint32_t words_to_forward = 1;
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
-    remote_update_ptr_val<to_receiver_pkts_sent_id>(words_to_forward);
+    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(words_to_forward);
 }
 
 /////////////////////////////////////////////
@@ -419,16 +420,16 @@ FORCE_INLINE void receiver_send_received_ack(
     volatile tt_l1_ptr auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
         local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
     const auto src_id = pkt_header->src_ch_id;
-    while (internal_::eth_txq_is_busy(sender_txq_id)) {
+    while (internal_::eth_txq_is_busy(receiver_txq_id)) {
     };
-    remote_update_ptr_val(to_sender_packets_acked_streams[src_id], 1);
+    remote_update_ptr_val<receiver_txq_id>(to_sender_packets_acked_streams[src_id], 1);
 }
 
 // MUST CHECK !is_eth_txq_busy() before calling
 FORCE_INLINE void receiver_send_completion_ack(uint8_t src_id) {
-    while (internal_::eth_txq_is_busy(sender_txq_id)) {
+    while (internal_::eth_txq_is_busy(receiver_txq_id)) {
     };
-    remote_update_ptr_val(to_sender_packets_completed_streams[src_id], 1);
+    remote_update_ptr_val<receiver_txq_id>(to_sender_packets_completed_streams[src_id], 1);
 }
 
 template <uint8_t SENDER_NUM_BUFFERS>
@@ -1264,10 +1265,10 @@ void run_fabric_edm_main_loop(
             }
         }
 
-        if (did_something) {
-            did_nothing_count = 0;
-        } else {
-            if constexpr (enable_context_switch) {
+        if constexpr (enable_context_switch) {
+            if (did_something) {
+                did_nothing_count = 0;
+            } else {
                 if (did_nothing_count++ > SWITCH_INTERVAL) {
                     did_nothing_count = 0;
                     // shouldn't do noc counter sync since we are not incrementing them
@@ -1854,7 +1855,7 @@ void kernel_main() {
         }
     }
 
-    if constexpr (enable_context_switch) {
+    if constexpr (enable_handshake) {
         if constexpr (is_handshake_sender) {
             erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {

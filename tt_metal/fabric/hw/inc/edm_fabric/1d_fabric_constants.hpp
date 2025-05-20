@@ -185,7 +185,7 @@ constexpr bool enable_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_START_ID
 constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 64) != 0;
 constexpr bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 65) != 0;
 constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 66);
-constexpr size_t receiver_rxq_id = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 67);
+constexpr size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 67);
 constexpr size_t iterations_between_ctx_switch_and_teardown_checks =
     get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 68);
 constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 69);
