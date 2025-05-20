@@ -1084,7 +1084,7 @@ def test_ttnn_slice_whisper(
 @pytest.mark.parametrize(
     "dims, slice_size, cores",
     [
-        [[2, 256, 256, 56], 128, 16],
+        [[2, 256, 256, 56], 128, 160],
         [[2, 256, 128, 23], 16, 8],
         [[2, 256, 256, 37], 64, 64],
         [[2, 8, 8, 32], 2, 4],
@@ -1097,7 +1097,10 @@ def test_ttnn_slice_whisper(
 def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, orientation):
     core_grid = device.compute_with_storage_grid_size()
     if core_grid.x * core_grid.y < cores:
-        pytest.skip("Device does not have enough cores")
+        pytest.skip(
+            "Skipping test_slice_height_sharded_for_conv2d as device does not have enough Tensix cores. Needs %d, but device has %d"
+            % (cores, core_grid.x * core_grid.y)
+        )
 
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
@@ -1133,9 +1136,9 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
 @pytest.mark.parametrize(
     "dims, slice_size, core_x, core_y",
     [
-        [[2, 64, 64, 292], 32, 4, 4],
-        [[2, 64, 64, 532], 16, 4, 4],
-        [[2, 16, 16, 1016], 4, 4, 4],
+        [[2, 64, 64, 256], 32, 4, 4],
+        [[2, 64, 64, 512], 16, 4, 4],
+        [[2, 16, 16, 1024], 4, 4, 4],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -1144,7 +1147,10 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
 def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, core_x, core_y, layout, orientation):
     core_grid = device.core_grid
     if core_grid.x < core_x or core_grid.y < core_y:
-        pytest.skip("Device does not have enough cores")
+        pytest.skip(
+            "Skipping test_slice_block_sharded_for_conv2d as device does not have enough Tensix cores. Needs %s, but device has %s"
+            % ((core_x, core_y), (core_grid.x, core_grid.y))
+        )
 
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
