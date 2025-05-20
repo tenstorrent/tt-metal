@@ -7,8 +7,9 @@
 #include "debug/dprint.h"
 
 FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
+    constexpr uint32_t one_tile = 1;
     // Reserve space
-    cb_reserve_back(cb_id, 1);
+    cb_reserve_back(cb_id, one_tile);
 
     // Writer config
     const uint32_t writer_addr = get_write_ptr(cb_id);
@@ -37,7 +38,7 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     }  // i loop
 
     // Push the tile
-    cb_push_back(cb_id, 1);
+    cb_push_back(cb_id, one_tile);
 }
 
 /*
