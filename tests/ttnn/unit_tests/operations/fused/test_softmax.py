@@ -224,9 +224,9 @@ def test_softmax_sharded_stable_with_program_cache(
     assert device.num_program_cache_entries() == 1
 
 
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [32])
+@pytest.mark.parametrize("batch_size", [2])
+@pytest.mark.parametrize("h", [16384])
+@pytest.mark.parametrize("w", [8192])
 @pytest.mark.parametrize("dim", [-1])
 def test_softmax(device, batch_size, h, w, dim):
     torch.manual_seed(0)
@@ -242,6 +242,42 @@ def test_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, h, w, dim",
+    [
+        # (1, 2048, 128000, -1),
+        # (1, 512, 128000, -1),
+        # (1, 128, 128000, -1),
+        (1, 32, 128000, -1),
+        (1, 2048, 32000, -1),
+        (1, 512, 32000, -1),
+        (1, 32, 32000, -1),  # base case
+    ],
+)
+def test_large_softmax(device, batch_size, h, w, dim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
+    print(torch_input_tensor)
+    torch_output_tensor = F.softmax(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    input_tensor = ttnn.to_device(input_tensor, device)
+    print("starting kernel")
+    output_tensor = ttnn.softmax(input_tensor, dim=dim)
+    print("ending kernel")
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    print("Start Moving from device")
+    output_tensor = ttnn.from_device(output_tensor)
+    print("Done Moving from device")
+    output_tensor = ttnn.to_torch(output_tensor)
+    print("starting PCC")
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 

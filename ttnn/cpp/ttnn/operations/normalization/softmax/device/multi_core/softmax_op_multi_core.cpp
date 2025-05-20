@@ -34,7 +34,6 @@ inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
 inline bool is_dram(const tt::tt_metal::Buffer* b) { return b->buffer_type() == tt::tt_metal::BufferType::DRAM; }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
-
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
 tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     const Tensor& input_tensor,
@@ -129,12 +128,18 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     // used for buffering scale-mask
     // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
     uint32_t im3_t = block_size * (tt::div_up(Wt, block_size) + 1);
-    TT_FATAL(
-        im3_t == Wt + block_size,
-        "Intermediate buffer size (im3_t={}) must be equal to width plus block_size (Wt ({}) + block_size ({}))",
-        im3_t,
-        Wt,
-        block_size);
+
+    uint32_t cb_length = in0_t;
+    if ((input_tensor.device()->l1_size_per_core() * 0.9) <
+        (in0_t * in0_tile_size) + (im4_t * im_tile_size) + (im0_t * im_tile_size) + (im3_t * im_tile_size)) {
+        cb_length = block_size *
+                    tt::div_up((input_tensor.device()->l1_size_per_core() * 0.9) / ((4 * im_tile_size)), block_size);
+        in0_t = cb_length;
+        im4_t = cb_length;
+        im0_t = cb_length * 2;
+        im3_t = cb_length;
+    }
+    TT_ASSERT(im3_t == Wt + block_size);
 
     TT_FATAL(Wt % block_size == 0, "Width (Wt={}) must be divisible by block_size ({})", Wt, block_size);
     TT_FATAL(
@@ -367,7 +372,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             program,
             softmax_kernels_id,
             core,
-            {num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data, in0_t});
+            {num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data, cb_length});
 
         SetRuntimeArgs(
             program,
@@ -486,6 +491,13 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 W,
                 TILE_WIDTH,
                 im0_t);
+// =======
+//             TT_ASSERT(Wt % block_size == 0);
+//             TT_ASSERT((block_size != -1) && "Wt must be divisible by one of the numbers in the range from 8 to 1.");
+//             TT_ASSERT(
+//                 im0_t % block_size == 0 & im0_t &&
+//                 "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
+// >>>>>>> 005851ac73 (working in preogress)
 
             uint32_t NCHt = NC * Ht;
             uint32_t num_tile_rows = NC * Ht;
