@@ -81,14 +81,6 @@ Tensor ExecuteTosaGather::invoke(
         "Index tensor first dimension must be equal to input tensor first dimension");
     const auto W = original_input_index_tensor_lshape[1];
 
-    // Check for early exit for empty tensors tensors
-    if (original_input_tensor_lshape.rank() == 0) {
-        return input_tensor;
-    }
-    if (original_input_index_tensor_lshape.rank() == 0) {
-        return input_index_tensor;
-    }
-
     Tensor expanded_index_tensor =
         CMAKE_UNIQUE_NAMESPACE::pre_tosa_gather_transform_input_index_tensor(input_index_tensor, dim, C);
 

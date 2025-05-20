@@ -107,6 +107,14 @@ Tensor ExecuteGather::invoke(
     const auto original_index_tensor_lshape = input_index_tensor.get_logical_shape();
     const auto index_tensor_rank = input_index_tensor.get_padded_shape().rank();
 
+    // Check for early exit for empty tensors tensors
+    if (original_input_tensor_lshape == ttnn::Shape{}) {
+        return input_tensor;
+    }
+    if (original_index_tensor_lshape == ttnn::Shape{}) {
+        return input_index_tensor;
+    }
+
     const bool input_tensor_is_dim_last_idx = (dim == -1 || dim == input_tensor_rank - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
     const bool input_index_tensor_is_dim_last_idx = (dim == -1 || dim == index_tensor_rank - 1);
