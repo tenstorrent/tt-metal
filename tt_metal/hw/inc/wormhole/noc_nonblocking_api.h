@@ -679,6 +679,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_set_sta
     bool multicast_path_reserve,
     bool posted = false,
     uint32_t trid = 0) {
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_write_set_state<noc_mode, use_trid>(
         noc,
         cmd_buf,
