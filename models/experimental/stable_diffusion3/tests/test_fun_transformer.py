@@ -49,7 +49,6 @@ def test_transformer(
     dit_parallel_config = create_dit_parallel_config(
         mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel
     )
-    mesh_device.enable_async(True)
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
