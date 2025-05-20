@@ -32,8 +32,9 @@ ALWI void recip_tile_init() { MATH((llk_math_eltwise_unary_sfpu_reciprocal_init<
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | int      | Subject to specific hardware/kernel limits          | False    |
  */
- // clang-format on
+// clang-format on
 ALWI void recip_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
     MATH((llk_math_eltwise_unary_sfpu_reciprocal<APPROX, DST_ACCUM_MODE>(idst, vector_mode)));
 }
