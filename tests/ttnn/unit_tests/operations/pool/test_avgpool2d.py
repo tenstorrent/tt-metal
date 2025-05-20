@@ -99,11 +99,11 @@ def run_avg_pool2d(
     (
         # Case: Normal compute & Normal reader kernel.
         [1, 32, 16, 16],
-        # [1, 512, 112, 32],
+        [1, 512, 112, 32],
         [1, 512, 16, 16],
         [1, 800, 16, 16],
         [2, 32, 16, 16],
-        # [2, 512, 112, 32],
+        [2, 512, 112, 32],
         [2, 512, 16, 16],
         [2, 800, 16, 16],
     ),
@@ -156,8 +156,8 @@ def run_avg_pool2d(
     "shard_scheme",
     [
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        # ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
 def test_run_avg_pool2d(

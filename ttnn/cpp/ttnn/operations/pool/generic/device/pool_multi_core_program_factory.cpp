@@ -422,6 +422,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                 uint32_t scalar_cnt = scalar_values.size();
                 std::vector<uint32_t> runtime_args_reader = {scalar_cnt};
                 for (int j = 0; j < scalar_cnt; j++) {
+                    runtime_args_reader.push_back(sync_indices[j]);
                     runtime_args_reader.push_back(scalar_values[j] << 16);
                 }
 
