@@ -130,30 +130,103 @@ class CIv2ModelDownloadUtils_:
 
         endpoint = f"{endpoint_prefix}/{model_path}"
 
-        subprocess.run(
-            [
-                "wget",
-                "-r",
-                "-nH",
-                "-x",
-                "--cut-dirs=5",
-                "-np",
-                "--progress=dot:giga",
-                "-R",
-                "index.html*",
-                "-P",
-                download_dir_str,
-                endpoint,
-            ],
-            check=True,
-            text=True,
-        )
+        try:
+            # TODO: How do we add a timeout here without relying on native timeout command?
+            subprocess.run(
+                [
+                    "wget",
+                    "-r",
+                    "-nH",
+                    "-x",
+                    "--cut-dirs=5",
+                    "-np",
+                    "--progress=dot:giga",
+                    "-R",
+                    "index.html*",
+                    "-P",
+                    download_dir_str,
+                    endpoint,
+                ],
+                check=True,
+                text=True,
+            )
+        except Exception as err:
+            logger.error(f"Error occurred while trying to download from {endpoint}. Check above logs from wget call.")
+            logger.error(err)
+            raise err
 
         return download_dir / Path(model_path)
 
 
 @pytest.fixture(scope="session")
 def model_location_generator(is_ci_v2_env):
+    """
+    Returns a function that will determine the appropriate file path for a
+    model based on available locations.
+
+    This function locates model files by checking several possible locations in the following order:
+    1. CIv2 cache if running in CI environment and the user requests CIv2
+       resources via setting download_if_ci_v2 to True.
+       If we're in a CIv2 environment and download_if_ci_v2 is True, that means
+       the model is requesting files from CIv2. However, we will error out if
+       the files are not available because that means the responsible developer
+       did not properly uploaded the requested files.
+    2. Cloud MLPerf path if available, which is virtually all cases for CIv1
+    3. Default to the model_version string, which means downloading to the
+       local Huggingface cache directory (HF_HOME, or ~/.cache/huggingface by
+       default)
+
+    For CIv2 specifically
+    ---------------------
+
+    The expected directory structure in the single source of truth datastore
+    should be:
+
+    lfc://mldata/model_checkpoints/pytorch/huggingface/pytorch
+    ├── huggingface
+    └── hf_repo_owner/hf_repo
+        ├── weight1.bin
+        ├── weight2.bin
+        ├── ...
+        └── T3K
+            ├── T3K_ttnn_tensor1.bin
+            ├── T3K_ttnn_tensor2.bin
+            └── ...
+        └── N300
+            ├── N300_ttnn_tensor1.bin
+            ├── N300_ttnn_tensor2.bin
+            └── ...
+
+    Why couple the TT-NN tensor binaries into the Huggingface model's folder?
+    This is because tensors are generated on a per-model basis, so in terms
+    of folder organization there isn't too much benefit from having a separate
+    place for HF weights and a separate place for the bins.
+
+    What's nice about this is this makes it clear which HF model corresponds
+    to which set of tensor binaries, which is useful for engineers to quickly
+    see which model is generating which binaries.
+
+    Note that the logic for all of this is in CIv2ModelDownloadUtils_.
+
+    :param model_version: The version identifier of the model to locate
+    :type model_version: str
+    :param model_subdir: Subdirectory within the model folder structure.
+                         Default is empty string.
+                         Note: Nested subdirectories (model_subdir) are not
+                         supported in CIv2 cache.
+    :type model_subdir: str
+    :param download_if_ci_v2: Whether to download from CI v2 cache if in a CI v2 environment
+    :type download_if_ci_v2: bool
+
+    :return: The path to the model files (internal MLPerf path, CI v2 cache
+             path, or just model_version which uses HF_HOME)
+    :rtype: str
+
+    :raises AssertionError: If trying to run in CIv2 environment with MLPerf
+    files which is impossible, or if model_subdir contains unsupported
+    directory structure
+    """
+
     def model_location_generator_(model_version, model_subdir="", download_if_ci_v2=False):
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
