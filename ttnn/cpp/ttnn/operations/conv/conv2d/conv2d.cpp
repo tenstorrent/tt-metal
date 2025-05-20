@@ -392,7 +392,7 @@ Result conv2d_L1(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor_,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
@@ -400,14 +400,21 @@ Result conv2d_L1(
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     auto input_tensor = input_tensor_;
     auto weight_tensor = weight_tensor_;
+    std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
-    if (conv_config.enable_dram_fold && !mm_conv) {
+    if (conv_config.enable_kernel_stride_folding) {
         // Fold the input tensor to reduce spatial dimensions by stride factors, effectively converting
         // a large kernel convolution into a matmul operation.
         input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);
+        // If the weight is not preprocessed on device, fold it.
         if (!tt::tt_metal::is_device_tensor(weight_tensor)) {
             weight_tensor =
                 fold_tensor(weight_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, true);
+        }
+        // If the bias is not on device, move it to device.
+        if (bias_tensor.has_value()) {
+            bias_tensor = ttnn::to_device(bias_tensor.value(), device, ttnn::DRAM_MEMORY_CONFIG);
+            bias_tensor = ttnn::to_layout(bias_tensor.value(), Layout::TILE, std::nullopt, std::nullopt, device);
         }
         // Update the input height and width to the folded dimensions
         input_height = input_height / stride[0];
@@ -491,7 +498,8 @@ Result conv2d_L1(
     bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-    if (!weight_is_on_device || conv_config.always_preprocess_weights) {
+    if ((!weight_is_on_device || conv_config.always_preprocess_weights) &&
+        (!conv_config.enable_kernel_stride_folding)) {
         // prepare weights in desired layout and move to device
 
         // TODO: Implement heuristic to decide if weights should be preprocessed on device.

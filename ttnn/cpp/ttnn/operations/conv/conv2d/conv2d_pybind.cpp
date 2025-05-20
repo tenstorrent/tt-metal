@@ -431,7 +431,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("output_layout") = Layout::TILE,
         py::arg("preprocess_weights_on_device") = false,
         py::arg("always_preprocess_weights") = false,
-        py::arg("enable_dram_fold") = false,
+        py::arg("enable_kernel_stride_folding") = false,
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("enable_split_reader") = false,
@@ -525,7 +525,7 @@ void py_bind_conv2d(py::module& module) {
         However, if this flag is set to true, the op will always preprocess the weights, even if they are on device.
         This is useful when the weights are on device, but in the PyTorch format [out_channels, in_channels, kernel_height, kernel_width].
         )doc");
-    py_conv_config.def_readwrite("enable_dram_fold", &Conv2dConfig::enable_dram_fold, R"doc(
+    py_conv_config.def_readwrite("enable_kernel_stride_folding", &Conv2dConfig::enable_kernel_stride_folding, R"doc(
         Enables input and weight tensor folding when strides match kernel dimensions.
 
         When enabled, this optimization reshapes tensors as follows:

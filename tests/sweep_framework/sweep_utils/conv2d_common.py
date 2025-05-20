@@ -267,11 +267,15 @@ def run_conv2d_short_sweep(
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, weights_dtype)
         output_layout = ttnn.Layout(output_layout)
         output_dtype = ttnn.DataType(output_dtype)
+        enable_kernel_stride_folding = False
+        if stride_h == kernel_height and stride_w == kernel_width and stride_h >= 16:
+            enable_kernel_stride_folding = True
         conv_config = ttnn.Conv2dConfig(
             dtype=output_dtype,
             weights_dtype=weights_dtype,
             output_layout=output_layout,
             preprocess_weights_on_device=True,
+            enable_kernel_stride_folding=enable_kernel_stride_folding,
         )
     else:
         tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)

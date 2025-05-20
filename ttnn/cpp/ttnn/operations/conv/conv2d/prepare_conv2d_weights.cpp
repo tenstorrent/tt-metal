@@ -65,8 +65,7 @@ ttnn::Tensor fold_tensor(
 
     if (is_weight_tensor) {
         tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({1, 2, 3, 0}));
-        tensor_on_device =
-            ttnn::to_layout(tensor_on_device, Layout::TILE, std::nullopt, std::nullopt, tensor_on_device.device());
+        tensor_on_device = ttnn::to_layout(tensor_on_device, Layout::TILE, std::nullopt, std::nullopt, device);
     }
 
     return tensor_on_device;
@@ -1151,7 +1150,7 @@ ttnn::Tensor prepare_conv_weights(
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
 
     // if folding is enabled, move the weight tensor to device DRAM, fold it and return the folded weight tensor
-    if (conv_config.enable_dram_fold) {
+    if (conv_config.enable_kernel_stride_folding) {
         return fold_tensor(weight_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, true);
     }
     auto [output_height, output_width] =
