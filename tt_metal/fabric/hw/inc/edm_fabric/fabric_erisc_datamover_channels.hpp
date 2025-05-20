@@ -152,7 +152,6 @@ struct EdmChannelWorkerInterface {
         cached_worker_semaphore_address(0),
         connection_live_semaphore(connection_live_semaphore),
         sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf) {
-        DPRINT << "EDM  my_y|x: " << (uint32_t)((my_y[0] << 8) | my_y[0]) << "\n";
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
     }
 
@@ -213,7 +212,6 @@ struct EdmChannelWorkerInterface {
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
-        DPRINT << "Caching producer noc addr " << (uint64_t)worker_semaphore_address << "\n";
         this->cached_worker_semaphore_address = worker_semaphore_address;
     }
 
