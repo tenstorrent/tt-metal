@@ -55,7 +55,7 @@ private:
     bool initialized_ = false;
     tt::tt_metal::FabricConfig fabric_config_{};
 
-    std::unordered_map<mesh_id_t, bool> wrap_around_mesh_;
+    std::unordered_map<mesh_id_t, bool> wrap_around_mesh_{};
     tt::tt_fabric::Topology topology_{};
     size_t packet_header_size_bytes_ = 0;
     size_t max_payload_size_bytes_ = 0;

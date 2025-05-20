@@ -254,7 +254,7 @@ void RunTestLineMcast(
     const auto& edm_config = fabric_context.get_fabric_router_config();
     uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
 
-    auto routers = control_plane->get_routers_to_chip(
+    auto routers = control_plane->get_forwarding_eth_chans_to_chip(
         sender_id.first, sender_id.second, mcast_start_id.first, mcast_start_id.second);
     if (routers.size() == 0) {
         log_info(
@@ -401,6 +401,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     fabric_hops[direction] = num_hops;
 
     tt::tt_metal::distributed::MeshShape mesh_shape;
+    std::vector<chan_id_t> eth_chans;
     chan_id_t edm_port;
 
     const auto& fabric_context = control_plane->get_fabric_context();
@@ -424,15 +425,11 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         dst_mesh_chip_id = end_mesh_chip_ids_by_dir[direction][num_hops - 1];
 
         // get a port to connect to
-        std::set<chan_id_t> eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
+        eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
             src_mesh_chip_id.first, src_mesh_chip_id.second, direction);
         if (eth_chans.size() == 0) {
             GTEST_SKIP() << "No active eth chans to connect to";
         }
-
-        // Pick a port from end of the list. On T3K, there are missimg routing planes due to FD tunneling
-        edm_port = *std::prev(eth_chans.end());
-
     } else {
         auto devices = fixture->get_devices();
         auto num_devices = devices.size();
@@ -447,9 +444,9 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         dst_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(dst_physical_device_id);
         mesh_shape = control_plane->get_physical_mesh_shape(src_mesh_chip_id.first);
 
-        auto routers = control_plane->get_routers_to_chip(
+        eth_chans = control_plane->get_forwarding_eth_chans_to_chip(
             src_mesh_chip_id.first, src_mesh_chip_id.second, dst_mesh_chip_id.first, dst_mesh_chip_id.second);
-        if (routers.size() == 0) {
+        if (eth_chans.size() == 0) {
             log_info(
                 tt::LogTest,
                 "No fabric routers between Src MeshId {} ChipId {} - Dst MeshId {} ChipId {}",
@@ -460,13 +457,10 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
 
             GTEST_SKIP() << "Skipping Test";
         }
-
-        auto vritual_router = routers[0].second;
-        auto logical_router =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
-                src_physical_device_id, vritual_router);
-        edm_port = logical_router.y;
     }
+
+    // Pick any port, for now pick the 1st one in the set
+    edm_port = *eth_chans.begin();
 
     tt::log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
     tt::log_info(tt::LogTest, "mesh size {:x}", mesh_shape.mesh_size());

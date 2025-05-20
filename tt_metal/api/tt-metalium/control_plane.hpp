@@ -50,8 +50,14 @@ public:
         chip_id_t dst_chip_id,
         chan_id_t src_chan_id) const;
 
-    // Return routers to get to the destination chip, avoid local eth to eth routing. CoreCoord is a virtual coord.
-    std::vector<std::pair<routing_plane_id_t, CoreCoord>> get_routers_to_chip(
+    // Returns the direction in which the data should be forwarded from the src to reach the dest
+    std::optional<RoutingDirection> get_forwarding_direction(
+        mesh_id_t src_mesh_id, chip_id_t src_chip_id, mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) const;
+
+    // Return eth channels that can forward the data from src to dest.
+    // This will be a subset of the active routers in a given direction since some channels could be
+    // reserved along the way for tunneling etc.
+    std::vector<chan_id_t> get_forwarding_eth_chans_to_chip(
         mesh_id_t src_mesh_id, chip_id_t src_chip_id, mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) const;
 
     stl::Span<const chip_id_t> get_intra_chip_neighbors(
@@ -59,11 +65,12 @@ public:
     std::unordered_map<mesh_id_t, std::vector<chip_id_t>> get_chip_neighbors(
         mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const;
 
-    routing_plane_id_t get_routing_plane_id(chan_id_t eth_chan_id) const;
+    routing_plane_id_t get_routing_plane_id(
+        chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
 
     size_t get_num_active_fabric_routers(mesh_id_t mesh_id, chip_id_t chip_id) const;
 
-    std::set<chan_id_t> get_active_fabric_eth_channels_in_direction(
+    std::vector<chan_id_t> get_active_fabric_eth_channels_in_direction(
         mesh_id_t mesh_id, chip_id_t chip_id, RoutingDirection routing_direction) const;
 
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
@@ -93,6 +100,9 @@ private:
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
     std::vector<std::vector<std::vector<std::vector<chan_id_t>>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
+
+    // custom logic to order eth channels
+    void order_ethernet_channels();
 
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates

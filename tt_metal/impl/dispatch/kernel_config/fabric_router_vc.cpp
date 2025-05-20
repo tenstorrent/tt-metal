@@ -39,7 +39,8 @@ void FabricRouterVC::GenerateDependentConfigs() {
             control_plane->get_mesh_chip_id_from_physical_chip_id(us_kernel->GetDeviceId());
         const auto& [dst_mesh_id, dst_chip_id] =
             control_plane->get_mesh_chip_id_from_physical_chip_id(ds_kernel->GetDeviceId());
-        const auto& routers = control_plane->get_routers_to_chip(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id);
+        const auto& router_chans =
+            control_plane->get_forwarding_eth_chans_to_chip(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id);
         TT_ASSERT(
             !routers.empty(),
             "No routers for (mesh {}, chip {}) to (mesh {}, chip{})",
@@ -47,10 +48,12 @@ void FabricRouterVC::GenerateDependentConfigs() {
             src_chip_id,
             dst_mesh_id,
             dst_chip_id);
-        const auto& [routing_plane, fabric_router] = routers.front();
+        const auto& fabric_router =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+                us_kernel->GetDeviceId(), *router_chans.begin());
 
-        const auto& routers_rev =
-            control_plane->get_routers_to_chip(dst_mesh_id, dst_chip_id, src_mesh_id, src_chip_id);
+        const auto& router_chans_rev =
+            control_plane->get_forwarding_eth_chans_to_chip(dst_mesh_id, dst_chip_id, src_mesh_id, src_chip_id);
         TT_ASSERT(
             !routers_rev.empty(),
             "No routers for return path (mesh {}, chip {}) to (mesh {}, chip{})",
@@ -58,7 +61,9 @@ void FabricRouterVC::GenerateDependentConfigs() {
             dst_chip_id,
             src_mesh_id,
             src_chip_id);
-        const auto& [routing_plane_rev, fabric_router_rev] = routers_rev.front();
+        const auto& fabric_router_rev =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+                ds_kernel->GetDeviceId(), *router_chans_rev.begin());
 
         bool valid_path{false};
         if (auto prefetch_us = dynamic_cast<PrefetchKernel*>(us_kernel);
