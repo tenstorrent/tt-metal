@@ -32,7 +32,7 @@ class TtVaeDecoderParameters:
         state: dict[str, torch.Tensor],
         *,
         dtype: ttnn.DataType | None = None,
-        device: ttnn.Device,
+        device: ttnn.MeshDevice,
     ) -> TtVaeDecoderParameters:
         return cls(
             conv_in=TtConv2dParameters.from_torch(substate(state, "conv_in"), dtype=dtype, device=device),
@@ -84,7 +84,7 @@ class TtUpDecoderBlock2DParameters:
         state: dict[str, torch.Tensor],
         *,
         dtype: ttnn.DataType | None = None,
-        device: ttnn.Device,
+        device: ttnn.MeshDevice,
     ) -> TtUpDecoderBlock2DParameters:
         return cls(
             resnets=[
@@ -134,7 +134,7 @@ class TtUNetMidBlock2DParameters:
         state: dict[str, torch.Tensor],
         *,
         dtype: ttnn.DataType | None = None,
-        device: ttnn.Device,
+        device: ttnn.MeshDevice,
     ) -> TtUNetMidBlock2DParameters:
         return cls(
             resnet1=TtResnetBlock2DParameters.from_torch(substate(state, "resnets.0"), dtype=dtype, device=device),
@@ -182,7 +182,7 @@ class TtResnetBlock2DParameters:
         state: dict[str, torch.Tensor],
         *,
         dtype: ttnn.DataType | None = None,
-        device: ttnn.Device,
+        device: ttnn.MeshDevice,
     ) -> TtResnetBlock2DParameters:
         return cls(
             norm1=TtGroupNormParameters.from_torch(substate(state, "norm1"), device=device),
@@ -248,7 +248,7 @@ class TtAttentionParameters:
         state: dict[str, torch.Tensor],
         *,
         dtype: ttnn.DataType | None = None,
-        device: ttnn.Device,
+        device: ttnn.MeshDevice,
     ) -> TtAttentionParameters:
         return cls(
             group_norm=TtGroupNormParameters.from_torch(substate(state, "group_norm"), device=device),
