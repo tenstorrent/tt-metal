@@ -1216,8 +1216,8 @@ void setup_test_with_persistent_fabric(
                 tt::LogTest,
                 "Implementing loopback on device {} by connecting 1D fabric endpoint to itself at x={}, y={}",
                 devices.back()->id(),
-                edm_builder_per_conn.begin()->my_noc_x,
-                edm_builder_per_conn.begin()->my_noc_y);
+                edm_builders_per_conn.begin()->my_noc_x,
+                edm_builders_per_conn.begin()->my_noc_y);
             for (auto& edm_per_risc : edm_builders_per_conn) {
                 edm_per_risc.connect_to_downstream_edm(edm_per_risc);
             }
