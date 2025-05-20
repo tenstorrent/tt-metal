@@ -99,17 +99,19 @@ void kernel_main() {
     // Set up seminc packet
     uint64_t output_semaphore_noc_addr_in_pkt =
         safe_get_noc_addr(receiver_core_x, receiver_core_y, global_semaphore_addr, 0);
-    volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+    volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
 
-    pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+    pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         output_semaphore_noc_addr_in_pkt,
         static_cast<uint16_t>(1),  // increment 1
         32});
 
+    volatile PACKET_HEADER_TYPE* cur_pkt_header;
+
     bool cur_is_forward = num_targets_forward_direction > num_targets_backward_direction;
     uint32_t forward_hops = 1;
     uint32_t backward_hops = 1;
-    uint32_t dst_ring_id;
     for (uint32_t i = 0; i < ring_size - 1; ++i) {
         if (forward_hops == num_targets_forward_direction + 1) {
             cur_is_forward = false;
@@ -117,13 +119,13 @@ void kernel_main() {
         if (backward_hops == num_targets_backward_direction + 1) {
             cur_is_forward = true;
         }
-        if (cur_is_forward) {
-            dst_ring_id = (my_ring_id + forward_hops) % ring_size;
-            pkt_hdr_forward->to_chip_unicast(forward_hops);
-        } else {
-            dst_ring_id = (my_ring_id - backward_hops + ring_size) % ring_size;
-            pkt_hdr_backward->to_chip_unicast(backward_hops);
-        }
+        uint32_t& cur_hops = cur_is_forward ? forward_hops : backward_hops;
+        uint32_t dst_ring_id =
+            cur_is_forward ? (my_ring_id + cur_hops) % ring_size : (my_ring_id - cur_hops + ring_size) % ring_size;
+        tt::tt_fabric::WorkerToFabricEdmSender& cur_connection =
+            cur_is_forward ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
+        cur_pkt_header = cur_is_forward ? pkt_hdr_forward : pkt_hdr_backward;
+        cur_pkt_header->to_chip_unicast(cur_hops);
 
         const uint32_t my_relative_ring_id = (my_ring_id < dst_ring_id) ? my_ring_id : my_ring_id - 1;
         uint32_t packet_id = 0;
@@ -152,51 +154,26 @@ void kernel_main() {
                     uint32_t current_chunk_id = packet_id / chunk_granularity;
                     if (current_chunk_id != prev_chunk_id) {
                         // Fused payload write with atomic inc
-                        if (cur_is_forward) {
-                            pkt_hdr_forward->to_noc_fused_unicast_write_atomic_inc(
-                                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                                    noc0_dest_noc_addr, output_semaphore_noc_addr_in_pkt, 1, 32, false},
-                                payload_size_bytes);
-                            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                            fabric_connection.get_forward_connection()
-                                .send_payload_without_header_non_blocking_from_address(
-                                    l1_read_addr, payload_size_bytes);
-                            fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
-                                (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
-                        } else {
-                            pkt_hdr_backward->to_noc_fused_unicast_write_atomic_inc(
-                                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                                    noc0_dest_noc_addr, output_semaphore_noc_addr_in_pkt, 1, 32, false},
-                                payload_size_bytes);
-                            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                            fabric_connection.get_backward_connection()
-                                .send_payload_without_header_non_blocking_from_address(
-                                    l1_read_addr, payload_size_bytes);
-                            fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
-                                (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
-                        }
+                        cur_pkt_header->to_noc_fused_unicast_write_atomic_inc(
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                                noc0_dest_noc_addr, output_semaphore_noc_addr_in_pkt, 1, 32, false},
+                            payload_size_bytes);
+                        cur_connection.wait_for_empty_write_slot();
+                        cur_connection.send_payload_without_header_non_blocking_from_address(
+                            l1_read_addr, payload_size_bytes);
+                        cur_connection.send_payload_flush_non_blocking_from_address(
+                            (uint32_t)cur_pkt_header, sizeof(PACKET_HEADER_TYPE));
+
                         prev_chunk_id = current_chunk_id;
                     } else {
                         // Unicast payload write
-                        if (cur_is_forward) {
-                            pkt_hdr_forward->to_noc_unicast_write(
-                                tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
-                            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                            fabric_connection.get_forward_connection()
-                                .send_payload_without_header_non_blocking_from_address(
-                                    l1_read_addr, payload_size_bytes);
-                            fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
-                                (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
-                        } else {
-                            pkt_hdr_backward->to_noc_unicast_write(
-                                tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
-                            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                            fabric_connection.get_backward_connection()
-                                .send_payload_without_header_non_blocking_from_address(
-                                    l1_read_addr, payload_size_bytes);
-                            fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
-                                (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
-                        }
+                        cur_pkt_header->to_noc_unicast_write(
+                            tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+                        cur_connection.wait_for_empty_write_slot();
+                        cur_connection.send_payload_without_header_non_blocking_from_address(
+                            l1_read_addr, payload_size_bytes);
+                        cur_connection.send_payload_flush_non_blocking_from_address(
+                            (uint32_t)cur_pkt_header, sizeof(PACKET_HEADER_TYPE));
                     }
 
                     noc_async_writes_flushed();
@@ -211,24 +188,13 @@ void kernel_main() {
 
         // Handle final incomplete chunk
         if (packet_id % chunk_granularity != 0) {
-            if (cur_is_forward) {
-                pkt_hdr->to_chip_unicast(forward_hops);
-                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                    packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-            } else {
-                pkt_hdr->to_chip_unicast(backward_hops);
-                fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                    packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-            }
+            pkt_hdr_seminc->to_chip_unicast(cur_hops);
+            cur_connection.wait_for_empty_write_slot();
+            cur_connection.send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
         }
 
-        if (cur_is_forward) {
-            forward_hops++;
-        } else {
-            backward_hops++;
-        }
+        cur_hops++;
     }
 
     if (fabric_connection.is_logically_connected()) {
