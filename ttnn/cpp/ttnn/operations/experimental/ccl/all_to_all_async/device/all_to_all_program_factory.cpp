@@ -100,6 +100,36 @@ auto create_receiver_buffer(
 
 }  // namespace all_to_all_detail
 
+static std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> calculate_strides_and_offsets(
+    uint32_t in_row_tiles, uint32_t in_col_tiles, uint32_t ring_size, uint32_t ring_index, uint32_t in_dim) {
+    uint32_t input_row_device_stride = 0;
+    uint32_t input_col_device_stride = 0;
+    uint32_t out_row_start = 0;
+    uint32_t out_col_start = 0;
+    uint32_t input_shard_row_tiles = in_row_tiles;
+    uint32_t input_shard_col_tiles = in_col_tiles;
+
+    if (in_dim == 2) {
+        // out_dim == 3
+        input_col_device_stride = in_col_tiles / ring_size;
+        out_row_start = ring_index * in_row_tiles;
+        input_shard_col_tiles = input_col_device_stride;
+    } else if (in_dim == 3) {
+        // out_dim == 2
+        input_row_device_stride = in_row_tiles / ring_size;
+        out_col_start = ring_index * in_col_tiles;
+        input_shard_row_tiles = input_row_device_stride;
+    }
+
+    return std::make_tuple(
+        input_row_device_stride,
+        input_col_device_stride,
+        out_row_start,
+        out_col_start,
+        input_shard_row_tiles,
+        input_shard_col_tiles);
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     const Tensor& input_tensor,
     Tensor& intermediate_buffer,
@@ -249,6 +279,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     const auto output_tensor_page_layout = output_buffer.layout();
     const auto output_tensor_num_pages = output_buffer.buffer()->num_pages();
 
+    const uint32_t N_DRAM_BANKS = device->num_dram_channels();
+
     TT_FATAL(
         num_chunks_per_shard < 31,
         "num_chunks_per_shard: {}, chunk_num_tiles: {}, input_tensor_num_pages: {}",
@@ -295,7 +327,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         num_targets_backward,                              // num_targets_backward_direction
         dynamic_alternate,                                 // alternate
         chunk_granularity,                                 // granularity of signaling to receiver
-        contig_pages_advanced                              // contig_pages_advanced
+        contig_pages_advanced,                             // contig_pages_advanced
+        N_DRAM_BANKS                                       // num_dram_banks
     };
     for (const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -336,7 +369,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         num_chunks_per_shard,
         op_config.get_page_size(),
         receiver_cb_index,
-        pages_per_packet};
+        pages_per_packet,
+        N_DRAM_BANKS};
     auto receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/kernels/"
@@ -365,36 +399,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
             - out_row_start
             - out_col_start
     */
-    auto calculate_strides_and_offsets =
-        [](uint32_t in_row_tiles, uint32_t in_col_tiles, uint32_t ring_size, uint32_t ring_index, uint32_t in_dim) {
-            uint32_t input_row_device_stride = 0;
-            uint32_t input_col_device_stride = 0;
-            uint32_t out_row_start = 0;
-            uint32_t out_col_start = 0;
-            uint32_t input_shard_row_tiles = in_row_tiles;
-            uint32_t input_shard_col_tiles = in_col_tiles;
-
-            if (in_dim == 2) {
-                // out_dim == 3
-                input_col_device_stride = in_col_tiles / ring_size;
-                out_row_start = ring_index * in_row_tiles;
-                input_shard_col_tiles = input_col_device_stride;
-            } else if (in_dim == 3) {
-                // out_dim == 2
-                input_row_device_stride = in_row_tiles / ring_size;
-                out_col_start = ring_index * in_col_tiles;
-                input_shard_row_tiles = input_row_device_stride;
-            }
-
-            return std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(
-                input_row_device_stride,
-                input_col_device_stride,
-                out_row_start,
-                out_col_start,
-                input_shard_row_tiles,
-                input_shard_col_tiles);
-        };
-
     auto
         [input_row_device_stride,
          input_col_device_stride,
@@ -409,7 +413,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     const uint32_t packets_per_device_shard = packets_per_row * input_shard_row_tiles;
     const uint32_t final_packet_id = packets_per_device_shard - 1;
     const uint32_t final_packet_global_id = (ring_size - 2) + final_packet_id * (ring_size - 1);
-    const uint32_t N_DRAM_BANKS = 12;
+
     const uint32_t final_packet_first_tile_id =
         (final_packet_global_id % N_DRAM_BANKS) +
         contig_pages_advanced * N_DRAM_BANKS * (final_packet_global_id / N_DRAM_BANKS);

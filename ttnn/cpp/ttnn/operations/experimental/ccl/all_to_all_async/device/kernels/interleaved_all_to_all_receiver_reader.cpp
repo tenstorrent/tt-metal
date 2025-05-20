@@ -19,9 +19,8 @@ constexpr uint32_t num_chunks_per_shard = get_compile_time_arg_val(5);
 constexpr uint32_t page_size = get_compile_time_arg_val(6);
 constexpr uint32_t cb_id = get_compile_time_arg_val(7);
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(8);
+constexpr uint32_t N_DRAM_BANKS = get_compile_time_arg_val(9);
 
-// TODO: CT args
-constexpr uint32_t N_DRAM_BANKS = 12;
 constexpr uint32_t NUM_SENDERS = ring_size - 1;
 
 void kernel_main() {
@@ -46,7 +45,7 @@ void kernel_main() {
     uint32_t out_row_end = out_row_start + input_shard_row_tiles;
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
-    constexpr bool is_dram = true;  // TODO: CT arg
+    constexpr bool is_dram = true;
     auto input_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
         .bank_base_address = input_buffer_addr, .page_size = page_size, .data_format = get_dataformat(cb_id)};
     auto intermediate_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
@@ -63,7 +62,6 @@ void kernel_main() {
             for (uint32_t col_tile_id = shard_col_start_id; col_tile_id < shard_col_end_id;
                  col_tile_id += num_pages_per_packet) {
                 uint32_t tile_id = row_tile_id * in_col_tiles + col_tile_id;
-                // DPRINT << "tile_id: " << tile_id << "\n";
                 cb_reserve_back(cb_id, num_pages_per_packet);
                 const uint32_t l1_write_addr_base = get_write_ptr(cb_id);
                 uint32_t l1_write_addr = l1_write_addr_base;
@@ -124,5 +122,4 @@ void kernel_main() {
 
     // Reset global semaphore
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr) = 0;
-    // DPRINT << "reset done\n";
 }

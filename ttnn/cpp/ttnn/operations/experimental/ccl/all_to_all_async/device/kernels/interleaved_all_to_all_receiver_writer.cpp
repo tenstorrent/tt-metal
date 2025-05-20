@@ -39,7 +39,7 @@ void kernel_main() {
     uint32_t out_row_end = out_row_start + input_shard_row_tiles;
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
-    constexpr bool is_dram = true;  // TODO: CT arg
+    constexpr bool is_dram = true;
     auto output_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
         .bank_base_address = output_buffer_addr, .page_size = page_size, .data_format = get_dataformat(cb_id)};
 
@@ -47,7 +47,6 @@ void kernel_main() {
         // Follows same logic as sender reader for local copy.
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += num_pages_per_packet) {
-                // DPRINT << "tile_id: " << tile_id << "\n";
                 cb_wait_front(cb_id, num_pages_per_packet);
                 size_t l1_read_addr = get_read_ptr(cb_id);
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, num_pages_per_packet);

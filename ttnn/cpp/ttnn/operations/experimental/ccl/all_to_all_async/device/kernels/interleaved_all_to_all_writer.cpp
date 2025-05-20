@@ -29,6 +29,7 @@ constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(9);
 constexpr bool dynamic_alternate = get_compile_time_arg_val(10);
 constexpr uint32_t chunk_granularity = get_compile_time_arg_val(11);
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(12);
+constexpr uint32_t N_DRAM_BANKS = get_compile_time_arg_val(13);
 
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
@@ -36,20 +37,14 @@ constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targe
 
 constexpr uint32_t wait_sem_value = (ring_size - 1);
 
-constexpr uint32_t N_DRAM_BANKS = 12;
 constexpr uint32_t NUM_SENDERS = ring_size - 1;
 
-/*
- * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
- * dispatch implementations depending on those invocation parameters.
- */
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
 
     size_t arg_idx = 0;
-    // Load the input tensor spec
     address_t intermediate_buffer_addr = get_arg_val<address_t>(arg_idx++);
     address_t output_buffer_addr = get_arg_val<address_t>(arg_idx++);
     uint32_t out_row_tiles = get_arg_val<uint32_t>(arg_idx++);
@@ -64,29 +59,12 @@ void kernel_main() {
     uint32_t receiver_core_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t global_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
-    DPRINT << "arg_for_fab: " << (uint32_t)arg_for_fab << "\n";
-    auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
+
+    auto fabric_connection = FabricConnectionManager::build_from_args<
+        FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(arg_idx);
 
     uint32_t out_row_end = out_row_start + input_shard_row_tiles;
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
-
-    DPRINT << "ct args: \n";
-    DPRINT << "my_ring_id: " << (uint32_t)my_ring_id << "\n";
-    DPRINT << "reserved_packet_header_cb_id: " << (uint32_t)reserved_packet_header_cb_id << "\n";
-    DPRINT << "num_packet_headers_storable: " << (uint32_t)num_packet_headers_storable << "\n";
-    DPRINT << "buffer0_type: " << (uint32_t)buffer0_type << "\n";
-    DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << "\n";
-    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
-    DPRINT << "num_targets_forward_direction: " << (uint32_t)num_targets_forward_direction << "\n";
-    DPRINT << "num_targets_backward_direction: " << (uint32_t)num_targets_backward_direction << "\n";
-
-    DPRINT << "arg_for_fab: " << (uint32_t)arg_for_fab << "\n";
-    DPRINT << "fabric_connection arg 0" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 1" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 2" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 3" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 4" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
 
     // packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
@@ -98,9 +76,6 @@ void kernel_main() {
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
-    DPRINT << "packet_header_buffer_addr_forward: " << (uint32_t)packet_header_buffer_addr_forward << "\n";
-    DPRINT << "packet_header_buffer_addr_backward: " << (uint32_t)packet_header_buffer_addr_backward << "\n";
-    DPRINT << "packet_header_buffer_seminc: " << (uint32_t)packet_header_buffer_seminc << "\n";
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -117,20 +92,9 @@ void kernel_main() {
     auto output_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
         .bank_base_address = output_buffer_addr, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
 
-    DPRINT << "fabric_connection.is_logically_connected(): " << (uint32_t)fabric_connection.is_logically_connected()
-           << "\n";
     if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open();
+        fabric_connection.open_finish();
     }
-
-    DPRINT << "device " << (uint32_t)my_ring_id << " opened fabric\n";
-
-    DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << "\n";
-    DPRINT << "num_targets_backward_direction: " << num_targets_backward_direction << "\n";
-    DPRINT << "my_ring_id: " << my_ring_id << "\n";
-
-    DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
 
     // Set up seminc packet
     uint64_t output_semaphore_noc_addr_in_pkt =
@@ -160,8 +124,6 @@ void kernel_main() {
             dst_ring_id = (my_ring_id - backward_hops + ring_size) % ring_size;
             pkt_hdr_backward->to_chip_unicast(backward_hops);
         }
-
-        DPRINT << "from device " << (uint32_t)my_ring_id << " to device " << (uint32_t)dst_ring_id << "\n";
 
         const uint32_t my_relative_ring_id = (my_ring_id < dst_ring_id) ? my_ring_id : my_ring_id - 1;
         uint32_t packet_id = 0;
@@ -250,8 +212,8 @@ void kernel_main() {
         // Handle final incomplete chunk
         if (packet_id % chunk_granularity != 0) {
             if (cur_is_forward) {
-                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                 pkt_hdr->to_chip_unicast(forward_hops);
+                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                 fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                     packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
             } else {
@@ -274,6 +236,4 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
-
-    DPRINT << "DONE \n";
 }
