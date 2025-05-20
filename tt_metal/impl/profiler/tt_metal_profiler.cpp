@@ -211,6 +211,9 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
     tt_metal::detail::WaitProgramDone(device, sync_program, false);
+    std::vector<CoreCoord> cores = {core};
+    tt_metal_device_profiler_map.at(device_id).dumpResults(
+        device, cores, ProfilerDumpState::FORCE_UMD_READ, ProfilerDataBufferSource::L1);
 
     log_info("SYNC PROGRAM FINISH IS DONE ON {}", device_id);
     if ((smallestHostime[device_id] == 0) || (smallestHostime[device_id] > hostStartTime)) {

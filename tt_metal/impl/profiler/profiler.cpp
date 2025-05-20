@@ -73,7 +73,7 @@ std::vector<uint32_t> read_control_buffer_from_core(
     std::vector<uint32_t> control_buffer;
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
+    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             if (core_type == HalProgrammableCoreType::TENSIX) {
                 distributed::FDMeshCommandQueue& mesh_cq =
@@ -120,7 +120,7 @@ void write_control_buffer_to_core(
     const std::vector<uint32_t>& control_buffer) {
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
+    if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             if (core_type == HalProgrammableCoreType::TENSIX) {
                 distributed::FDMeshCommandQueue& mesh_cq =
@@ -257,142 +257,6 @@ void DeviceProfiler::readRiscProfilerResults(
         riscCount = 1;
     }
 
-    // if (data_source == ProfilerDataBufferSource::L1) {
-    //// for (auto data : data_buffer){
-    //// fmt::print("{}\n",data);
-    ////}
-    // for (int riscEndIndex = 0; riscEndIndex < 5; riscEndIndex++) {
-    ////fmt::print("RISC {},{}\n", riscEndIndex, control_buffer[riscEndIndex +
-    /// kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER]);
-    // uint32_t riscNumRead = 0;
-    // uint32_t coreFlatIDRead = 0;
-    // uint32_t runHostCounterRead = 0;
-
-    // bool newRunStart = false;
-
-    // uint32_t opTime_H = 0;
-    // uint32_t opTime_L = 0;
-    // std::string opname;
-    // uint32_t riscType;
-    // if (CoreType == HalProgrammableCoreType::TENSIX) {
-    // riscType = riscEndIndex;
-    //} else {
-    // riscType = 5;
-    //}
-    // for (int index = riscEndIndex * kernel_profiler::PROFILER_L1_VECTOR_SIZE;
-    // index < riscEndIndex * kernel_profiler::PROFILER_L1_VECTOR_SIZE +
-    // control_buffer[riscEndIndex + kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER];
-    // index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
-    ////fmt::print("bufffer {},{},{}\n", index, data_buffer[index], data_buffer[index + 1]);
-    // if (!newRunStart && data_buffer[index] == 0 && data_buffer[index + 1] == 0) {
-    // newRunStart = true;
-    // opTime_H = 0;
-    // opTime_L = 0;
-    //} else if (newRunStart) {
-    // newRunStart = false;
-
-    //// TODO(MO): Cleanup magic numbers
-    // riscNumRead = data_buffer[index] & 0x7;
-    // coreFlatIDRead = (data_buffer[index] >> 3) & 0xFF;
-    // runHostCounterRead = data_buffer[index + 1];
-
-    // opname = getOpNameIfAvailable(device_id, runHostCounterRead);
-
-    //} else {
-    // uint32_t timer_id = (data_buffer[index] >> 12) & 0x7FFFF;
-    // kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
-
-    // switch (packet_type) {
-    // case kernel_profiler::ZONE_START:
-    // case kernel_profiler::ZONE_END: {
-    // uint32_t time_H = data_buffer[index] & 0xFFF;
-    // if (timer_id || time_H) {
-    // uint32_t time_L = data_buffer[index + 1];
-
-    // if (opTime_H == 0) {
-    // opTime_H = time_H;
-    //}
-    // if (opTime_L == 0) {
-    // opTime_L = time_L;
-    //}
-
-    // logPacketData(
-    // log_file_ofs,
-    // noc_trace_json_log,
-    // runHostCounterRead,
-    // opname,
-    // device_id,
-    // phys_coord,
-    // coreFlatID,
-    // riscType,
-    // 0,
-    // timer_id,
-    //(uint64_t(time_H) << 32) | time_L);
-    //}
-    //} break;
-    // case kernel_profiler::ZONE_TOTAL: {
-    // uint32_t sum = data_buffer[index + 1];
-
-    // uint32_t time_H = opTime_H;
-    // uint32_t time_L = opTime_L;
-    // logPacketData(
-    // log_file_ofs,
-    // noc_trace_json_log,
-    // runHostCounterRead,
-    // opname,
-    // device_id,
-    // phys_coord,
-    // coreFlatID,
-    // riscType,
-    // sum,
-    // timer_id,
-    //(uint64_t(time_H) << 32) | time_L);
-
-    // break;
-    //}
-    // case kernel_profiler::TS_DATA: {
-    // uint32_t time_H = data_buffer[index] & 0xFFF;
-    // uint32_t time_L = data_buffer[index + 1];
-    // index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
-    // uint32_t data_H = data_buffer[index];
-    // uint32_t data_L = data_buffer[index + 1];
-    // logPacketData(
-    // log_file_ofs,
-    // noc_trace_json_log,
-    // runHostCounterRead,
-    // opname,
-    // device_id,
-    // phys_coord,
-    // coreFlatID,
-    // riscType,
-    //(uint64_t(data_H) << 32) | data_L,
-    // timer_id,
-    //(uint64_t(time_H) << 32) | time_L);
-    // continue;
-    //}
-    // case kernel_profiler::TS_EVENT: {
-    // uint32_t time_H = data_buffer[index] & 0xFFF;
-    // uint32_t time_L = data_buffer[index + 1];
-    // logPacketData(
-    // log_file_ofs,
-    // noc_trace_json_log,
-    // runHostCounterRead,
-    // opname,
-    // device_id,
-    // phys_coord,
-    // coreFlatID,
-    // riscType,
-    // 0,
-    // timer_id,
-    //(uint64_t(time_H) << 32) | time_L);
-    //}
-    //}
-    //}
-    //}
-    //}
-    // return;
-    //}
-
     int riscNum = 0;
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
@@ -407,6 +271,7 @@ void DeviceProfiler::readRiscProfilerResults(
             riscType = 5;
         }
         if (bufferEndIndex > 0) {
+            ZoneScopedN("HAS END");
             uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
             if (data_source == ProfilerDataBufferSource::L1) {
                 // Shift by L1 buffer size only
@@ -438,6 +303,7 @@ void DeviceProfiler::readRiscProfilerResults(
             std::string opname;
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
+                ZoneScopedN("LOOP");
                 if (!newRunStart && data_buffer[index] == 0 && data_buffer[index + 1] == 0) {
                     newRunStart = true;
                     opTime_H = 0;
@@ -594,6 +460,7 @@ void DeviceProfiler::logPacketData(
     uint64_t data,
     uint32_t timer_id,
     uint64_t timestamp) {
+    ZoneScoped;
     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     uint32_t t_id = timer_id & 0xFFFF;
     nlohmann::json metaData;
@@ -1049,11 +916,8 @@ void DeviceProfiler::dumpResults(
 
     generateZoneSourceLocationsHashes();
 
-    bool do_L1_data_buffer = data_source == ProfilerDataBufferSource::L1;
-
-    std::string zone_name =
-        fmt::format("{}-{}-{}", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
-    ZoneName(zone_name.c_str(), zone_name.size());
+    bool do_L1_data_buffer =
+        ((data_source == ProfilerDataBufferSource::L1) || (state == ProfilerDumpState::LAST_CLOSE_DEVICE));
 
     if (!do_L1_data_buffer) {
         Buffer* output_dram_buffer_ptr = nullptr;
@@ -1070,17 +934,9 @@ void DeviceProfiler::dumpResults(
             }
             const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
             if (USE_FAST_DISPATCH) {
-                if (state == ProfilerDumpState::LAST_CLOSE_DEVICE || state == ProfilerDumpState::FORCE_UMD_READ) {
-                    // if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
-                    tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
-                    //}
-                } else {
-                    issue_fd_read_from_profiler_buffer(output_dram_buffer, device, profile_buffer);
-                }
+                issue_fd_read_from_profiler_buffer(output_dram_buffer, device, profile_buffer);
             } else {
-                // if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
-                //}
             }
             for (const auto& worker_core : worker_cores) {
                 resetControlBuffers(device, worker_core, state);
@@ -1089,6 +945,16 @@ void DeviceProfiler::dumpResults(
             do_L1_data_buffer = true;
         }
     }
+
+    std::string zone_name = "";
+    if (!do_L1_data_buffer) {
+        zone_name =
+            fmt::format("{}-{}-DRAM", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
+    } else {
+        zone_name =
+            fmt::format("{}-{}-L1", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
+    }
+    ZoneName(zone_name.c_str(), zone_name.size());
 
     if (rtoptions.get_profiler_noc_events_enabled()) {
         log_warning("Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");

@@ -302,7 +302,6 @@ __attribute__((noinline)) void finish_profiler() {
 
                 profiler_noc_async_write_posted(
                     reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex]), dram_bank_dst_noc_addr, send_size);
-                profiler_control_buffer[deviceIndex] = 0;
             }
         }
     }
