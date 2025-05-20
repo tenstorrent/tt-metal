@@ -86,7 +86,7 @@ param_ids = generate_param_ids(all_params)
 )
 def test_matmul(testname, formats, dest_acc, math_fidelity):
 
-    src_A, src_B = generate_stimuli()
+    src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
 
     golden_tensor = generate_golden(src_A, src_B, formats.output_format, math_fidelity)
     golden_tensor = tilize(golden_tensor, format_dict[formats.input_format])
