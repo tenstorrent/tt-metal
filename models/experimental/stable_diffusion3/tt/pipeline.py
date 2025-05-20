@@ -20,7 +20,6 @@ from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
 
 from ..tt.utils import from_torch_fast, to_torch
-from .substate import substate
 from .t5_encoder import TtT5Encoder, TtT5EncoderParameters
 from .transformer import TtSD3Transformer2DModel, TtSD3Transformer2DModelParameters
 from .vae_decoder import TtVaeDecoder, TtVaeDecoderParameters
@@ -140,7 +139,7 @@ class TtStableDiffusion3Pipeline:
 
             parameters = TtVaeDecoderParameters.from_torch(
                 vae.decoder.state_dict(),
-                device=self._device,
+                device=self._device.get_devices()[0],
                 dtype=ttnn.bfloat16,
             )
             self._vae = TtVaeDecoder(parameters, norm_num_groups=vae.config.norm_num_groups)
@@ -150,7 +149,6 @@ class TtStableDiffusion3Pipeline:
     def prepare(
         self,
         *,
-        batch_size: int,
         num_images_per_prompt: int = 1,
         width: int = 1024,
         height: int = 1024,
@@ -159,7 +157,6 @@ class TtStableDiffusion3Pipeline:
         prompt_sequence_length: int = 333,
         spatial_sequence_length: int = 4096,
     ) -> None:
-        self._prepared_batch_size = batch_size
         self._prepared_num_images_per_prompt = num_images_per_prompt
         self._prepared_width = width
         self._prepared_height = height
@@ -270,8 +267,13 @@ class TtStableDiffusion3Pipeline:
     ) -> None:
         start_time = time.time()
 
-        batch_size = self._prepared_batch_size
+        batch_size = len(prompt_1)
         num_images_per_prompt = self._prepared_num_images_per_prompt
+
+        assert batch_size * num_images_per_prompt == 1, (
+            "generating multiple images is not yet supported as it requires another mesh sharding stategy"
+        )
+
         width = self._prepared_width
         height = self._prepared_height
         guidance_scale = self._prepared_guidance_scale
@@ -280,11 +282,9 @@ class TtStableDiffusion3Pipeline:
         assert height % (self._vae_scale_factor * self._tt_transformer.patch_size) == 0
         assert width % (self._vae_scale_factor * self._tt_transformer.patch_size) == 0
         assert max_t5_sequence_length <= 512  # noqa: PLR2004
-        assert batch_size == len(prompt_1)
 
         do_classifier_free_guidance = guidance_scale > 1
-        # TODO: pass the patch_size value
-        patch_size = 2
+
         latents_shape = (
             batch_size * num_images_per_prompt,
             self._num_channels_latents,
@@ -389,6 +389,8 @@ class TtStableDiffusion3Pipeline:
                 prompt_sequence_length=333,
                 spatial_sequence_length=4096,
             )
+
+        latents_output = ttnn.get_device_tensors(latents_step)[0]
 
         denoising_end_time = time.time()
 

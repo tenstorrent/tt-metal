@@ -52,7 +52,6 @@ def test_sd3(
     )
 
     pipeline.prepare(
-        batch_size=1,
         width=image_w,
         height=image_h,
         guidance_scale=guidance_scale,
