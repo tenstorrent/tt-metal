@@ -321,6 +321,7 @@ Result conv2d_DRAM(
             }  // Step,
         );
         auto conv_config_l1 = conv_config;
+        conv_config_l1.output_layout = Layout::ROW_MAJOR;
         ttnn::Tensor sliced_output_tensor;
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(
@@ -354,8 +355,6 @@ Result conv2d_DRAM(
             sliced_output_tensor =
                 ttnn::to_layout(sliced_output_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
         }
-        sliced_output_tensor = ttnn::reshape(
-            sliced_output_tensor, ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}));
         ttnn::experimental::slice_write(
             queue_id,
             sliced_output_tensor,
@@ -363,8 +362,9 @@ Result conv2d_DRAM(
             std::array<uint32_t, 4>{0, output_slice_height_start, output_slice_width_start, 0},
             std::array<uint32_t, 4>{batch_size, output_slice_height_end, output_slice_width_end, out_channels},
             std::array<uint32_t, 4>{1, 1, 1, 1});
-
-        first_run = false;
+        ttnn::deallocate(sliced_input_tensor);
+        ttnn::deallocate(sliced_output_tensor);
+        first_run = true;
         output_slice_dim_start += output_slice_size;
         slice_index++;
     }
