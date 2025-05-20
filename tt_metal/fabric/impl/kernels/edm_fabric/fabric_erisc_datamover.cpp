@@ -1714,7 +1714,7 @@ void kernel_main() {
                                                       ? local_sem_for_teardown_from_downstream_edm[edm_index]
                                                       : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
                                                             local_sem_for_teardown_from_downstream_edm[edm_index]);
-                if constexpr (is_2d_fabric && enable_handshake) {
+                if constexpr (is_2d_fabric) {
                     // reset the handshake addresses to 0 (this is for router -> router handshake for connections over noc)
                     *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
                     *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
