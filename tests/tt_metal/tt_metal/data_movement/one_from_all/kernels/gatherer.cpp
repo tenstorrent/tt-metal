@@ -33,18 +33,16 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("RISCV1");
-        for (uint32_t i = 0; i < num_of_transactions; i++) {
-            uint32_t subordinate_addr_offset = 0;
-            for (uint32_t j = 0; j < total_subordinate_cores; j++) {
-                uint64_t src_noc_addr =
-                    get_noc_addr(responder_coords[j][0], responder_coords[j][1], subordinate_l1_byte_addresses[j]);
+        for (uint32_t sub_core = 0; sub_core < total_subordinate_cores; sub_core++) {
+            uint64_t src_base_noc_addr = get_noc_addr(responder_coords[sub_core][0], responder_coords[sub_core][1], 0);
+            for (uint32_t i = 0; i < num_of_transactions; i++) {
+                uint64_t src_noc_addr = src_base_noc_addr | subordinate_l1_byte_addresses[sub_core];
 
-                noc_async_read(src_noc_addr, dst_addr + subordinate_addr_offset, transaction_size_bytes);
+                noc_async_read(src_noc_addr, dst_addr, transaction_size_bytes);
 
-                subordinate_l1_byte_addresses[j] += transaction_size_bytes;
-                subordinate_addr_offset += subordinate_size_bytes;
+                subordinate_l1_byte_addresses[sub_core] += transaction_size_bytes;
+                dst_addr += transaction_size_bytes;
             }
-            dst_addr += transaction_size_bytes;
         }
         noc_async_read_barrier();
     }

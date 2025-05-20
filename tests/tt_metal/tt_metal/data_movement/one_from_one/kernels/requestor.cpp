@@ -25,8 +25,9 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("RISCV1");
+        uint64_t src_base_noc_addr = get_noc_addr(responder_x_coord, responder_y_coord, 0);
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            uint64_t src_noc_addr = get_noc_addr(responder_x_coord, responder_y_coord, src_addr);
+            uint64_t src_noc_addr = src_base_noc_addr | src_addr;
 
             noc_async_read(src_noc_addr, dst_addr, transaction_size_bytes);
 
