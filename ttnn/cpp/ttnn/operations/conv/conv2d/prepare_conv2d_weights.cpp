@@ -852,8 +852,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     if (input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({2, 3, 1, 0}));
 
-        weight_shape = weight_tensor_.get_logical_shape();
-
         ttnn::Shape weights_channels_padded_shape(
             std::array<uint32_t, 4>({window_h, window_w, out_channels_padded, in_channels_padded}));
 
@@ -924,7 +922,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         weight_tensor_ = ttnn::reshape(
             weight_tensor_,
             ttnn::Shape({1, 1, rounded_weight_block_height * input_num_cores_channels, final_out_channels_padded}));
-        weight_shape = weight_tensor_.get_logical_shape();
     } else {
         weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({2, 3, 1, 0}));
 

@@ -84,19 +84,6 @@ def test_fold_with_permute_reshape_on_host(device, n, c, h, w, pad_h, pad_w, str
     assert_with_pcc(torch_output_tensor, torch_output_tensor_new, 1)
 
 
-def write_to_file(file_name, tensor):
-    tensor = tensor.float()
-    tensor = tensor.cpu().detach().numpy()
-    with open(file_name, "w") as f:
-        for i in range(1):
-            for j in range(tensor.shape[1]):
-                for k in range(tensor.shape[2]):
-                    for l in range(tensor.shape[3]):
-                        # f.write(str(round(tensor[i][j][k][l]), 2) + " ")
-                        f.write("{:.2f}".format(tensor[i][j][k][l]) + " ")
-                    f.write("\n")
-
-
 @pytest.mark.parametrize("nhw", [(1, 224, 224), (1, 384, 512), (1, 512, 672)])
 @pytest.mark.parametrize("channels", [1, 3, 9, 32, 54, 320])
 @pytest.mark.parametrize("stride", [(16, 16), (32, 32)])

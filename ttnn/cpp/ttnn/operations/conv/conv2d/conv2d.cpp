@@ -667,6 +667,7 @@ Result conv2d_L1(
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
+
         return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 }

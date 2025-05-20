@@ -19,7 +19,7 @@ struct Fold {
         uint32_t stride_h;
         uint32_t stride_w;
         bool is_sharded;
-        bool is_tiled_interleaved = false;
+        bool is_dram_interleaved = false;
     };
 
     struct tensor_args_t {

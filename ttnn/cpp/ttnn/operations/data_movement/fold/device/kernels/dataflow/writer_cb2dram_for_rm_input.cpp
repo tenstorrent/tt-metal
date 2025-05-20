@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,10 +27,11 @@ void kernel_main() {
     uint32_t Oh = input_height / stride_height;
     uint32_t Ow = input_width / stride_width;
     uint32_t patch_size = stride_height * stride_width;
+    uint32_t input_hw = input_height * input_width;
 
     for (uint32_t input_idx = start_input_work; input_idx < end_input_work; input_idx++) {
-        uint32_t b = input_idx / (input_height * input_width);
-        uint32_t hw = input_idx % (input_height * input_width);
+        uint32_t b = input_idx / input_hw;
+        uint32_t hw = input_idx % input_hw;
         uint32_t h = hw / input_width;
         uint32_t w = hw % input_width;
 

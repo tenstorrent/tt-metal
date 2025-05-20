@@ -3572,7 +3572,6 @@ def test_conv2d_with_fold(
     input_layout,
     has_bias,
 ):
-    # This triggers enable_kernel_stride_folding in conv2d_common.py
     run_conv(
         device=device,
         torch_tensor_map=torch_tensor_map,
