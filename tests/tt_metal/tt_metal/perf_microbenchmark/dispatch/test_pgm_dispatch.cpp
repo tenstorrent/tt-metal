@@ -10,6 +10,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <cstdlib>
 #include <exception>
 #include <map>
@@ -26,6 +27,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include "fabric_types.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
@@ -36,6 +38,7 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "umd/device/types/xy_pair.h"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
@@ -54,6 +57,7 @@ using std::vector;
 using namespace tt;
 
 static bool dump_test_info = false;
+static chip_id_t device_id = 0;
 
 struct TestInfo {
     uint32_t iterations = DEFAULT_ITERATIONS;
@@ -329,6 +333,19 @@ struct FakeBenchmarkState {
     std::vector<int> range{1};
 };
 
+struct FabricConfigGuard {
+    explicit FabricConfigGuard(tt::tt_metal::FabricConfig config) {
+        tt::tt_metal::detail::InitializeFabricConfig(config);
+    }
+
+    ~FabricConfigGuard() { tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED); }
+};
+
+bool using_fabric() {
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) != device_id &&
+           tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric();
+}
+
 template <typename T>
 static int pgm_dispatch(T& state, TestInfo info) {
     if constexpr (std::is_same_v<T, benchmark::State>) {
@@ -388,7 +405,11 @@ static int pgm_dispatch(T& state, TestInfo info) {
 
     bool pass = true;
     try {
-        const chip_id_t device_id = 0;
+        auto fabric_option = tt::tt_metal::FabricConfig::DISABLED;
+        if (using_fabric()) {
+            fabric_option = tt::tt_metal::FabricConfig::FABRIC_1D;
+        }
+        FabricConfigGuard fabric_config(fabric_option);
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         tt_metal::IDevice* device = tt_metal::CreateDevice(
             device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, DispatchCoreConfig{dispatch_core_type});
@@ -727,6 +748,8 @@ BENCHMARK_CAPTURE(
     ->UseManualTime();
 int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
+    device_id = test_args::get_command_option_int32(input_args, "--device", device_id);
+
     if (test_args::has_command_option(input_args, "--custom")) {
         TestInfo info;
         init(input_args, info);
@@ -801,7 +824,7 @@ int main(int argc, char** argv) {
         }
     }
     std::string arch_name = tt::tt_metal::hal::get_arch_name();
-    if (arch_name == std::string("wormhole_b0")) {
+    if (arch_name == std::string("wormhole_b0") && !using_fabric()) {
         benchmark::RegisterBenchmark(
             "BM_pgm_dispatch/eth_dispatch",
             BM_pgm_dispatch,
