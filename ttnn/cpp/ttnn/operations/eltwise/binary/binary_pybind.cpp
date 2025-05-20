@@ -2040,7 +2040,7 @@ void py_module(py::module& module) {
         module,
         ttnn::gcd,
         R"doc(Computes Greatest common divisor of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
-        [supported range -1024 to 1024].)doc",
+        [supported range [-2147483647, 2147483648]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|gcd|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
         R"doc(INT32)doc",
@@ -2052,7 +2052,7 @@ void py_module(py::module& module) {
         module,
         ttnn::lcm,
         R"doc(Computes Least common multiple of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
-        [supported range -1024 to 1024].)doc",
+        [supported range [-32767, 32768]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|lcm|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
         R"doc(INT32)doc",
