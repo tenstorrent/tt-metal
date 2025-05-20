@@ -437,12 +437,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                 channel++;
                 if (channel % num_shards_c == 0) {
                     channel = 0;
-                    uint32_t delta_x = x + num_of_ele;
-                    x = delta_x % out_h;
-                    if (delta_x / out_h != 0) {
-                        uint32_t delta_y = y + delta_x / out_h;
-                        y = delta_y % out_w;
-                        if (delta_y / out_w != 0) {
+                    uint32_t delta_y = y + num_of_ele;
+                    y = delta_y % out_w;
+                    if (delta_y / out_w != 0) {
+                        uint32_t delta_x = x + delta_y / out_w;
+                        x = delta_x % out_h;
+                        if (delta_x / out_h != 0) {
                             batch++;
                             if (batch % in_n == 0) {
                                 batch = 0;

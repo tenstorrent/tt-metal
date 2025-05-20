@@ -73,6 +73,13 @@ def run_avg_pool2d(
         applied_shard_scheme=shard_scheme,
     )
 
+    # for b in range(ttnn_output.shape[0]):
+    #     for c in range(ttnn_output.shape[1]):
+    #         for h in range(ttnn_output.shape[2]):
+    #             for w in range(ttnn_output.shape[3]):
+    #                 value = ttnn_output[b, c, h, w]
+    #                 print(f"tensor[{b}][{c}][{h}][{w}] = {value}")
+
     ## Test teardown for Actual.
     ttnn_output = ttnn_output.reshape(
         torch_output.shape[0], torch_output.shape[2], torch_output.shape[3], torch_output.shape[1]
