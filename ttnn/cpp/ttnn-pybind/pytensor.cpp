@@ -721,19 +721,21 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("pad_value") = 0.0f,
             py::return_value_policy::move,
             R"doc(
-                +---------------+---------------+
-                | Argument      | Name          |
-                +===============+===============+
-                | arg0          | data          |
-                +---------------+---------------+
-                | arg1          | shape         |
-                +---------------+---------------+
-                | arg2          | data_type     |
-                +---------------+---------------+
-                | arg3          | layout        |
-                +---------------+---------------+
-                | arg4          | pad_value     |
-                +---------------+---------------+
+                +---------------+----------------------+
+                | Argument      | Name                 |
+                +===============+======================+
+                | arg0          | data                 |
+                +---------------+----------------------+
+                | arg1          | shape                |
+                +---------------+----------------------+
+                | arg2          | data_type            |
+                +---------------+----------------------+
+                | arg3          | layout               |
+                +---------------+----------------------+
+                | arg4          | tile (optional)      |
+                +---------------+----------------------+
+                | arg5          | pad_value (optional) |
+                +---------------+----------------------+
 
                 Example of creating a TT Tensor on host:
 
@@ -772,23 +774,23 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("pad_value") = 0.0f,
             py::return_value_policy::move,
             R"doc(
-                +---------------+---------------+
-                | Argument      | Name          |
-                +===============+===============+
-                | arg0          | data          |
-                +---------------+---------------+
-                | arg1          | shape         |
-                +---------------+---------------+
-                | arg2          | data_type     |
-                +---------------+---------------+
-                | arg3          | layout        |
-                +---------------+---------------+
-                | arg4          | device        |
-                +---------------+---------------+
-                | arg5          | tile          |
-                +---------------+---------------+
-                | arg6          | pad_value     |
-                +---------------+---------------+
+                +---------------+----------------------+
+                | Argument      | Name                 |
+                +===============+======================+
+                | arg0          | data                 |
+                +---------------+----------------------+
+                | arg1          | shape                |
+                +---------------+----------------------+
+                | arg2          | data_type            |
+                +---------------+----------------------+
+                | arg3          | layout               |
+                +---------------+----------------------+
+                | arg4          | device (optional)    |
+                +---------------+----------------------+
+                | arg5          | tile (optional)      |
+                +---------------+----------------------+
+                | arg6          | pad_value (optional) |
+                +---------------+----------------------+
 
                 Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
 
@@ -836,25 +838,25 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("pad_value") = 0.0f,
             py::return_value_policy::move,
             R"doc(
-                +---------------+---------------+
-                | Argument      | Name          |
-                +===============+===============+
-                | arg0          | data          |
-                +---------------+---------------+
-                | arg1          | shape         |
-                +---------------+---------------+
-                | arg2          | data_type     |
-                +---------------+---------------+
-                | arg3          | layout        |
-                +---------------+---------------+
-                | arg4          | device        |
-                +---------------+---------------+
-                | arg5          | mem_config    |
-                +---------------+---------------+
-                | arg6          | tile          |
-                +---------------+---------------+
-                | arg7          | pad_value     |
-                +---------------+---------------+
+                +---------------+----------------------+
+                | Argument      | Name                 |
+                +===============+======================+
+                | arg0          | data                 |
+                +---------------+----------------------+
+                | arg1          | shape                |
+                +---------------+----------------------+
+                | arg2          | data_type            |
+                +---------------+----------------------+
+                | arg3          | layout               |
+                +---------------+----------------------+
+                | arg4          | device               |
+                +---------------+----------------------+
+                | arg5          | mem_config           |
+                +---------------+----------------------+
+                | arg6          | tile (optional)      |
+                +---------------+----------------------+
+                | arg7          | pad_value (optional) |
+                +---------------+----------------------+
 
                 Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
 
@@ -915,23 +917,23 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("pad_value") = std::nullopt,
             py::return_value_policy::move,
             R"doc(
-                +--------------+------------------------+
-                | Argument     | Description            |
-                +==============+========================+
-                | tensor       | Pytorch or Numpy Tensor|
-                +--------------+------------------------+
-                | data_type    | TT Tensor data type    |
-                +--------------+------------------------+
-                | strategy     | TT Strategy            |
-                +--------------+------------------------+
-                | tile         | TT Tile Spec           |
-                +--------------+------------------------+
-                | layout       | TT Layout              |
-                +--------------+------------------------+
-                | mem_config   | TT Memory Config       |
-                +--------------+------------------------+
-                | pad_value    | TT Pad Value           |
-                +--------------+------------------------+
+                +--------------+--------------------------------+
+                | Argument     | Description                    |
+                +==============+================================+
+                | tensor       | Pytorch or Numpy Tensor        |
+                +--------------+--------------------------------+
+                | data_type    | TT Tensor data type (optional) |
+                +--------------+--------------------------------+
+                | strategy     | TT Strategy (optional)         |
+                +--------------+--------------------------------+
+                | tile         | TT Tile Spec (optional)        |
+                +--------------+--------------------------------+
+                | layout       | TT Layout (optional)           |
+                +--------------+--------------------------------+
+                | mem_config   | TT Memory Config (optional)    |
+                +--------------+--------------------------------+
+                | pad_value    | Padding value (optional)       |
+                +--------------+--------------------------------+
 
                 Example of creating a TT Tensor that uses torch.Tensor's storage as its own storage:
 
@@ -969,25 +971,25 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("pad_value") = std::nullopt,
             py::return_value_policy::move,
             R"doc(
-                +--------------+------------------------+
-                | Argument     | Description            |
-                +==============+========================+
-                | tensor       | Pytorch or Numpy Tensor|
-                +--------------+------------------------+
-                | data_type    | TT Tensor data type    |
-                +--------------+------------------------+
-                | device       | TT device ptr          |
-                +--------------+------------------------+
-                | layout       | TT layout              |
-                +--------------+------------------------+
-                | mem_config   | TT memory_config       |
-                +--------------+------------------------+
-                | tile         | TT Tile Spec           |
-                +--------------+------------------------+
-                | cq_id        | TT Command Queue ID    |
-                +--------------+------------------------+
-                | pad_value    | Padding value          |
-                +--------------+------------------------+
+                +--------------+--------------------------------+
+                | Argument     | Description                    |
+                +==============+================================+
+                | tensor       | Pytorch or Numpy Tensor        |
+                +--------------+--------------------------------+
+                | data_type    | TT Tensor data type (optional) |
+                +--------------+--------------------------------+
+                | device       | TT device ptr (optional)       |
+                +--------------+--------------------------------+
+                | layout       | TT layout (optional)           |
+                +--------------+--------------------------------+
+                | mem_config   | TT memory_config (optional)    |
+                +--------------+--------------------------------+
+                | tile         | TT Tile Spec (optional)        |
+                +--------------+--------------------------------+
+                | cq_id        | TT Command Queue ID (optional) |
+                +--------------+--------------------------------+
+                | pad_value    | Padding value (optional)       |
+                +--------------+--------------------------------+
 
                 Example of creating a TT Tensor from numpy tensor:
 
