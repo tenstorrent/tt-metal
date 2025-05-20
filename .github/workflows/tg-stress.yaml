@@ -70,7 +70,7 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U06F3ER8X9A # Stuti Raizada
+          owner: U053W15B6JF # Djordje Ivanovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   stress-6u:
@@ -117,6 +117,6 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U06F3ER8X9A # Stuti Raizada
+          owner: U053W15B6JF # Djordje Ivanovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
