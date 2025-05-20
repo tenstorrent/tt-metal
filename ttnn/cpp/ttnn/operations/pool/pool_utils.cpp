@@ -111,9 +111,9 @@ uint32_t get_bf16_pool_scalar(
                     }
                     last_area_signature = area_signature;
 
-                    out_x_stick = (out_x_stick + 1) % out_h.value_or(0);
-                    if (out_x_stick == 0) {
-                        out_y_stick = (out_y_stick + 1) % out_w.value_or(0);
+                    out_y_stick = (out_y_stick + 1) % out_w.value_or(0);
+                    if (out_y_stick == 0) {
+                        out_x_stick = (out_x_stick + 1) % out_h.value_or(0);
                     }
                 }
             } else {
