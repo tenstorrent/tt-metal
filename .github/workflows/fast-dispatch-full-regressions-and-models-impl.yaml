@@ -87,7 +87,10 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, yolov4, whisper, yolov8s_world, yolov9c, stable_diffusion_xl_base, vgg_unet, ufld_v2, mobilenetv2, functional_vanilla_unet, yolov10, openpdn_mnist, yolov8x, vit,sentence_bert]
+        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, yolov4, whisper, yolov8s_world, yolov9c, stable_diffusion_xl_base, vgg_unet, ufld_v2, mobilenetv2, functional_vanilla_unet, yolov10, openpdn_mnist, yolov8x, vit,sentence_bert, stable_diffusion]
+        include:
+          - model: stable_diffusion
+            timeout-minutes: 15
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     defaults:
       run:
@@ -146,8 +149,6 @@ jobs:
       fail-fast: false
       matrix:
         test-config:
-          - model: "stable_diffusion"
-            cmd: SLOW_MATMULS=1 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion
               # Skipping due to issue #15932
               # - model: "mamba 1"
               # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1
