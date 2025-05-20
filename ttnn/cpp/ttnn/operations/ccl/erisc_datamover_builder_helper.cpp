@@ -126,6 +126,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             for (size_t l = 0; l < this->num_links; l++) {
                 std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder> fwd_edm_builders_for_risc;
                 std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder> bwd_edm_builders_for_risc;
+                const auto curr_edm_config =
+                    tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dateline);
                 for (size_t risc_id = 0; risc_id < (device_sequence.front()->arch() == tt::ARCH::BLACKHOLE ? 2 : 1);
                      risc_id++) {
                     log_trace(
@@ -134,13 +136,15 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         src_device->id(),
                         risc_id,
                         edm_builders_forward_direction[src_device->id()].size());
+                    tt::log_debug(
+                        "src_device {}, dest_device {}, is_dateline {}", src_device->id(), dest_device->id(), dateline);
                     fwd_edm_builders_for_risc.push_back(tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                         src_device,
                         *src_program,
                         local_link_cores[l],
                         src_device->id(),
                         dest_device->id(),
-                        config,
+                        curr_edm_config,
                         enable_persistent_mode,
                         build_in_worker_connection_mode,
                         dateline,
@@ -158,7 +162,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         remote_link_cores[l],
                         dest_device->id(),
                         src_device->id(),
-                        config,
+                        curr_edm_config,
                         enable_persistent_mode,
                         build_in_worker_connection_mode,
                         dateline,

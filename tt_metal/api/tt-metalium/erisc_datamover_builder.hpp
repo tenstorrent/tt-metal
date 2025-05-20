@@ -132,6 +132,7 @@ struct FabricEriscDatamoverConfig {
     FabricEriscDatamoverConfig(
         std::size_t channel_buffer_size_bytes,
         Topology topology = Topology::Linear,
+        bool is_dateline = false,
         tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 
     std::array<std::size_t, num_riscv_cores> channel_buffer_size_bytes = {0};
