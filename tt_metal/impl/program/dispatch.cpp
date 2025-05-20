@@ -1944,6 +1944,131 @@ void update_program_dispatch_commands(
     }
 }
 
+void update_traced_program_dispatch_commands(
+    const TraceNode& trace_node,
+    ProgramCommandSequence& cached_program_command_sequence,
+    uint32_t multicast_cores_launch_message_wptr,
+    uint32_t unicast_cores_launch_message_wptr,
+    uint32_t expected_num_workers_completed,
+    CoreCoord dispatch_core,
+    CoreType dispatch_core_type,
+    SubDeviceId sub_device_id,
+    const ProgramDispatchMetadata& dispatch_md,
+    ProgramBinaryStatus program_binary_status,
+    std::pair<bool, int> unicast_go_signal_update) {
+    uint32_t i = 0;
+    ZoneScopedN("program_loaded_on_device");
+    const ProgramImpl& program = *trace_node.program;
+
+    static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
+    static constexpr uint32_t tensix_l1_write_offset_offset =
+        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset1));
+    static constexpr uint32_t eth_l1_write_offset_offset =
+        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset2));
+    static constexpr uint32_t program_host_id_offset =
+        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.program_host_id));
+    // Update Stall Command Sequence
+    if (program_binary_status != ProgramBinaryStatus::Committed) {
+        // Program binary is in flight. Issue a Prefetch Stall
+        cached_program_command_sequence.current_stall_seq_idx = UncachedStallSequenceIdx;
+    } else {
+        // Program Binary is in DRAM. Prefetcher does not need to stall before reading
+        // binary
+        cached_program_command_sequence.current_stall_seq_idx = CachedStallSequenceIdx;
+    }
+
+    auto& curr_stall_seq_idx = cached_program_command_sequence.current_stall_seq_idx;
+    cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
+        wait_count_offset, &(dispatch_md.sync_count), sizeof(uint32_t));
+
+    // Update preamble based on kernel config ring buffer slot
+    const auto& hal = MetalContext::instance().hal();
+    cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
+        tensix_l1_write_offset_offset,
+        &dispatch_md.kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
+        sizeof(uint32_t));
+    // May truncate to fit the space.
+    static_assert(
+        std::is_same_v<uint16_t, decltype(std::declval<CQDispatchCmd>().set_write_offset.program_host_id)>,
+        "program_host_id type should be uint16_t");
+    uint16_t runtime_id = trace_node.program_runtime_id;
+    cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
+        program_host_id_offset, &runtime_id, sizeof(runtime_id));
+    if (hal.get_programmable_core_type_count() >= 2) {
+        cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
+            eth_l1_write_offset_offset,
+            &dispatch_md.kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)],
+            sizeof(uint32_t));
+    }
+
+    // Update CB Configs
+    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
+    TT_ASSERT(
+        trace_node.cb_configs_payloads.size() ==
+        cached_program_command_sequence.circular_buffers_on_core_ranges.size());
+    for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
+        uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
+        const uint32_t* cb_config_payload_from_trace = trace_node.cb_configs_payloads[i].data();
+        std::memcpy(
+            cb_config_payload,
+            cb_config_payload_from_trace,
+            trace_node.cb_configs_payloads[i].size() * sizeof(uint32_t));
+        i++;
+    }
+    // Update RTAs.
+    TT_ASSERT(cached_program_command_sequence.rta_updates.size() == trace_node.rta_data.size());
+    for (size_t i = 0; i < cached_program_command_sequence.rta_updates.size(); i++) {
+        auto& rta_update = cached_program_command_sequence.rta_updates[i];
+        std::memcpy(rta_update.dst, trace_node.rta_data[i].data(), rta_update.size);
+    }
+
+    // Update launch messages
+    for (auto& launch_msg : cached_program_command_sequence.launch_messages) {
+        for (uint32_t i = 0; i < dispatch_md.kernel_config_addrs.size(); i++) {
+            launch_msg->kernel_config.kernel_config_base[i] = dispatch_md.kernel_config_addrs[i].addr;
+        }
+        launch_msg->kernel_config.host_assigned_id = trace_node.program_runtime_id;
+    }
+    // Update launch message addresses to reflect new launch_msg slot in ring buffer
+    uint32_t multicast_cores_launch_msg_addr =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH) +
+        multicast_cores_launch_message_wptr * sizeof(launch_msg_t);
+    for (auto launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
+        launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
+    }
+    if (cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.size()) {
+        uint32_t unicast_cores_launch_message_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH) +
+            unicast_cores_launch_message_wptr * sizeof(launch_msg_t);
+        for (auto launch_msg_cmd_ptr : cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs) {
+            launch_msg_cmd_ptr->addr = unicast_cores_launch_message_addr;
+        }
+    }
+    // Update go signal to reflect potentially modified dispatch core and new wait count
+    go_msg_t run_program_go_signal;
+    run_program_go_signal.signal = RUN_MSG_GO;
+    run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
+    run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
+    run_program_go_signal.dispatch_message_offset = MetalContext::instance()
+                                                        .dispatch_mem_map(dispatch_core_type)
+                                                        .get_dispatch_message_update_offset(*sub_device_id);
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal =
+        *reinterpret_cast<uint32_t*>(&run_program_go_signal);
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
+    // Update the number of unicast txns based on user provided parameter
+    // This is required when a MeshWorkload uses ethernet cores on a set of devices
+    // where the number of active eth cores is heterogenous across devices.
+    // Update the number of unicast txns to eth cores to match the minimum number of cores
+    // across devices (specified by user)
+    if (unicast_go_signal_update.first) {
+        TT_FATAL(
+            unicast_go_signal_update.second > 0,
+            "Must specify a valid number of cores to unicast the go signal to when updating dispatch commands");
+        cached_program_command_sequence.mcast_go_signal_cmd_ptr->num_unicast_txns = unicast_go_signal_update.second;
+    }
+}
+
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,
@@ -2029,6 +2154,62 @@ void write_program_command_sequence(
         manager.fetch_queue_reserve_back(command_queue_id);
         manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
     }
+}
+
+TraceNode create_trace_node(ProgramImpl& program, IDevice* device) {
+    std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(device)};
+    program.generate_trace_dispatch_commands(device);
+    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+
+    // By using the traced command sequence, we know the RTA data source-of-truth isn't this command sequence (it's in a
+    // regular cached program command sequence), so rta_updates includes all the RTAs.
+    auto& cached_program_command_sequence = program.get_trace_cached_program_command_sequences().at(command_hash);
+    std::vector<std::vector<uint8_t>> rta_data;
+    for (auto& update : cached_program_command_sequence.rta_updates) {
+        rta_data.push_back(std::vector<uint8_t>(
+            static_cast<const uint8_t*>(update.src), static_cast<const uint8_t*>(update.src) + update.size));
+    }
+
+    std::vector<std::vector<uint32_t>> all_cb_configs_payloads;
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
+    for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
+        all_cb_configs_payloads.push_back(
+            std::vector<uint32_t>(NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG));
+        auto& cb_config_payload = all_cb_configs_payloads.back();
+        uint32_t first_unused_index = 0;
+        for (const std::shared_ptr<CircularBuffer>& cb : cbs_on_core_range) {
+            const uint32_t cb_address = cb->address();
+            const uint32_t cb_size = cb->size();
+            for (const auto& buffer_index : cb->local_buffer_indices()) {
+                // 1 cmd for all 32 buffer indices, populate with real data for specified indices
+
+                // cb config payload
+                uint32_t base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
+                cb_config_payload[base_index] = cb_address;
+                cb_config_payload[base_index + 1] = cb_size;
+                cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
+                cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
+                first_unused_index = std::max(first_unused_index, base_index + 4);
+            }
+            for (const auto& buffer_index : cb->remote_buffer_indices()) {
+                const uint32_t base_index = remote_offset_index + (NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                                                                      UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+                cb_config_payload[base_index] = cb->config_address();
+                cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
+                first_unused_index = std::max(first_unused_index, base_index + 2);
+            }
+        }
+        cb_config_payload.resize(first_unused_index);
+    }
+
+    return TraceNode{
+        program.shared_from_this(),
+        program.get_runtime_id(),
+        sub_device_ids[0],
+        std::move(rta_data),
+        std::move(all_cb_configs_payloads)};
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
