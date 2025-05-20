@@ -5,6 +5,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <gtest/gtest.h>
 #include <numeric>
+#include <thread>
 
 namespace {
 using Rank = tt::tt_metal::distributed::multihost::Rank;
