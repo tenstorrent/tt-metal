@@ -39,13 +39,17 @@ class TtStableDiffusion3Pipeline:
         self._text_encoder_1 = CLIPTextModelWithProjection.from_pretrained(checkpoint, subfolder="text_encoder")
         self._text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(checkpoint, subfolder="text_encoder_2")
         if enable_t5_text_encoder:
-            torch_text_encoder_3 = T5EncoderModel.from_pretrained(checkpoint, subfolder="text_encoder_3")
+            torch_text_encoder_3 = T5EncoderModel.from_pretrained(
+                checkpoint,
+                subfolder="text_encoder_3",
+                dtype=torch.bfloat16,
+            )
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint, subfolder="scheduler")
         self._vae = AutoencoderKL.from_pretrained(checkpoint, subfolder="vae")
         torch_transformer = SD3Transformer2DModel.from_pretrained(
             checkpoint,
             subfolder="transformer",
-            torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
+            torch_dtype=torch.bfloat16,
         )
         torch_transformer.eval()
 
