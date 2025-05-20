@@ -229,7 +229,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
                                                   size_t num_alive_receiver_channels,
                                                   size_t& num_sender_buffer_slots,
                                                   size_t& num_receiver_buffer_slots) {
-        // change the reveiver buffer slots for dateline, and keep the sender buffer slots the same as non-dateline,
+        // change the receiver buffer slots for dateline, and keep the sender buffer slots the same as non-dateline,
         // since the sender buffer slots should be kept the same across all edms
         size_t non_dateline_num_sender_buffer_slots = 0;
         size_t non_dateline_num_receiver_buffer_slots = 0;
@@ -296,6 +296,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         // skip sender channel 2 for dateline edm and set the buffer size to 0
+        // Dateline connections have some channels that are unused because there
+        // is not legal data path to feed into them. Therefore we can "skip" them and receover
+        // the buffering space in L1 for other channels.
         bool skip_current_channel = (i == non_dateline_sender_channel_idx && is_dateline);
         this->sender_channels_num_buffers[i] = skip_current_channel ? 0 : num_sender_buffer_slots;
         this->sender_channels_size_bytes[i] =
