@@ -1,6 +1,5 @@
 numpy==2.2.5
 pytest-cov==6.1.1
-pytest-randomly==3.16.0
 pytest-repeat==0.9.4
 pytest-split==0.10.0
 pytest-sugar==1.0.0
