@@ -735,6 +735,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t last_block_padded_block_tiles_w_skip =
         (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
 
+    uint32_t last_ktile_w = (a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1]) * datum_size(in0_data_format);
+
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
     if (in0_noc == tt::tt_metal::NOC::NOC_1) {
@@ -795,8 +797,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
                 (std::uint32_t)end_core_noc.y,    // in0_mcast_dest_noc_end_y
 
                 // padding args
-                (std::uint32_t)out_block_h  // last_block_h
-            };
+                (std::uint32_t)out_block_h,  // last_block_h
+                (std::uint32_t)last_ktile_w};
 
             if (fuse_op) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
@@ -964,6 +966,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1000,8 +1004,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
     bool untilize_out) {
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
-
-    tt_metal::Program program{};
 
     bool fuse_op = false;
 
@@ -1508,6 +1510,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
+    uint32_t last_ktile_w = (a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1]) * datum_size(in0_data_format);
+
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
     if (in1_noc == tt::tt_metal::NOC::NOC_0) {
@@ -1629,7 +1633,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
             (std::uint32_t)0,  // in0_mcast_dest_noc_end_y
 
             // padding args
-            (std::uint32_t)per_core_M  // last_block_h
+            (std::uint32_t)per_core_M,  // last_block_h
+            (std::uint32_t)last_ktile_w,
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_1_default
     }
@@ -2567,6 +2572,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             fused_op_signaler);
     } else {
         return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1(
+            program,
+            a,
             device,
             math_fidelity,
             fp32_dest_acc_en,

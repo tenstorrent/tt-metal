@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "pad_tile.hpp"
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -21,6 +22,7 @@ void kernel_main() {
 
     // padding args
     const uint32_t last_block_h = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t last_ktile_w = get_arg_val<uint32_t>(rt_args_idx++);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
@@ -149,6 +151,17 @@ void kernel_main() {
                             if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
                                 noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
                             }
+
+                            // Zero out padded regions for the very last tile
+                            if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1) && (last_ktile_w > 0)) {
+                                noc_async_read_barrier();
+                                if constexpr (in0_data_format == DataFormat::Float32) {
+                                    fill_pad_tile<uint32_t>(last_ktile_w, 0, l1_write_addr_in0, 0);
+                                } else if constexpr (in0_data_format == DataFormat::Float16_b) {
+                                    fill_pad_tile<uint16_t>(last_ktile_w, 0, l1_write_addr_in0, 0);
+                                }
+                            }
+
                             l1_write_addr_in0 += in0_single_tile_size_bytes;
                             in0_tensor_tile_id += in0_tensor_stride_w;
                         }
