@@ -38,6 +38,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t num_sender_channels_1d = 3;
     static constexpr std::size_t num_sender_channels_2d = 5;
     static constexpr std::size_t num_sender_channels = std::max(num_sender_channels_1d, num_sender_channels_2d);
+    static constexpr std::size_t num_downstream_sender_channels = num_sender_channels - 1;
 
     static constexpr std::size_t num_receiver_channels = 2;
     static constexpr std::size_t num_downstream_edms_vc0 = 1;
@@ -119,6 +120,7 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, num_sender_channels> sender_channels_size_bytes;
     std::array<std::size_t, num_receiver_channels> receiver_channels_size_bytes;
     std::array<std::size_t, num_sender_channels> sender_channels_num_buffers;
+    std::array<std::size_t, num_downstream_sender_channels> downstream_sender_channels_num_buffers;
     std::array<std::size_t, num_receiver_channels> receiver_channels_num_buffers;
 
     std::array<std::size_t, num_sender_channels> sender_channels_base_address;
@@ -260,6 +262,8 @@ public:
     size_t channel_buffer_size = 0;
 
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_num_buffers;
+    std::array<std::size_t, FabricEriscDatamoverConfig::num_downstream_sender_channels>
+        downstream_sender_channels_num_buffers;
     std::array<size_t, FabricEriscDatamoverConfig::num_receiver_channels> receiver_channels_num_buffers;
 
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> local_sender_channels_buffer_address;

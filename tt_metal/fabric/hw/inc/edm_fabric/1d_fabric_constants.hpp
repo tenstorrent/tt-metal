@@ -112,7 +112,7 @@ constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_STA
 
 constexpr size_t SENDER_NUM_BUFFERS_VC0_0 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
 constexpr size_t SENDER_NUM_BUFFERS_VC0_1 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
-constexpr size_t SENDER_NUM_BUFFERS = SENDER_NUM_BUFFERS_VC0_1;
+// constexpr size_t SENDER_NUM_BUFFERS = SENDER_NUM_BUFFERS_VC0_1;
 constexpr size_t SENDER_NUM_BUFFERS_VC0_2 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
 constexpr size_t SENDER_NUM_BUFFERS_VC0_3 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 11);
 constexpr size_t SENDER_NUM_BUFFERS_VC1_0 = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 12);
@@ -127,73 +127,105 @@ static_assert(
     SENDER_NUM_BUFFERS_VC0_3 == SENDER_NUM_BUFFERS_VC1_0,
     "SENDER_NUM_BUFFERS_VC0_3 must be equal to SENDER_NUM_BUFFERS_VC1_0");
 
-constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 13);
-constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 14);
-constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 15);
-constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 16);
-constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 17);
-constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 18);
-constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 19);
-constexpr size_t local_sender_3_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 20);
-constexpr size_t local_sender_channel_3_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 21);
-constexpr size_t local_sender_4_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 22);
-constexpr size_t local_sender_channel_4_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 23);
-constexpr size_t local_receiver_0_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 24);
-constexpr size_t remote_receiver_0_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 25);
-constexpr size_t local_receiver_1_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 26);
-constexpr size_t remote_receiver_1_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 27);
-constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 28);
-constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 29);
-constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 30);
-constexpr size_t remote_sender_3_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 31);
-constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 32);
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 13);
+constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 14);
+
+constexpr size_t LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX = MAIN_CT_ARGS_START_IDX + 15;
+constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX);
+constexpr size_t local_sender_channel_0_connection_info_addr =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 1);
+constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 2);
+constexpr size_t local_sender_channel_1_connection_info_addr =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 3);
+constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 4);
+constexpr size_t local_sender_channel_2_connection_info_addr =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 5);
+constexpr size_t local_sender_3_channel_address = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 6);
+constexpr size_t local_sender_channel_3_connection_info_addr =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 7);
+constexpr size_t local_sender_4_channel_address = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 8);
+constexpr size_t local_sender_channel_4_connection_info_addr =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 9);
+constexpr size_t local_receiver_0_channel_buffer_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 10);
+constexpr size_t remote_receiver_0_channel_buffer_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 11);
+constexpr size_t local_receiver_1_channel_buffer_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 12);
+constexpr size_t remote_receiver_1_channel_buffer_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 13);
+constexpr size_t remote_sender_0_channel_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 14);
+constexpr size_t remote_sender_1_channel_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 15);
+constexpr size_t remote_sender_2_channel_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 16);
+constexpr size_t remote_sender_3_channel_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 17);
+constexpr size_t remote_sender_4_channel_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 18);
 
 // TODO: CONVERT TO SEMAPHORE
-constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 33);
+constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 19);
 constexpr uint32_t edm_local_sync_ptr_addr =
-    wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 34) : 0;
-constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 35);
+    wait_for_host_signal ? get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 20) : 0;
+constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 21);
 
-constexpr bool persistent_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 36) != 0;
+constexpr bool persistent_mode = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 22) != 0;
 
 // Per-channel counters
-constexpr bool enable_fabric_counters = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 37) != 0;
-constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 38);
-constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 39);
-constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 40);
-constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 41);
-constexpr size_t sender_channel_2_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 42);
-constexpr size_t sender_channel_3_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 43);
-constexpr size_t sender_channel_4_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 44);
+constexpr bool enable_fabric_counters = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 23) != 0;
+constexpr size_t receiver_channel_0_counters_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 24);
+constexpr size_t receiver_channel_1_counters_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 25);
+constexpr size_t sender_channel_0_counters_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 26);
+constexpr size_t sender_channel_1_counters_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 27);
+constexpr size_t sender_channel_2_counters_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 28);
+constexpr size_t sender_channel_3_counters_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 29);
+constexpr size_t sender_channel_4_counters_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 30);
 
-constexpr bool enable_packet_header_recording = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 45) != 0;
-constexpr size_t receiver_0_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 46);
+constexpr bool enable_packet_header_recording =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 31) != 0;
+constexpr size_t receiver_0_completed_packet_header_cb_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 32);
 constexpr size_t receiver_0_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 47);
-constexpr size_t receiver_1_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 48);
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 33);
+constexpr size_t receiver_1_completed_packet_header_cb_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 34);
 constexpr size_t receiver_1_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 49);
-constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 50);
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 35);
+constexpr size_t sender_0_completed_packet_header_cb_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 36);
 constexpr size_t sender_0_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 51);
-constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 52);
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 37);
+constexpr size_t sender_1_completed_packet_header_cb_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 38);
 constexpr size_t sender_1_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 53);
-constexpr size_t sender_2_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 54);
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 39);
+constexpr size_t sender_2_completed_packet_header_cb_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 40);
 constexpr size_t sender_2_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 55);
-constexpr size_t sender_3_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 56);
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 41);
+constexpr size_t sender_3_completed_packet_header_cb_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 42);
 constexpr size_t sender_3_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 57);
-constexpr size_t sender_4_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 58);
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 43);
+constexpr size_t sender_4_completed_packet_header_cb_address =
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 44);
 constexpr size_t sender_4_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 59);
-constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 60);
-constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 61);
+    get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 45);
+constexpr size_t is_2d_fabric = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 46);
+constexpr size_t my_direction = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 47);
 
-constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 62);
+constexpr size_t num_eth_ports = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 48);
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 63;
+constexpr size_t SPECIAL_MARKER_0_IDX = LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 49;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,

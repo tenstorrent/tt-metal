@@ -201,6 +201,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         std::pair<size_t, size_t>{8, 16}, std::pair<size_t, size_t>{8, 8}};
 
     size_t num_sender_buffer_slots;
+    size_t downstream_num_sender_buffer_slots;
     size_t num_receiver_buffer_slots;
 
     auto get_optimal_num_slots = [this](
@@ -261,6 +262,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             num_receiver_buffer_slots);
     }
 
+    downstream_num_sender_buffer_slots = num_sender_buffer_slots;
+
     std::size_t total_slot_count =
         num_alive_sender_channels * num_sender_buffer_slots + num_alive_receiver_channels * num_receiver_buffer_slots;
     TT_FATAL(
@@ -274,6 +277,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->sender_channels_num_buffers[i] = skip_current_channel ? 0 : num_sender_buffer_slots;
         this->sender_channels_size_bytes[i] =
             skip_current_channel ? 0 : channel_buffer_size_bytes * num_sender_buffer_slots;
+    }
+    for (uint32_t i = 0; i < this->num_used_sender_channels - 1; i++) {
+        this->downstream_sender_channels_num_buffers[i] = downstream_num_sender_buffer_slots;
     }
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         bool skip_current_channel = (i == non_dateline_receiver_channel_idx && is_dateline);
@@ -438,6 +444,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         tt::tt_metal::hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
     channel_buffer_size(config.channel_buffer_size_bytes),
     sender_channels_num_buffers(config.sender_channels_num_buffers),
+    downstream_sender_channels_num_buffers(config.downstream_sender_channels_num_buffers),
     receiver_channels_num_buffers(config.receiver_channels_num_buffers),
 
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
@@ -517,6 +524,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         this->sender_channels_num_buffers[1],
         this->sender_channels_num_buffers[1],
         this->sender_channels_num_buffers[1],
+
+        // downstream sender channel num buffers
+        this->downstream_sender_channels_num_buffers[0],
+
         receiver_channel_num_buffers,
 
         config.sender_channels_base_address[0],

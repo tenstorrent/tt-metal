@@ -868,14 +868,15 @@ template <
     bool enable_packet_header_recording,
     bool enable_fabric_counters,
     uint8_t RECEIVER_NUM_BUFFERS,
-    uint8_t SENDER_NUM_BUFFERS,
+    // uint8_t SENDER_NUM_BUFFERS,
     size_t NUM_SENDER_CHANNELS,
     uint8_t to_receiver_pkts_sent_id,
     uint8_t receiver_channel,
     typename WriteTridTracker>
 void run_receiver_channel_step(
     tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_channel,
-    std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
+    std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
+        downstream_edm_interface,
     volatile tt::tt_fabric::EdmFabricReceiverChannelCounters* receiver_channel_counters_ptr,
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
     PacketHeaderRecorder& packet_header_recorder,
@@ -1073,7 +1074,7 @@ template <
     bool enable_fabric_counters,
     uint8_t RECEIVER_NUM_BUFFERS,
     uint8_t NUM_RECEIVER_CHANNELS,
-    uint8_t SENDER_NUM_BUFFERS,
+    // uint8_t SENDER_NUM_BUFFERS,
     size_t NUM_SENDER_CHANNELS,
     size_t MAX_NUM_SENDER_CHANNELS,
     size_t MAX_NUM_RECEIVER_CHANNELS>
@@ -1094,7 +1095,7 @@ void run_fabric_edm_main_loop(
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_VC0_3>& local_sender_channel_worker_interfaces_vc0_3,
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_VC1_0>& local_sender_channel_worker_interfaces_vc1_0,
 
-    std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
+    std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
         downstream_edm_noc_interfaces,
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& remote_receiver_channels,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
@@ -1184,7 +1185,7 @@ void run_fabric_edm_main_loop(
                     enable_packet_header_recording,
                     enable_fabric_counters,
                     RECEIVER_NUM_BUFFERS,
-                    SENDER_NUM_BUFFERS,
+                    // SENDER_NUM_BUFFERS,
                     NUM_SENDER_CHANNELS,
                     to_receiver_packets_sent_streams[0],
                     0>(
@@ -1202,7 +1203,7 @@ void run_fabric_edm_main_loop(
                     enable_packet_header_recording,
                     enable_fabric_counters,
                     RECEIVER_NUM_BUFFERS,
-                    SENDER_NUM_BUFFERS,
+                    // SENDER_NUM_BUFFERS,
                     NUM_SENDER_CHANNELS,
                     to_receiver_packets_sent_streams[1],
                     1>(
@@ -1476,7 +1477,7 @@ void kernel_main() {
         erisc::datamover::handshake::receiver_side_start(handshake_addr);
     }
 
-    DPRINT << "SENDER_NUM_BUFFERS: " << (uint32_t)SENDER_NUM_BUFFERS << "\n";
+    // DPRINT << "SENDER_NUM_BUFFERS: " << (uint32_t)SENDER_NUM_BUFFERS << "\n";
     DPRINT << "RECEIVER_NUM_BUFFERS: " << (uint32_t)RECEIVER_NUM_BUFFERS << "\n";
     DPRINT << "local_sender_0_channel_address: " << (uint32_t)local_sender_0_channel_address << "\n";
     DPRINT << "local_sender_channel_0_connection_info_addr: " << (uint32_t)local_sender_channel_0_connection_info_addr
@@ -1545,7 +1546,7 @@ void kernel_main() {
             reinterpret_cast<volatile uint32_t*>(receiver_1_completed_packet_header_cb_address),
             receiver_1_completed_packet_header_cb_size_headers)};
 
-    static_assert(SENDER_NUM_BUFFERS > 0, "compile time argument [1]: SENDER_NUM_BUFFERS must be > 0");
+    // static_assert(SENDER_NUM_BUFFERS > 0, "compile time argument [1]: SENDER_NUM_BUFFERS must be > 0");
     static_assert(RECEIVER_NUM_BUFFERS > 0, "compile time argument [2]: RECEIVER_NUM_BUFFERS must be > 0");
 
     volatile tt::tt_fabric::EdmFabricReceiverChannelCounters* receiver_0_channel_counters_ptr = nullptr;
@@ -1811,7 +1812,7 @@ void kernel_main() {
     }
 
     // no need to unroll if we assume downstream connected channels have same buffer slots
-    std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>
+    std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>
         downstream_edm_noc_interfaces;
     if (has_downstream_edm_vc0_buffer_connection) {
         // Only bit 0 is set for 1D
@@ -1836,31 +1837,32 @@ void kernel_main() {
                     *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
                     *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
                 }
-                new (&downstream_edm_noc_interfaces[edm_index]) tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
-                    // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
-                    // connections we must always use semaphore lookup
-                    // For 2D, downstream_edm_vc0_semaphore_id is an address.
-                    is_2d_fabric,
-                    0,  // Unused in routers. Used by workers to get edm direction for 2D.
-                    (downstream_edm_vc0_noc_x >> (edm_index * 8)) & 0xFF,
-                    (downstream_edm_vc0_noc_y >> (edm_index * 8)) & 0xFF,
-                    downstream_edm_vc0_buffer_base_address,
-                    SENDER_NUM_BUFFERS,
-                    downstream_edm_vc0_semaphore_id,
-                    downstream_edm_vc0_worker_registration_id,
-                    downstream_edm_vc0_worker_location_info_address,
-                    channel_buffer_size,
+                new (&downstream_edm_noc_interfaces[edm_index])
+                    tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS>(
+                        // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
+                        // connections we must always use semaphore lookup
+                        // For 2D, downstream_edm_vc0_semaphore_id is an address.
+                        is_2d_fabric,
+                        0,  // Unused in routers. Used by workers to get edm direction for 2D.
+                        (downstream_edm_vc0_noc_x >> (edm_index * 8)) & 0xFF,
+                        (downstream_edm_vc0_noc_y >> (edm_index * 8)) & 0xFF,
+                        downstream_edm_vc0_buffer_base_address,
+                        DOWNSTREAM_SENDER_NUM_BUFFERS,
+                        downstream_edm_vc0_semaphore_id,
+                        downstream_edm_vc0_worker_registration_id,
+                        downstream_edm_vc0_worker_location_info_address,
+                        channel_buffer_size,
 #ifdef FABRIC_2D
-                    local_sender_channel_connection_buffer_index_id[edm_index],
+                        local_sender_channel_connection_buffer_index_id[edm_index],
 #else
-                    local_sender_channel_1_connection_buffer_index_id,
+                        local_sender_channel_1_connection_buffer_index_id,
 #endif
-                    reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),
-                    reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
-                    downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc read
-                                                                           // dest.
-                    receiver_channel_forwarding_data_cmd_buf_ids[0],
-                    receiver_channel_forwarding_sync_cmd_buf_ids[0]);
+                        reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),
+                        reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
+                        downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc
+                                                                               // read dest.
+                        receiver_channel_forwarding_data_cmd_buf_ids[0],
+                        receiver_channel_forwarding_sync_cmd_buf_ids[0]);
                 downstream_edm_noc_interfaces[edm_index]
                     .template setup_edm_noc_cmd_buf<
                         tt::tt_fabric::edm_to_downstream_noc,
@@ -1886,7 +1888,7 @@ void kernel_main() {
                 *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
             }
             new (&downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1])
-                tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
+                tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS>(
                     // persistent_mode -> hardcode to false because for EDM -> EDM
                     //  connections we must always use semaphore lookup
                     is_2d_fabric,
@@ -1894,7 +1896,7 @@ void kernel_main() {
                     downstream_edm_vc1_noc_x,
                     downstream_edm_vc1_noc_y,
                     downstream_edm_vc1_buffer_base_address,
-                    SENDER_NUM_BUFFERS,
+                    DOWNSTREAM_SENDER_NUM_BUFFERS,
                     downstream_edm_vc1_semaphore_id,
                     downstream_edm_vc1_worker_registration_id,
                     downstream_edm_vc1_worker_location_info_address,
@@ -2064,7 +2066,7 @@ void kernel_main() {
         enable_fabric_counters,
         RECEIVER_NUM_BUFFERS,
         NUM_RECEIVER_CHANNELS,
-        SENDER_NUM_BUFFERS,
+        // SENDER_NUM_BUFFERS,
         NUM_SENDER_CHANNELS,
         MAX_NUM_SENDER_CHANNELS,
         MAX_NUM_RECEIVER_CHANNELS>(
