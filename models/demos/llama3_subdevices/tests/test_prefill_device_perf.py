@@ -323,24 +323,22 @@ def test_llama_TG_perf_device(
             # Workaround: We are storing the op index in the "iteration" field of the measurement, to facilitate the graph in superset
 
             # average
+            benchmark_data.add_measurement(profiler, 0, step_name, op_name + "-model-kernel-avg", avg_kernel_duration)
             benchmark_data.add_measurement(
-                profiler, op_index, step_name, op_name + "-model-kernel-avg", avg_kernel_duration
-            )
-            benchmark_data.add_measurement(
-                profiler, op_index, step_name, op_name + "-model-op_to_op-avg", avg_dispatch_duration
+                profiler, 0, step_name, op_name + "-model-op_to_op-avg", avg_dispatch_duration
             )
 
             # min
             benchmark_data.add_measurement(
                 profiler,
-                op_index,
+                0,
                 step_name,
                 op_name + "-model-kernel-min",
                 min_kernel_duration,
             )
             benchmark_data.add_measurement(
                 profiler,
-                op_index,
+                0,
                 step_name,
                 op_name + "-model-op_to_op-min",
                 dispatch_duration_per_instance_min_dict[op_code_with_id],
@@ -349,14 +347,14 @@ def test_llama_TG_perf_device(
             # max
             benchmark_data.add_measurement(
                 profiler,
-                op_index,
+                0,
                 step_name,
                 op_name + "-model-kernel-max",
                 max_kernel_duration,
             )
             benchmark_data.add_measurement(
                 profiler,
-                op_index,
+                0,
                 step_name,
                 op_name + "-model-op_to_op-max",
                 dispatch_duration_per_instance_max_dict[op_code_with_id],
