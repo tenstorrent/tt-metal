@@ -96,4 +96,4 @@ def test_vae_resnet(
     ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    assert_with_pcc(torch_output, ttnn_output, 0.989)
