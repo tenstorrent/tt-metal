@@ -37,7 +37,6 @@ class TtStableDiffusion3Pipeline:
         parallel_config: DiTParallelConfig,
     ) -> None:
         self._device = device
-        device.enable_async(True)
 
         logger.info("loading models...")
         self._tokenizer_1 = CLIPTokenizer.from_pretrained(checkpoint, subfolder="tokenizer")

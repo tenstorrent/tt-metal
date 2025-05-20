@@ -50,7 +50,6 @@ def test_attention(
     prompt_sequence_length: int,
     joint_attention: bool,
 ) -> None:
-    mesh_device.enable_async(True)
     mesh_shape = tuple(mesh_device.shape)
     cfg_parallel = ParallelConfig(mesh_shape=mesh_shape, factor=1, mesh_axis=0)
     tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1], mesh_axis=1)

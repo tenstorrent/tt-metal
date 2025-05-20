@@ -42,7 +42,6 @@ def test_transformer(
     height: int,
     width: int,
 ) -> None:
-    mesh_device.enable_async(True)
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 

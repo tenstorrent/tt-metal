@@ -106,7 +106,12 @@ def _merge_qkv_proj(
 
 
 def sd_attention_qkv(
-    x: ttnn.Tensor, parameters: TtAttentionPartParameters, *, num_heads: int, deallocate: bool
+    x: ttnn.Tensor,
+    parameters: TtAttentionPartParameters,
+    parallel_config: DiTParallelConfig,
+    *,
+    num_heads: int,
+    deallocate: bool,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     # tracy.signpost("enter TtAttentionPart")
 
@@ -137,7 +142,7 @@ def sd_attention_qkv(
         deallocate=deallocate,
     )
 
-    num_local_heads = num_heads // len(x.devices())
+    num_local_heads = num_heads // parallel_config.tensor_parallel.factor
     q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
         qkv, num_heads=num_local_heads, transpose_key=False
     )
@@ -179,7 +184,13 @@ def sd_joint_attention(
     spatial = ttnn.squeeze(spatial, 1)
     prompt = ttnn.squeeze(prompt, 1)
 
-    q, k, v = sd_attention_qkv(spatial, parameters=parameters.spatial, num_heads=num_heads, deallocate=deallocate)
+    q, k, v = sd_attention_qkv(
+        spatial,
+        parameters=parameters.spatial,
+        parallel_config=parallel_config,
+        num_heads=num_heads,
+        deallocate=deallocate,
+    )
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -221,7 +232,13 @@ def sd_joint_attention(
 
     assert parameters.prompt is not None
 
-    q2, k2, v2 = sd_attention_qkv(prompt, parameters=parameters.prompt, num_heads=num_heads, deallocate=deallocate)
+    q2, k2, v2 = sd_attention_qkv(
+        prompt,
+        parameters=parameters.prompt,
+        parallel_config=parallel_config,
+        num_heads=num_heads,
+        deallocate=deallocate,
+    )
 
     # TODO: Check that unpadded text seqlen is logical shape of joint tensors.
     spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
