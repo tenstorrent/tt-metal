@@ -40,8 +40,6 @@ void MAIN {
     constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(13);
     constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(14);
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(15);
-    // constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(16);
-    // constexpr uint32_t k_chunk_size = get_compile_time_arg_val(17);
     constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(18);
     constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(19);
     constexpr bool is_causal = get_compile_time_arg_val(20) == 1;
