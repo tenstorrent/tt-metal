@@ -82,7 +82,7 @@ class VaeDecoder:
 
         # groupnorm
         self.norm_num_blocks = norm_num_blocks
-        self.norm_grid_core = ttnn.CoreGrid(y=4, x=8)
+        self.norm_grid_core = ttnn.CoreGrid(y=4, x=4)
         (
             self.norm_input_mask,
             self.norm_weights,
@@ -128,6 +128,7 @@ class VaeDecoder:
             inplace=False,
             num_out_blocks=self.norm_num_blocks,
             epsilon=GROUPNORM_EPSILON,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         hidden_states = ttnn.silu(hidden_states)
