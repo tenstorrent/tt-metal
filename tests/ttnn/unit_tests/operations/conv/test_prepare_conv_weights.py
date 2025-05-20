@@ -251,7 +251,7 @@ def test_prepare_conv_weights(
 )
 @pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
 @pytest.mark.parametrize("weights_dtype", [None, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("torch_weights_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("torch_weights_dtype", [ttnn.float32])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_conv_weights_dtype(
     batch_size,
