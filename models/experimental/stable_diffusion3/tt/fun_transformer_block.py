@@ -14,6 +14,7 @@ from .fun_attention import sd_joint_attention, TtAttentionParameters
 from .fun_feed_forward import sd_feed_forward, TtFeedForwardParameters
 from .fun_linear import sd_linear, TtLinearParameters
 from .fun_normalization import sd_layer_norm, TtLayerNormParameters
+from .parallel_config import DiTParallelConfig
 from .substate import has_substate, substate
 
 if TYPE_CHECKING:
@@ -46,6 +47,7 @@ class TtTransformerBlockParameters:
         hidden_dim_padding: int,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_config: DiTParallelConfig,
     ) -> TtTransformerBlockParameters:
         embedding_dim = state["norm1.linear.weight"].shape[1]
 
@@ -70,6 +72,7 @@ class TtTransformerBlockParameters:
                 hidden_dim_padding=hidden_dim_padding,
                 dtype=dtype,
                 device=device,
+                parallel_config=parallel_config,
             ),
             spatial_attn=TtAttentionParameters.from_torch(
                 substate(state, "attn2"),
@@ -78,6 +81,7 @@ class TtTransformerBlockParameters:
                 hidden_dim_padding=hidden_dim_padding,
                 dtype=dtype,
                 device=device,
+                parallel_config=parallel_config,
             )
             if has_spatial_attn
             else None,
@@ -101,8 +105,12 @@ class TtTransformerBlockParameters:
                 hidden_dim_padding=hidden_dim_padding,
                 unsqueeze_bias=True,
             ),
-            spatial_ff=TtFeedForwardParameters.from_torch(substate(state, "ff"), dtype=dtype, device=device),
-            prompt_ff=TtFeedForwardParameters.from_torch(substate(state, "ff_context"), dtype=dtype, device=device)
+            spatial_ff=TtFeedForwardParameters.from_torch(
+                substate(state, "ff"), dtype=dtype, device=device, parallel_config=parallel_config
+            ),
+            prompt_ff=TtFeedForwardParameters.from_torch(
+                substate(state, "ff_context"), dtype=dtype, device=device, parallel_config=parallel_config
+            )
             if has_ff_context
             else None,
             distributed=device.get_num_devices() > 1,
@@ -112,6 +120,7 @@ class TtTransformerBlockParameters:
 def sd_spatial_attn_block(
     inp: ttnn.Tensor,
     parameters: TtAttentionParameters,
+    parallel_config: DiTParallelConfig,
     *,
     num_heads: int,
     gate: ttnn.Tensor,
@@ -121,7 +130,9 @@ def sd_spatial_attn_block(
     # assert self._spatial_attn is not None
     assert parameters.spatial_attn is not None
     scaled = inp * (1 + scale) + shift
-    attn, _ = sd_joint_attention(spatial=scaled, parameters=parameters, num_heads=num_heads, deallocate=True)
+    attn, _ = sd_joint_attention(
+        spatial=scaled, parameters=parameters, num_heads=num_heads, deallocate=True, parallel_config=parallel_config
+    )
 
     result = gate * attn
     ttnn.deallocate(scaled)
@@ -139,14 +150,14 @@ def sd_dual_attn_block(
     spatial_scale: ttnn.Tensor,
     spatial_shift: ttnn.Tensor,
     parameters: TtAttentionParameters,
-    distributed: bool,
+    parallel_config: DiTParallelConfig,
     num_heads: int,
     N: int,
     L: int,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
     spatial_scaled = spatial * (1 + spatial_scale) + spatial_shift
     prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
-    if distributed:
+    if parallel_config.tensor_parallel.factor > 1:
         spatial_scaled = utils.all_gather(spatial_scaled, dim=-1)
         prompt_scaled = utils.all_gather(prompt_scaled, dim=-1)
     spatial_attn, prompt_attn = sd_joint_attention(
@@ -157,6 +168,7 @@ def sd_dual_attn_block(
         deallocate=True,
         N=N,
         L=L,
+        parallel_config=parallel_config,
     )
     spatial_attn_scaled = spatial_gate * spatial_attn
     prompt_attn_scaled = prompt_gate * prompt_attn if prompt_gate is not None else None
@@ -168,16 +180,16 @@ def sd_dual_attn_block(
 def sd_gated_ff_block(
     inp: ttnn.Tensor,
     parameters: TtFeedForwardParameters,
-    distributed: bool,
+    parallel_config: DiTParallelConfig,
     *,
     gate: ttnn.Tensor,
     scale: ttnn.Tensor,
     shift: ttnn.Tensor,
 ) -> ttnn.Tensor:
     scaled = inp * (1 + scale) + shift
-    if distributed:
+    if parallel_config.tensor_parallel.factor > 1:
         scaled = utils.all_gather(scaled, dim=-1)
-    result = gate * sd_feed_forward(scaled, parameters)
+    result = gate * sd_feed_forward(scaled, parameters, parallel_config=parallel_config)
     ttnn.deallocate(scaled)
     return result
 
@@ -188,6 +200,7 @@ def sd_transformer_block(  # noqa: PLR0915
     prompt: ttnn.Tensor,
     time_embed: ttnn.Tensor,
     parameters: TtTransformerBlockParameters,
+    parallel_config: DiTParallelConfig,
     num_heads: int,
     N: int,
     L: int,
@@ -257,7 +270,7 @@ def sd_transformer_block(  # noqa: PLR0915
         spatial_scale=spatial_scale_dual_attn,
         spatial_shift=spatial_shift_dual_attn,
         parameters=parameters.dual_attn,
-        distributed=parameters.distributed,
+        parallel_config=parallel_config,
         num_heads=num_heads,
         N=N,
         L=L,
@@ -297,7 +310,7 @@ def sd_transformer_block(  # noqa: PLR0915
     spatial += sd_gated_ff_block(
         spatial_normed,
         parameters=parameters.spatial_ff,
-        distributed=parameters.distributed,
+        parallel_config=parallel_config,
         gate=spatial_gate_ff,
         scale=spatial_scale_ff,
         shift=spatial_shift_ff,
@@ -320,7 +333,7 @@ def sd_transformer_block(  # noqa: PLR0915
     prompt += sd_gated_ff_block(
         prompt_normed,
         parameters=parameters.prompt_ff,
-        distributed=parameters.distributed,
+        parallel_config=parallel_config,
         gate=prompt_gate_ff,
         scale=prompt_scale_ff,
         shift=prompt_shift_ff,

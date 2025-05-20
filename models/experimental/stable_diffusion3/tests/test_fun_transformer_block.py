@@ -12,6 +12,7 @@ import ttnn
 from ..reference import SD3Transformer2DModel
 from ..tt.fun_transformer_block import sd_transformer_block, TtTransformerBlockParameters
 from ..tt.utils import assert_quality, from_torch_fast
+from ..tt.parallel_config import create_dit_parallel_config, ParallelConfig
 
 if TYPE_CHECKING:
     from ..reference.transformer_block import TransformerBlock
@@ -46,6 +47,13 @@ def test_transformer_block(
     spatial_sequence_length: int,
     prompt_sequence_length: int,
 ) -> None:
+    mesh_shape = tuple(mesh_device.shape)
+    cfg_parallel = ParallelConfig(mesh_shape=mesh_shape, factor=1, mesh_axis=0)
+    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1], mesh_axis=1)
+    dit_parallel_config = create_dit_parallel_config(
+        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel
+    )
+
     mesh_device.enable_async(True)
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
@@ -80,6 +88,7 @@ def test_transformer_block(
         hidden_dim_padding=hidden_dim_padding,
         device=mesh_device,
         dtype=ttnn_dtype,
+        parallel_config=dit_parallel_config,
     )
 
     torch.manual_seed(0)
@@ -128,6 +137,7 @@ def test_transformer_block(
         prompt=tt_prompt,
         time_embed=tt_time,
         parameters=parameters,
+        parallel_config=dit_parallel_config,
         num_heads=num_heads,
         N=spatial_sequence_length,
         L=prompt_sequence_length,

@@ -12,6 +12,7 @@ import pytest
 import ttnn
 
 from .tt.fun_pipeline import TtStableDiffusion3Pipeline
+from .tt.parallel_config import create_dit_parallel_config, ParallelConfig
 
 
 @pytest.mark.parametrize(
@@ -37,7 +38,13 @@ from .tt.fun_pipeline import TtStableDiffusion3Pipeline
 def test_sd3(
     *, mesh_device: ttnn.MeshDevice, model_name, image_w, image_h, guidance_scale, num_inference_steps
 ) -> None:  # , prompt_sequence_length, spatial_sequence_length,) -> None:
-    breakpoint()
+    mesh_shape = tuple(mesh_device.shape)
+    cfg_parallel = ParallelConfig(mesh_shape=mesh_shape, factor=1, mesh_axis=0)
+    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1], mesh_axis=1)
+    dit_parallel_config = create_dit_parallel_config(
+        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel
+    )
+
     if guidance_scale > 1:
         guidance_cond = 2
     else:
@@ -48,6 +55,7 @@ def test_sd3(
         device=mesh_device,
         enable_t5_text_encoder=mesh_device.get_num_devices() >= 4,
         guidance_cond=guidance_cond,
+        parallel_config=dit_parallel_config,
     )
 
     pipeline.prepare(

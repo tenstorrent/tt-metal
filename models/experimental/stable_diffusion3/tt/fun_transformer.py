@@ -16,6 +16,7 @@ from .fun_normalization import sd_layer_norm, TtLayerNormParameters
 from .fun_patch_embedding import sd_patch_embed, TtPatchEmbedParameters
 from .fun_timestep_embedding import sd_combined_timestep_embed, TtCombinedTimestepTextProjEmbeddingsParameters
 from .fun_transformer_block import sd_transformer_block, TtTransformerBlockParameters, chunk_time
+from .parallel_config import DiTParallelConfig
 
 
 @dataclass
@@ -27,7 +28,6 @@ class TtSD3Transformer2DModelParameters:
     time_embed_out: TtLinearParameters
     norm_out: TtLayerNormParameters
     proj_out: TtLinearParameters
-    distributed: bool
 
     @classmethod
     def from_torch(
@@ -40,6 +40,7 @@ class TtSD3Transformer2DModelParameters:
         hidden_dim_padding: int,
         dtype: ttnn.DataType | None = None,
         device: ttnn.MeshDevice,
+        parallel_config: DiTParallelConfig,
         guidance_cond: int,
     ) -> TtSD3Transformer2DModelParameters:
         return cls(
@@ -48,6 +49,7 @@ class TtSD3Transformer2DModelParameters:
                 device=device,
                 hidden_dim_padding=hidden_dim_padding,
                 out_channels=embedding_dim,
+                parallel_config=parallel_config,
             ),
             time_text_embed=TtCombinedTimestepTextProjEmbeddingsParameters.from_torch(
                 substate(state, "time_text_embed"), dtype=dtype, device=device, guidance_cond=guidance_cond
@@ -63,6 +65,7 @@ class TtSD3Transformer2DModelParameters:
                     hidden_dim_padding=hidden_dim_padding,
                     dtype=dtype,
                     device=device,
+                    parallel_config=parallel_config,
                 )
                 for s in indexed_substates(state, "transformer_blocks")
             ],
@@ -75,7 +78,6 @@ class TtSD3Transformer2DModelParameters:
             proj_out=TtLinearParameters.from_torch(
                 substate(state, "proj_out"), dtype=dtype, device=device, shard_dim=None
             ),
-            distributed=device.get_num_devices() > 1,
         )
 
 
@@ -100,11 +102,12 @@ def sd_transformer(
     pooled_projection: ttnn.Tensor,
     timestep: ttnn.Tensor,
     parameters: TtSD3Transformer2DModelParameters,
+    parallel_config: DiTParallelConfig,
     num_heads: int,
     N: int,
     L: int,
 ) -> ttnn.Tensor:
-    spatial = sd_patch_embed(spatial, parameters.pos_embed)
+    spatial = sd_patch_embed(spatial, parameters.pos_embed, parallel_config=parallel_config)
     time_embed = sd_combined_timestep_embed(
         timestep=timestep, pooled_projection=pooled_projection, parameters=parameters.time_text_embed
     )
@@ -119,6 +122,7 @@ def sd_transformer(
             prompt=prompt,
             time_embed=time_embed,
             parameters=block,
+            parallel_config=parallel_config,
             num_heads=num_heads,
             N=N,  # spatial_sequence_length
             L=L,  # prompt_sequence_length
@@ -127,7 +131,7 @@ def sd_transformer(
             prompt = prompt_out
     spatial_time = sd_linear(ttnn.silu(time_embed), parameters.time_embed_out)
     [scale, shift] = chunk_time(spatial_time, 2)
-    if parameters.distributed:
+    if parallel_config.tensor_parallel.factor > 1:
         spatial = utils.all_gather(spatial, dim=-1)
     spatial = sd_layer_norm(spatial, parameters.norm_out) * (1 + scale) + shift
     return sd_linear(spatial, parameters.proj_out)

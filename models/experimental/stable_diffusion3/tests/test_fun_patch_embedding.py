@@ -13,6 +13,7 @@ import ttnn
 from ..reference import SD3Transformer2DModel
 from ..tt.fun_patch_embedding import sd_patch_embed, TtPatchEmbedParameters
 from ..tt.utils import assert_quality, to_torch
+from ..tt.parallel_config import create_dit_parallel_config, ParallelConfig
 
 if TYPE_CHECKING:
     from ..reference.patch_embedding import PatchEmbed
@@ -43,6 +44,12 @@ def test_patch_embedding(
     model_name,
     batch_size: int,
 ) -> None:
+    mesh_shape = tuple(mesh_device.shape)
+    cfg_parallel = ParallelConfig(mesh_shape=mesh_shape, factor=1, mesh_axis=0)
+    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1], mesh_axis=1)
+    dit_parallel_config = create_dit_parallel_config(
+        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel
+    )
     dtype = ttnn.bfloat16
 
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
@@ -67,7 +74,11 @@ def test_patch_embedding(
     torch_model.eval()
 
     parameters = TtPatchEmbedParameters.from_torch(
-        torch_model.state_dict(), device=mesh_device, hidden_dim_padding=hidden_dim_padding, out_channels=embedding_dim
+        torch_model.state_dict(),
+        device=mesh_device,
+        hidden_dim_padding=hidden_dim_padding,
+        out_channels=embedding_dim,
+        parallel_config=dit_parallel_config,
     )
 
     torch_input_tensor = torch.randn((batch_size, 16, 128, 128), dtype=torch.bfloat16)
@@ -82,7 +93,7 @@ def test_patch_embedding(
         dtype=dtype,
     )
 
-    tt_output = sd_patch_embed(tt_input_tensor, parameters)
+    tt_output = sd_patch_embed(tt_input_tensor, parameters, parallel_config=dit_parallel_config)
 
     tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=-1).squeeze(1)[
         :batch_size, :, :embedding_dim

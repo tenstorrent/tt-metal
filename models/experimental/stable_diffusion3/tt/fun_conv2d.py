@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import torch
 import ttnn
 
+from .parallel_config import DiTParallelConfig
 from .utils import from_torch_fast
 
 
@@ -29,7 +30,9 @@ class TtConv2dParameters:
         hidden_dim_padding: int,
         out_channels: int,
         device,
+        parallel_config: DiTParallelConfig,
     ) -> TtConv2dParameters:
+        # TODO: Use parallel_config
         weight = state["weight"]
         out_channels, in_c, kh, kw = weight.shape
         weight = torch.permute(weight, (2, 3, 1, 0))
@@ -69,7 +72,7 @@ class TtConv2dParameters:
         )
 
 
-def sd_conv2d(x: ttnn.Tensor, parameters: TtConv2dParameters) -> ttnn.Tensor:
+def sd_conv2d(x: ttnn.Tensor, parameters: TtConv2dParameters, parallel_config: DiTParallelConfig) -> ttnn.Tensor:
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         x.device().arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,

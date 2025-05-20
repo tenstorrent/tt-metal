@@ -14,6 +14,7 @@ import ttnn
 from .fun_conv2d import sd_conv2d, TtConv2dParameters
 from .substate import substate
 from .utils import from_torch_fast
+from .parallel_config import DiTParallelConfig
 
 
 @dataclass
@@ -27,6 +28,7 @@ class TtPatchEmbedParameters:
         state: dict[str, torch.Tensor],
         *,
         device: ttnn.Device,
+        parallel_config: DiTParallelConfig,
         hidden_dim_padding: int,
         out_channels: int,
     ) -> TtPatchEmbedParameters:
@@ -43,6 +45,7 @@ class TtPatchEmbedParameters:
                 hidden_dim_padding=hidden_dim_padding,
                 out_channels=out_channels,
                 device=device,
+                parallel_config=parallel_config,
             ),
             pos_embed=from_torch_fast(
                 pos_embed_param, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, shard_dim=-1
@@ -58,7 +61,9 @@ class TtPatchEmbedParameters:
         return self.proj.kernel_size[0]
 
 
-def sd_patch_embed(latent: ttnn.Tensor, parameters: TtPatchEmbedParameters) -> ttnn.Tensor:
+def sd_patch_embed(
+    latent: ttnn.Tensor, parameters: TtPatchEmbedParameters, parallel_config: DiTParallelConfig
+) -> ttnn.Tensor:
     def _cropped_pos_embed(height: int, width: int) -> ttnn.Tensor:
         top = (parameters.pos_embed_max_size - height) // 2
         left = (parameters.pos_embed_max_size - width) // 2
@@ -73,7 +78,7 @@ def sd_patch_embed(latent: ttnn.Tensor, parameters: TtPatchEmbedParameters) -> t
     out_height = in_height // parameters.patch_size
     out_width = in_width // parameters.patch_size
 
-    latent = sd_conv2d(latent, parameters.proj)
+    latent = sd_conv2d(latent, parameters.proj, parallel_config=parallel_config)
     latent = ttnn.reshape(latent, (batch_size_, out_height * out_width, -1))
     pos_embed = _cropped_pos_embed(out_height, out_width)
     return latent + pos_embed

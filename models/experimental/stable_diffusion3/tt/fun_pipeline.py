@@ -28,7 +28,13 @@ TILE_SIZE = 32
 
 class TtStableDiffusion3Pipeline:
     def __init__(
-        self, *, checkpoint: str, device: ttnn.MeshDevice, enable_t5_text_encoder: bool = True, guidance_cond: int
+        self,
+        *,
+        checkpoint: str,
+        device: ttnn.MeshDevice,
+        enable_t5_text_encoder: bool = True,
+        guidance_cond: int,
+        parallel_config: DiTParallelConfig,
     ) -> None:
         self._device = device
         device.enable_async(True)
@@ -87,8 +93,10 @@ class TtStableDiffusion3Pipeline:
             device=self._device,
             dtype=ttnn.bfloat8_b if device.get_num_devices() == 1 else ttnn.bfloat16,
             guidance_cond=guidance_cond,
+            parallel_config=parallel_config,
         )
 
+        self.parallel_config = parallel_config
         self.num_heads = num_heads
         self.patch_size = parameters.pos_embed.patch_size
         self.tt_transformer_parameters = parameters
@@ -407,6 +415,7 @@ class TtStableDiffusion3Pipeline:
             pooled_projection=pooled_prompt_embeds,
             timestep=timestep,
             parameters=self.tt_transformer_parameters,
+            parallel_config=self.parallel_config,
             num_heads=self.num_heads,
             N=spatial_sequence_length,
             L=prompt_sequence_length,
