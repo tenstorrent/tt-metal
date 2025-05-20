@@ -33,7 +33,6 @@ void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb
 
 namespace NAMESPACE {
 void MAIN {
-    DPRINT << "O" << ENDL();
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
     const uint32_t Ht = get_arg_val<uint32_t>(1);
     const uint32_t Wt = get_arg_val<uint32_t>(2);
@@ -41,9 +40,8 @@ void MAIN {
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
     const uint32_t cb_length_t = get_arg_val<uint32_t>(6);
-    DPRINT << "before init" << ENDL();
+
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
-    DPRINT << "after_init" << ENDL();
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -75,7 +73,7 @@ void MAIN {
     cb_wait_front(cb_fused_scale, 1);
 #endif
 
-    uint32_t num_cb_passes = 1 + ((Wt - 1) / cb_length_t);
+    uint32_t num_cb_passes = 1 + ((Wt - 1) / cb_length_t);  // ceiling divide
     DPRINT << "num_cb_passes: " << num_cb_passes << ENDL();
     DPRINT << "Wt: " << Wt << ENDL();
     DPRINT << "cb_length_t: " << cb_length_t << ENDL();
@@ -125,9 +123,9 @@ void MAIN {
             reconfig_data_format_srcb(cb_scaler);
             pack_reconfig_data_format(prev_pack_cb, cb_recipsumexps);
             unary_op_init_common(cb_exps, cb_recipsumexps);
-            // DPRINT << "------------1Got here before reduce ---------------" << ENDL();
+            DPRINT << "------------1Got here before reduce ---------------" << ENDL();
             reduce_cb(cb_exps, cb_scaler, cb_recipsumexps, use_prev_reduce, cb_length_t);
-            // DPRINT << "------------1Got here before reduce ---------------" << ENDL();
+            DPRINT << "------------1Got here before reduce ---------------" << ENDL();
             prev_srca_cb = cb_exps;
             prev_srcb_cb = cb_scaler;
             prev_pack_cb = cb_recipsumexps;
@@ -136,7 +134,7 @@ void MAIN {
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
             UNPACK(DPRINT << "END_cur_cb_length: " << cur_cb_length_t << ENDL());
         }
-        UNPACK(DPRINT << "END_cur_cb_length: " << cur_cb_length_t << ENDL());
+        UNPACK(DPRINT << "END FIRST: " << cur_cb_length_t << ENDL());
         // DPRINT << "------------Got here recip_sum ---------------" << ENDL();
         cb_wait_front(cb_recipsumexps, 1);
 
@@ -168,6 +166,7 @@ void MAIN {
         copy_tile_to_dst_init_short_with_dt(cb_recipsumexps, cb_in0);
         length_left_t = Wt;
         cur_cb_length_t = cb_length_t;
+        DPRINT << "Start Final COMPUTE: " << ENDL();
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             reconfig_data_format_srca(prev_srca_cb, cb_in0);
             pack_reconfig_data_format(prev_pack_cb, cb_exps);
@@ -182,6 +181,7 @@ void MAIN {
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
         }
         cb_pop_front(cb_recipsumexps, 1);
+        DPRINT << "DONE COMPUTE: " << ENDL();
     }
 }
 }  // namespace NAMESPACE
@@ -258,14 +258,15 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, const uint32_t cb_length_t, const u
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
     unary_op_init_common(cb_in, cb_out);
-    DPRINT << "blk: " << blk << ENDL();
-    DPRINT << "cb_length_t: " << cb_length_t << ENDL();
+    // DPRINT << "blk: " << blk << ENDL();
+    // DPRINT << "cb_length_t: " << cb_length_t << ENDL();
     uint32_t loop = 0;
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
-        DPRINT << "cur_blk: " << cur_blk << ENDL();
+        // DPRINT << "cur_blk: " << cur_blk << ENDL();
         uint32_t temp = (cur_blk < cb_length_t);
-        DPRINT << "cur_blk < cb_length_t " << temp << ENDL();
+        // DPRINT << "cur_blk < cb_length_t " << temp << ENDL();
         cb_wait_front(cb_in, blk);
+        cb_reserve_back(cb_out, blk);
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_in);  // need to copy from CB to DST to be able to run sfpu math
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
@@ -273,25 +274,28 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, const uint32_t cb_length_t, const u
             // fill_tile(cur_dst, 0);
         }
         cb_pop_front(cb_in, blk);
-        DPRINT << "Cur_loop" << cur_blk << ENDL();
-        DPRINT << "loop" << loop << ENDL();
+        // DPRINT << "Cur_loop" << cur_blk << ENDL();
+        // DPRINT << "loop" << loop << ENDL();
         exp_tile_init<false>();
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
-            DPRINT << "Exp_loop" << cur_dst << ENDL();
+            // DPRINT << "Exp_loop" << cur_dst << ENDL();
             // dprint_tensix_dest_reg(cur_dst);
             exp_tile<false>(cur_dst);  // exp on DST[0]
-            DPRINT << "Exp_loop" << cur_dst << ENDL();
+            // DPRINT << "Exp_loop" << cur_dst << ENDL();
         }
         tile_regs_wait();
         tile_regs_commit();
-        cb_reserve_back(cb_out, blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }
+        // DPRINT << "END LOOP ITER: " << loop << ENDL();
+        // DPRINT << "END cur_blk: " << cur_blk << ENDL();
+        // DPRINT << "END cb_length_t: " << cb_length_t << ENDL();
         cb_push_back(cb_out, blk);
         tile_regs_release();
         loop++;
     }
+    DPRINT << "leaving exp: " << loop << ENDL();
 }
 // void reduce_cb(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, bool use_prev_reduce, uint32_t cb_length_t) {
 //     // Requirements:
@@ -327,16 +331,13 @@ void reduce_cb(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, bool use_pre
     // Requirements:
     //   cb_length_t of cb_in and cb_out are the same.
     //   blk is a divisor of cb_length_t reconfig_data_format(cb_in, cb_scaler);
-    // DPRINT << "------------1Got here in reduce ---------------" << ENDL();
     pack_reconfig_data_format(cb_out);
     const uint32_t dst0 = 0;
     const uint32_t dst1 = 1;
+    cb_wait_front(cb_in, cb_length_t);
     tile_regs_acquire();
     tile_regs_wait();
     reduce_init_delta<true>(cb_in, cb_scaler, cb_out);
-    // DPRINT << "------------1Got here in reduce ---------------" << ENDL();
-    cb_wait_front(cb_in, cb_length_t);
-    // DPRINT << "------------1Got here in reduce ---------------" << ENDL();
     for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
         reduce_tile(cb_in, cb_scaler, cur_tile, 0, dst0);
         // UNPACK(tt::compute::common::print_full_tile(cb_in, dst0, true));
@@ -367,14 +368,14 @@ void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb
     mul_bcast_cols_init_short(cb_in, cb_recip);
     const uint32_t dst0 = 0;
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
+        cb_wait_front(cb_in, blk);
         tile_regs_acquire();
         tile_regs_wait();
-        cb_wait_front(cb_in, blk);
-        cb_reserve_back(cb_out, blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             mul_tiles_bcast_cols(cb_in, cb_recip, cur_dst, 0, cur_dst);
         }
         tile_regs_commit();
+        cb_reserve_back(cb_out, blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
         }

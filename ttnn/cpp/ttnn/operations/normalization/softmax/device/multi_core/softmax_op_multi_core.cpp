@@ -130,14 +130,19 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     uint32_t im3_t = block_size * (tt::div_up(Wt, block_size) + 1);
 
     uint32_t cb_length = in0_t;
-    if ((input_tensor.device()->l1_size_per_core() * 0.9) <
+    if ((120 * in0_tile_size) + (120 * im_tile_size) + (120 * im_tile_size) + (120 * im_tile_size) <
         (in0_t * in0_tile_size) + (im4_t * im_tile_size) + (im0_t * im_tile_size) + (im3_t * im_tile_size)) {
-        cb_length = block_size *
-                    tt::div_up((input_tensor.device()->l1_size_per_core() * 0.9) / ((4 * im_tile_size)), block_size);
-        in0_t = cb_length;
-        im4_t = cb_length;
-        im0_t = cb_length * 2;
-        im3_t = cb_length;
+        // cb_length = block_size *
+        //             tt::div_up((input_tensor.device()->l1_size_per_core() * 0.9) / ((4 * im_tile_size)), block_size);
+        // in0_t = cb_length;
+        // im4_t = cb_length;
+        // im0_t = cb_length * 2;
+        // im3_t = cb_length;
+        cb_length = 120;
+        in0_t = 120;
+        im4_t = 120;
+        im0_t = 120;
+        im3_t = 120;
     }
     TT_ASSERT(im3_t == Wt + block_size);
 
