@@ -47,6 +47,8 @@ void AllToAllAsync::validate_with_output_tensors(
         this->in_dim != this->out_dim,
         "AllToAllAsync: in_dim and out_dim must be different, but are both {}",
         this->in_dim);
+    TT_FATAL(input_tensor.get_padded_shape().size() == 4, "AllToAllAsync: input tensor must have 4 dimensions");
+
     TT_FATAL(
         input_tensor.get_padded_shape()[this->out_dim] % this->ring_size == 0,
         "AllToAllAsync: input tensor dimension {} must be divisible by ring_size {}",
@@ -77,6 +79,7 @@ void AllToAllAsync::validate_with_output_tensors(
         // For AllToAll, the shape of the *local* tensor shard should typically be the same.
         // Global logical shape also remains the same.
         auto output_shape = output_tensor.get_padded_shape();
+        TT_FATAL(output_shape.size() == 4, "AllToAllAsync: output tensor must have 4 dimensions");
         auto input_shape = input_tensor.get_padded_shape();
         input_shape[this->in_dim] *= this->ring_size;
         input_shape[this->out_dim] /= this->ring_size;
@@ -180,7 +183,6 @@ tt::tt_metal::operation::Hash AllToAllAsync::compute_program_hash(const std::vec
     auto input_memory_layout = input_tensor.get_layout();
     auto input_dtype = input_tensor.get_dtype();
     auto input_memory_config = input_tensor.memory_config();
-    uint32_t semaphore_address = this->semaphore.address();
 
     return tt::tt_metal::operation::hash_operation<AllToAllAsync>(
         this->in_dim,
@@ -192,8 +194,7 @@ tt::tt_metal::operation::Hash AllToAllAsync::compute_program_hash(const std::vec
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config,
-        semaphore_address);
+        input_memory_config);
 }
 
 namespace operations {
