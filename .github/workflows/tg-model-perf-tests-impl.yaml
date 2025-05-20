@@ -48,7 +48,7 @@ jobs:
             timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
-            owner_id: U044T8U8DEF # Johanna Rock
+            owner_id: U053W15B6JF # Djordje Ivanovic
           },
           {
             name: "Galaxy Llama 70B model dispatch perf tests",
@@ -57,7 +57,7 @@ jobs:
             timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
-            owner_id: U044T8U8DEF # Johanna Rock
+            owner_id: U053W15B6JF # Djordje Ivanovic
           },
           # { See GH Issue #22164
           #   name: "Llama Galaxy Perf Unit Tests",
