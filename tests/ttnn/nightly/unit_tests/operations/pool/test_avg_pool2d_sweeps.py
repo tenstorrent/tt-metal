@@ -41,6 +41,7 @@ parameters = {
         # [1, 32, 3, 3, 2, 2, 2, 2, 1, 1, False, False, None],
         # [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, False, False, None],
         # [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, True, False, None],
+        # [1, 512, 112, 32, 3, 3, 2, 2, 0, 0, True, False, None],
     ],
     "failing_parameters": [
         # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, ceil_mode, count_include_pad]
