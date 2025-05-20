@@ -9,7 +9,6 @@ from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_blackhole("Sort needs to be tested and is failing on BH. Issue #22146")
 @pytest.mark.parametrize(
     "shape, dim, descending",
     [
@@ -49,7 +48,6 @@ def test_sort_standard(shape, dim, descending, device):
         assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
-@skip_for_blackhole("Sort needs to be tested and is failing on BH. Issue #22146")
 @pytest.mark.parametrize(
     "shape, dim, descending",
     [

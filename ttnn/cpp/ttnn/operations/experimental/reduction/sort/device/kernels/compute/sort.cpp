@@ -134,19 +134,29 @@ void MAIN {
                         const uint32_t left_tile_id = i;
                         const uint32_t right_tile_id = j;
 
-                        acquire_dst();
+                        // Temporary solution - wait
+                        for (uint32_t i = 0; i < 100000; i++) {
+                            asm volatile("nop");
+                        }
 
+                        tile_regs_acquire();
+
+                        // copy_tile_to_dst_init_short(index_tensor_transposed_cb_index);
                         copy_tile_to_dst_init_short_with_dt(
                             index_tensor_transposed_cb_index, input_tensor_transposed_cb_index);
                         copy_tile(input_tensor_transposed_cb_index, left_tile_id, input_dest_start);
                         copy_tile(input_tensor_transposed_cb_index, right_tile_id, input_dest_end);
 
+                        // copy_tile_to_dst_init_short(input_tensor_transposed_cb_index);
                         copy_tile_to_dst_init_short_with_dt(
                             input_tensor_transposed_cb_index, index_tensor_transposed_cb_index);
                         copy_tile(index_tensor_transposed_cb_index, left_tile_id, index_dest_start);
                         copy_tile(index_tensor_transposed_cb_index, right_tile_id, index_dest_end);
 
                         ckernel::topk_local_sort(0, (int)dir, 5);
+
+                        tile_regs_commit();
+                        tile_regs_wait();
 
                         pack_reconfig_data_format(input_tensor_transposed_cb_index);
                         pack_tile<true>(input_dest_start, input_tensor_transposed_cb_index, left_tile_id);
@@ -156,7 +166,7 @@ void MAIN {
                         pack_tile<true>(index_dest_start, index_tensor_transposed_cb_index, left_tile_id);
                         pack_tile<true>(index_dest_end, index_tensor_transposed_cb_index, right_tile_id);
 
-                        release_dst();
+                        tile_regs_release();
                     }
                 }
             }
