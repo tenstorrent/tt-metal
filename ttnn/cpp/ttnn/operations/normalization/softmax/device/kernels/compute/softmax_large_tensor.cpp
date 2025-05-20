@@ -112,7 +112,7 @@ void MAIN {
             // #endif
             // print_count++;
 
-            UNPACK(DPRINT << "cur_cb_length: " << cur_cb_length_t << ENDL());
+            UNPACK(DPRINT << "cur_pass: " << cur_pass << ENDL());
             reconfig_data_format_srca(cb_in0);
             pack_reconfig_data_format(cb_exps);
             exp_cb(cb_in0, cb_exps, cur_cb_length_t, blk);
@@ -131,12 +131,9 @@ void MAIN {
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
         }
-        UNPACK(DPRINT << "END FIRST: " << cur_cb_length_t << ENDL());
-        // DPRINT << "------------Got here recip_sum ---------------" << ENDL();
         cb_wait_front(cb_recipsumexps, 1);
 
         reconfig_data_format_srca(prev_srca_cb, cb_recipsumexps);
-        // pack_reconfig_data_format(prev_pack_cb, cb_recipsumexps);
         tile_regs_acquire();
         tile_regs_wait();
 
@@ -266,6 +263,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, const uint32_t cb_length_t, const u
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_in);  // need to copy from CB to DST to be able to run sfpu math
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+            UNPACK(tt::compute::common::print_full_tile(cb_in, cur_dst, true));
             copy_tile(cb_in, cur_dst, cur_dst);
             // fill_tile(cur_dst, 0);
         }
