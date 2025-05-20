@@ -19,7 +19,9 @@ This directory contains **all integration and fault‑tolerance tests** for the 
 ## Building
 
 ```bash
-CMake uses external project to build mpi with ULFM. Make sure you don't use a system mpirun
+CMake uses debian file in repository https://github.com/dmakoviichuk-tt/mpi-ulfm/tags.
+It will be installed to the /opt/mpi-ulfm-v5.0.7 folder. Also symliln to the mpirun-ulfm will be created.
+Make sure you don't use a system mpirun.
 ```
 
 Targets created:
