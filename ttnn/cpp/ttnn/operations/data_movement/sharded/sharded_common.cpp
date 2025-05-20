@@ -42,7 +42,11 @@ compute_width_sharding_reshard_segments(
 
     using WidthShardingReshardSegmentForSingleCore = std::vector<WidthShardingReshardSegment>;
 
-    TT_FATAL(local_shard_height == remote_shard_height, "Unexpected mismatch in shard heights");
+    TT_FATAL(
+        local_shard_height == remote_shard_height,
+        "Unexpected mismatch in shard heights ({} != {}",
+        local_shard_height,
+        remote_shard_height);
 
     const uint32_t total_num_sticks = local_shard_height;
     const uint32_t local_stride_bytes = element_size * local_shard_width;
@@ -93,7 +97,9 @@ compute_width_sharding_reshard_segments(
 
     TT_FATAL(
         runtime_args_for_each_core.size() == num_local_shards,
-        "Expect to have one set of runtime args per local core");  // sanity check
+        "Expect to have one set of runtime args per local core (expected {} but was {})",
+        num_local_shards,
+        runtime_args_for_each_core.size());  // sanity check
 
     return {runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes};
 }

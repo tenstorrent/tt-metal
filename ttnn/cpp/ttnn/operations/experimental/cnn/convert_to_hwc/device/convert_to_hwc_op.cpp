@@ -19,7 +19,7 @@ void ConvertToHWC::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& C = shape[-2];
 
     TT_FATAL(shape.size() == 4, "Input shape must be rank 4 (was rank {})", shape.size());
-    TT_FATAL(shape[0] == 1 && shape[1] == 1, "Expected input tensor to be shape [1, 1, C, HW]");
+    TT_FATAL(shape[0] == 1 && shape[1] == 1, "Expected input tensor to be shape [1, 1, C, HW] (shape was {})", shape);
     TT_FATAL(C <= TILE_HEIGHT, "C must be less than or equal to 32 (was {})", C);
 
     TT_FATAL(input.layout() == ROW_MAJOR_LAYOUT, "Input tensor must be in row-major layout");
