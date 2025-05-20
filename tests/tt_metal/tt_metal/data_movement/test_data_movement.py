@@ -32,8 +32,14 @@ test_id_to_name = {
     12: "One to All Multicast Linked 2x2 Packet Sizes",
     13: "One to All Multicast Linked 5x5 Packet Sizes",
     14: "One to All Multicast Linked 11x10 Packet Sizes",
+<<<<<<< HEAD
     15: "One from All Packet Sizes",
     16: "Loopback Packet Sizes",
+=======
+    50: "One to One Directed Ideal",
+    51: "One from One Directed Ideal",
+    52: "One to All Directed Ideal",
+>>>>>>> 2ee4e0a425 (Adding test IDs for the directed ideal tests)
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
