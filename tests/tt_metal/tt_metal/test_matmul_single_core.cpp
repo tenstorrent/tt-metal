@@ -232,7 +232,7 @@ int main(int argc, char** argv) {
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
         auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
         auto result_untilized = untilize_swizzled(result_flat_layout, M * 32, N * 32);
-        
+
         // print_vec_of_bfloat16(result_bfp16, 16, "Result bfp16");
         // tt_metal::print_faces(unpack_uint32_vec_into_bfloat16_vec(activations_tile_transposed), "Activations tile transpose");
         // tt_metal::print_faces(unpack_uint32_vec_into_bfloat16_vec(weights), "Weights tile transposed");
