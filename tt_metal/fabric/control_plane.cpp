@@ -441,6 +441,27 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         this->validate_mesh_connections(5);
         this->validate_mesh_connections(6);
         this->validate_mesh_connections(7);
+    } else if (mesh_graph_desc_filename == "t3k_2x2_1x2_1x1_mesh_graph_descriptor.yaml") {
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({
+            this->get_physical_chip_id_from_eth_coord({0, 0, 0, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 1, 0, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 0, 1, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 1, 1, 0, 0}),
+        });
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({
+            this->get_physical_chip_id_from_eth_coord({0, 2, 0, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 3, 0, 0, 0}),
+        });
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({
+            this->get_physical_chip_id_from_eth_coord({0, 2, 1, 0, 0}),
+        });
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({
+            this->get_physical_chip_id_from_eth_coord({0, 3, 1, 0, 0}),
+        });
+        this->validate_mesh_connections(0);
+        this->validate_mesh_connections(1);
+        this->validate_mesh_connections(2);
+        this->validate_mesh_connections(3);
     } else if (
         mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml" ||
