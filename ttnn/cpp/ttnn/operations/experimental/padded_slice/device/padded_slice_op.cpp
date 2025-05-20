@@ -124,9 +124,6 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
         output_tensor_shape,
         output_tensor_shape);
     return {ttnn::TensorSpec(output_tensor_shape, tensor_layout)};
-
-    // tt::tt_metal::TensorLayout(
-    // input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), this->output_mem_config))};
 }
 
 operation::ProgramWithCallbacks PaddedSliceDeviceOperation::create_program(
