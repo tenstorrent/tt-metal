@@ -220,6 +220,37 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         }
     };
 
+    auto get_optimal_num_slots_for_dateline = [this, &get_optimal_num_slots](
+                                                  auto& ring_buffer_slot_options,
+                                                  auto& ring_buffer_slot_options_dateline,
+                                                  size_t num_used_sender_channels,
+                                                  size_t num_used_receiver_channels,
+                                                  size_t num_alive_sender_channels,
+                                                  size_t num_alive_receiver_channels,
+                                                  size_t& num_sender_buffer_slots,
+                                                  size_t& num_receiver_buffer_slots) {
+        // change the reveiver buffer slots for dateline, and keep the sender buffer slots the same as non-dateline,
+        // since the sender buffer slots should be kept the same across all edms
+        size_t non_dateline_num_sender_buffer_slots = 0;
+        size_t non_dateline_num_receiver_buffer_slots = 0;
+        size_t dateline_num_sender_buffer_slots = 0;
+        size_t dateline_num_receiver_buffer_slots = 0;
+        get_optimal_num_slots(
+            ring_buffer_slot_options,
+            num_used_sender_channels,
+            num_used_receiver_channels,
+            non_dateline_num_sender_buffer_slots,
+            non_dateline_num_receiver_buffer_slots);
+        get_optimal_num_slots(
+            ring_buffer_slot_options_dateline,
+            num_alive_sender_channels,
+            num_alive_receiver_channels,
+            dateline_num_sender_buffer_slots,
+            dateline_num_receiver_buffer_slots);
+        num_sender_buffer_slots = non_dateline_num_sender_buffer_slots;
+        num_receiver_buffer_slots = dateline_num_receiver_buffer_slots;
+    };
+
     auto num_alive_sender_channels = is_dateline ? this->num_used_sender_channels - 1 : this->num_used_sender_channels;
     auto num_alive_receiver_channels =
         is_dateline ? this->num_used_receiver_channels - 1 : this->num_used_receiver_channels;
@@ -228,22 +259,16 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     if (topology == Topology::Ring) {
         if (is_dateline) {
-            size_t temp1_num_sender_buffer_slots = 0;
-            size_t temp2_num_sender_buffer_slots = 0;
-            get_optimal_num_slots(
+            get_optimal_num_slots_for_dateline(
                 ring_buffer_slot_options,
+                ring_buffer_slot_options_dateline,
                 this->num_used_sender_channels,
                 this->num_used_receiver_channels,
-                temp1_num_sender_buffer_slots,
-                num_receiver_buffer_slots);
-            get_optimal_num_slots(
-                ring_buffer_slot_options_dateline,
                 num_alive_sender_channels,
                 num_alive_receiver_channels,
-                temp2_num_sender_buffer_slots,
+                num_sender_buffer_slots,
                 num_receiver_buffer_slots);
-            // use the normal sender buffer slots to not hang
-            num_sender_buffer_slots = temp1_num_sender_buffer_slots;
+
         } else {
             get_optimal_num_slots(
                 ring_buffer_slot_options,
@@ -270,12 +295,14 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         available_channel_buffering_space);
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+        // skip sender channel 2 for dateline edm and set the buffer size to 0
         bool skip_current_channel = (i == non_dateline_sender_channel_idx && is_dateline);
         this->sender_channels_num_buffers[i] = skip_current_channel ? 0 : num_sender_buffer_slots;
         this->sender_channels_size_bytes[i] =
             skip_current_channel ? 0 : channel_buffer_size_bytes * num_sender_buffer_slots;
     }
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+        // skip receiver channel 0 for dateline edm and set the buffer size to 0
         bool skip_current_channel = (i == non_dateline_receiver_channel_idx && is_dateline);
         this->receiver_channels_num_buffers[i] = skip_current_channel ? 0 : num_receiver_buffer_slots;
         this->receiver_channels_size_bytes[i] =
