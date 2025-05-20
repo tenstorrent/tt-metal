@@ -545,4 +545,9 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked11x10PacketSizes)
     }
 }
 
+/* ========== Test case for one to all multicast data movement; ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
+    // Parameters
+}
+
 }  // namespace tt::tt_metal
