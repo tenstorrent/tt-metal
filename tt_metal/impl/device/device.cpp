@@ -211,70 +211,19 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
     ZoneScoped;
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-    // Construct allocator config from soc_desc
-    // Take max alignment to satisfy NoC rd/wr constraints
-    // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
-    // PCIe/DRAM -> Tensix/Eth src and dst addrs must be DRAM_ALIGNMENT aligned
-    // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
-    const auto &logical_size = this->logical_grid_size();
-    const auto& compute_size = this->compute_with_storage_grid_size();
-    const auto& hal = MetalContext::instance().hal();
-    AllocatorConfig config(
-        {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
-         .dram_bank_size = soc_desc.dram_view_size,
-         .dram_bank_offsets = {},
-         .dram_unreserved_base =
-             hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
-         .dram_alignment = hal.get_alignment(HalMemType::DRAM),
-         .l1_unreserved_base = align(worker_l1_unreserved_start, hal.get_alignment(HalMemType::DRAM)),
-         .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
-         .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-         .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
-         .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
-         .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
-         .core_type_from_noc_coord_table = {},  // Populated later
-         .worker_log_to_virtual_routing_x =
-             tt::tt_metal::MetalContext::instance().get_cluster().get_worker_logical_to_virtual_x(this->id()),
-         .worker_log_to_virtual_routing_y =
-             tt::tt_metal::MetalContext::instance().get_cluster().get_worker_logical_to_virtual_y(this->id()),
-         .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
-         .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
-         .l1_alignment = hal.get_alignment(HalMemType::L1),
-         .disable_interleaved = false});
-    TT_FATAL(config.l1_small_size < (config.storage_core_bank_size.has_value() ? config.storage_core_bank_size.value() : config.worker_l1_size - config.l1_unreserved_base),
-            "Reserved size must be less than bank size");
-    TT_FATAL(
-        config.l1_small_size % config.l1_alignment == 0,
-        "Reserved size must be aligned to L1 allocator alignment {}",
-        config.l1_alignment);
-    // Initialize dram_offsets from soc_descriptor
-    for (auto channel = 0; channel < soc_desc.get_num_dram_views(); channel++) {
-        config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
-    }
-    // Initialize core_type_from_noc_coord_table table
-    for (const CoreCoord& core : soc_desc.get_all_cores(CoordSystem::PHYSICAL)) {
-        config.core_type_from_noc_coord_table.insert(
-            {this->virtual_core_from_physical_core({core.x, core.y}), AllocCoreType::Invalid});
-    }
-    for (const CoreCoord& core : soc_desc.get_all_harvested_cores(CoordSystem::PHYSICAL)) {
-        config.core_type_from_noc_coord_table.insert(
-            {this->virtual_core_from_physical_core({core.x, core.y}), AllocCoreType::Invalid});
-    }
+    auto config = L1BankingAllocator::generate_config(
+        this->id(),
+        this->num_hw_cqs(),
+        l1_small_size,
+        trace_region_size,
+        worker_l1_unreserved_start,
+        {l1_bank_remap.begin(), l1_bank_remap.end()});
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->compute_cores_.insert(core);
-        const auto noc_coord = this->worker_core_from_logical_core(core);
-        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
     for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->storage_only_cores_.insert(core);
-        const auto noc_coord = this->worker_core_from_logical_core(core);
-        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
-    }
-    for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_config)) {
-        const auto noc_coord = this->virtual_core_from_logical_core(core, dispatch_core_type);
-        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
     for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
         this->ethernet_cores_.insert({core.x, core.y});
