@@ -14,6 +14,9 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
+#include "ttnn/operations/eltwise/ternary/device/where_prim/where_device_operation.hpp"
+#include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
+
 namespace ttnn {
 namespace operations {
 namespace ternary {
@@ -24,6 +27,27 @@ namespace ternary_utils {
 // y = (predicate >= 0)*value_true + (predicate < 0)*value_false
 
 using FloatOrTensor = std::variant<Tensor, float>;
+
+template <FloatOrTensorConcept T, FloatOrTensorConcept U>
+Tensor where_impl_ng(
+    QueueId queue_id,
+    const Tensor& predicate,
+    const T& value_true,
+    const U& value_false,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    // TODO: missing const dtype
+    auto dtype = ttnn::DataType::BFLOAT16;
+    return ttnn::prim::where_impl(
+        queue_id,
+        TernaryOpType::WHERE,
+        predicate,
+        value_true,
+        value_false,
+        dtype,
+        output_mem_config,
+        std::move(output_tensor));
+}
 
 Tensor where_impl(
     QueueId queue_id,
@@ -108,7 +132,7 @@ Tensor WhereOperation::invoke(
     const float value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-    return ternary_utils::where_impl(
+    return ternary_utils::where_impl_ng(
         queue_id,
         predicate,
         value_true,

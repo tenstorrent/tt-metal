@@ -54,7 +54,7 @@ struct WhereOperation {
         const Tensor& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, output_tensor);
+        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, std::move(output_tensor));
     }
 
     static Tensor invoke(
@@ -63,7 +63,7 @@ struct WhereOperation {
         const Tensor& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, output_tensor);
+        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, std::move(output_tensor));
     }
 
     static Tensor invoke(
@@ -72,7 +72,7 @@ struct WhereOperation {
         const float value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, output_tensor);
+        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, std::move(output_tensor));
     }
 
     static Tensor invoke(
@@ -81,7 +81,7 @@ struct WhereOperation {
         const float value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, output_tensor);
+        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, std::move(output_tensor));
     }
 };
 
