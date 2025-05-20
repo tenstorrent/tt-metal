@@ -50,8 +50,8 @@ class TtResnetBlock2D(nn.Module):
 
         # DEVICE CODE: GroupNorm preparation
         if not self.gn_fallback:
-            core_y, self.norm_blocks_1 = get_DRAM_GN_config(module_path, 1)
-            self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=8)
+            core_x, core_y, self.norm_blocks_1 = get_DRAM_GN_config(module_path, 1)
+            self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=core_x)
 
             self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
                 device, self.norm_weights_1, self.norm_bias_1, self.norm_core_grid_1.y
@@ -60,8 +60,8 @@ class TtResnetBlock2D(nn.Module):
                 self.device, self.norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
             )
 
-            core_y, self.norm_blocks_2 = get_DRAM_GN_config(module_path, 2)
-            self.norm_core_grid_2 = ttnn.CoreGrid(y=core_y, x=8)
+            core_x, core_y, self.norm_blocks_2 = get_DRAM_GN_config(module_path, 2)
+            self.norm_core_grid_2 = ttnn.CoreGrid(y=core_y, x=core_x)
 
             self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
                 device, self.norm_weights_2, self.norm_bias_2, self.norm_core_grid_2.y
