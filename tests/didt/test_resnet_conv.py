@@ -169,6 +169,9 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
     # scale batch_size with num cores to keep sub_block dims
     batch_size = compute_with_storage_grid_size[0] * compute_with_storage_grid_size[1]
 
+    print("PRINTING THE DEVICE GRID")
+    print(mesh_device.compute_with_storage_grid_size())
+
     output_channels = 64
     input_channels = 16
     torch.manual_seed(0)
