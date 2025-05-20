@@ -12,7 +12,7 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
-#include "cpp/ttnn/operations/copy.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -450,42 +450,41 @@ Tensor ExecuteBinaryRemainder::invoke(
     return ttnn::unary_remainder(input, scalar);
 }
 
+Tensor run_fmod(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& division_result,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor result = ttnn::subtract(
+        input_a,
+        ttnn::multiply(division_result, input_b, std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+    return ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
+}
+
 // FMOD result = input − (other * trunc(input/other))
-// Binary FMOD will be overloaded by unary FMOD in another PR
+// When inputs are of data type BF16 and when input_b==0, expected is nan, but FMOD gives inf
 Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input_a.device()->arch();
-    TT_FATAL(
-        arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE, "Op is only supported on Wormhole or Blackhole");
-
     DataType input_dtype = input_a.get_dtype();
+    Tensor div_res = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
+    div_res = ttnn::trunc(div_res, output_mem_config);
     // No typecast for FP32 input
     if (input_dtype == DataType::FLOAT32 && input_b.get_dtype() == DataType::FLOAT32) {
-        Tensor div_res = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
-        div_res = ttnn::trunc(div_res, output_mem_config);
-        Tensor result = ttnn::subtract(
-            input_a,
-            ttnn::multiply(div_res, input_b, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config);
-        result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-        return result;
+        return run_fmod(input_a, input_b, div_res, output_mem_config);
     }
     // For bfloat16 with decimal values, need to typecast to FP32 to improve precision
     Tensor a = typecast(input_a, DataType::FLOAT32);
     Tensor b = typecast(input_b, DataType::FLOAT32);
-
-    Tensor div_res =
-        typecast(ttnn::div(input_a, input_b, true, "trunc", std::nullopt, output_mem_config), DataType::FLOAT32);
-    Tensor result =
-        ttnn::subtract(a, ttnn::multiply(div_res, b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-    return typecast(result, input_dtype);
+    div_res = typecast(div_res, DataType::FLOAT32);
+    return typecast(run_fmod(a, b, div_res, output_mem_config), input_dtype);
 }
 
 Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::unary_fmod(input, scalar);
+    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::FMOD>::invoke(
+        ttnn::DefaultQueueId, input, scalar, output_mem_config);
 }
 
 Tensor _floor_div_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {

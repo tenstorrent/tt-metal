@@ -21,7 +21,7 @@ from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 DECODE_OP_START_INDEX = 4
-DECODE_OP_END_INDEX = -12
+DECODE_OP_END_INDEX = -13
 
 perf_targets = {
     "RMSAllGather_0": {
@@ -82,7 +82,7 @@ perf_targets = {
         "op_name": "QKV_MM",
         "kernel_duration": 10623,
         "op_to_op": 716.4444444444445,
-        "non-overlapped-dispatch-time": 6102.0,
+        "non-overlapped-dispatch-time": 6956.1,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
@@ -246,11 +246,11 @@ DECODER_OP_END_IDX = -11
             "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             1,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos

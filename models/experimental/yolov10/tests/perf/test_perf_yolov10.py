@@ -9,12 +9,12 @@ import pytest
 from loguru import logger
 from ultralytics import YOLO
 from models.perf.perf_utils import prep_perf_report
-from models.demos.yolov10.reference.yolov10 import YOLOv10
-from models.demos.yolov10.tt.yolov10 import TtnnYolov10
+from models.experimental.yolov10.reference.yolov10 import YOLOv10
+from models.experimental.yolov10.tt.yolov10 import TtnnYolov10
 from models.utility_functions import run_for_wormhole_b0
 from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.demos.yolov10.tt.model_preprocessing import (
+from models.experimental.yolov10.tt.model_preprocessing import (
     create_yolov10x_input_tensors,
     create_yolov10x_model_parameters,
 )

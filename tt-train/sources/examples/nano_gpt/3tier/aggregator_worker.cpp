@@ -87,14 +87,14 @@ int main(int argc, char **argv) {
 
     fmt::println("Aggregator config setup finished");
 
-    auto steps_per_dataset = three_tier_arch::get_steps_per_dataset(config);
+    auto [steps_per_dataset, vocab_size] = three_tier_arch::get_steps_per_dataset_and_vocab_size(config);
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
 
-    auto &vocab_size = config.transformer_config.vocab_size;
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     auto should_be_divisible_by = (enable_tp ? num_devices : 1U) * 32U;
     vocab_size = three_tier_arch::round_up_to_tile(vocab_size, should_be_divisible_by);
+    config.transformer_config.vocab_size = vocab_size;
 
     auto create_model = [enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
         if (enable_tp) {

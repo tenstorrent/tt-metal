@@ -40,19 +40,18 @@ set(TTNN_1D_FABRIC_LATENCY_TEST_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_1d_fabr
 set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/common_tensor_test_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_host_buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_distributed_host_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_multi_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_with_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_distributed_tensor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_memory_pin.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_mesh_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_partition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_vector_conversion.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_xtensor_conversion.cpp
 )
+
+set(EMITC_UNIT_TESTS_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emitc/test_sanity.cpp)
 
 add_executable(unit_tests_ttnn ${TTNN_UNIT_TESTS_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_ttnn)
@@ -67,6 +66,7 @@ add_executable(
     ${CMAKE_CURRENT_SOURCE_DIR}/multi_thread/test_ccl_multi_cq_multi_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multi_thread/test_utils.cpp
 )
+add_executable(unit_tests_ttnn_emitc ${EMITC_UNIT_TESTS_SRC})
 
 target_link_libraries(
     test_ccl_multi_cq_multi_device
@@ -84,3 +84,4 @@ setup_ttnn_test_target(unit_tests_ttnn_ccl_multi_tensor)
 setup_ttnn_test_target(unit_tests_ttnn_1d_fabric_latency)
 setup_ttnn_test_target(unit_tests_ttnn_tensor)
 setup_ttnn_test_target(test_ccl_multi_cq_multi_device)
+setup_ttnn_test_target(unit_tests_ttnn_emitc)

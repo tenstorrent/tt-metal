@@ -56,6 +56,8 @@ public:
 
     stl::Span<const chip_id_t> get_intra_chip_neighbors(
         mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const;
+    std::unordered_map<mesh_id_t, std::vector<chip_id_t>> get_chip_neighbors(
+        mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const;
 
     routing_plane_id_t get_routing_plane_id(chan_id_t eth_chan_id) const;
 

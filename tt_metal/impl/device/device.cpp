@@ -167,173 +167,6 @@ uint32_t Device::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId
     return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).num_cores(core_type);
 }
 
-/* Get all dispatch cores associated with this device. On return, my_dispatch_cores contains dispatch cores used by
- * this device (split between cores on this device itself and if this is a remote device, the mmio device dispatch
- * cores being used by this device). On return, other_dispatch_cores contains dispatch cores on this device that are
- * used by other (remote) devices.
-*/
-void Device::get_associated_dispatch_virtual_cores(
-    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,
-    std::unordered_map<chip_id_t,std::unordered_set<CoreCoord>> &other_dispatch_cores) {
-    if (this->is_mmio_capable()) {
-        for (const chip_id_t& device_id :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(this->id_)) {
-            uint8_t num_hw_cqs = this->num_hw_cqs();
-            uint16_t curr_channel =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-            CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-            for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                if (device_id == this->id_) {
-                    //mmio device.
-                    bool dispatch_hd_allocated = false;
-                    CoreCoord virtual_core_dispatch_hd;
-                    if (MetalContext::instance().get_dispatch_core_manager().is_dispatcher_core_allocated(
-                            device_id, curr_channel, cq_id)) {
-                        tt_cxy_pair dispatch_location =
-                            MetalContext::instance().get_dispatch_core_manager().dispatcher_core(
-                                device_id, curr_channel, cq_id);
-                        virtual_core_dispatch_hd = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
-                        my_dispatch_cores[this->id_].insert(virtual_core_dispatch_hd);
-                        dispatch_hd_allocated = true;
-                        log_debug(tt::LogMetal, "MMIO Device Dispatch core: Logical: {} - Physical: {}", dispatch_location.str(), virtual_core_dispatch_hd.str());
-                    }
-                    // Include dispatch_s in the dispatch core location set, if its not on the same core as dispatch_hd
-                    if (MetalContext::instance().get_dispatch_core_manager().is_dispatcher_s_core_allocated(
-                            device_id, curr_channel, cq_id)) {
-                        tt_cxy_pair dispatch_s_location =
-                            MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(
-                                device_id, curr_channel, cq_id);
-                        CoreCoord virtual_core_dispatch_s = this->virtual_core_from_logical_core(dispatch_s_location, dispatch_core_type);
-                        if ((!dispatch_hd_allocated) or (virtual_core_dispatch_s != virtual_core_dispatch_hd)) {
-                            my_dispatch_cores[dispatch_s_location.chip].insert(virtual_core_dispatch_s);
-                        }
-                    }
-                    if (MetalContext::instance().get_dispatch_core_manager().is_prefetcher_core_allocated(
-                            device_id, curr_channel, cq_id)) {
-                        tt_cxy_pair prefetch_location =
-                            MetalContext::instance().get_dispatch_core_manager().prefetcher_core(
-                                device_id, curr_channel, cq_id);
-                        CoreCoord virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
-                        my_dispatch_cores[this->id_].insert(virtual_core);
-                        log_debug(tt::LogMetal, "MMIO Device Prefetch core: Logical: {} - Physical: {}", prefetch_location.str(), virtual_core.str());
-                    }
-                } else if (tt::DevicePool::instance().is_device_active(device_id)) {
-                    //non mmio devices serviced by this mmio capable device.
-                    //skip remote dispatch cores only if respective remote device is active.
-                    if (MetalContext::instance().get_dispatch_core_manager().is_dispatcher_core_allocated(
-                            device_id, curr_channel, cq_id)) {
-                        tt_cxy_pair dispatch_location =
-                            MetalContext::instance().get_dispatch_core_manager().dispatcher_core(
-                                device_id, curr_channel, cq_id);
-                        CoreCoord virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(virtual_core);
-                        log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will keep running on MMIO Device.", dispatch_location.str(), virtual_core.str());
-                    }
-                    if (MetalContext::instance().get_dispatch_core_manager().is_prefetcher_core_allocated(
-                            device_id, curr_channel, cq_id)) {
-                        tt_cxy_pair prefetch_location =
-                            MetalContext::instance().get_dispatch_core_manager().prefetcher_core(
-                                device_id, curr_channel, cq_id);
-                        CoreCoord virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(virtual_core);
-                        log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will keep running on MMIO Device.", prefetch_location.str(), virtual_core.str());
-                    }
-                    if (MetalContext::instance().get_dispatch_core_manager().is_mux_core_allocated(
-                            device_id, curr_channel, cq_id)) {
-                        tt_cxy_pair mux_location = MetalContext::instance().get_dispatch_core_manager().mux_core(
-                            device_id, curr_channel, cq_id);
-                        CoreCoord virtual_core = this->virtual_core_from_logical_core(mux_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(virtual_core);
-                        log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will keep running on MMIO Device.", mux_location.str(), virtual_core.str());
-                    }
-                    if (MetalContext::instance().get_dispatch_core_manager().is_demux_core_allocated(
-                            device_id, curr_channel, cq_id)) {
-                        tt_cxy_pair demux_location = MetalContext::instance().get_dispatch_core_manager().demux_core(
-                            device_id, curr_channel, cq_id);
-                        CoreCoord virtual_core = this->virtual_core_from_logical_core(demux_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(virtual_core);
-                        log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will keep running on MMIO Device.", demux_location.str(), virtual_core.str());
-                    }
-                }
-            }
-        }
-    } else {
-        //remote device that is active
-        uint8_t num_hw_cqs = this->num_hw_cqs();
-        auto device_id = this->id_;
-        uint16_t curr_channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-        CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            if (MetalContext::instance().get_dispatch_core_manager().is_dispatcher_core_allocated(
-                    device_id, curr_channel, cq_id)) {
-                tt_cxy_pair dispatch_location = MetalContext::instance().get_dispatch_core_manager().dispatcher_core(
-                    device_id, curr_channel, cq_id);
-                CoreCoord virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
-                log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will be reset on MMIO Device.", dispatch_location.str(), virtual_core.str());
-            }
-            if (MetalContext::instance().get_dispatch_core_manager().is_prefetcher_core_allocated(
-                    device_id, curr_channel, cq_id)) {
-                tt_cxy_pair prefetch_location = MetalContext::instance().get_dispatch_core_manager().prefetcher_core(
-                    device_id, curr_channel, cq_id);
-                CoreCoord virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
-                my_dispatch_cores[prefetch_location.chip].insert(virtual_core);
-                log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will be reset on MMIO Device.", prefetch_location.str(), virtual_core.str());
-            }
-            if (MetalContext::instance().get_dispatch_core_manager().is_mux_core_allocated(
-                    device_id, curr_channel, cq_id)) {
-                tt_cxy_pair mux_location =
-                    MetalContext::instance().get_dispatch_core_manager().mux_core(device_id, curr_channel, cq_id);
-                CoreCoord virtual_core = this->virtual_core_from_logical_core(mux_location, dispatch_core_type);
-                my_dispatch_cores[mux_location.chip].insert(virtual_core);
-                log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will be reset on MMIO Device.", mux_location.str(), virtual_core.str());
-            }
-            if (MetalContext::instance().get_dispatch_core_manager().is_demux_core_allocated(
-                    device_id, curr_channel, cq_id)) {
-                tt_cxy_pair demux_location =
-                    MetalContext::instance().get_dispatch_core_manager().demux_core(device_id, curr_channel, cq_id);
-                CoreCoord virtual_core = this->virtual_core_from_logical_core(demux_location, dispatch_core_type);
-                my_dispatch_cores[demux_location.chip].insert(virtual_core);
-                log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will be reset on MMIO Device.", demux_location.str(), virtual_core.str());
-            }
-        }
-        CoreCoord virtual_core;
-        tt_cxy_pair mux_location =
-            MetalContext::instance().get_dispatch_core_manager().mux_d_core(device_id, curr_channel, 0);
-        virtual_core = this->virtual_core_from_logical_core(mux_location, dispatch_core_type);
-        my_dispatch_cores[mux_location.chip].insert(virtual_core);
-        tt_cxy_pair demux_location =
-            MetalContext::instance().get_dispatch_core_manager().demux_d_core(device_id, curr_channel, 0);
-        virtual_core = this->virtual_core_from_logical_core(demux_location, dispatch_core_type);
-        my_dispatch_cores[demux_location.chip].insert(virtual_core);
-        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            tt_cxy_pair prefetch_location =
-                MetalContext::instance().get_dispatch_core_manager().prefetcher_d_core(device_id, curr_channel, cq_id);
-            virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
-            my_dispatch_cores[prefetch_location.chip].insert(virtual_core);
-        }
-        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            tt_cxy_pair dispatch_location =
-                MetalContext::instance().get_dispatch_core_manager().dispatcher_d_core(device_id, curr_channel, cq_id);
-            virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
-            my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
-        }
-        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            // Include dispatch_s in the dispatch core location set, if its not on the same core as dispatch_d
-            tt_cxy_pair dispatch_location =
-                MetalContext::instance().get_dispatch_core_manager().dispatcher_d_core(device_id, curr_channel, cq_id);
-            virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
-            tt_cxy_pair dispatch_s_location =
-                MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_id, curr_channel, cq_id);
-            CoreCoord virtual_core_dispatch_s = this->virtual_core_from_logical_core(dispatch_s_location, dispatch_core_type);
-            if (virtual_core_dispatch_s != virtual_core) {
-                my_dispatch_cores[dispatch_s_location.chip].insert(virtual_core_dispatch_s);
-            }
-        }
-    }
-}
-
 void Device::initialize_cluster() {
     ZoneScoped;
     if (tt_metal::MetalContext::instance().rtoptions().get_clear_l1()) {
@@ -657,76 +490,66 @@ void Device::reset_cores() {
         return (data[0] != 0);
     };
 
+    auto get_active_erisc_launch_flag_addr = [&]() {
+        auto core_type_idx =
+            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        std::uint32_t launch_erisc_addr =
+            tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
+        return launch_erisc_addr;
+    };
+
+    // Send exit_erisc_kernel to the launch message
+    auto erisc_send_exit_signal = [&](CoreCoord virtual_core, bool is_idle_eth) {
+        go_msg_t go_msg;
+        std::memset(&go_msg, 0, sizeof(go_msg_t));
+        log_info(
+            tt::LogMetal,
+            "While initializing device {}, {} ethernet dispatch core {} detected as still "
+            "running, issuing exit signal.",
+            this->id(),
+            is_idle_eth ? "idle" : "active",
+            virtual_core.str());
+
+        DeviceAddr launch_addr = hal.get_dev_addr(
+            is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
+            HalL1MemAddrType::LAUNCH);
+
+        std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+        data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
+
+        launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
+        launch_msg->kernel_config.exit_erisc_kernel = 1;
+        llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
+
+        if (!is_idle_eth) {
+            // Active
+            std::vector<uint32_t> clear_flag_data = {0};
+            tt::llrt::write_hex_vec_to_core(
+                this->id(), virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
+        }
+    };
+
     auto mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->id_);
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
-    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores, other_dispatch_cores, device_to_early_exit_cores;
-    go_msg_t go_msg;
-    std::memset(&go_msg, 0, sizeof(go_msg_t));
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
+
+    // Active ethernet
     if (hal.get_eth_fw_is_cooperative()) {
         for (const auto& eth_core : this->get_active_ethernet_cores()) {
             CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
             if (erisc_app_still_running(virtual_core)) {
-                std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-                DeviceAddr launch_addr =
-                    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
-
-                data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
-                launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
-                log_info(
-                    tt::LogMetal,
-                    "While initializing Device {}, active ethernet core {} on Device {} detected as still running, "
-                    "issuing exit signal.",
-                    this->id(),
-                    virtual_core.str(),
-                    this->id());
-                launch_msg->kernel_config.exit_erisc_kernel = 1;
-                llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
+                erisc_send_exit_signal(virtual_core, false /* is_idle_eth */);
                 device_to_early_exit_cores[this->id()].insert(virtual_core);
-
-                // Clear launch erisc flag
-                auto core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-                std::uint32_t launch_erisc_addr = tt::tt_metal::MetalContext::instance()
-                                                      .hal()
-                                                      .get_jit_build_config(core_type_idx, 0, 0)
-                                                      .fw_launch_addr;
-                std::vector<uint32_t> clear_flag_data = {0};
-                tt::llrt::write_hex_vec_to_core(this->id(), virtual_core, clear_flag_data, launch_erisc_addr);
             }
         }
     }
 
-    this->get_associated_dispatch_virtual_cores(dispatch_cores, other_dispatch_cores);
-    // Ignore other_dispatch_cores, they will be reset by the devices that use them.
-    for (auto &id_and_cores : dispatch_cores) {
-        for (auto it = id_and_cores.second.begin(); it != id_and_cores.second.end(); it++) {
-            const auto &virtual_core = *it;
-            // For new FD init, we've already initialized dispatch cores on other devices, so don't reset here.
-            if (id_and_cores.first != this->id())
-                continue;
-
-            // Only need to manually reset ethernet dispatch cores, tensix cores are all reset below.
-            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(
-                    virtual_core, id_and_cores.first)) {
-                // Ethernet cores won't be reset, so just signal the dispatch cores to early exit.
-                if (erisc_app_still_running(virtual_core)) {
-                    log_info(
-                        tt::LogMetal,
-                        "While initializing device {}, idle ethernet dispatch core {} on Device {} detected as still "
-                        "running, issuing exit signal.",
-                        this->id(),
-                        virtual_core.str(),
-                        id_and_cores.first);
-                    std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-                    DeviceAddr launch_addr =
-                        hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::LAUNCH);
-                    data = tt::llrt::read_hex_vec_from_core(
-                        id_and_cores.first, virtual_core, launch_addr, sizeof(launch_msg_t));
-                    launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
-                    launch_msg->kernel_config.exit_erisc_kernel = 1;
-                    llrt::write_launch_msg_to_core(id_and_cores.first, virtual_core, launch_msg, &go_msg, launch_addr, false);
-                    device_to_early_exit_cores[id_and_cores.first].insert(virtual_core);
-                }
-            }
+    // Idle ethernet
+    for (const auto& eth_core : this->get_inactive_ethernet_cores()) {
+        CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
+        if (erisc_app_still_running(virtual_core)) {
+            tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
+                tt_cxy_pair(this->id(), virtual_core));
         }
     }
 
@@ -751,13 +574,9 @@ void Device::reset_cores() {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
-
-            // Don't reset dispatch cores for other devices, in case they're still running.
-            if (other_dispatch_cores[this->id_].find(worker_core) == other_dispatch_cores[this->id_].end()) {
-                if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
-                    tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
-                        tt_cxy_pair(this->id(), worker_core));
-                }
+            if (!this->storage_only_cores_.contains(logical_core)) {
+                tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
+                    tt_cxy_pair(this->id(), worker_core));
             }
         }
     }
@@ -1173,7 +992,6 @@ void Device::init_command_queue_device() {
             sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices(),
             sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data());
     }
-    dispatch_firmware_active_ = true;
 }
 
 void Device::init_fabric() {
@@ -1272,15 +1090,6 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
-    for (const auto& hw_command_queue : command_queues_) {
-        if (hw_command_queue->sysmem_manager().get_bypass_mode()) {
-            hw_command_queue->record_end();
-        }
-        hw_command_queue->terminate();
-    }
-
-    dispatch_firmware_active_ = false;
-
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     this->disable_and_clear_program_cache();
@@ -1288,27 +1097,21 @@ bool Device::close() {
 
     sub_device_manager_tracker_.reset(nullptr);
 
-    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> not_done_dispatch_cores;
-    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> cores_to_skip;
-    this->get_associated_dispatch_virtual_cores(not_done_dispatch_cores, cores_to_skip);
-
-    auto mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->id_);
-    std::unordered_set<CoreCoord> wait_for_cores = not_done_dispatch_cores[mmio_device_id];
-
-    llrt::internal_::wait_until_cores_done(mmio_device_id, RUN_MSG_GO, wait_for_cores);
-
     DprintServerDetach(this->id());
     watcher_detach(this->id());
 
-    // Assert worker cores
+    // Assert worker cores only for this device
+    auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(this->id());
+    auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(this->id());
+
     CoreCoord grid_size = this->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
-            if (cores_to_skip[mmio_device_id].find(worker_core) == cores_to_skip[mmio_device_id].end()) {
-                if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
+            if (!dispatch_cores.contains(worker_core) && !routing_cores.contains(worker_core)) {
+                if (!this->storage_only_cores_.contains(logical_core)) {
                     tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                         tt_cxy_pair(this->id(), worker_core));
                 }
@@ -1327,19 +1130,6 @@ bool Device::close() {
                     ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                 tt_cxy_pair(this->id(), virtual_eth_core), reset_val);
-        }
-    }
-
-    if (this->id_ != mmio_device_id) {
-        for (auto it = not_done_dispatch_cores[mmio_device_id].begin(); it != not_done_dispatch_cores[mmio_device_id].end(); it++) {
-            const auto &virtual_core = *it;
-            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id_)) {
-                log_debug(tt::LogMetal, "Ethernet dispatch core {} on Device {} is idle. Closing Device {}", virtual_core.str(), mmio_device_id, this->id());
-            } else {
-                log_debug(tt::LogMetal, "Resetting core {} on Device {} when closing Device {}", virtual_core.str(), mmio_device_id, this->id());
-                tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
-                    tt_cxy_pair(mmio_device_id, virtual_core));
-            }
         }
     }
 
