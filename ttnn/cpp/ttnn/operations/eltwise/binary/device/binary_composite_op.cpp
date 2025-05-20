@@ -241,7 +241,14 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    const auto has_legacy_only_args = round_mode.has_value() or accurate_mode;
+    if (not(use_legacy ? *use_legacy
+                       : has_legacy_only_args or
+                             binary::is_legacy_only(
+                                 input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
+        TT_FATAL(
+            not has_legacy_only_args,
+            "round_mode, accurate_mode are not valid when passing use_legacy parameter in div");
         return BinaryOperation<BinaryOpType::DIV>::invoke(
             queue_id,
             input,
@@ -281,9 +288,14 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    const auto has_legacy_only_args = round_mode.has_value() or accurate_mode;
+    if (not(use_legacy
+                ? *use_legacy
+                : has_legacy_only_args or
+                      binary::is_legacy_only(
+                          input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
         TT_FATAL(
-            (!round_mode.has_value() && !accurate_mode),
+            not has_legacy_only_args,
             "round_mode, accurate_mode are not valid when passing use_legacy parameter in div");
         return BinaryOperation<BinaryOpType::DIV>::invoke(
             queue_id,
@@ -324,37 +336,37 @@ Tensor ExecuteDiv::invoke(
             output_tensor);
     }
 
-        if (round_mode == "trunc") {
-            result = ttnn::trunc(queue_id, result, output_mem_config, output_tensor);
-        } else if (round_mode == "floor") {
-            result = ttnn::floor(queue_id, result, output_mem_config, output_tensor);
-        }
+    if (round_mode == "trunc") {
+        result = ttnn::trunc(queue_id, result, output_mem_config, output_tensor);
+    } else if (round_mode == "floor") {
+        result = ttnn::floor(queue_id, result, output_mem_config, output_tensor);
+    }
 
-        if (is_fp32) {
-            return result;
-        }
+    if (is_fp32) {
+        return result;
+    }
 
-        // Accurate mode: handle division by zero (inf/nan cases)
-        if (accurate_mode) {
-            float t_nan = std::nanf("");
-            float t_inf = std::numeric_limits<float>::infinity();
-            result = where(
+    // Accurate mode: handle division by zero (inf/nan cases)
+    if (accurate_mode) {
+        float t_nan = std::nanf("");
+        float t_inf = std::numeric_limits<float>::infinity();
+        result = where(
+            queue_id,
+            ttnn::eqz(queue_id, input_b, output_mem_config),
+            ttnn::where(
                 queue_id,
-                ttnn::eqz(queue_id, input_b, output_mem_config),
-                ttnn::where(
+                ttnn::eqz(queue_id, input_a, output_mem_config),
+                t_nan,
+                ttnn::multiply(
                     queue_id,
-                    ttnn::eqz(queue_id, input_a, output_mem_config),
-                    t_nan,
-                    ttnn::multiply(
-                        queue_id,
-                        ttnn::sign(queue_id, input_a, output_mem_config),
-                        t_inf,
-                        std::nullopt,
-                        output_mem_config)),
-                result);
-        }
+                    ttnn::sign(queue_id, input_a, output_mem_config),
+                    t_inf,
+                    std::nullopt,
+                    output_mem_config)),
+            result);
+    }
 
-        return typecast(queue_id, result, input_dtype, std::nullopt, output_tensor);
+    return typecast(queue_id, result, input_dtype, std::nullopt, output_tensor);
 }
 
 Tensor _div_no_nan_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
@@ -450,42 +462,41 @@ Tensor ExecuteBinaryRemainder::invoke(
     return ttnn::unary_remainder(input, scalar);
 }
 
+Tensor run_fmod(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& division_result,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor result = ttnn::subtract(
+        input_a,
+        ttnn::multiply(division_result, input_b, std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+    return ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
+}
+
 // FMOD result = input − (other * trunc(input/other))
-// Binary FMOD will be overloaded by unary FMOD in another PR
+// When inputs are of data type BF16 and when input_b==0, expected is nan, but FMOD gives inf
 Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input_a.device()->arch();
-    TT_FATAL(
-        arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE, "Op is only supported on Wormhole or Blackhole");
-
     DataType input_dtype = input_a.get_dtype();
+    Tensor div_res = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
+    div_res = ttnn::trunc(div_res, output_mem_config);
     // No typecast for FP32 input
     if (input_dtype == DataType::FLOAT32 && input_b.get_dtype() == DataType::FLOAT32) {
-        Tensor div_res = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
-        div_res = ttnn::trunc(div_res, output_mem_config);
-        Tensor result = ttnn::subtract(
-            input_a,
-            ttnn::multiply(div_res, input_b, std::nullopt, output_mem_config),
-            std::nullopt,
-            output_mem_config);
-        result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-        return result;
+        return run_fmod(input_a, input_b, div_res, output_mem_config);
     }
     // For bfloat16 with decimal values, need to typecast to FP32 to improve precision
     Tensor a = typecast(input_a, DataType::FLOAT32);
     Tensor b = typecast(input_b, DataType::FLOAT32);
-
-    Tensor div_res =
-        typecast(ttnn::div(input_a, input_b, true, "trunc", std::nullopt, output_mem_config), DataType::FLOAT32);
-    Tensor result =
-        ttnn::subtract(a, ttnn::multiply(div_res, b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-    return typecast(result, input_dtype);
+    div_res = typecast(div_res, DataType::FLOAT32);
+    return typecast(run_fmod(a, b, div_res, output_mem_config), input_dtype);
 }
 
 Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::unary_fmod(input, scalar);
+    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::FMOD>::invoke(
+        ttnn::DefaultQueueId, input, scalar, output_mem_config);
 }
 
 Tensor _floor_div_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
@@ -756,7 +767,14 @@ Tensor ExecuteRsub::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    if (not(use_legacy ? *use_legacy
+                       : binary::is_legacy_only(
+                             input_tensor_a,
+                             input_b,
+                             memory_config,
+                             optional_output_tensor,
+                             lhs_activations,
+                             rhs_activations))) {
         return BinaryOperation<operations::binary::BinaryOpType::RSUB>::invoke(
             queue_id,
             input_tensor_a,
@@ -785,7 +803,14 @@ Tensor ExecuteBitwiseAnd::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    if (not(use_legacy ? *use_legacy
+                       : binary::is_legacy_only(
+                             input_tensor_a,
+                             input_tensor_b,
+                             memory_config,
+                             optional_output_tensor,
+                             lhs_activations,
+                             rhs_activations))) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
             queue_id,
             input_tensor_a,
@@ -822,7 +847,14 @@ Tensor ExecuteBitwiseAnd::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    if (not(use_legacy ? *use_legacy
+                       : binary::is_legacy_only(
+                             input_tensor_a,
+                             input_b,
+                             memory_config,
+                             optional_output_tensor,
+                             lhs_activations,
+                             rhs_activations))) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
             queue_id,
             input_tensor_a,
@@ -852,7 +884,14 @@ Tensor ExecuteBitwiseOr::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    if (not(use_legacy ? *use_legacy
+                       : binary::is_legacy_only(
+                             input_tensor_a,
+                             input_tensor_b,
+                             memory_config,
+                             optional_output_tensor,
+                             lhs_activations,
+                             rhs_activations))) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_OR>::invoke(
             queue_id,
             input_tensor_a,
@@ -880,7 +919,14 @@ Tensor ExecuteBitwiseOr::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    if (not(use_legacy ? *use_legacy
+                       : binary::is_legacy_only(
+                             input_tensor_a,
+                             input_b,
+                             memory_config,
+                             optional_output_tensor,
+                             lhs_activations,
+                             rhs_activations))) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_OR>::invoke(
             queue_id,
             input_tensor_a,
@@ -910,7 +956,14 @@ Tensor ExecuteBitwiseXor::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    if (not(use_legacy ? *use_legacy
+                       : binary::is_legacy_only(
+                             input_tensor_a,
+                             input_tensor_b,
+                             memory_config,
+                             optional_output_tensor,
+                             lhs_activations,
+                             rhs_activations))) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_XOR>::invoke(
             queue_id,
             input_tensor_a,
@@ -938,7 +991,14 @@ Tensor ExecuteBitwiseXor::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    if (not(use_legacy ? *use_legacy
+                       : binary::is_legacy_only(
+                             input_tensor_a,
+                             input_b,
+                             memory_config,
+                             optional_output_tensor,
+                             lhs_activations,
+                             rhs_activations))) {
         return BinaryOperation<operations::binary::BinaryOpType::BITWISE_XOR>::invoke(
             queue_id,
             input_tensor_a,
@@ -968,7 +1028,14 @@ Tensor ExecuteBitwiseLeftShift::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    if (not(use_legacy ? *use_legacy
+                       : binary::is_legacy_only(
+                             input_tensor_a,
+                             input_tensor_b,
+                             memory_config,
+                             optional_output_tensor,
+                             lhs_activations,
+                             rhs_activations))) {
         return BinaryOperation<operations::binary::BinaryOpType::LEFT_SHIFT>::invoke(
             queue_id,
             input_tensor_a,
@@ -996,7 +1063,14 @@ Tensor ExecuteBitwiseLeftShift::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    if (not(use_legacy ? *use_legacy
+                       : binary::is_legacy_only(
+                             input_tensor_a,
+                             input_b,
+                             memory_config,
+                             optional_output_tensor,
+                             lhs_activations,
+                             rhs_activations))) {
         return BinaryOperation<operations::binary::BinaryOpType::LEFT_SHIFT>::invoke(
             queue_id,
             input_tensor_a,
@@ -1026,7 +1100,14 @@ Tensor ExecuteBitwiseRightShift::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    if (not(use_legacy ? *use_legacy
+                       : binary::is_legacy_only(
+                             input_tensor_a,
+                             input_tensor_b,
+                             memory_config,
+                             optional_output_tensor,
+                             lhs_activations,
+                             rhs_activations))) {
         return BinaryOperation<operations::binary::BinaryOpType::RIGHT_SHIFT>::invoke(
             queue_id,
             input_tensor_a,
@@ -1054,7 +1135,14 @@ Tensor ExecuteBitwiseRightShift::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    if (not use_legacy.value_or(true)) {
+    if (not(use_legacy ? *use_legacy
+                       : binary::is_legacy_only(
+                             input_tensor_a,
+                             input_b,
+                             memory_config,
+                             optional_output_tensor,
+                             lhs_activations,
+                             rhs_activations))) {
         return BinaryOperation<operations::binary::BinaryOpType::RIGHT_SHIFT>::invoke(
             queue_id,
             input_tensor_a,

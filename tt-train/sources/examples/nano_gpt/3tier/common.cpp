@@ -62,20 +62,15 @@ std::vector<ttml::core::distributed::Rank> get_workers_and_aggregator_ranks(uint
     return ranks;
 }
 
-uint32_t get_steps_per_dataset(const TrainingConfig &config) {
+std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
     std::string text;
     std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
-    try {
-        text = read_file_to_str(config.data_path);
-        // check file extension:
-        if (config.data_path.ends_with(".txt")) {
-            text_or_tokens = read_file_to_str(config.data_path);
-        } else {
-            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
-        }
-    } catch (const std::exception &e) {
-        std::cerr << e.what() << std::endl;
-        return -1;
+    text = read_file_to_str(config.data_path);
+    // check file extension:
+    if (config.data_path.ends_with(".txt")) {
+        text_or_tokens = read_file_to_str(config.data_path);
+    } else {
+        text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
     }
     auto sequence_length = config.transformer_config.max_sequence_length;
 
@@ -101,7 +96,7 @@ uint32_t get_steps_per_dataset(const TrainingConfig &config) {
 
     auto dataset_size = dataset.get_size();
     auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
-    return steps_per_dataset;
+    return {steps_per_dataset, tokenizer->get_vocab_size()};
 }
 
 std::string read_file_to_str(const std::string &file_path) {

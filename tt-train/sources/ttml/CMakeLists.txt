@@ -74,6 +74,7 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}/tt_stl"
         # TTNN
         "$ENV{TT_METAL_HOME}/ttnn"
+        "$ENV{TT_METAL_HOME}/ttnn/api"
         "$ENV{TT_METAL_HOME}/ttnn/cpp"
         "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
         "${reflect_SOURCE_DIR}"
