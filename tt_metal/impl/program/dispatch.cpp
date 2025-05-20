@@ -2020,7 +2020,7 @@ void update_traced_program_dispatch_commands(
     TT_ASSERT(cached_program_command_sequence.rta_updates.size() == trace_node.rta_data.size());
     for (size_t i = 0; i < cached_program_command_sequence.rta_updates.size(); i++) {
         auto& rta_update = cached_program_command_sequence.rta_updates[i];
-        memcpy(rta_update.dst, trace_node.rta_data[i].data(), rta_update.size);
+        std::memcpy(rta_update.dst, trace_node.rta_data[i].data(), rta_update.size);
     }
 
     // Update launch messages
