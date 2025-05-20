@@ -5,6 +5,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <gtest/gtest.h>
 #include "common/multihost_test_tools.hpp"
+#include <thread>
 
 TEST(FaultTolerance, shrink_after_rank_failure) {
     using tt::tt_metal::distributed::multihost::DistributedContext;
