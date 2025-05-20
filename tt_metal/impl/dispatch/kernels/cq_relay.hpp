@@ -145,7 +145,8 @@ inline void cq_fabric_write_atomic_inc_any_len(
     packet_header->to_noc_fused_unicast_write_atomic_inc(
         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
             dst_ptr,
-            get_semaphore<static_cast<ProgrammableCoreType>(FD_CORE_TYPE)>(downstream_sem_id),
+            get_noc_addr_helper(
+                downstream_noc_xy, get_semaphore<static_cast<ProgrammableCoreType>(FD_CORE_TYPE)>(downstream_sem_id)),
             n,
             std::numeric_limits<uint16_t>::max()},
         length);

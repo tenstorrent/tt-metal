@@ -1488,11 +1488,13 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 
     uint32_t downstream_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
     if (downstream_pages_left >= npages) {
-        cq_fabric_write_any_len<
+        cq_fabric_write_atomic_inc_any_len<
+            downstream_noc_xy,
+            downstream_cb_sem_id,
             fabric_mux_channel_buffer_size_bytes,
             fabric_mux_num_buffers_per_channel,
             fabric_header_rb_base>(
-            edm_sender, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
+            edm_sender, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length, npages);
         downstream_data_ptr += npages * downstream_cb_page_size;
     } else {
         uint32_t tail_pages = npages - downstream_pages_left;
@@ -1506,19 +1508,15 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
             data_ptr += available;
             length -= available;
         }
-        cq_fabric_write_any_len<
+        cq_fabric_write_atomic_inc_any_len<
+            downstream_noc_xy,
+            downstream_cb_sem_id,
             fabric_mux_channel_buffer_size_bytes,
             fabric_mux_num_buffers_per_channel,
             fabric_header_rb_base>(
-            edm_sender, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
+            edm_sender, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length, npages);
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
-
-    cq_fabric_release_pages<
-        downstream_noc_xy,
-        downstream_cb_sem_id,
-        fabric_mux_num_buffers_per_channel,
-        fabric_header_rb_base>(edm_sender, npages);
 
     return fence;
 }

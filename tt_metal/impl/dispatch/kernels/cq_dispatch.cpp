@@ -367,24 +367,13 @@ void relay_to_next_cb(
             cb_fence += n_pages * dispatch_cb_page_size;
         }
 
-        // cq_fabric_write_atomic_inc_any_len<
-        //     downstream_noc_xy,
-        //     downstream_cb_sem_id,
-        //     fabric_mux_channel_buffer_size_bytes,
-        //     fabric_mux_num_buffers_per_channel,
-        //     fabric_header_rb_base>(
-        //     edm_sender, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), xfer_size, 1);
-
-        cq_fabric_write_any_len<
+        cq_fabric_write_atomic_inc_any_len<
+            downstream_noc_xy,
+            downstream_cb_sem_id,
             fabric_mux_channel_buffer_size_bytes,
             fabric_mux_num_buffers_per_channel,
             fabric_header_rb_base>(
-            edm_sender, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), xfer_size);
-        cq_fabric_release_pages<
-            downstream_noc_xy,
-            downstream_cb_sem_id,
-            fabric_mux_num_buffers_per_channel,
-            fabric_header_rb_base>(edm_sender, 1);
+            edm_sender, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), xfer_size, 1);
 
         length -= xfer_size;
         data_ptr += xfer_size;
