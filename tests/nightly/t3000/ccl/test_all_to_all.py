@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 def run_with_trace(
     mesh_device,
-    all_gather_topology,
+    all_to_all_topology,
     input_tensor_mesh,
     in_dim,
     out_dim,
@@ -32,7 +32,7 @@ def run_with_trace(
         multi_device_global_semaphore=multi_device_global_semaphore,
         num_links=num_links,
         memory_config=output_mem_config,
-        topology=all_gather_topology,
+        topology=all_to_all_topology,
         subdevice_id=subdevice_id,
     )
     ttnn.synchronize_device(mesh_device)
@@ -49,7 +49,7 @@ def run_with_trace(
             multi_device_global_semaphore=multi_device_global_semaphore,
             num_links=num_links,
             memory_config=output_mem_config,
-            topology=all_gather_topology,
+            topology=all_to_all_topology,
             subdevice_id=subdevice_id,
         )
         output_tensors.append(tt_out_tensor)
@@ -273,8 +273,6 @@ def run_all_to_all_impl(
 
     assert (
         mesh_device.num_program_cache_entries() == 1
-        if trace_mode
-        else mesh_device.num_program_cache_entries() == num_iters
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
