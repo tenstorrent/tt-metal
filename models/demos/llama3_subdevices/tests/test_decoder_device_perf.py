@@ -108,7 +108,7 @@ perf_targets = {
     "AllReduceCreateQkvHeads_0": {
         "op_name": "AllReduce_Fuse_Createheads",
         "kernel_duration": 14541.059027777777,
-        "op_to_op": 667.0,
+        "op_to_op": 966.0,
         "non-overlapped-dispatch-time": 7932.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.4,
