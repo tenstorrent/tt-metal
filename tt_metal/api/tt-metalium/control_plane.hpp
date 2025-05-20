@@ -65,8 +65,7 @@ public:
     std::unordered_map<mesh_id_t, std::vector<chip_id_t>> get_chip_neighbors(
         mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const;
 
-    routing_plane_id_t get_routing_plane_id(
-        chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
+    routing_plane_id_t get_routing_plane_id(mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t eth_chan_id) const;
 
     size_t get_num_active_fabric_routers(mesh_id_t mesh_id, chip_id_t chip_id) const;
 
@@ -103,6 +102,9 @@ private:
 
     // custom logic to order eth channels
     void order_ethernet_channels();
+
+    routing_plane_id_t get_routing_plane_id(
+        chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
 
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates

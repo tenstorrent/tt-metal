@@ -404,15 +404,37 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(
     chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const {
-    const auto num_eth_ports_per_direction = routing_table_generator_->get_chip_spec().num_eth_ports_per_direction;
-    TT_FATAL(
-        eth_chans_in_direction.size() <= num_eth_ports_per_direction,
-        "Number of eth channels: {} in a direction are more than expected: {}",
-        eth_chans_in_direction.size(),
-        num_eth_ports_per_direction);
-
     auto it = std::find(eth_chans_in_direction.begin(), eth_chans_in_direction.end(), eth_chan_id);
     return std::distance(eth_chans_in_direction.begin(), it);
+}
+
+routing_plane_id_t ControlPlane::get_routing_plane_id(
+    mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t eth_chan_id) const {
+    TT_FATAL(
+        mesh_id < this->router_port_directions_to_physical_eth_chan_map_.size(), "Mesh ID {} out of bounds", mesh_id);
+
+    TT_FATAL(
+        chip_id < this->router_port_directions_to_physical_eth_chan_map_[mesh_id].size(),
+        "Chip ID {} out of bounds for Mesh ID {}",
+        chip_id,
+        mesh_id);
+
+    std::optional<std::vector<chan_id_t>> eth_chans_in_direction;
+    const auto chip_eth_chans_map = this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id];
+    for (const auto& [_, eth_chans] : chip_eth_chans_map) {
+        if (std::find(eth_chans.begin(), eth_chans.end(), eth_chan_id) != eth_chans.end()) {
+            eth_chans_in_direction = eth_chans;
+            break;
+        }
+    }
+    TT_FATAL(
+        eth_chans_in_direction.has_value(),
+        "Could not find Eth chan ID {} for Chip ID {}, Mesh ID {}",
+        eth_chan_id,
+        chip_id,
+        mesh_id);
+
+    return get_routing_plane_id(eth_chan_id, eth_chans_in_direction.value());
 }
 
 chan_id_t ControlPlane::get_downstream_eth_chan_id(

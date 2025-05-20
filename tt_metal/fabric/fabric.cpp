@@ -68,35 +68,29 @@ void append_fabric_connection_rt_args(
     }
 
     // get the direction in which the data will be forwarded from the src_chip_id
-    std::optional<RoutingDirection> forwarding_direction;
-    if (is_2d_fabric) {
-        forwarding_direction =
-            control_plane->get_forwarding_direction(src_mesh_id, src_logical_chip_id, dst_mesh_id, dst_logical_chip_id);
-    } else {
-        // for 1D fabric, we loop to match the dst chip since we need to ensure src and dst are on the same line
-        // remove this once control plane has row/col info/view
-        for (const auto& direction : FabricContext::routing_directions) {
-            // This assumes all neighbor chips to the dst mesh are the same
-            auto neighbors = control_plane->get_chip_neighbors(src_mesh_id, src_logical_chip_id, direction);
-            auto neighbor_mesh_chips = neighbors.find(dst_mesh_id);
-            if (neighbor_mesh_chips == neighbors.end() || neighbor_mesh_chips->second[0] != dst_logical_chip_id) {
-                continue;
-            }
-
-            forwarding_direction = direction;
-            break;
-        }
-    }
-
+    std::optional<RoutingDirection> forwarding_direction =
+        control_plane->get_forwarding_direction(src_mesh_id, src_logical_chip_id, dst_mesh_id, dst_logical_chip_id);
     TT_FATAL(
         forwarding_direction.has_value(),
         "Could not find any forwarding direction from src {} to dst {}",
         src_chip_id,
         dst_chip_id);
 
+    if (!is_2d_fabric) {
+        // for 1D fabric we need to check if src and dst are on the same line
+        // remove this once control plane has row/col info/view
+        auto neighbors =
+            control_plane->get_chip_neighbors(src_mesh_id, src_logical_chip_id, forwarding_direction.value());
+        auto neighbor_mesh_chips = neighbors.find(dst_mesh_id);
+        TT_FATAL(
+            neighbor_mesh_chips != neighbors.end() && neighbor_mesh_chips->second[0] == dst_logical_chip_id,
+            "dst chip {} is not an immediate neighbor of src chip {}",
+            dst_chip_id,
+            src_chip_id);
+    }
+
     const auto candidate_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
         src_mesh_id, src_logical_chip_id, forwarding_direction.value());
-
     TT_FATAL(
         link_idx < candidate_eth_chans.size(),
         "requested link idx {}, out of bounds, max available {}",

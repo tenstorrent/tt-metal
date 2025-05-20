@@ -487,18 +487,7 @@ struct test_board_t {
 
     inline routing_plane_id_t get_routing_plane_from_chan(chip_id_t physical_chip_id, chan_id_t eth_chan) {
         const auto mesh_chip_id = this->get_mesh_chip_id(physical_chip_id);
-        std::vector<chan_id_t> eth_chans_in_dir;
-        for (const auto& direction : routing_directions) {
-            eth_chans_in_dir = control_plane->get_active_fabric_eth_channels_in_direction(
-                mesh_chip_id.first, mesh_chip_id.second, direction);
-            if (std::find(eth_chans_in_dir.begin(), eth_chans_in_dir.end(), eth_chan) != eth_chans_in_dir.end()) {
-                break;
-            }
-        }
-        if (eth_chans_in_dir.empty()) {
-            TT_THROW("Cannot find ethernet channel direction");
-        }
-        return control_plane->get_routing_plane_id(eth_chan, eth_chans_in_dir);
+        return control_plane->get_routing_plane_id(mesh_chip_id.first, mesh_chip_id.second, eth_chan);
     }
 
     inline eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t eth_chan) {
