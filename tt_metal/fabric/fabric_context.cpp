@@ -86,7 +86,7 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
         this->router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
             this->channel_buffer_size_bytes_, this->topology_);
         this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
-            this->channel_buffer_size_bytes_, this->topology_, true);
+            this->channel_buffer_size_bytes_, this->topology_, tt::tt_fabric::FabricEriscDatamoverType::Dateline);
         set_routing_mode(this->topology_, this->fabric_config_);
     } else {
         this->router_config_ = nullptr;

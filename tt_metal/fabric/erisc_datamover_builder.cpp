@@ -122,7 +122,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
-    std::size_t channel_buffer_size_bytes, Topology topology, bool is_dateline, bool is_dateline_neighbor) :
+    std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverType edm_type) :
     FabricEriscDatamoverConfig(topology) {
     this->num_used_sender_channels = get_sender_channel_count(topology);
     if (topology == Topology::Mesh) {
@@ -200,8 +200,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     constexpr std::array<std::pair<size_t, size_t>, 1> ring_buffer_slot_options_dateline = {
         std::pair<size_t, size_t>{16, 16}};
 
-    size_t num_sender_buffer_slots;
-
+    std::array<size_t, num_sender_channels> num_sender_buffer_slots = {0};
+    size_t downstream_num_sender_buffer_slots;
     size_t num_receiver_buffer_slots;
 
     auto get_optimal_num_slots = [this](
@@ -221,78 +221,108 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         }
     };
 
-    auto num_alive_sender_channels = is_dateline ? this->num_used_sender_channels - 1 : this->num_used_sender_channels;
-    auto num_alive_receiver_channels =
-        is_dateline ? this->num_used_receiver_channels - 1 : this->num_used_receiver_channels;
+    auto num_alive_sender_channels = 0;
+    auto num_alive_receiver_channels = 0;
     auto non_dateline_sender_channel_idx = 2;
     auto non_dateline_receiver_channel_idx = 0;
 
+    switch (edm_type) {
+        case FabricEriscDatamoverType::Default:
+        case FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
+            num_alive_sender_channels = this->num_used_sender_channels;
+            num_alive_receiver_channels = this->num_used_receiver_channels;
+            break;
+        case FabricEriscDatamoverType::Dateline:
+        case FabricEriscDatamoverType::DatelineUpstream:
+            num_alive_sender_channels = this->num_used_sender_channels - 1;
+            num_alive_receiver_channels = this->num_used_receiver_channels - 1;
+            break;
+        default: TT_THROW("unsupported edm types!");
+    }
+    bool is_dateline = edm_type == FabricEriscDatamoverType::Dateline;
+    bool is_dateline_upstream = edm_type == FabricEriscDatamoverType::DatelineUpstream;
+
     if (topology == Topology::Ring) {
+        size_t default_num_sender_buffer_slots;
+        size_t default_num_receiver_buffer_slots;
+        // get the default buffer slots
+        get_optimal_num_slots(
+            ring_buffer_slot_options,
+            num_alive_sender_channels,
+            num_alive_receiver_channels,
+            default_num_sender_buffer_slots,
+            default_num_receiver_buffer_slots);
+        // get the dateline buffer slots
+        size_t dateline_num_sender_buffer_slots;
+        size_t dateline_num_receiver_buffer_slots;
+        get_optimal_num_slots(
+            ring_buffer_slot_options_dateline,
+            num_alive_sender_channels,
+            num_alive_receiver_channels,
+            dateline_num_sender_buffer_slots,
+            dateline_num_receiver_buffer_slots);
+
         if (is_dateline) {
-            size_t temp1_num_sender_buffer_slots = 0;
-            size_t temp2_num_sender_buffer_slots = 0;
-            get_optimal_num_slots(
-                ring_buffer_slot_options,
-                this->num_used_sender_channels,
-                this->num_used_receiver_channels,
-                temp1_num_sender_buffer_slots,
-                num_receiver_buffer_slots);
-            get_optimal_num_slots(
-                ring_buffer_slot_options_dateline,
-                num_alive_sender_channels,
-                num_alive_receiver_channels,
-                num_sender_buffer_slots,
-                num_receiver_buffer_slots);
-            // use the normal sender buffer slots to not hang
-            // num_sender_buffer_slots = temp2_num_sender_buffer_slots;
+            for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
+                bool skip_current_channel = i == non_dateline_sender_channel_idx;
+                if (skip_current_channel) {
+                    num_sender_buffer_slots[i] = 0;
+                } else {
+                    if (i == 0) {  // tensix worker
+                        num_sender_buffer_slots[i] = default_num_sender_buffer_slots;
+                    } else {
+                        num_sender_buffer_slots[i] = dateline_num_sender_buffer_slots;
+                    }
+                }
+            }
+            num_receiver_buffer_slots = dateline_num_receiver_buffer_slots;
         } else {
-            get_optimal_num_slots(
-                ring_buffer_slot_options,
-                this->num_used_sender_channels,
-                this->num_used_receiver_channels,
-                num_sender_buffer_slots,
-                num_receiver_buffer_slots);
+            for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
+                num_sender_buffer_slots[i] = default_num_sender_buffer_slots;
+            }
+            num_receiver_buffer_slots = default_num_receiver_buffer_slots;
+        }
+
+        if (is_dateline_upstream) {
+            downstream_num_sender_buffer_slots = dateline_num_sender_buffer_slots;
+        } else {
+            downstream_num_sender_buffer_slots = default_num_sender_buffer_slots;
         }
     } else {
+        size_t default_num_sender_buffer_slots;
+        size_t default_num_receiver_buffer_slots;
         get_optimal_num_slots(
             linear_buffer_slot_options,
             this->num_used_sender_channels,
             this->num_used_receiver_channels,
-            num_sender_buffer_slots,
-            num_receiver_buffer_slots);
+            default_num_sender_buffer_slots,
+            default_num_receiver_buffer_slots);
+
+        for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
+            num_sender_buffer_slots[i] = default_num_sender_buffer_slots;
+        }
+        downstream_num_sender_buffer_slots = default_num_sender_buffer_slots;
+        num_receiver_buffer_slots = default_num_receiver_buffer_slots;
     }
 
-    size_t downstream_num_sender_buffer_slots =
-        is_dateline_neighbor ? ring_buffer_slot_options_dateline[0].first : num_sender_buffer_slots;
+    size_t total_sender_slots =
+        std::accumulate(num_sender_buffer_slots.begin(), num_sender_buffer_slots.end(), size_t{0});
 
-    if (is_dateline) {
-        TT_FATAL(
-            is_dateline_neighbor != is_dateline, "Dateline and non-dateline EDMs cannot be connected to each other");
-    }
-
-    std::size_t total_slot_count =
-        num_alive_sender_channels * num_sender_buffer_slots + num_alive_receiver_channels * num_receiver_buffer_slots;
-    // TT_FATAL(
-    //     total_slot_count * channel_buffer_size_bytes <= available_channel_buffering_space,
-    //     "Total channel size of {} B exceeds available space of {} B",
-    //     total_slot_count * channel_buffer_size_bytes,
-    //     available_channel_buffering_space);
+    std::size_t total_slot_count = total_sender_slots + num_alive_receiver_channels * num_receiver_buffer_slots;
+    TT_FATAL(
+        total_slot_count * channel_buffer_size_bytes <= available_channel_buffering_space,
+        "Total channel size of {} B exceeds available space of {} B",
+        total_slot_count * channel_buffer_size_bytes,
+        available_channel_buffering_space);
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
-        bool skip_current_channel = (i == non_dateline_sender_channel_idx && is_dateline);
-        this->sender_channels_num_buffers[i] = skip_current_channel      ? 0
-                                               : (is_dateline && i == 0) ? num_sender_buffer_slots / 2
-                                                                         : num_sender_buffer_slots;
-        this->sender_channels_size_bytes[i] = skip_current_channel ? 0
-                                              : (is_dateline && i == 0)
-                                                  ? channel_buffer_size_bytes * num_sender_buffer_slots / 2
-                                                  : channel_buffer_size_bytes * num_sender_buffer_slots;
+        this->sender_channels_num_buffers[i] = num_sender_buffer_slots[i];
+        this->sender_channels_size_bytes[i] = channel_buffer_size_bytes * num_sender_buffer_slots[i];
 
         log_info("sender_channels_num_buffers {}", this->sender_channels_num_buffers[i]);
     }
     for (uint32_t i = 0; i < this->num_used_sender_channels - 1; i++) {
-        this->downstream_sender_channels_num_buffers[i] =
-            is_dateline ? downstream_num_sender_buffer_slots / 2 : downstream_num_sender_buffer_slots;
+        this->downstream_sender_channels_num_buffers[i] = downstream_num_sender_buffer_slots;
         log_info("downstream_sender_channels_num_buffers {}", this->downstream_sender_channels_num_buffers[i]);
     }
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
@@ -300,7 +330,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->receiver_channels_num_buffers[i] = skip_current_channel ? 0 : num_receiver_buffer_slots;
         this->receiver_channels_size_bytes[i] =
             skip_current_channel ? 0 : channel_buffer_size_bytes * num_receiver_buffer_slots;
-        log_info("receiver_channels_num_buffers {}", this->receiver_channels_num_buffers[i]);
+        log_info(
+            "is_dateline {} receiver_channels_num_buffers {}", is_dateline, this->receiver_channels_num_buffers[i]);
     }
 
     uint32_t buffer_addr = buffer_region_start;

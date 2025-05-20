@@ -23,6 +23,14 @@
 
 namespace tt::tt_fabric {
 
+enum class FabricEriscDatamoverType {
+    Default = 0,
+    Dateline = 1,
+    DatelineUpstream = 2,
+    DatelineUpstreamAdjacentDevice = 3,
+    Invalid = 4,
+};
+
 struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
     static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
@@ -115,8 +123,7 @@ struct FabricEriscDatamoverConfig {
     FabricEriscDatamoverConfig(
         std::size_t channel_buffer_size_bytes,
         Topology topology = Topology::Linear,
-        bool is_dateline = false,
-        bool is_dateline_neighbor = false);
+        FabricEriscDatamoverType edm_type = FabricEriscDatamoverType::Default);
 
     std::size_t channel_buffer_size_bytes = 0;
 
