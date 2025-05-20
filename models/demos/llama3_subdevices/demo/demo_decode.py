@@ -190,9 +190,11 @@ def run_llama3_demo(
             * paged_attention_config.max_num_blocks
             / model_args.batch_size_per_device_group
         )
-        assert (
+        is_valid_token_position = (stress_test and start_pos <= paged_cache_max_seq_len) or (
             max_generated_tokens + start_pos <= paged_cache_max_seq_len
-        ), f"max_generated_tokens ({max_generated_tokens}) + start_pos ({start_pos}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
+        )
+        assert_msg = f"Either stress test with start_pos ({start_pos}) <= paged_cache_max_seq_len ({paged_cache_max_seq_len}) or max_generated_tokens ({max_generated_tokens}) + start_pos ({start_pos}) <= paged_cache_max_seq_len ({paged_cache_max_seq_len})"
+        assert is_valid_token_position, assert_msg
 
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
