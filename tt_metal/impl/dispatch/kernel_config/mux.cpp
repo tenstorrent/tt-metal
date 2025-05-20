@@ -6,7 +6,6 @@
 #include <host_api.hpp>
 #include <map>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -18,7 +17,6 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "eth_tunneler.hpp"
-#include "hal.hpp"
 #include "utils.hpp"
 
 using namespace tt::tt_metal;
@@ -28,6 +26,7 @@ void MuxKernel::GenerateStaticConfigs() {
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     logical_core_ =
         MetalContext::instance().get_dispatch_core_manager().mux_d_core(device_->id(), channel, this->cq_id_);
+    kernel_type_ = FDKernelType::ROUTING;
     auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     static_config_.reserved = 0;
     static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;

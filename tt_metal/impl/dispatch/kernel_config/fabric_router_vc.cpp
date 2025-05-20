@@ -14,7 +14,7 @@
 
 namespace tt::tt_metal {
 
-void FabricRouterVC::GenerateStaticConfigs() {}
+void FabricRouterVC::GenerateStaticConfigs() { kernel_type_ = FDKernelType::VIRTUAL; }
 
 void FabricRouterVC::GenerateDependentConfigs() {
     // Provide router details to upstream and downstream kernels
