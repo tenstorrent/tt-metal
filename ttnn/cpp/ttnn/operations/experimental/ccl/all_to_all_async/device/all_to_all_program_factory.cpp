@@ -10,6 +10,7 @@
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -201,7 +202,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         receiver_worker_cores.size());
 
     // Calculate buffer parameters
-    const size_t packet_size = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+    const size_t packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    ;
     const uint32_t page_size = op_config.get_page_size();
     const uint32_t pages_per_packet = packet_size / page_size;
     const uint32_t cb_pages = all_to_all_detail::TRIPLE_BUFFER_MULTIPLIER * pages_per_packet;
@@ -435,7 +437,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
                                 // semaphore
 
-    uint32_t global_semaphore_args_idx;
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
         if (link == 0) {
@@ -467,6 +468,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         std::vector<uint32_t> writer_rt_args = {
             intermediate_buffer.buffer()->address(),
             output_buffer.buffer()->address(),
+            semaphore.address(),
             out_row_tiles,
             out_col_tiles,
             out_row_start,
@@ -477,9 +479,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
             reset_global_semaphore,
             receiver_core_x,
             receiver_core_y,
-            semaphore.address(),
         };
-        global_semaphore_args_idx = writer_rt_args.size() - 1;
 
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {
@@ -556,7 +556,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
          receiver_reader_kernel_id,
          semaphore,
          sender_worker_cores,
-         global_semaphore_args_idx,
          receiver_worker_cores](
             const void* operation,
             Program& program,
@@ -584,7 +583,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = intermediate_buffer.buffer()->address();
                 worker_writer_sender_runtime_args[1] = output_buffer.buffer()->address();
-                worker_writer_sender_runtime_args[global_semaphore_args_idx] = semaphore.address();
+                worker_writer_sender_runtime_args[2] = semaphore.address();
             }
             // receiver
             for (uint32_t i = 0; i < receiver_worker_cores.size(); i++) {

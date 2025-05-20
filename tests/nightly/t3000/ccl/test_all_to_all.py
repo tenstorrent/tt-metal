@@ -7,7 +7,6 @@ import ttnn
 import torch
 from loguru import logger
 
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import check_mesh_tensor_alloc
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 
@@ -193,10 +192,6 @@ def run_all_to_all_impl(
         )
         for _ in range(num_iters)
     ]
-
-    for im_buf, out_buf in zip(persistent_intermediate_buffers, persistent_output_buffers):
-        check_mesh_tensor_alloc(im_buf)
-        check_mesh_tensor_alloc(out_buf)
 
     logger.info("Done creating persistent buffers")
 

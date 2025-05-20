@@ -5,7 +5,7 @@
 #include "all_to_all_async_op.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -32,13 +32,14 @@ void AllToAllAsync::validate_with_output_tensors(
         input_tensor.device()->compute_with_storage_grid_size().y);
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "Unsupported input memory layout {}.",
-        input_tensor.memory_config().memory_layout);
-    TT_FATAL(
-        input_tensor.memory_config().buffer_type == BufferType::DRAM,
+        input_tensor.buffer()->buffer_type() == BufferType::DRAM,
         "AllToAllAsync: Input tensor must be in DRAM, but is in {}",
-        input_tensor.memory_config().buffer_type);
+        input_tensor.buffer()->buffer_type());
+    TT_FATAL(input_tensor.layout() == Layout::TILE, "Unsupported input layout {}.", input_tensor.layout());
+    TT_FATAL(
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Unsupported input memory layout {}.",
+        input_tensor.memory_config().memory_layout());
 
     TT_FATAL(this->in_dim == 2 || this->in_dim == 3, "AllToAllAsync: in_dim must be 2 or 3, but is {}", this->in_dim);
     TT_FATAL(
@@ -68,9 +69,14 @@ void AllToAllAsync::validate_with_output_tensors(
             output_tensor.storage_type() == StorageType::DEVICE,
             "Output tensor for all_to_all_async must be on device");
         TT_FATAL(
-            output_tensor.memory_config().buffer_type == BufferType::DRAM,
+            output_tensor.buffer()->buffer_type() == BufferType::DRAM,
             "Output tensor for all_to_all_async must be in DRAM, but is in {}",
-            output_tensor.memory_config().buffer_type);
+            output_tensor.buffer()->buffer_type());
+        TT_FATAL(output_tensor.layout() == Layout::TILE, "Unsupported output layout {}.", output_tensor.layout());
+        TT_FATAL(
+            output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Unsupported output memory layout {}.",
+            output_tensor.memory_config().memory_layout());
         TT_FATAL(output_tensor.get_dtype() == dtype, "Output tensor dtype must match input tensor dtype");
         TT_FATAL(
             output_tensor.memory_config() == this->output_mem_config,
@@ -180,7 +186,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
 tt::tt_metal::operation::Hash AllToAllAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     auto input_shape = input_tensor.get_padded_shape();
-    auto input_memory_layout = input_tensor.get_layout();
+    auto input_memory_layout = input_tensor.layout();
     auto input_dtype = input_tensor.get_dtype();
     auto input_memory_config = input_tensor.memory_config();
 

@@ -47,6 +47,7 @@ void kernel_main() {
     size_t arg_idx = 0;
     address_t intermediate_buffer_addr = get_arg_val<address_t>(arg_idx++);
     address_t output_buffer_addr = get_arg_val<address_t>(arg_idx++);
+    uint32_t global_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_row_tiles = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_col_tiles = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_row_start = get_arg_val<uint32_t>(arg_idx++);
@@ -57,7 +58,6 @@ void kernel_main() {
     bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
     uint32_t receiver_core_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t receiver_core_y = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t global_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
 
     auto fabric_connection = FabricConnectionManager::build_from_args<
