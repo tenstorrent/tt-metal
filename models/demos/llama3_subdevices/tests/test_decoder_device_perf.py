@@ -21,7 +21,7 @@ from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 DECODE_OP_START_INDEX = 4
-DECODE_OP_END_INDEX = -12
+DECODE_OP_END_INDEX = -13
 
 perf_targets = {
     "RMSAllGather_0": {
