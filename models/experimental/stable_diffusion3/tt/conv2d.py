@@ -50,7 +50,7 @@ class TtConv2dParameters:
         device: ttnn.MeshDevice,
         dtype: ttnn.DataType | None = None,
     ) -> TtConv2dParameters:
-        mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        mesh_mapper = ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
 
         return cls(
             weight=from_torch_fast(state["weight"], dtype=dtype, mesh_mapper=mesh_mapper),
@@ -165,7 +165,9 @@ class TtConv2d:
             x = ttnn.aggregate_as_tensor([result.output for result in results])
             self._weight = ttnn.aggregate_as_tensor([result.prepared_weight for result in results])
             self._bias = (
-                ttnn.aggregate_as_tensor([result.prepared_bias for result in results]) if self._bias is not None else None  # type: ignore
+                ttnn.aggregate_as_tensor([result.prepared_bias for result in results])
+                if self._bias is not None
+                else None  # type: ignore
             )
         else:
             x = results[0].output
