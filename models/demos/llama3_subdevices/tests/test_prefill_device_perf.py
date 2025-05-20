@@ -16,7 +16,7 @@ from termcolor import colored
 import json
 
 PREFILL_OP_START_INDEX = 0
-PREFILL_OP_END_INDEX = 37
+PREFILL_OP_END_INDEX = 35
 
 
 def merge_device_rows(df):
