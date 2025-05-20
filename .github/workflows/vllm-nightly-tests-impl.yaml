@@ -69,7 +69,7 @@ jobs:
         with:
           repository: tenstorrent/vllm
           path: docker-job/vllm
-          ref: ppetrovic/transformers-version
+          ref: dev
           fetch-depth: 1
 
       - name: 📀 Install vLLM
