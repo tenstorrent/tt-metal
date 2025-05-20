@@ -99,18 +99,11 @@ inline void cq_fabric_write_any_len(T& edm, uint32_t data_ptr, uint64_t dst_ptr,
         dst_ptr += k_FabricMaxBurstSize;
         data_ptr += k_FabricMaxBurstSize;
         length -= k_FabricMaxBurstSize;
-
-        noc_async_writes_flushed();
     }
 
-    if (length) {
-        // DPRINT << "Send write of length " << DEC() << length << ENDL();
-        packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_ptr}, length);
+    packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_ptr}, length);
 
-        tt::tt_fabric::fabric_async_write<fabric_mux_num_buffers_per_channel>(edm, packet_header, data_ptr, length);
-
-        noc_async_writes_flushed();
-    }
+    tt::tt_fabric::fabric_async_write<fabric_mux_num_buffers_per_channel>(edm, packet_header, data_ptr, length);
 }
 
 // Use the EDM Client to write data in packets and then atomic increment at the end
@@ -138,8 +131,6 @@ inline void cq_fabric_write_atomic_inc_any_len(
         dst_ptr += k_FabricMaxBurstSize;
         data_ptr += k_FabricMaxBurstSize;
         length -= k_FabricMaxBurstSize;
-
-        noc_async_writes_flushed();
     }
 
     packet_header->to_noc_fused_unicast_write_atomic_inc(
@@ -152,8 +143,6 @@ inline void cq_fabric_write_atomic_inc_any_len(
         length);
 
     tt::tt_fabric::fabric_async_write<fabric_mux_num_buffers_per_channel>(edm, packet_header, data_ptr, length);
-
-    noc_async_writes_flushed();
 }
 
 // Use the EDM Client to release pages
@@ -175,7 +164,6 @@ inline void cq_fabric_release_pages(T& edm, uint16_t n) {
         std::numeric_limits<uint16_t>::max(),
     });
     tt::tt_fabric::fabric_atomic_inc<fabric_mux_num_buffers_per_channel>(edm, packet_header);
-    noc_async_writes_flushed();
 }
 
 template <uint32_t mux_x, uint32_t mux_y, uint32_t mux_termination_signal_address>
