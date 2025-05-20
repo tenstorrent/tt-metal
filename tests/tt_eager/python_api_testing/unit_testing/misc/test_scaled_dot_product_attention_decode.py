@@ -929,11 +929,16 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         )
 
     shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
-    Q_shard_spec = ttnn.ShardSpec(shard_grid, (8, d), ttnn.ShardOrientation.ROW_MAJOR)
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-    Q_height_sharded_memcfg = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, Q_shard_spec
-    )
+    if q_layout == ttnn.ROW_MAJOR_LAYOUT:
+        shard_spec_rm = ttnn.ShardSpec(shard_grid, (nh, d), ttnn.ShardOrientation.ROW_MAJOR)
+        Q_height_sharded_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec_rm
+        )
+    else:
+        Q_height_sharded_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
+        )
 
     tt_K = ttnn.as_tensor(
         paged_k_shuffled, device=device, dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
