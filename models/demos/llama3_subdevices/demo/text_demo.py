@@ -19,7 +19,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -284,6 +284,15 @@ def test_demo_text(
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = True  # repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
+
+    # Creat batch output file
+    benchmark_data = BenchmarkData()
+    profiler_step_name = "tg-llama-demo-prefill-e2e"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_directory = "models/demos/llama3_subdevices/demo/output"
+    os.makedirs(output_directory, exist_ok=True)
+    os.chmod(output_directory, 0o755)
+    output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
     # Override parameters from command line if they are provided
     # input_prompts = request.config.getoption("--input_prompts") or input_prompts
@@ -685,44 +694,17 @@ def test_demo_text(
         assert avg_time_to_first_token * 1000 < 122, f"TTFT {avg_time_to_first_token} ms is too high, should be < 121."
 
     # Save benchmark data for CI dashboard
-    # if is_ci_env:
-    #     # Instead of running warmup iterations, the demo profiles the initial compile iteration
-    #     bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
-    #     benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
+    if is_ci_env and repeat_batches > 1:
+        benchmark_data.add_measurement(
+            profiler,
+            1,  # grab the second repeat batch of prefill
+            "inference_prefill",
+            "ttft_e2e",
+            round(avg_time_to_first_token * 1000, 2),
+        )  # average TTFT in ms
 
-    #     # Save the decode performance of every iteration for plotting in superset
-    #     for i in range(1, iteration):
-    #         benchmark_data.add_measurement(
-    #             profiler,
-    #             0,
-    #             "inference_decode",
-    #             f"time_to_token_{i}",
-    #             profiler.get_duration(f"inference_decode_time_{i}") * 1000,
-    #             step_warm_up_num_iterations=None,
-    #             target=None,
-    #         )
-
-    #     # Also save the avg decode performance for the 128 iterations (excluding the compile time)
-    #     inference_decode_time_first_128 = sum(
-    #         profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
-    #     )
-    #     benchmark_data.add_measurement(
-    #         profiler,
-    #         0,
-    #         "inference_decode",
-    #         "avg_decode_time_first_128",
-    #         inference_decode_time_first_128 * 1000 / 127,
-    #         step_warm_up_num_iterations=None,
-    #         target=None,
-    #     )
-
-    #     benchmark_data.save_partial_run_json(
-    #         profiler,
-    #         run_type=f"{tt_device_name}-demo",
-    #         ml_model_name=model_args.base_model_name,
-    #         ml_model_type="llm",
-    #         num_layers=model_args.n_layers,
-    #         batch_size=batch_size,
-    #         input_sequence_length=max(prefill_lens),
-    #         output_sequence_length=num_tokens_generated_decode[0],
-    #     )
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"tg_llama_text_demo_prefill",
+            ml_model_name="llama70b-tg",
+        )
