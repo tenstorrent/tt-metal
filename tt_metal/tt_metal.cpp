@@ -313,24 +313,69 @@ inline void SetRuntimeArgsImpl(
 
 namespace detail {
 
-bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
+bool WriteToDeviceDRAMChannel(
+    IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer, bool use_dma) {
     bool pass = true;
     TT_FATAL(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
-    tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-        host_buffer, device->id(), dram_channel, address);
+    if (use_dma) {
+        TT_FATAL(device->is_mmio_capable(), "DMA write to non-MMIO device is not supported");
+        tt::tt_metal::MetalContext::instance().get_cluster().dma_write_dram_vec(
+            host_buffer, device->id(), dram_channel, address);
+    } else {
+        tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
+            host_buffer, device->id(), dram_channel, address);
+    }
+    return pass;
+}
+
+bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
+    return WriteToDeviceDRAMChannel(device, dram_channel, address, host_buffer, /*use_dma=*/false);
+}
+
+bool ReadFromDeviceDRAMChannel(
+    IDevice* device,
+    int dram_channel,
+    uint32_t address,
+    uint32_t size,
+    std::vector<uint32_t>& host_buffer,
+    bool use_dma) {
+    bool pass = true;
+    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
+    if (use_dma) {
+        TT_FATAL(device->is_mmio_capable(), "DMA read from non-MMIO device is not supported");
+        tt::tt_metal::MetalContext::instance().get_cluster().dma_read_dram_vec(
+            host_buffer, size, device->id(), dram_channel, address);
+    } else {
+        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+            host_buffer, size, device->id(), dram_channel, address);
+    }
     return pass;
 }
 
 bool ReadFromDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer) {
-    bool pass = true;
-    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
-    tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-        host_buffer, size, device->id(), dram_channel, address);
-    return pass;
+    return ReadFromDeviceDRAMChannel(device, dram_channel, address, size, host_buffer, false);
+}
+
+bool WriteToDeviceL1(
+    IDevice* device,
+    const CoreCoord& logical_core,
+    uint32_t address,
+    std::vector<uint32_t>& host_buffer,
+    CoreType core_type,
+    bool use_dma) {
+    ZoneScoped;
+    auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    if (use_dma) {
+        TT_FATAL(device->is_mmio_capable(), "DMA write to non-MMIO device is not supported");
+        llrt::dma_write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
+    } else {
+        llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
+    }
+    return true;
 }
 
 bool WriteToDeviceL1(
@@ -339,10 +384,7 @@ bool WriteToDeviceL1(
     uint32_t address,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
-    ZoneScoped;
-    auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
-    return true;
+    return WriteToDeviceL1(device, logical_core, address, host_buffer, core_type, /*use_dma=*/false);
 }
 
 bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval) {
@@ -449,7 +491,7 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
-void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, bool use_dma) {
     TT_FATAL(
         host_buffer.size() <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
@@ -476,9 +518,14 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
         if (buffer.is_l1()) {
             auto core_coordinates =
                 device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
-            llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
+            if (use_dma) {
+                TT_FATAL(buffer.device()->is_mmio_capable(), "DMA write to non-MMIO device is not supported");
+                llrt::dma_write_hex_vec_to_core(buffer.device()->id(), core_coordinates, page, absolute_address);
+            } else {
+                llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
+            }
         } else {
-            WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
+            WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page, use_dma);
         }
     }
 }
@@ -495,7 +542,7 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
     return addr;
 }
 
-void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, bool use_dma) {
     uint32_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),
@@ -516,11 +563,11 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         switch (buffer.buffer_type()) {
-            case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address, page); break;
+            case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address, page, use_dma); break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
                 CoreCoord logical_core = buffer.allocator()->get_logical_core_from_bank_id(bank_index);
-                WriteToDeviceL1(device, logical_core, address, page, CoreType::WORKER);
+                WriteToDeviceL1(device, logical_core, address, page, CoreType::WORKER, use_dma);
             } break;
             default: TT_THROW("Unsupported buffer type to write to device!");
         }
@@ -530,7 +577,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     }
 }
 
-void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, bool use_dma) {
     ZoneScoped;
     if (buffer.is_nd_sharded()) {
         TT_FATAL(buffer.is_l1(), "Buffer with BufferDistributionSpec must be L1 for WriteToDevice!");
@@ -541,27 +588,33 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
                 // TODO: subspan is in elements; here 1 element is 1 byte (ie. uint8_t) so using bytes here is fine
                 auto chunk_span = tt::stl::make_const_span(
                     host_buffer.subspan(chunk_mapping_in_bytes.src, chunk_mapping_in_bytes.size));
-                llrt::write_hex_vec_to_core(
-                    buffer.device()->id(), virtual_core, chunk_span, buffer.address() + chunk_mapping_in_bytes.dst);
+                if (use_dma) {
+                    TT_FATAL(buffer.device()->is_mmio_capable(), "DMA write to non-MMIO device is not supported");
+                    llrt::dma_write_hex_vec_to_core(
+                        buffer.device()->id(), virtual_core, chunk_span, buffer.address() + chunk_mapping_in_bytes.dst);
+                } else {
+                    llrt::write_hex_vec_to_core(
+                        buffer.device()->id(), virtual_core, chunk_span, buffer.address() + chunk_mapping_in_bytes.dst);
+                }
             }
         }
     } else if (
         buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
-        WriteToDeviceInterleavedContiguous(buffer, host_buffer);
+        WriteToDeviceInterleavedContiguous(buffer, host_buffer, use_dma);
     } else if (is_sharded(buffer.buffer_layout())) {
-        WriteToDeviceSharded(buffer, host_buffer);
+        WriteToDeviceSharded(buffer, host_buffer, use_dma);
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");
     }
 }
 
-void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, bool use_dma) {
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
         case BufferType::L1_SMALL: {
-            WriteToDevice(buffer, host_buffer);
+            WriteToDevice(buffer, host_buffer, use_dma);
         } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Writing to host memory is unsupported!");
@@ -570,7 +623,15 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     }
 }
 
-void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer) {
+void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    WriteToBuffer(buffer, host_buffer, /*use_dma=*/false);
+}
+
+void WriteToBufferUsingDMA(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    WriteToBuffer(buffer, host_buffer, /*use_dma=*/true);
+}
+
+void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer, bool use_dma) {
     uint32_t page_size = buffer.page_size();
     uint32_t num_pages = buffer.num_pages();
 
@@ -586,13 +647,21 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
         page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
-            case BufferType::TRACE: ReadFromDeviceDRAMChannel(device, bank_index, address, page_size, page); break;
+            case BufferType::TRACE:
+                ReadFromDeviceDRAMChannel(device, bank_index, address, page_size, page, use_dma);
+                break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto core_coordinates = device->worker_core_from_logical_core(
                     buffer.allocator()->get_logical_core_from_bank_id(bank_index));
-                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                    page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), address);
+                if (use_dma) {
+                    TT_FATAL(buffer.device()->is_mmio_capable(), "DMA read from non-MMIO device is not supported");
+                    tt::tt_metal::MetalContext::instance().get_cluster().dma_read_core(
+                        page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), address);
+                } else {
+                    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                        page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), address);
+                }
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }
@@ -612,24 +681,37 @@ void read_pages_to_host_helper(
     const uint32_t& page_size,
     const uint32_t& host_page_id,
     const uint32_t& dev_page_id,
-    const uint32_t& bank_id) {
+    const uint32_t& bank_id,
+    bool use_dma) {
     auto absolute_address = dev_buffer.sharded_page_address(bank_id, dev_page_id);
     uint32_t host_buffer_start = host_page_id * page_size;
     if (dev_buffer.is_l1()) {
         auto core_coordinates =
             device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
-        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
+        if (use_dma) {
+            TT_FATAL(dev_buffer.device()->is_mmio_capable(), "DMA read from non-MMIO device is not supported");
+            tt::tt_metal::MetalContext::instance().get_cluster().dma_read_core(
+                host_buffer + host_buffer_start,
+                page_size,
+                tt_cxy_pair(device->id(), core_coordinates),
+                absolute_address);
+        } else {
+            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                host_buffer + host_buffer_start,
+                page_size,
+                tt_cxy_pair(device->id(), core_coordinates),
+                absolute_address);
+        }
     } else {
         std::vector<uint32_t> page;
         page.resize(page_size / sizeof(uint32_t));
         auto bank_local_address = dev_buffer.bank_local_page_address(bank_id, dev_page_id);
-        ReadFromDeviceDRAMChannel(device, bank_id, bank_local_address, page_size, page);
+        ReadFromDeviceDRAMChannel(device, bank_id, bank_local_address, page_size, page, use_dma);
         std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
     }
 }
 
-void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
+void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_order, bool use_dma) {
     TensorMemoryLayout buffer_layout = buffer.buffer_layout();
 
     auto device = buffer.device();
@@ -645,15 +727,16 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
         if (host_page_id.has_value()) {
             if (!shard_order) {
                 read_pages_to_host_helper(
-                    device, buffer, host_buffer, page_size, host_page_id.value(), dev_page_id, bank_id);
+                    device, buffer, host_buffer, page_size, host_page_id.value(), dev_page_id, bank_id, use_dma);
             } else {
-                read_pages_to_host_helper(device, buffer, host_buffer, page_size, dev_page_id, dev_page_id, bank_id);
+                read_pages_to_host_helper(
+                    device, buffer, host_buffer, page_size, dev_page_id, dev_page_id, bank_id, use_dma);
             }
         }
     }
 }
 
-void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
+void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order, bool use_dma) {
     ZoneScoped;
     if (buffer.is_nd_sharded()) {
         TT_FATAL(buffer.is_l1(), "Buffer with BufferDistributionSpec must be L1 for ReadFromDevice!");
@@ -661,20 +744,29 @@ void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                // Using cluster read_core API (as opposed to ReadFromDeviceL1) because it is inplace
-                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                    host_buffer + chunk_mapping_in_bytes.src,
-                    chunk_mapping_in_bytes.size,
-                    tt_cxy_pair(buffer.device()->id(), virtual_core),
-                    buffer.address() + chunk_mapping_in_bytes.dst);
+                // Using cluster read_core/dma_read_core API (as opposed to ReadFromDeviceL1) because it is inplace
+                if (use_dma) {
+                    TT_FATAL(buffer.device()->is_mmio_capable(), "DMA read from non-MMIO device is not supported");
+                    tt::tt_metal::MetalContext::instance().get_cluster().dma_read_core(
+                        host_buffer + chunk_mapping_in_bytes.src,
+                        chunk_mapping_in_bytes.size,
+                        tt_cxy_pair(buffer.device()->id(), virtual_core),
+                        buffer.address() + chunk_mapping_in_bytes.dst);
+                } else {
+                    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                        host_buffer + chunk_mapping_in_bytes.src,
+                        chunk_mapping_in_bytes.size,
+                        tt_cxy_pair(buffer.device()->id(), virtual_core),
+                        buffer.address() + chunk_mapping_in_bytes.dst);
+                }
             }
         }
     } else if (
         buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
-        ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
+        ReadFromDeviceInterleavedContiguous(buffer, host_buffer, use_dma);
     } else if (is_sharded(buffer.buffer_layout())) {
-        ReadFromDeviceSharded(buffer, host_buffer, shard_order);
+        ReadFromDeviceSharded(buffer, host_buffer, shard_order, use_dma);
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");
     }
@@ -684,7 +776,7 @@ void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<uint32_t>
     ReadFromBuffer(*buffer, host_buffer, shard_order);
 }
 
-void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
+void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, bool shard_order, bool use_dma) {
     IDevice* device = buffer.device();
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
@@ -696,13 +788,21 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
             } else {
                 tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
             }
-            ReadFromDevice(buffer, host_buffer, shard_order);
+            ReadFromDevice(buffer, host_buffer, shard_order, use_dma);
         } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Reading from host memory is unsupported!");
         } break;
         default: TT_THROW("Unsupported buffer type!");
     }
+}
+
+void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
+    ReadFromBuffer(buffer, host_buffer, shard_order, /*use_dma=*/false);
+}
+
+void ReadFromBufferUsingDMA(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
+    ReadFromBuffer(buffer, host_buffer, shard_order, /*use_dma=*/true);
 }
 
 void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
@@ -721,7 +821,8 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
     for (auto dev_page_id : page_ids) {
         auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
         auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
-        read_pages_to_host_helper(device, buffer, host_buffer, buffer.page_size(), host_page_id, dev_page_id, bank_id);
+        read_pages_to_host_helper(
+            device, buffer, host_buffer, buffer.page_size(), host_page_id, dev_page_id, bank_id, /*use_dma=*/false);
         host_page_id++;
     }
 }

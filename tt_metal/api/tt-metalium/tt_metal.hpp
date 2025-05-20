@@ -117,6 +117,24 @@ void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<DType>& host_buf
     ReadFromBuffer(*buffer, host_buffer, shard_order);
 }
 
+// DMA reads and writes are only supported for MMIO devices
+void ReadFromBufferUsingDMA(Buffer& buffer, uint8_t* host_buffer, bool shard_order = false);
+
+template <typename DType>
+void ReadFromBufferUsingDMA(Buffer& buffer, std::vector<DType>& host_buffer, bool shard_order = false) {
+    ReadFromBufferUsingDMA(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), shard_order);
+}
+
+void WriteToBufferUsingDMA(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer);
+
+template <typename DType>
+void WriteToBufferUsingDMA(Buffer& buffer, const std::vector<DType>& host_buffer) {
+    WriteToBufferUsingDMA(
+        buffer,
+        tt::stl::Span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
+}
+
 void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id);
 /**
  * Copies data from a buffer into a host buffer
