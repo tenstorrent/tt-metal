@@ -126,7 +126,8 @@ int main(int argc, char** argv) {
             for (int r = 0; r < num_cores_r; ++r) {
                 for (int c = 0; c < num_cores_c; ++c) {
                     print_vec_of_bfloat16(
-                        tensors[r * num_cores_c + c].get_values(), 1, 
+                        tensors[r * num_cores_c + c].get_values(),
+                        1,
                         std::string("input tensor " + std::to_string(r) + " " + std::to_string(c)));
                 }
             }
@@ -248,7 +249,8 @@ int main(int argc, char** argv) {
 
                     if (print_tensor) {
                         print_vec_of_bfloat16(
-                            result_bfp16, 1, 
+                            result_bfp16,
+                            1,
                             std::string("result_bfp16 " + std::to_string(r) + " " + std::to_string(c)));
 
                         print_vec_of_bfloat16(
