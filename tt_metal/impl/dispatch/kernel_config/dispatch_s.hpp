@@ -39,6 +39,7 @@ public:
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
         this->logical_core_ = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(
             device_id, channel, cq_id_);
+        this->kernel_type_ = FDKernelType::DISPATCH;
     }
     void CreateKernel() override;
     void GenerateStaticConfigs() override;

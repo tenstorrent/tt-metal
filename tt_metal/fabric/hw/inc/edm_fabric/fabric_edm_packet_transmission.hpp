@@ -240,6 +240,10 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     packet_header->routing_fields.value = cached_routing_fields.value + 1;
 }
 
+FORCE_INLINE void update_packet_header_for_next_hop(
+    volatile tt_l1_ptr tt::tt_fabric::MeshPacketHeader* packet_header,
+    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {}
+
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring
 //

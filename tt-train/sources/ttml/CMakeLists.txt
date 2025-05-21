@@ -74,6 +74,7 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}/tt_stl"
         # TTNN
         "$ENV{TT_METAL_HOME}/ttnn"
+        "$ENV{TT_METAL_HOME}/ttnn/api"
         "$ENV{TT_METAL_HOME}/ttnn/cpp"
         "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
         "${reflect_SOURCE_DIR}"
@@ -161,6 +162,7 @@ target_link_libraries(
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
 message(STATUS "xtl_SOURCE_DIR: ${xtl_SOURCE_DIR}")
+message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 
 message(STATUS "msgpack_SOURCE_DIR: ${msgpack_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)

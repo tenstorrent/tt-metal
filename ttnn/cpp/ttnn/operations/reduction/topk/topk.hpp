@@ -21,6 +21,7 @@ struct ExecuteTopK {
         const bool largest,
         const bool sorted,
         const std::optional<MemoryConfig>& memory_config,
+        const std::optional<CoreRangeSet>& sub_core_grids,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt);
 };
 

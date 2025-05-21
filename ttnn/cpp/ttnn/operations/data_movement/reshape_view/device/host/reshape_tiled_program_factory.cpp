@@ -161,7 +161,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
 
     TileIterator output_tile_iterator(ho_0, wo_0, ho_sz, wo_sz);
 
-    uint32_t prev_offset_i, prev_offset_o, prev_page_idx_i;
+    uint32_t prev_offset_i{}, prev_offset_o{}, prev_page_idx_i{};
 
     // TODO there are properties of the mapping we could take advantage of to avoid some computation.
     while (output_tile_iterator.next()) {

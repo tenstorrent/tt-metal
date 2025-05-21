@@ -279,6 +279,9 @@ Result conv2d_DRAM(
         const uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
 
         if (!conv_config.shard_layout.has_value()) {
+            if (!conv_config.weights_dtype.has_value()) {
+                conv_config.weights_dtype = weight_tensor.dtype();
+            }
             conv_config = determine_conv_config_for_auto_shard(
                 conv_config,
                 mm_conv,
@@ -406,6 +409,9 @@ Result conv2d_L1(
 
     bool auto_shard = false;
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
+        if (!conv_config.weights_dtype.has_value()) {
+            conv_config.weights_dtype = weight_tensor.dtype();
+        }
         // In this case we deduce the shard layout.
         conv_config = determine_conv_config_for_auto_shard(
             conv_config,
@@ -559,6 +565,15 @@ Result conv2d_L1(
             }
         }
 
+        bool enable_split_reader = conv_config.enable_split_reader;
+        if (enable_split_reader && opt_conv_op_block_config.act_block_h_ntiles == 1) {
+            // If the activation block height is 1, we can't enable split reader.
+            enable_split_reader = false;
+            log_warning(
+                tt::LogOp,
+                "Conv2D: Split reader was requested by the user, but it can't be support with just one tile per core "
+                "in activation matrix height.");
+        }
         // call conv micro op
         auto conv_output = optimized_conv_new(
             input_tensor_post_tm,
@@ -577,7 +592,7 @@ Result conv2d_L1(
             compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
-            conv_config.enable_split_reader);
+            enable_split_reader);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);

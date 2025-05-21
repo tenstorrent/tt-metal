@@ -9,13 +9,16 @@
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/fabric_types.hpp>
 
 namespace tt::tt_fabric {
+
+class FabricContext;
 
 class ControlPlane {
 public:
     explicit ControlPlane(const std::string& mesh_graph_desc_yaml_file);
-    ~ControlPlane() = default;
+    ~ControlPlane();
     void initialize_from_mesh_graph_desc_file(const std::string& mesh_graph_desc_file);
 
     void write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chip_id) const;
@@ -53,6 +56,8 @@ public:
 
     stl::Span<const chip_id_t> get_intra_chip_neighbors(
         mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const;
+    std::unordered_map<mesh_id_t, std::vector<chip_id_t>> get_chip_neighbors(
+        mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const;
 
     routing_plane_id_t get_routing_plane_id(chan_id_t eth_chan_id) const;
 
@@ -69,6 +74,12 @@ public:
 
     void set_routing_mode(uint16_t mode);
     uint16_t get_routing_mode() const;
+
+    void initialize_fabric_context(tt_metal::FabricConfig fabric_config);
+
+    FabricContext& get_fabric_context() const;
+
+    void clear_fabric_context();
 
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
@@ -100,5 +111,7 @@ private:
 
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
+
+    std::unique_ptr<FabricContext> fabric_context_;
 };
 }  // namespace tt::tt_fabric

@@ -46,7 +46,7 @@ class TtSegformerForImageClassification:
         sequence_output = outputs[0]
         batch_size = sequence_output.shape[0]
         sequence_output = ttnn.reshape(sequence_output, (batch_size, -1, self.config.hidden_sizes[-1]))
-        sequence_output = ttnn.mean(sequence_output, dim=1)
+        sequence_output = ttnn.mean(sequence_output, dim=1, keepdim=True)
         sequence_output = ttnn.squeeze(sequence_output, dim=0)
         logits = ttnn.linear(
             sequence_output,

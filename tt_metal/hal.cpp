@@ -37,18 +37,12 @@ uint32_t get_pcie_alignment() { return tt::tt_metal::MetalContext::instance().ha
 
 uint32_t get_erisc_l1_unreserved_base() {
     auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
-    if (hal_ref.get_arch() != tt::ARCH::GRAYSKULL) {
-        return hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-    }
-    return 0;
+    return hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 }
 
 uint32_t get_erisc_l1_unreserved_size() {
     auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
-    if (hal_ref.get_arch() != tt::ARCH::GRAYSKULL) {
-        return hal_ref.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-    }
-    return 0;
+    return hal_ref.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 }
 
 uint32_t get_max_worker_l1_unreserved_size() {

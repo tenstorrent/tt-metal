@@ -281,7 +281,6 @@ if [ "$cpm_use_local_packages" = "ON" ]; then
 fi
 
 if [ "$enable_ccache" = "ON" ]; then
-    cmake_args+=("-DCMAKE_DISABLE_PRECOMPILE_HEADERS=TRUE")
     cmake_args+=("-DENABLE_CCACHE=TRUE")
 fi
 

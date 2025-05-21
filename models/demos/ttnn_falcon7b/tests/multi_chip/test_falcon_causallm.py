@@ -65,6 +65,7 @@ def test_falcon_causal_lm(
     expected_pcc,
     model_config_str,
     num_loops,
+    model_location_generator,
 ):
     torch.manual_seed(0)
     batch = device_batch_size * mesh_device.get_num_devices()
@@ -73,10 +74,12 @@ def test_falcon_causal_lm(
     else:
         shard_dim = 0
 
-    configuration = transformers.FalconConfig.from_pretrained(model_version)
+    model_location_or_version = model_location_generator(model_version, download_if_ci_v2=True)
+
+    configuration = transformers.FalconConfig.from_pretrained(model_location_or_version)
     configuration.num_hidden_layers = num_layers
     model = transformers.models.falcon.modeling_falcon.FalconForCausalLM.from_pretrained(
-        model_version, config=configuration
+        model_location_or_version, config=configuration
     ).eval()
     model_config = get_model_config(model_config_str)
     dtype = model_config["DEFAULT_DTYPE"]

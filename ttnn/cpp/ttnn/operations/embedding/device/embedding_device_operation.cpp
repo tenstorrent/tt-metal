@@ -40,7 +40,9 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
             TT_FATAL(weights.get_padded_shape()[-1] % shard_spec->shape[1] == 0, "Number of columns in table {} must be factor of shard width {}", weights.get_padded_shape()[-1], shard_spec->shape[1]);
         }
     } else {
-        TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Embedding only supports interleaved RM outputs");
+        if (is_sharded(this->output_mem_config.memory_layout())) {
+            TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Embedding only supports height sharded Row Major outputs");
+        }
         TT_FATAL(!is_block_float(this->output_dtype), "Output cannot be a block float dtype when not tilized");
     }
     if(a.get_layout() == Layout::ROW_MAJOR) {

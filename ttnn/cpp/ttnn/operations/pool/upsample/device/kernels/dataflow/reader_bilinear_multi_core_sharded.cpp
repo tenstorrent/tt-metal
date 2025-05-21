@@ -42,7 +42,8 @@ void kernel_main() {
     constexpr uint32_t y_index_comp = get_compile_time_arg_val(5);
     constexpr uint32_t x_index_compute_comp = get_compile_time_arg_val(6);
     constexpr uint32_t is_reader = get_compile_time_arg_val(7);
-
+    constexpr uint32_t blocks = get_compile_time_arg_val(8);
+    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(9);
     uint32_t l1_read_addr = get_read_ptr(in_cb_id);
     uint32_t total_nsticks_to_process = in_w * scale_w;
     // Calculate the number of sticks to process per core by dividing the total number of sticks (in width direction)
@@ -66,58 +67,64 @@ void kernel_main() {
     for (uint32_t image_row = 0; image_row < in_image_rows_per_core * scale_h; ++image_row) {
         x_index = x_index_compute;
         for (uint32_t j = 0; j < nsticks_to_process_on_core; j++) {
-            cb_reserve_back(out_cb_id, 4);
-            cb_reserve_back(in_scalar_cb_id, 1);
+            for (uint32_t i = 0; i < blocks; i++) {
+                cb_reserve_back(out_cb_id, 4);
+                cb_reserve_back(in_scalar_cb_id, 1);
 
-            x = x_index < 0 ? 0 : x_index;
-            y = y_index < read_offset ? read_offset : y_index;
-            dx = x - int(x);
-            dy = y - int(y);
+                x = x_index < 0 ? 0 : x_index;
+                y = y_index < read_offset ? read_offset : y_index;
+                dx = x - int(x);
+                dy = y - int(y);
 
-            uint32_t x1 = int(x);
-            uint32_t y1 = int(y);
-            uint32_t x2 = min(x1 + 1, in_w - 1);
-            uint32_t y2 = y1 + 1;
-            if (is_last_row) {
-                y2 = min(y2, in_image_rows_per_core);  // if last row, y2 should be in_image_rows_per_core
+                uint32_t x1 = int(x);
+                uint32_t y1 = int(y);
+                uint32_t x2 = min(x1 + 1, in_w - 1);
+                uint32_t y2 = y1 + 1;
+                if (is_last_row) {
+                    y2 = min(y2, in_image_rows_per_core);  // if last row, y2 should be in_image_rows_per_core
+                }
+
+                fill_four_val(
+                    get_write_ptr(in_scalar_cb_id),
+                    float_to_bfloat16((1 - dx) * (1 - dy)),
+                    float_to_bfloat16(dx * (1 - dy)),
+                    float_to_bfloat16((1 - dx) * dy),
+                    float_to_bfloat16(dx * dy));
+
+                uint32_t l1_write_addr = get_write_ptr(out_cb_id);
+                uint32_t l1_read_addr_temp =
+                    l1_read_addr + x1 * stick_nbytes + y1 * in_w * stick_nbytes + i * input_block_size_bytes;
+                // 1st tile
+                uint64_t src_noc_addr = get_noc_addr(l1_read_addr_temp);
+                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
+                l1_write_addr += input_block_size_bytes;
+
+                // 2nd tile
+                l1_read_addr_temp =
+                    l1_read_addr + y1 * in_w * stick_nbytes + x2 * stick_nbytes + i * input_block_size_bytes;
+                src_noc_addr = get_noc_addr(l1_read_addr_temp);
+                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
+                l1_write_addr += input_block_size_bytes;
+
+                // 3rd tile
+                l1_read_addr_temp =
+                    l1_read_addr + y2 * in_w * stick_nbytes + x1 * stick_nbytes + i * input_block_size_bytes;
+                src_noc_addr = get_noc_addr(l1_read_addr_temp);
+                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
+                l1_write_addr += input_block_size_bytes;
+
+                // 4th tile
+                l1_read_addr_temp =
+                    l1_read_addr + y2 * in_w * stick_nbytes + x2 * stick_nbytes + i * input_block_size_bytes;
+                src_noc_addr = get_noc_addr(l1_read_addr_temp);
+                noc_async_read(src_noc_addr, l1_write_addr, input_block_size_bytes);
+                l1_write_addr += input_block_size_bytes;
+
+                // push scaler and data into cb.
+                noc_async_read_barrier();
+                cb_push_back(out_cb_id, 4);
+                cb_push_back(in_scalar_cb_id, 1);
             }
-
-            fill_four_val(
-                get_write_ptr(in_scalar_cb_id),
-                float_to_bfloat16((1 - dx) * (1 - dy)),
-                float_to_bfloat16(dx * (1 - dy)),
-                float_to_bfloat16((1 - dx) * dy),
-                float_to_bfloat16(dx * dy));
-
-            uint32_t l1_write_addr = get_write_ptr(out_cb_id);
-            uint32_t l1_read_addr_temp = l1_read_addr + x1 * stick_nbytes + y1 * in_w * stick_nbytes;
-            // 1st tile
-            uint64_t src_noc_addr = get_noc_addr(l1_read_addr_temp);
-            noc_async_read(src_noc_addr, l1_write_addr, stick_nbytes);
-            l1_write_addr += stick_nbytes;
-
-            // 2nd tile
-            l1_read_addr_temp = l1_read_addr + y1 * in_w * stick_nbytes + x2 * stick_nbytes;
-            src_noc_addr = get_noc_addr(l1_read_addr_temp);
-            noc_async_read(src_noc_addr, l1_write_addr, stick_nbytes);
-            l1_write_addr += stick_nbytes;
-
-            // 3rd tile
-            l1_read_addr_temp = l1_read_addr + y2 * in_w * stick_nbytes + x1 * stick_nbytes;
-            src_noc_addr = get_noc_addr(l1_read_addr_temp);
-            noc_async_read(src_noc_addr, l1_write_addr, stick_nbytes);
-            l1_write_addr += stick_nbytes;
-
-            // 4th tile
-            l1_read_addr_temp = l1_read_addr + y2 * in_w * stick_nbytes + x2 * stick_nbytes;
-            src_noc_addr = get_noc_addr(l1_read_addr_temp);
-            noc_async_read(src_noc_addr, l1_write_addr, stick_nbytes);
-            l1_write_addr += stick_nbytes;
-
-            // push scaler and data into cb.
-            noc_async_read_barrier();
-            cb_push_back(out_cb_id, 4);
-            cb_push_back(in_scalar_cb_id, 1);
             x_index += scale_w_inv * 2;
         }
         y_index += scale_h_inv;

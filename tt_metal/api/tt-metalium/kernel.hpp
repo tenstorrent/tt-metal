@@ -143,7 +143,10 @@ class Kernel : public JitBuildSettings {
 
     bool is_idle_eth() const;
 
-   protected:
+    // May only be called after kernel_full_name_ is set.
+    void register_kernel_elf_paths_with_watcher(IDevice& device);
+
+protected:
     int watcher_kernel_id_;
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
@@ -169,7 +172,9 @@ class Kernel : public JitBuildSettings {
 
     virtual std::string config_hash() const = 0;
 
-   private:
+    virtual std::vector<std::string> file_paths(IDevice& device) const = 0;
+
+private:
     void register_kernel_with_watcher();
 };
 
@@ -204,6 +209,7 @@ private:
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
+    std::vector<std::string> file_paths(IDevice& device) const override;
 };
 
 class EthernetKernel : public Kernel {
@@ -237,6 +243,7 @@ private:
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
+    std::vector<std::string> file_paths(IDevice& device) const override;
 };
 
 class ComputeKernel : public Kernel {
@@ -271,6 +278,7 @@ private:
     uint8_t expected_num_binaries() const override;
 
     std::string config_hash() const override;
+    std::vector<std::string> file_paths(IDevice& device) const override;
 };
 
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);

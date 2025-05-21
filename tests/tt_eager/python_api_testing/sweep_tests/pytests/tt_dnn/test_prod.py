@@ -29,7 +29,6 @@ mem_configs = [
     "dim",
     (3, 2, 1, 0, -1, -2, -3, -4, None),
 )
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("keepdim", [False, True])
 @pytest.mark.parametrize(
     "input_shapes",

@@ -6,7 +6,6 @@
 
 #include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
@@ -20,7 +19,7 @@ class Program;
 
 namespace tt::tt_fabric {
 
-tt::tt_fabric::FabricEriscDatamoverConfig get_tt_fabric_config();
+size_t get_tt_fabric_channel_buffer_size_bytes();
 
 // Used to get the run-time args for estabilishing connection with the fabric router.
 // The API appends the connection specific run-time args to the set of exisiting

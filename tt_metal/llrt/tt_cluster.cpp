@@ -5,7 +5,7 @@
 #include "tt_cluster.hpp"
 
 #include <core_coord.hpp>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <algorithm>
@@ -55,36 +55,30 @@ namespace {
 inline std::string get_soc_description_file(
     const tt::ARCH& arch, tt::TargetDevice target_device, [[maybe_unused]] const std::string& output_dir = "") {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    std::string tt_metal_home;
-    if (getenv("TT_METAL_HOME")) {
-        tt_metal_home = getenv("TT_METAL_HOME");
+    std::string path;
+    if (auto *home = getenv("TT_METAL_HOME")) {
+        path = home;
     } else {
-        tt_metal_home = "./";
+        path = "./";
     }
-    if (tt_metal_home.back() != '/') {
-        tt_metal_home += "/";
+    if (path.back() != '/') {
+        path.push_back('/');
     }
-    if (target_device == tt::TargetDevice::Simulator) {
-        switch (arch) {
-            case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported");
-            case tt::ARCH::GRAYSKULL: throw std::runtime_error("GRAYSKULL arch not supported");
-            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_versim.yaml";
-            case tt::ARCH::BLACKHOLE:
-                return tt_metal_home + "tt_metal/soc_descriptors/blackhole_simulation_1x2_arch.yaml";
-            default: throw std::runtime_error("Unsupported device arch");
-        };
-    } else {
-        switch (arch) {
-            case tt::ARCH::Invalid:
-                throw std::runtime_error(
-                    "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
-            case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/soc_descriptors/grayskull_120_arch.yaml";
-            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml";
-            case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/soc_descriptors/blackhole_140_arch.yaml";
-            default: throw std::runtime_error("Unsupported device arch");
-        };
+    path += "tt_metal/soc_descriptors/";
+    bool is_sim = target_device == tt::TargetDevice::Simulator;
+    char const *file = nullptr;
+    switch (arch) {
+    case tt::ARCH::WORMHOLE_B0:
+        file = is_sim ? "wormhole_b0_versim.yaml" : "wormhole_b0_80_arch.yaml";
+        break;
+    case tt::ARCH::BLACKHOLE:
+        file = is_sim ? "blackhole_simulation_1x2_arch.yaml" : "blackhole_140_arch.yaml";
+        break;
+    default:
+        throw std::runtime_error("Unsupported device arch");
     }
-    return "";
+    path += file;
+    return path;
 }
 }  // namespace
 namespace tt {
@@ -163,10 +157,8 @@ Cluster::Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal
 
     this->detect_arch_and_target();
 
-    if (arch_ != ARCH::GRAYSKULL) {
-        routing_info_addr_ = hal_.get_dev_addr(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
-    }
+    routing_info_addr_ = hal_.get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
 
     this->initialize_device_drivers();
 
@@ -364,10 +356,8 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
     barrier_params.dram_barrier_base = hal_.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
 
-    if (hal_.get_arch() != tt::ARCH::GRAYSKULL) {
-        barrier_params.eth_l1_barrier_base =
-            hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
-    }
+    barrier_params.eth_l1_barrier_base =
+        hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
     device_driver->set_barrier_address_params(barrier_params);
 
     this->driver_ = std::move(device_driver);
@@ -470,9 +460,14 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
                  get_soc_desc(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED)) {
                 this->virtual_pcie_cores_[chip_id].insert({core.x, core.y});
             }
-            for (const tt::umd::CoreCoord& core :
-                 get_soc_desc(chip_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-                this->virtual_dram_cores_[chip_id].insert({core.x, core.y});
+            for (auto dram_channel = 0; dram_channel < this->get_soc_desc(chip_id).get_num_dram_views();
+                 dram_channel++) {
+                auto worker_dram_ep = this->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_view(dram_channel);
+                auto eth_dram_ep = this->get_soc_desc(chip_id).get_preferred_eth_core_for_dram_view(dram_channel);
+                this->virtual_dram_cores_[chip_id].insert({worker_dram_ep.x, worker_dram_ep.y});
+                if (worker_dram_ep != eth_dram_ep) {
+                    this->virtual_dram_cores_[chip_id].insert({eth_dram_ep.x, eth_dram_ep.y});
+                }
             }
         }
     }
@@ -611,50 +606,44 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSof
     this->driver_->assert_risc_reset_at_core(core.chip, core_coord, soft_resets);
 }
 
-void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {
-    int chip_id, d_view, d_subchannel;
-    std::tie(chip_id, d_view, d_subchannel) = dram;
-    const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
+void Cluster::write_dram_vec(
+    std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access) const {
+    const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
-        d_view < desc_to_use.get_num_dram_views(),
+        dram_view < desc_to_use.get_num_dram_views(),
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
-        d_view,
+        dram_view,
         desc_to_use.get_num_dram_views());
-    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
-    TT_ASSERT(
-        d_subchannel < desc_to_use.get_dram_cores().at(d_chan).size(),
-        "Trying to address dram sub channel that doesnt exist in the device descriptor");
-    tt::umd::CoreCoord dram_core_coord =
-        desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::TRANSLATED);
-    tt_cxy_pair dram_core = tt_cxy_pair(chip_id, dram_core_coord.x, dram_core_coord.y);
-    size_t offset = desc_to_use.get_address_offset(d_view);
+
+    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
+    tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
+    size_t offset = desc_to_use.get_address_offset(dram_view);
     write_core(
         vec.data(),
         vec.size() * sizeof(uint32_t),
-        tt_cxy_pair(chip_id, dram_core.x, dram_core.y),
+        tt_cxy_pair(device_id, dram_core.x, dram_core.y),
         addr + offset,
         small_access);
 }
 
 void Cluster::read_dram_vec(
-    std::vector<uint32_t> &vec, uint32_t sz_in_bytes, tt_target_dram dram, uint64_t addr, bool small_access) const {
-    int chip_id, d_view, d_subchannel;
-    std::tie(chip_id, d_view, d_subchannel) = dram;
-    const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
+    std::vector<uint32_t>& vec,
+    uint32_t sz_in_bytes,
+    chip_id_t device_id,
+    int dram_view,
+    uint64_t addr,
+    bool small_access) const {
+    const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
-        d_view < desc_to_use.get_num_dram_views(),
+        dram_view < desc_to_use.get_num_dram_views(),
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
-        d_view,
+        dram_view,
         desc_to_use.get_num_dram_views());
-    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
-    TT_ASSERT(
-        d_subchannel < desc_to_use.get_dram_cores().at(d_chan).size(),
-        "Trying to address dram sub channel that doesnt exist in the device descriptor");
-    tt::umd::CoreCoord dram_core_coord =
-        desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::TRANSLATED);
-    tt_cxy_pair dram_core = tt_cxy_pair(chip_id, dram_core_coord.x, dram_core_coord.y);
-    size_t offset = desc_to_use.get_address_offset(d_view);
-    read_core(vec, sz_in_bytes, tt_cxy_pair(chip_id, dram_core.x, dram_core.y), addr + offset, small_access);
+
+    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
+    tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
+    size_t offset = desc_to_use.get_address_offset(dram_view);
+    read_core(vec, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, small_access);
 }
 
 void Cluster::write_core(
@@ -1128,8 +1117,12 @@ void Cluster::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
     if (fabric_config != tt_metal::FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
+        if (tt::tt_fabric::is_tt_fabric_config(fabric_config) || tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+            this->get_control_plane()->initialize_fabric_context(fabric_config);
+        }
     } else {
         this->release_ethernet_cores_for_fabric_routers();
+        this->get_control_plane()->clear_fabric_context();
     }
     this->get_control_plane()->configure_routing_tables_for_fabric_ethernet_channels();
 }

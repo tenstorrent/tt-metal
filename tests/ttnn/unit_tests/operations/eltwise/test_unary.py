@@ -622,7 +622,8 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
 )
 @pytest.mark.parametrize("scalar", [-100, -54, -1, 0, 1, 13, 29])
 @pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq])
-def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
     torch.manual_seed(213919)
 
     # Generate a uniform range of values across the valid int32 range
@@ -634,9 +635,12 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
 
+    if is_wormhole_b0() and use_legacy == False and ((in_data - scalar) < -2147483647).any():
+        pytest.xfail("Overflow occurs as in case of binary_ng, sub_tile is called")
+
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_op(input_tensor, scalar)
+    output_tensor = ttnn_op(input_tensor, scalar, use_legacy=use_legacy)
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden_tensor = golden_function(in_data, scalar)
 

@@ -53,6 +53,7 @@
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 
 using std::vector;
 using namespace tt;
@@ -409,7 +410,7 @@ struct test_board_t {
 
         for (auto& [chip_id, neighbor_cnt] : n_hop_neighbors_cnt) {
             uint32_t temp_neighbor_cnt = UINT32_MAX;
-            chip_id_t selected_chip_id;
+            chip_id_t selected_chip_id{};
 
             // check if the key exists, since it could have been erased if the chip id has already been picked
             if (!chip_n_hop_neighbors.contains(chip_id)) {

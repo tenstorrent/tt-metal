@@ -11,13 +11,6 @@ from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import run_for_wormhole_b0
 
 
-def buffer_address(tensor):
-    addr = []
-    for t in ttnn.get_device_tensors(tensor):
-        addr.append(t.buffer_address())
-    return addr
-
-
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

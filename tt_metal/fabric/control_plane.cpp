@@ -37,6 +37,7 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
+#include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {
 
@@ -126,9 +127,6 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
 
     // Initialize the control plane routers based on mesh graph
     this->initialize_from_mesh_graph_desc_file(mesh_graph_desc_file);
-
-    // Printing, only enabled with log_debug
-    this->print_ethernet_channels();
 }
 
 chip_id_t ControlPlane::get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const {
@@ -374,6 +372,21 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
         this->validate_mesh_connections(0);
+    } else if (mesh_graph_desc_filename == "t3k_split_mesh_graph_descriptor.yaml") {
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({
+            this->get_physical_chip_id_from_eth_coord({0, 0, 0, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 1, 0, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 0, 1, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 1, 1, 0, 0}),
+        });
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({
+            this->get_physical_chip_id_from_eth_coord({0, 2, 0, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 3, 0, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 2, 1, 0, 0}),
+            this->get_physical_chip_id_from_eth_coord({0, 3, 1, 0, 0}),
+        });
+        this->validate_mesh_connections(0);
+        this->validate_mesh_connections(1);
     } else if (
         mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml" ||
@@ -599,7 +612,15 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                     physical_chip_id);
             for (const auto& [connected_mesh_id, edge] : inter_mesh_connectivity[mesh_id][chip_id]) {
                 // Loop over edges connected chip ids, they could connect to different chips for intermesh traffic
+                // edge.connected_chip_ids is a vector of chip ids, that is populated per port. Since we push all
+                // connected ports into the map when we visit a chip id, we should skip if we have already visited this
+                // chip id
+                std::unordered_set<chip_id_t> visited_chip_ids;
                 for (const auto& logical_connected_chip_id : edge.connected_chip_ids) {
+                    if (visited_chip_ids.count(logical_connected_chip_id)) {
+                        continue;
+                    }
+                    visited_chip_ids.insert(logical_connected_chip_id);
                     const auto& physical_connected_chip_id =
                         this->logical_mesh_chip_id_to_physical_chip_id_mapping_[connected_mesh_id]
                                                                                [logical_connected_chip_id];
@@ -877,6 +898,22 @@ stl::Span<const chip_id_t> ControlPlane::get_intra_chip_neighbors(
     return {};
 }
 
+std::unordered_map<mesh_id_t, std::vector<chip_id_t>> ControlPlane::get_chip_neighbors(
+    mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const {
+    std::unordered_map<mesh_id_t, std::vector<chip_id_t>> neighbors;
+    auto intra_neighbors = this->get_intra_chip_neighbors(src_mesh_id, src_chip_id, routing_direction);
+    if (!intra_neighbors.empty()) {
+        neighbors[src_mesh_id].insert(neighbors[src_mesh_id].end(), intra_neighbors.begin(), intra_neighbors.end());
+    }
+    for (const auto& [mesh_id, routing_edge] :
+         this->routing_table_generator_->get_inter_mesh_connectivity()[src_mesh_id][src_chip_id]) {
+        if (routing_edge.port_direction == routing_direction) {
+            neighbors[mesh_id] = routing_edge.connected_chip_ids;
+        }
+    }
+    return neighbors;
+}
+
 size_t ControlPlane::get_num_active_fabric_routers(mesh_id_t mesh_id, chip_id_t chip_id) const {
     // Return the number of active fabric routers on the chip
     // Not always all the available FABRIC_ROUTER cores given by Cluster, since some may be disabled
@@ -1011,5 +1048,19 @@ void ControlPlane::set_routing_mode(uint16_t mode) {
 }
 
 uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
+
+void ControlPlane::initialize_fabric_context(tt_metal::FabricConfig fabric_config) {
+    TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
+    this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
+}
+
+FabricContext& ControlPlane::get_fabric_context() const {
+    TT_FATAL(this->fabric_context_ != nullptr, "Trying to get un-initialized fabric context");
+    return *this->fabric_context_.get();
+}
+
+void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
+
+ControlPlane::~ControlPlane() = default;
 
 }  // namespace tt::tt_fabric

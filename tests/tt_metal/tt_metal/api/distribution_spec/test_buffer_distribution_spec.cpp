@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "command_queue_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
 #include "tt_metal/test_utils/stimulus.hpp"
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/allocator.hpp>
 
@@ -24,7 +25,7 @@ struct BufferDistributionSpecInputs {
     tt::tt_metal::BufferType buffer_type;
 };
 
-struct BufferAllocationExpected {
+struct MeshBufferAllocationExpected {
     std::vector<CoreCoord> cores;
     size_t num_cores;
     size_t num_dev_pages;
@@ -32,7 +33,7 @@ struct BufferAllocationExpected {
     size_t aligned_size_per_bank;
 };
 
-struct BufferReadWriteExpected {
+struct MeshBufferReadWriteExpected {
     using ExplicitCoreMappingInBytes =
         std::pair<std::vector<tt::tt_metal::CoreCoord>, std::vector<tt::tt_metal::DistributionSpec::TargetData>>;
     ExplicitCoreMappingInBytes explicit_core_mapping_in_bytes;
@@ -40,16 +41,16 @@ struct BufferReadWriteExpected {
 
 struct BufferAllocationParams {
     BufferDistributionSpecInputs inputs;
-    BufferAllocationExpected expected;
+    MeshBufferAllocationExpected expected;
 };
 
 struct BufferReadWriteParams {
     BufferDistributionSpecInputs inputs;
-    BufferReadWriteExpected expected;
+    MeshBufferReadWriteExpected expected;
 };
 
-std::shared_ptr<tt::tt_metal::Buffer> create_buffer_from_inputs(
-    const BufferDistributionSpecInputs& inputs, tt::tt_metal::IDevice* device) {
+std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_mesh_buffer_from_inputs(
+    const BufferDistributionSpecInputs& inputs, tt::tt_metal::distributed::MeshDevice* mesh_device) {
     auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
         inputs.physical_tensor_shape,
         inputs.physical_shard_shape,
@@ -58,9 +59,20 @@ std::shared_ptr<tt::tt_metal::Buffer> create_buffer_from_inputs(
         inputs.shard_orientation);
 
     // These values would be passed from tensor correctly based on PageConfig
-    const auto host_size = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
+    const auto host_size_in_bytes = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
     const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
-    return tt::tt_metal::Buffer::create(device, host_size, page_size, inputs.buffer_type, buffer_distribution_spec);
+
+    // MeshBuffer params
+    const tt::tt_metal::distributed::DeviceLocalBufferConfig device_local_config{
+        .page_size = page_size,
+        .buffer_type = inputs.buffer_type,
+        .buffer_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+        .buffer_distribution_spec = buffer_distribution_spec,
+    };
+
+    // Mirrors allocate_mesh_buffer_on_device in ttnn
+    const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
+    return tt::tt_metal::distributed::MeshBuffer::create(mesh_buffer_config, device_local_config, mesh_device);
 }
 
 }  // namespace distribution_spec_tests
@@ -69,37 +81,42 @@ std::shared_ptr<tt::tt_metal::Buffer> create_buffer_from_inputs(
 using namespace distribution_spec_tests;
 using namespace tt::tt_metal;
 
-class BufferAllocationTests : public CommandQueueSingleCardBufferFixture,
-                              public ::testing::WithParamInterface<BufferAllocationParams> {};
+class MeshBufferAllocationTests : public GenericMeshDeviceFixture,
+                                  public ::testing::WithParamInterface<BufferAllocationParams> {};
 
-TEST_P(BufferAllocationTests, BufferAllocation) {
+TEST_P(MeshBufferAllocationTests, Allocation) {
     const auto& params = GetParam();
 
-    auto buffer = create_buffer_from_inputs(params.inputs, devices_[0]);
+    // Create a replicated mesh buffer across generic mesh device; tests will only use first device
+    const auto mesh_buffer = create_replicated_mesh_buffer_from_inputs(params.inputs, mesh_device_.get());
 
-    // Check that the stored cores in Buffer matches expected cores to be used
-    const auto& [cores, _] = buffer->get_bank_data_mapping();
+    // Extract local single-device buffer (ie. shard_view) concepts for testing
+    const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
+    const auto shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
+
+    // Check that the stored cores in local device buffer matches expected cores to be used
+    const auto& [cores, _] = shard_view->get_bank_data_mapping();
     EXPECT_EQ(cores, params.expected.cores);
 
     /* These are the params allocator cares about; check all of them */
-    EXPECT_EQ(buffer->num_cores().value(), params.expected.num_cores);
+    EXPECT_EQ(shard_view->num_cores().value(), params.expected.num_cores);
     // For BufferDistributionSpec, defined as: max number of pages per core * num_cores
-    EXPECT_EQ(buffer->num_dev_pages(), params.expected.num_dev_pages);
+    EXPECT_EQ(shard_view->num_dev_pages(), params.expected.num_dev_pages);
 
     // Alignment is handled internally, not testing that here
-    // In buffer, defined as: num_dev_pages * aligned_page_size
-    EXPECT_EQ(buffer->aligned_size(), params.expected.aligned_size);
-    // In buffer, calculated from: aligned_size, aligned_page_size, num_banks, alignment
-    // TODO: Fix buffer implementation to use aligned_size / num_cores? They should be equal...
-    // - Need to make buffer->num_cores() not optional...
-    EXPECT_EQ(buffer->aligned_size_per_bank(), params.expected.aligned_size_per_bank);
-    EXPECT_EQ(buffer->aligned_size() % buffer->num_cores().value(), 0);
-    EXPECT_EQ(buffer->aligned_size_per_bank(), buffer->aligned_size() / buffer->num_cores().value());
+    // In local device buffer, defined as: num_dev_pages * aligned_page_size
+    EXPECT_EQ(shard_view->aligned_size(), params.expected.aligned_size);
+    // In local device buffer, calculated from: aligned_size, aligned_page_size, num_banks, alignment
+    // TODO: Fix local device buffer implementation to use aligned_size / num_cores? They should be equal...
+    // - Need to make shard_view->num_cores() not optional...
+    EXPECT_EQ(shard_view->aligned_size_per_bank(), params.expected.aligned_size_per_bank);
+    EXPECT_EQ(shard_view->aligned_size() % shard_view->num_cores().value(), 0);
+    EXPECT_EQ(shard_view->aligned_size_per_bank(), shard_view->aligned_size() / shard_view->num_cores().value());
 }
 
 INSTANTIATE_TEST_SUITE_P(
     BufferDistributionSpec,
-    BufferAllocationTests,
+    MeshBufferAllocationTests,
     ::testing::Values(
         // Cut along last two dims; tile layout
         // page size = 32 x 32 x 2 = 2048 bytes (eg. bfloat16, uint16, etc...)
@@ -113,7 +130,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shard_orientation = ShardOrientation::ROW_MAJOR,
                 .buffer_type = BufferType::L1,
             },
-            BufferAllocationExpected{
+            MeshBufferAllocationExpected{
                 .cores = {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}},
                 .num_cores = 6,
                 .num_dev_pages = 10 * 6,  // Shard shape is 10 pages
@@ -133,7 +150,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shard_orientation = ShardOrientation::COL_MAJOR,
                 .buffer_type = BufferType::L1,
             },
-            BufferAllocationExpected{
+            MeshBufferAllocationExpected{
                 .cores = {{0, 0}, {0, 1}, {0, 2}, {0, 3}},
                 .num_cores = 4,
                 .num_dev_pages = 384 * 4,  // Shard shape is 384 pages
@@ -153,7 +170,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shard_orientation = ShardOrientation::ROW_MAJOR,
                 .buffer_type = BufferType::L1,
             },
-            BufferAllocationExpected{
+            MeshBufferAllocationExpected{
                 .cores = {{0, 0}, {1, 0}, {2, 0}, {0, 1}, {1, 1}},
                 .num_cores = 5,
                 .num_dev_pages = 3 * 8 * 5,  // Shard shape is 8 pages; 3 shards max per bank (12 shards over 5 banks)
@@ -173,7 +190,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shard_orientation = ShardOrientation::COL_MAJOR,
                 .buffer_type = BufferType::L1,
             },
-            BufferAllocationExpected{
+            MeshBufferAllocationExpected{
                 .cores = {{0, 0}, {0, 1}, {1, 0}, {1, 1}},
                 .num_cores = 4,
                 .num_dev_pages = 5 * 120 *
@@ -184,23 +201,34 @@ INSTANTIATE_TEST_SUITE_P(
         })  // Values
 );
 
-class BufferReadWriteTests : public CommandQueueSingleCardBufferFixture,
-                             public ::testing::WithParamInterface<std::tuple<bool, bool, BufferReadWriteParams>> {};
+class MeshBufferReadWriteTests : public GenericMeshDeviceFixture,
+                                 public ::testing::WithParamInterface<std::tuple<bool, bool, BufferReadWriteParams>> {};
 
-TEST_P(BufferReadWriteTests, WriteReadLoopback) {
+TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     const auto& [cq_write, cq_read, params] = GetParam();
 
     // The expected values are assuming 16 byte alignment, which is true for L1 for WH + BH
     // If want to extend tests to DRAM or other alignment, can update expected values to be derived from aligned page
     // size
-    const auto allocator_alignment = devices_[0]->allocator()->get_alignment(params.inputs.buffer_type);
+    const auto allocator_alignment = mesh_device_->allocator()->get_alignment(params.inputs.buffer_type);
     ASSERT_EQ(allocator_alignment, 16);
 
-    auto buffer = create_buffer_from_inputs(params.inputs, devices_[0]);
-    auto device = buffer->device();
-    const DeviceAddr base_address = buffer->address();
+    // Create a replicated mesh buffer across generic mesh device; tests will only use first device
+    const auto mesh_buffer = create_replicated_mesh_buffer_from_inputs(params.inputs, mesh_device_.get());
+
+    // Extract local single-device buffer (ie. shard_view) concepts for testing
+    const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
+    const auto shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
+    const auto local_device = shard_view->device();
+    const auto host_size_in_bytes = mesh_buffer->device_local_size();
+    const auto bank_base_address = mesh_buffer->address();
+
+    // Double check that mesh buffer properties match local single-device buffer properties
+    ASSERT_EQ(host_size_in_bytes, shard_view->size());
+    ASSERT_EQ(bank_base_address, shard_view->address());
 
     /* Test is based off of: test_EnqueueWriteBuffer_and_EnqueueReadBuffer
+     * Here, buffer refers to local device buffer or shard view
      * - Initialize buffer and command queue state to 0
      * - Initialize src vector
      * - Write to buffer (with either EnqueueWriteBuffer or WriteToBuffer)
@@ -208,21 +236,22 @@ TEST_P(BufferReadWriteTests, WriteReadLoopback) {
      * - Read from buffer (with either EnqueueReadBuffer or ReadFromBuffer)
      */
 
-    // Initialize buffer to 0
+    // Initialize local device buffer to 0
     {
-        std::vector<uint32_t> zeros_vector(buffer->aligned_size_per_bank() / sizeof(uint32_t), 0);
+        std::vector<uint32_t> zeros_vector(shard_view->aligned_size_per_bank() / sizeof(uint32_t), 0);
         for (const auto& core : corerange_to_cores(params.inputs.grid)) {
-            tt::tt_metal::detail::WriteToDeviceL1(device, core, base_address, zeros_vector, buffer->core_type());
+            tt::tt_metal::detail::WriteToDeviceL1(
+                local_device, core, bank_base_address, zeros_vector, shard_view->core_type());
         }
     }
 
     // Clear out command queue
     {
         uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(local_device->id());
         chip_id_t mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
-        uint32_t cq_size = device->sysmem_manager().get_cq_size();
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(local_device->id());
+        uint32_t cq_size = local_device->sysmem_manager().get_cq_size();
         uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
             CommandQueueHostAddrType::UNRESERVED);
 
@@ -238,29 +267,39 @@ TEST_P(BufferReadWriteTests, WriteReadLoopback) {
 
     // Create src vector
     const auto src =
-        tt::test_utils::generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, buffer->size() / sizeof(uint8_t));
+        tt::test_utils::generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, host_size_in_bytes / sizeof(uint8_t));
 
     if (cq_write) {
-        tt::log_info("Writing with: EnqueueWriteBuffer");
-        auto& command_queue = device->command_queue();
-        EnqueueWriteBuffer(command_queue, buffer, src.data(), /*blocking=*/false);
-        Finish(command_queue);
+        tt::log_info("Writing with: FDMeshCommandQueue enqueue_write_shards");
+        std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
+            .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
+            .host_data = const_cast<void*>(reinterpret_cast<const void*>(src.data())),
+        }};
+        mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, shard_data_transfer, /*blocking=*/false);
+        Finish(mesh_device_->mesh_command_queue());
     } else {
-        tt::log_info("Writing with: WriteToBuffer");
-        tt::tt_metal::detail::WriteToBuffer(buffer, src);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+        tt::log_info("Writing with: WriteToBuffer (equivalent to SDMeshCommandQueue enqueue_write_shards)");
+        tt::tt_metal::detail::WriteToBuffer(*shard_view, src);
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(local_device->id());
     }
 
     // Validate written results are correct per core
     {
         // result_per_core is reassigned inside ReadFromDeviceL1
         std::vector<uint32_t> result_per_core;
+        // src.data() is sufficient since src is already a vector of uint8_t, but this is safer if src creation is
+        // changed to another dtype
         const auto* src_ptr = static_cast<const uint8_t*>(src.data());
 
         const auto& [cores, core_mapping_in_bytes] = params.expected.explicit_core_mapping_in_bytes;
         for (size_t i = 0; i < cores.size(); i++) {
             tt::tt_metal::detail::ReadFromDeviceL1(
-                device, cores[i], base_address, buffer->aligned_size_per_bank(), result_per_core, buffer->core_type());
+                local_device,
+                cores[i],
+                bank_base_address,
+                shard_view->aligned_size_per_bank(),
+                result_per_core,
+                shard_view->core_type());
 
             const auto* result_per_core_ptr = reinterpret_cast<const uint8_t*>(result_per_core.data());
             for (const auto& chunk_mapping_in_bytes : core_mapping_in_bytes[i]) {
@@ -274,16 +313,20 @@ TEST_P(BufferReadWriteTests, WriteReadLoopback) {
         }
     }
 
-    std::vector<uint8_t> dst(buffer->size() / sizeof(uint8_t));
+    // Initialize dst vector
+    std::vector<uint8_t> dst(host_size_in_bytes / sizeof(uint8_t), 0);
 
     if (cq_read) {
-        tt::log_debug("Reading with: EnqueueReadBuffer");
-        auto& command_queue = device->command_queue();
-        EnqueueReadBuffer(command_queue, buffer, dst.data(), /*blocking=*/false);
-        Finish(command_queue);
+        tt::log_info("Reading with: FDMeshCommandQueue enqueue_read_shards");
+        std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
+            .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
+            .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
+        }};
+        mesh_device_->mesh_command_queue().enqueue_read_shards(shard_data_transfer, mesh_buffer, /*blocking=*/false);
+        Finish(mesh_device_->mesh_command_queue());
     } else {
-        tt::log_info("Reading with: ReadFromBuffer");
-        tt::tt_metal::detail::ReadFromBuffer(buffer, dst);
+        tt::log_info("Reading with: ReadFromBuffer (equivalent to SDMeshCommandQueue enqueue_read_shards)");
+        tt::tt_metal::detail::ReadFromBuffer(*shard_view, dst);
     }
 
     // Validate read results are correct
@@ -292,7 +335,7 @@ TEST_P(BufferReadWriteTests, WriteReadLoopback) {
 
 INSTANTIATE_TEST_SUITE_P(
     BufferDistributionSpec,
-    BufferReadWriteTests,
+    MeshBufferReadWriteTests,
     ::testing::Combine(
         ::testing::Values(true, false),  // cq_write
         ::testing::Values(true, false),  // cq_read
@@ -309,8 +352,8 @@ INSTANTIATE_TEST_SUITE_P(
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
                 },
-                BufferReadWriteExpected{
-                    .explicit_core_mapping_in_bytes = BufferReadWriteExpected::ExplicitCoreMappingInBytes(
+                MeshBufferReadWriteExpected{
+                    .explicit_core_mapping_in_bytes = MeshBufferReadWriteExpected::ExplicitCoreMappingInBytes(
                         {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}, {2, 1}, {3, 1}},
                         {{{0, 0, 2048}, {2048, 2048, 2048}},
                          {{4096, 0, 2048}},
@@ -335,8 +378,8 @@ INSTANTIATE_TEST_SUITE_P(
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
                 },
-                BufferReadWriteExpected{
-                    .explicit_core_mapping_in_bytes = BufferReadWriteExpected::ExplicitCoreMappingInBytes(
+                MeshBufferReadWriteExpected{
+                    .explicit_core_mapping_in_bytes = MeshBufferReadWriteExpected::ExplicitCoreMappingInBytes(
                         {{4, 6}, {5, 6}, {6, 6}, {1, 1}},
                         {{{0, 0, 1088}, {1088, 1088, 1088}, {2176, 3264, 1088}, {3264, 4352, 1088}},
                          {{4352, 0, 1088}, {5440, 1088, 1088}, {6528, 3264, 1088}, {7616, 4352, 1088}},
@@ -356,8 +399,8 @@ INSTANTIATE_TEST_SUITE_P(
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
                 },
-                BufferReadWriteExpected{
-                    .explicit_core_mapping_in_bytes = BufferReadWriteExpected::ExplicitCoreMappingInBytes(
+                MeshBufferReadWriteExpected{
+                    .explicit_core_mapping_in_bytes = MeshBufferReadWriteExpected::ExplicitCoreMappingInBytes(
                         {{0, 0}, {1, 0}},
                         {{{0, 0, 16}, {32, 16, 16}, {64, 32, 16}, {96, 64, 16}, {128, 80, 16}, {160, 96, 16}},
                          {{16, 0, 16}, {48, 16, 16}, {80, 32, 16}, {112, 64, 16}, {144, 80, 16}, {176, 96, 16}}}),
@@ -376,8 +419,8 @@ INSTANTIATE_TEST_SUITE_P(
                     .shard_orientation = ShardOrientation::COL_MAJOR,
                     .buffer_type = BufferType::L1,
                 },
-                BufferReadWriteExpected{
-                    .explicit_core_mapping_in_bytes = BufferReadWriteExpected::ExplicitCoreMappingInBytes(
+                MeshBufferReadWriteExpected{
+                    .explicit_core_mapping_in_bytes = MeshBufferReadWriteExpected::ExplicitCoreMappingInBytes(
                         {{0, 0}, {0, 1}, {0, 2}, {0, 3}, {0, 4}, {1, 0}, {1, 1}, {1, 2}, {1, 3}, {1, 4}},
                         {{{0, 0, 4},
                           {4, 16, 4},
@@ -411,8 +454,8 @@ INSTANTIATE_TEST_SUITE_P(
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
                 },
-                BufferReadWriteExpected{
-                    .explicit_core_mapping_in_bytes = BufferReadWriteExpected::ExplicitCoreMappingInBytes(
+                MeshBufferReadWriteExpected{
+                    .explicit_core_mapping_in_bytes = MeshBufferReadWriteExpected::ExplicitCoreMappingInBytes(
                         {{0, 0}, {1, 0}, {2, 0}, {0, 1}, {1, 1}},
                         {{{0, 0, 2048},
                           {2048, 2048, 2048},

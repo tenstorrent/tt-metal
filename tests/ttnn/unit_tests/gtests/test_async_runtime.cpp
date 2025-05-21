@@ -65,8 +65,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     ttnn::SmallVector<int64_t> reduce_dims = {3};
     Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
     Tensor np_out_host = np_out.cpu();
-    const auto golden_output =
-        std::get<MultiDeviceHostStorage>(np_out_host.get_storage()).buffers.at(0).view_as<bfloat16>();
+    auto buffer = std::get<MultiDeviceHostStorage>(np_out_host.get_storage()).get_buffer(0);
+    const auto golden_output = buffer.view_as<bfloat16>();
     // Events for host - device synchronization
     // Running sum-reduce with preallocated output
     // Preallocate Input and Output Tensors on Device

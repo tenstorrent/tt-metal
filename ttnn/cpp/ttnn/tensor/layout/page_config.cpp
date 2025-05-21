@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "page_config.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
 
 #include <tt-metalium/shape2d.hpp>
 

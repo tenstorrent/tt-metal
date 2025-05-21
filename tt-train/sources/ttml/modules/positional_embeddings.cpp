@@ -49,7 +49,7 @@ PositionalEmbedding::PositionalEmbedding(const PositionalEmbeddingConfig& config
 
 autograd::TensorPtr PositionalEmbedding::operator()(const autograd::TensorPtr& input) {
     auto input_tensor = input->get_value();
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.logical_shape();
     if (input_shape.rank() != 4) {
         throw std::runtime_error(
             "PositionalEmbedding: input tensor must have 4 dimensions. Got rank " + std::to_string(input_shape.rank()));
@@ -87,7 +87,7 @@ TrainablePositionalEmbedding::TrainablePositionalEmbedding(const PositionalEmbed
 
 autograd::TensorPtr TrainablePositionalEmbedding::operator()(const autograd::TensorPtr& input) {
     auto input_tensor = input->get_value();
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.logical_shape();
     if (input_shape.rank() != 4) {
         throw std::runtime_error(
             "TrainablePositionalEmbedding: input tensor must have 4 dimensions. Got rank " +

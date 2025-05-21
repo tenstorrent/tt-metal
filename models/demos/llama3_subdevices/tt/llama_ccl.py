@@ -5,10 +5,6 @@
 import ttnn
 import torch
 
-from models.demos.llama3_subdevices.tt.llama_common import (
-    check_mesh_tensor_alloc,
-)
-
 
 class TT_CCL:
     def __init__(
@@ -114,7 +110,6 @@ class TT_CCL:
             memory_config=intermediate_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=[8, 4]),
         )
-        check_mesh_tensor_alloc(tt_intermediate_tensor)
         tt_intermediate_tensors = [tt_intermediate_tensor]
         return tt_intermediate_tensors
 
@@ -146,7 +141,6 @@ class TT_CCL:
             memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        check_mesh_tensor_alloc(tt_buffer)
         persistent_buffers["SDPA"] = tt_buffer
 
         # Layernorm
@@ -166,7 +160,6 @@ class TT_CCL:
             memory_config=tt_stats_sharded_config,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        check_mesh_tensor_alloc(tt_buffer)
         persistent_buffers["LAYERNORM"] = tt_buffer
 
         tt_buffer = ttnn.from_torch(
@@ -177,7 +170,6 @@ class TT_CCL:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        check_mesh_tensor_alloc(tt_buffer)
         persistent_buffers["SAMPLING"] = tt_buffer
 
         # Binary Mult + Silu
@@ -189,7 +181,6 @@ class TT_CCL:
             memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        check_mesh_tensor_alloc(tt_buffer)
         persistent_buffers["BINARY_MUL"] = tt_buffer
 
         return persistent_buffers
@@ -341,7 +332,6 @@ class TT_CCL:
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                         cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_{i}_{seqlen}"),
                     )
-                    check_mesh_tensor_alloc(tt_buffer)
                     tt_buffers.append(tt_buffer)
                 for i in range(2):
                     tt_buffer = ttnn.as_tensor(
@@ -353,7 +343,6 @@ class TT_CCL:
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                         cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_{i}_{seqlen}"),
                     )
-                    check_mesh_tensor_alloc(tt_buffer)
                     tt_buffers.append(tt_buffer)
                 for i in range(2):
                     tt_buffer = ttnn.as_tensor(
@@ -365,7 +354,6 @@ class TT_CCL:
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                         cache_file_name=self.weight_cache_path / (f"pb_rs_02_{key}_{i}_{seqlen}"),
                     )
-                    check_mesh_tensor_alloc(tt_buffer)
                     tt_buffers.append(tt_buffer)
                 persistent_buffers[key] = tt_buffers
             persistent_buffers_all[seqlen] = persistent_buffers
@@ -401,7 +389,6 @@ class TT_CCL:
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
                 )
-                check_mesh_tensor_alloc(tt_buffer)
                 ag_persistent_buffers[key] = tt_buffer
             ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
         return ag_persistent_buffers_all

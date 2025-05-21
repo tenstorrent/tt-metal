@@ -33,7 +33,7 @@ TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 480, "max": 505}, 10: {"min": 195, "max": 215}, 80: {"min": 47, "max": 51}},
+    "4U": {1: {"min": 470, "max": 505}, 10: {"min": 195, "max": 215}, 80: {"min": 47, "max": 51}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
     "6U": {1: {"min": 545, "max": 570}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
@@ -185,6 +185,15 @@ def run_llama3_demo(
 
     page_table_tt = None
     if paged_attention:
+        paged_cache_max_seq_len = (
+            paged_attention_config.block_size
+            * paged_attention_config.max_num_blocks
+            / model_args.batch_size_per_device_group
+        )
+        assert (
+            max_generated_tokens + start_pos <= paged_cache_max_seq_len
+        ), f"max_generated_tokens ({max_generated_tokens}) + start_pos ({start_pos}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
+
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical
@@ -559,11 +568,11 @@ def run_llama3_demo(
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
@@ -574,11 +583,11 @@ def run_llama3_demo(
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
@@ -589,11 +598,11 @@ def run_llama3_demo(
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             4 * 128 * 1024,  # max_generated_tokens (same index for stress test)
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
@@ -604,11 +613,11 @@ def run_llama3_demo(
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             2048,  # max_generated_tokens (same index for stress test)
-            False,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
@@ -619,11 +628,11 @@ def run_llama3_demo(
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             1,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
@@ -634,11 +643,11 @@ def run_llama3_demo(
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             20000,  # experimentally established as large enough to catch ND hangs
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos

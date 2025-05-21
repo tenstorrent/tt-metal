@@ -440,7 +440,6 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
     assert_with_pcc(in_torch, out_torch, 0.9999)
 
 
-@skip_for_blackhole("Fails on Blackhole. Issue #20698")
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("shape", [[1, 1, 18, 13]])
 @pytest.mark.parametrize("padshape", [[1, 1, TILE_HEIGHT, TILE_WIDTH]])

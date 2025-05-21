@@ -60,18 +60,12 @@ ALWI void transpose_wh_init_short(uint32_t icb) {
  * | Argument       | Description                                             | Type     | Valid Range                                    | Required |
  * |----------------|---------------------------------------------------------|----------|------------------------------------------------|----------|
  * | in_cb_id       | The identifier of the circular buffer (CB) containing A | uint32_t | 0 to 31                                        | True     |
- * | in_tile_index  | The index of tile A within the first CB                 | uint32_t | Must be less than the size of the CB           | True     | 
+ * | in_tile_index  | The index of tile A within the first CB                 | uint32_t | Must be less than the size of the CB           | True     |
  * | dst_tile_index | The index of the tile in DST REG for the result B       | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
  // clang-format on
 ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
-    UNPACK((
-#ifdef ARCH_GRAYSKULL
-        llk_unpack_A<BroadcastType::NONE, false>(icb, itile, true)
-#else
-        llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)
-#endif
-            ));
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)));
     MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(idst)));
 }
 

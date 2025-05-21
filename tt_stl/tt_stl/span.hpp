@@ -93,9 +93,25 @@ template <class R>
 Span(R&&) -> Span<std::remove_reference_t<decltype(*std::begin(std::declval<R&>()))>>;
 
 template <class Container>
-auto MakeConstSpan(const Container& vec) {
+auto make_const_span(const Container& vec) {
     using T = std::remove_reference_t<decltype(*std::begin(std::declval<Container&>()))>;
     return Span<const T>(vec.data(), vec.size());
+}
+
+template <class Container>
+auto make_span(Container& vec) {
+    using T = std::remove_reference_t<decltype(*std::begin(std::declval<Container&>()))>;
+    return Span<T>(vec.data(), vec.size());
+}
+
+template <class T>
+auto as_bytes(Span<T> span) noexcept {
+    return Span<const std::byte>(reinterpret_cast<const std::byte*>(span.data()), span.size_bytes());
+}
+
+template <class T>
+auto as_writable_bytes(Span<T> span) noexcept {
+    return Span<std::byte>(reinterpret_cast<std::byte*>(span.data()), span.size_bytes());
 }
 
 }  // namespace tt::stl

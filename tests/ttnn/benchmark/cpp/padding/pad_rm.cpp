@@ -12,7 +12,7 @@
 #include <ttnn/tensor/storage.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <ttnn/tensor/host_buffer/functions.hpp>
-#include <ttnn/tensor/host_buffer/host_buffer.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include "small_vector.hpp"
 
 namespace {

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "hostdevcommon/dprint_common.h"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 
 #include "hostdevcommon/dprint_common.h"
 

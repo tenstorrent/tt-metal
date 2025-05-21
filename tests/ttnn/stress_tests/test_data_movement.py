@@ -9,6 +9,8 @@ import ttnn
 from ttnn.device import get_device_core_grid, is_blackhole, is_wormhole_b0
 
 NUM_REPEATS = 5
+NUM_DEVICES = ttnn.distributed.get_num_pcie_devices()
+
 
 ##### WORMMHOLE #######
 L1_INPUT_SHAPE_WH = (30_000, 8, 8)
@@ -46,6 +48,7 @@ def reshape_input_shapes(test_case: str):
         raise RuntimeError("Unidentifiable device")
 
 
+@pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
 @pytest.mark.parametrize(
     "shapes_memory_config",
     [
@@ -53,11 +56,11 @@ def reshape_input_shapes(test_case: str):
         (*reshape_input_shapes("dram"), ttnn.DRAM_MEMORY_CONFIG),
     ],
 )
-def test_stress_reshape(device, use_program_cache, shapes_memory_config):
+def test_stress_reshape(mesh_device, use_program_cache, shapes_memory_config):
     input_shape, output_shape, memory_config = shapes_memory_config
     for _ in range(NUM_REPEATS):
         torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(torch_input_tensor, memory_config=memory_config, device=device)
+        input_tensor = ttnn.from_torch(torch_input_tensor, memory_config=memory_config, device=mesh_device)
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
         output_tensor = ttnn.reshape(input_tensor, output_shape)
 
@@ -76,9 +79,10 @@ def sharding_input_shape():
         raise RuntimeError("Unidentifiable device")
 
 
-def test_stress_reshard(device, use_program_cache):
+@pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
+def test_stress_reshard(mesh_device, use_program_cache):
     input_tensor_shape = sharding_input_shape()
-    core_grid = get_device_core_grid(device)
+    core_grid = get_device_core_grid(mesh_device)
 
     l1_shard_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -94,7 +98,7 @@ def test_stress_reshard(device, use_program_cache):
     )
     for _ in range(NUM_REPEATS):
         input_tensor_torch = torch.randn(input_tensor_shape)
-        input_tensor = ttnn.from_torch(input_tensor_torch, layout=ttnn.TILE_LAYOUT, device=device)
+        input_tensor = ttnn.from_torch(input_tensor_torch, layout=ttnn.TILE_LAYOUT, device=mesh_device)
 
         output_tensor = ttnn.interleaved_to_sharded(input_tensor, sharded_mem_config)
 

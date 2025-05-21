@@ -25,6 +25,8 @@ using namespace tt::tt_metal;
 
 void EthRouterKernel::GenerateStaticConfigs() {
     auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    kernel_type_ = FDKernelType::ROUTING;
+
     if (as_mux_) {
         uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
             servicing_device_id_);  // TODO: can be mmio
@@ -300,8 +302,8 @@ void EthRouterKernel::CreateKernel() {
         {"UPSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
         {"DOWNSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
         {"DOWNSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
         {"SKIP_NOC_LOGGING", "1"}};
     configure_kernel_variant(dispatch_kernel_file_names[PACKET_ROUTER_MUX], compile_args, defines, false, false, false);
 }

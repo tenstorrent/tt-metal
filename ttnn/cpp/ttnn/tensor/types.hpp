@@ -90,8 +90,9 @@ using Array8D = std::array<uint32_t, 8>;
 
 class MemoryConfig final {
 public:
-    MemoryConfig() = default; // Interleaved DRAM
-    explicit MemoryConfig(TensorMemoryLayout memory_layout,
+    MemoryConfig() = default;  // Interleaved DRAM
+    explicit MemoryConfig(
+        TensorMemoryLayout memory_layout,
         BufferType buffer_type = BufferType::DRAM,
         std::optional<ShardSpec> shard_spec = std::nullopt) :
         memory_layout_(memory_layout), buffer_type_(buffer_type), shard_spec_(std::move(shard_spec)) {}
@@ -125,11 +126,11 @@ private:
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
-bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
-bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
+bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b);
+bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b);
 
-} // namespace tt_metal
-} // namespace tt
+}  // namespace tt_metal
+}  // namespace tt
 
 template <>
 struct tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig> {

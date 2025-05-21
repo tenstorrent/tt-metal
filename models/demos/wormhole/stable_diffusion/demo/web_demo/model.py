@@ -21,7 +21,8 @@ from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMSched
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
-from models.utility_functions import disable_persistent_kernel_cache
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
+from models.utility_functions import disable_persistent_kernel_cache, is_blackhole
 
 
 def constant_prop_time_embeddings(timesteps, sample, time_proj):
@@ -68,7 +69,7 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
     vae.to(torch_device)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
-
+    tt_vae = Vae(torch_vae=vae, device=device)
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
     tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
     text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
@@ -190,14 +191,23 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
             iter += 1
         logger.info(f"Time taken for {iter} iterations: total: {total_accum:.3f}")
 
-        latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
+        # scale and decode the image latents with vae
+        latents = 1 / 0.18215 * ttnn_latents
 
-        latents = 1 / 0.18215 * latents
-        with torch.no_grad():
-            image = vae.decode(latents).sample
+        # on blackhole, we use the original vae decoder until #20760 is fixed
+        if not is_blackhole():
+            latents = ttnn.permute(latents, [0, 2, 3, 1])
+            ttnn_output = tt_vae.decode(latents)
+            ttnn_output = ttnn.reshape(ttnn_output, [1, image_size[0], image_size[1], ttnn_output.shape[3]])
+            ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
+            image = ttnn.to_torch(ttnn_output)
+        else:
+            latents = ttnn.to_torch(latents).to(torch.float32)
+            with torch.no_grad():
+                image = vae.decode(latents).sample
 
         image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
+        image = image.detach().cpu().float().permute(0, 2, 3, 1).numpy()
         images = (image * 255).round().astype("uint8")
         pil_images = [Image.fromarray(image) for image in images][0]
         # Generate a random file name for the image
@@ -216,7 +226,7 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
 def warmup_model():
     # create device, these constants are specific to n150 & n300
     device_id = 0
-    device_params = {"l1_small_size": 32768}
+    device_params = {"l1_small_size": 11 * 8192}
     dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
     if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
         dispatch_core_type = ttnn.device.DispatchCoreType.ETH

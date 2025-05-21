@@ -8,6 +8,7 @@
 #include <set>
 #include <vector>
 
+#include "core_coord.hpp"
 #include "data_types.hpp"
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
@@ -59,5 +60,11 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
 
 // Perform additional configuration (writing to specific L1 addresses, etc.) for fabric kernels on this device.
 void configure_fabric_cores(tt::tt_metal::IDevice* device);
+
+// Return the virtual dispatch cores running on a given device
+const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(chip_id_t dev_id);
+
+// Return the virtual cores used for dispatch routing/tunneling on a given device
+const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_t dev_id);
 
 }  // namespace tt::tt_metal

@@ -6,6 +6,7 @@
 
 import os
 import csv
+import sys
 from loguru import logger  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import itertools
@@ -22,6 +23,17 @@ test_id_to_name = {
     3: "DRAM Directed Ideal",
     4: "One to One Packet Sizes",
     5: "One from One Packet Sizes",
+    6: "One to All 2x2 Packet Sizes",
+    7: "One to All 4x4 Packet Sizes",
+    8: "One to All 10x10 Packet Sizes",
+    9: "One to All Multicast 2x2 Packet Sizes",
+    10: "One to All Multicast 5x5 Packet Sizes",
+    11: "One to All Multicast 11x10 Packet Sizes",
+    12: "One to All Multicast Linked 2x2 Packet Sizes",
+    13: "One to All Multicast Linked 5x5 Packet Sizes",
+    14: "One to All Multicast Linked 11x10 Packet Sizes",
+    15: "One from All Packet Sizes",
+    16: "Loopback Packet Sizes",
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
@@ -52,6 +64,39 @@ test_bounds = {
         5: {
             "riscv_1": {"latency": {"lower": 200, "upper": 5000}, "bandwidth": 0.1},
         },
+        6: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+        },
+        7: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 1.0},
+        },
+        8: {
+            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+        },
+        9: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 0.1},
+        },
+        10: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+        },
+        11: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+        },
+        12: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        13: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        14: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
+        },
+        15: {
+            "riscv_1": {"latency": {"lower": 700, "upper": 120000}, "bandwidth": 0.7},
+        },
+        16: {
+            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        },
     },
     "blackhole": {
         0: {
@@ -59,12 +104,12 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 400, "upper": 28000}, "bandwidth": 0.15},
         },
         1: {
-            "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
-            "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.29},
+            "riscv_1": {"latency": {"lower": 300, "upper": 700}, "bandwidth": 0.17},
+            "riscv_0": {"latency": {"lower": 200, "upper": 500}, "bandwidth": 0.23},
         },
         2: {
-            "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
-            "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
+            "riscv_1": {"latency": {"lower": 400, "upper": 600}, "bandwidth": 0.13},
+            "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.16},
         },
         3: {
             "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 33},
@@ -76,6 +121,39 @@ test_bounds = {
         },
         5: {
             "riscv_1": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+        },
+        6: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+        },
+        7: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 1.0},
+        },
+        8: {
+            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+        },
+        9: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        10: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+        },
+        11: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+        },
+        12: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        13: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+        },
+        14: {
+            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
+        },
+        15: {
+            "riscv_1": {"latency": {"lower": 800, "upper": 135000}, "bandwidth": 1.19},
+        },
+        16: {
+            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
     },
 }
@@ -222,64 +300,37 @@ def gather_stats_from_csv(file_path, verbose=False):
 def performance_check(dm_stats, arch="blackhole", verbose=False):
     # Tidy results' ranges
     results_bounds = {}
-    for riscv1_run, riscv0_run in itertools.zip_longest(
-        dm_stats["riscv_1"]["analysis"]["series"], dm_stats["riscv_0"]["analysis"]["series"], fillvalue=None
-    ):
-        if riscv1_run:
-            run_host_id = riscv1_run["duration_type"][0]["run_host_id"]
-            test_id = dm_stats["riscv_1"]["attributes"][run_host_id]["Test id"]
-        else:
-            run_host_id = riscv0_run["duration_type"][0]["run_host_id"]
-            test_id = dm_stats["riscv_0"]["attributes"][run_host_id]["Test id"]
+    for riscv in dm_stats.keys():
+        for run in dm_stats[riscv]["analysis"]["series"]:
+            run_host_id = run["duration_type"][0]["run_host_id"]
+            test_id = dm_stats[riscv]["attributes"][run_host_id]["Test id"]
+            if test_id not in results_bounds.keys():
+                results_bounds[test_id] = {
+                    riscv: {"latency": {"lower": float("inf"), "upper": 0}, "bandwidth": float("inf")}
+                }
+            elif riscv not in results_bounds[test_id].keys():
+                results_bounds[test_id][riscv] = {
+                    "latency": {"lower": float("inf"), "upper": 0},
+                    "bandwidth": float("inf"),
+                }
 
-        if not test_id in results_bounds.keys():
-            results_bounds[test_id] = {
-                "riscv_1": {"latency": {"lower": float("inf"), "upper": 0}, "bandwidth": float("inf")},
-                "riscv_0": {"latency": {"lower": float("inf"), "upper": 0}, "bandwidth": float("inf")},
-            }
-
-        if riscv1_run:
-            riscv1_cycles = riscv1_run["duration_cycles"]
-            results_bounds[test_id]["riscv_1"]["latency"]["lower"] = min(
-                results_bounds[test_id]["riscv_1"]["latency"]["lower"], riscv1_cycles
+            cycles = run["duration_cycles"]
+            results_bounds[test_id][riscv]["latency"]["lower"] = min(
+                results_bounds[test_id][riscv]["latency"]["lower"], cycles
             )
-            results_bounds[test_id]["riscv_1"]["latency"]["upper"] = max(
-                results_bounds[test_id]["riscv_1"]["latency"]["upper"], riscv1_cycles
+            results_bounds[test_id][riscv]["latency"]["upper"] = max(
+                results_bounds[test_id][riscv]["latency"]["upper"], cycles
             )
 
-            riscv1_attributes = dm_stats["riscv_1"]["attributes"][run_host_id]
-            riscv1_bw = (
-                riscv1_attributes["Number of transactions"]
-                * riscv1_attributes["Transaction size in bytes"]
-                / riscv1_cycles
-            )
-            results_bounds[test_id]["riscv_1"]["bandwidth"] = min(
-                results_bounds[test_id]["riscv_1"]["bandwidth"], riscv1_bw
-            )
-
-        if riscv0_run:
-            riscv0_cycles = riscv0_run["duration_cycles"]
-            results_bounds[test_id]["riscv_0"]["latency"]["lower"] = min(
-                results_bounds[test_id]["riscv_0"]["latency"]["lower"], riscv0_cycles
-            )
-            results_bounds[test_id]["riscv_0"]["latency"]["upper"] = max(
-                results_bounds[test_id]["riscv_0"]["latency"]["upper"], riscv0_cycles
-            )
-
-            riscv0_attributes = dm_stats["riscv_0"]["attributes"][run_host_id]
-            riscv0_bw = (
-                riscv0_attributes["Number of transactions"]
-                * riscv0_attributes["Transaction size in bytes"]
-                / riscv0_cycles
-            )
-            results_bounds[test_id]["riscv_0"]["bandwidth"] = min(
-                results_bounds[test_id]["riscv_0"]["bandwidth"], riscv0_bw
-            )
+            attributes = dm_stats[riscv]["attributes"][run_host_id]
+            bandwidth = attributes["Number of transactions"] * attributes["Transaction size in bytes"] / cycles
+            results_bounds[test_id][riscv]["bandwidth"] = min(results_bounds[test_id][riscv]["bandwidth"], bandwidth)
 
     # Performance checks per test
     for test_id, bounds in results_bounds.items():
         # Print latency and bandwidth perf results
         if verbose:
+            logger.info("")
             logger.info(f"Perf results for test id: {test_id}")
             logger.info(f"Latency")
             for riscv in bounds.keys():
@@ -292,8 +343,6 @@ def performance_check(dm_stats, arch="blackhole", verbose=False):
             for riscv in bounds.keys():
                 if bounds[riscv]["bandwidth"] != float("inf"):
                     logger.info(f"  {riscv}: {bounds[riscv]['bandwidth']} Bytes/cycle")
-
-            logger.info("")
 
         if test_id not in test_bounds[arch].keys():
             logger.warning(f"Test id {test_id} not found in {arch} test bounds.")
@@ -325,9 +374,6 @@ def performance_check(dm_stats, arch="blackhole", verbose=False):
 
 def print_stats(dm_stats):
     # Print stats per runtime host id
-    for i in range(len(dm_stats["riscv_1"]["analysis"]["series"])):
-        run_host_id = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
-
     for riscv1_run, riscv0_run in itertools.zip_longest(
         dm_stats["riscv_1"]["analysis"]["series"], dm_stats["riscv_0"]["analysis"]["series"], fillvalue=None
     ):

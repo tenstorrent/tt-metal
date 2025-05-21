@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <device.hpp>
 #include <distributed.hpp>
+#include "device_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
 #include <host_api.hpp>
@@ -35,6 +36,7 @@
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/arch.h>
 #include <umd/device/types/xy_pair.h>
+#include <tt-metalium/device_pool.hpp>
 
 namespace tt {
 
@@ -45,7 +47,7 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data) {
-    TT_ASSERT(device->dispatch_firmware_active());
+    TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
     if (auto mesh_device = device->get_mesh_device()) {
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
         distributed::WriteShard(mesh_device->mesh_command_queue(), buffer.get_mesh_buffer(), data, device_coord, true);
@@ -56,7 +58,7 @@ void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* 
 
 void issue_fd_read_from_profiler_buffer(
     const distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& host_data) {
-    TT_ASSERT(device->dispatch_firmware_active());
+    TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
     if (auto mesh_device = device->get_mesh_device()) {
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
         distributed::ReadShard(
@@ -71,7 +73,7 @@ std::vector<uint32_t> read_control_buffer_from_core(
     std::vector<uint32_t> control_buffer;
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (device->dispatch_firmware_active()) {
+    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             if (core_type == HalProgrammableCoreType::TENSIX) {
                 distributed::FDMeshCommandQueue& mesh_cq =
@@ -118,7 +120,7 @@ void write_control_buffer_to_core(
     const std::vector<uint32_t>& control_buffer) {
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (device->dispatch_firmware_active()) {
+    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             if (core_type == HalProgrammableCoreType::TENSIX) {
                 distributed::FDMeshCommandQueue& mesh_cq =

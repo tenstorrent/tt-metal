@@ -62,14 +62,14 @@ class TtDistributedLayernormDLNP1:
             total_count += count_local
             counts.append(count_local)
 
-            meanx_local = ttnn.sum(xs[i], dim=3, scaler=1.0 / counts[i])
+            meanx_local = ttnn.sum(xs[i], keepdim=True, dim=3, scaler=1.0 / counts[i])
             meanxs.append(meanx_local)
 
         # meanx2 = torch.mean(torch.square(xs), dim=-1, keepdim=True)
         meanx2s = []
         for i in range(num_devices):
             x2_local = ttnn.pow(xs[i], 2)
-            meanx2_local = ttnn.sum(x2_local, dim=3, scaler=1.0 / counts[i])
+            meanx2_local = ttnn.sum(x2_local, keepdim=True, dim=3, scaler=1.0 / counts[i])
             meanx2s.append(meanx2_local)
 
         # Weighted meanx to number of samples per device
