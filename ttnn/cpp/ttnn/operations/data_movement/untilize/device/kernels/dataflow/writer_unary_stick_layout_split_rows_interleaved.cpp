@@ -22,9 +22,22 @@ void kernel_main() {
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(1) == 1;
-
-#if (stick_size_is_power_of_two)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
+
+#ifdef SHARDED
+    using tensor_shard_info = ShardedInfo<
+        get_compile_time_arg_val(3),   // Memory layout
+        get_compile_time_arg_val(4),   // The number of sharding cores
+        get_compile_time_arg_val(5),   // The page size we offset each write to
+        get_compile_time_arg_val(6),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(7),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(8),   // pages_per_shard_x
+        get_compile_time_arg_val(9)>;  // pages_per_shard_y
+
+    const auto [mapping_table, rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(9));
+    experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
+#elif (stick_size_is_power_of_two)
     const InterleavedPow2AddrGen<dst_is_dram> s = {
         .bank_base_address = dst_addr,
         .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor

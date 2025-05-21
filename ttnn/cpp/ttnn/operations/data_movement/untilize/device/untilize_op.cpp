@@ -36,7 +36,14 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
 
     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
 
-    if (input_tensor_a.memory_config().is_sharded()) {
+    if (!this->use_multicore) {
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::SINGLE_BANK,
+            "Input layout must be interleaved or sharded");
+        TT_FATAL(
+            this->output_mem_config.memory_layout() != TensorMemoryLayout::SINGLE_BANK,
+            "Output layout must be interleaved or sharded");
+    } else if (input_tensor_a.memory_config().is_sharded()) {
         if (this->output_mem_config.is_sharded()) {
             TT_FATAL(
                 this->output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(), "Error");
