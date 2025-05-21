@@ -26,6 +26,7 @@ constexpr auto kComputeKernelPath =
 // reader runtime args
 constexpr uint32_t kInputBufferIdx = 0;
 constexpr uint32_t kTargetBufferIdx = 1U;
+constexpr uint32_t kGradBufferIdx = 2U;
 // writer runtime args
 constexpr uint32_t kOutputBufferIdx = 0;
 
@@ -39,16 +40,18 @@ constexpr auto kMaxValueAfterReductionCbIndex = tt::CBIndex::c_6;
 constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_7;
 constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_8;
 constexpr auto KReductionScalerCbIndex = tt::CBIndex::c_9;  // used to reduction
-constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
+constexpr auto KGradCbIndex = tt::CBIndex::c_10;
+constexpr auto kMatMulCbIndex = tt::CBIndex::c_11;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_12;
 
 constexpr uint32_t kNumTargetIndexesTiles = 2U;
 constexpr uint32_t kNumMaskTiles = 1U;
-constexpr uint32_t kNumMaxValueTiles = 1U;
 constexpr uint32_t kMaxValueBeforeReductionTiles = 2U;
 constexpr uint32_t kNumMaxValueAfterReductionTiles = 2U;
 constexpr uint32_t kNumExpSumBeforeReductionTiles = 2U;
 constexpr uint32_t kNumExpSumAfterReductionTiles = 2U;
 constexpr uint32_t kNumScalerTiles = 1U;  // used it to reduction
+constexpr uint32_t kNumGradTiles = 1U;
 
 constexpr uint32_t kPageElementsNumber = 32U;
 
@@ -160,15 +163,14 @@ void assign_per_core_runtime_args(
     const CrossEntropyBackwardKernels& kernels,
     const tt::tt_metal::Buffer* input_buffer,
     const tt::tt_metal::Buffer* target_buffer,
+    const tt::tt_metal::Buffer* grad_buffer,
     const tt::tt_metal::Buffer* output_buffer,
-
     uint32_t num_cores,
     uint32_t num_cores_y,
     uint32_t num_rows_per_core_group_1,
     uint32_t num_rows_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2,
-    /* [temp debug]*/ const tt::tt_metal::Buffer* temp_output_buffer) {
+    const tt::tt_metal::CoreRangeSet& core_group_2) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -187,17 +189,14 @@ void assign_per_core_runtime_args(
             program,
             kernels.reader,
             core,
-            {input_buffer->address(), target_buffer->address(), num_rows_per_core, num_rows_written});
+            {input_buffer->address(),
+             target_buffer->address(),
+             grad_buffer->address(),
+             num_rows_per_core,
+             num_rows_written});
 
         // Writer kernel: (dst_addr, dst_rms_addr number_of_rows, offset_in_rows)
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {output_buffer->address(),
-             /*temporary*/ num_rows_per_core,
-             num_rows_written,
-             temp_output_buffer->address()});
+        SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows_per_core, num_rows_written});
 
         num_rows_written += num_rows_per_core;
     }
@@ -212,6 +211,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     // -------------------------------------------------------------------------
     const auto& input = tensor_args.input;
     const auto& target = tensor_args.target;
+    const auto& grad = tensor_args.grad;
 
     auto* device = input.device();
 
@@ -230,7 +230,6 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
     TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
 
-    //
     uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;  // <- number of tiles in inner dimension
     uint32_t Ht = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
     uint32_t NC = padded_tensor_shape[0] * padded_tensor_shape[1];
@@ -252,9 +251,8 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     // mask_w - this mask used to avoid calculation of extra data(data which will be added to create full tile 32x32)??
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;  // width index of first trash value in tile
 
-    // fmt::print("scaler: {}\n", operation_attributes.scaler);
     uint32_t packed_scaler = pack_two_bfloat16_to_uint32(operation_attributes.scaler);
-    // fmt::print("packed scaler: {}\n", packed_scaler);
+    uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
 
     // compile arguments
     uint32_t block_size = get_block_size(Wt);
@@ -266,30 +264,31 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    uint32_t twice_block_size = 2U * block_size;
+    const uint32_t twice_block_size = 2U * block_size;
 
     const uint32_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
-    const uint64_t mask_scaler_maxmask_memory =
-        (kNumMaskTiles + kNumScalerTiles + kNumMaskTiles) * bfloat16_single_tile_size_bytes;
-    const uint64_t output_memory =
-        Wt * bfloat16_single_tile_size_bytes;  // TODO: check if this is correct, because my output is the same as input
+    const uint64_t masks_memory = 2U * kNumMaskTiles * bfloat16_single_tile_size_bytes;
+    const uint64_t scalers_memory = (3U * kNumScalerTiles) * bfloat16_single_tile_size_bytes;  // two scalers and matmul
+    const uint64_t output_memory = twice_block_size * bfloat16_single_tile_size_bytes;
     const uint64_t max_value_memory =
         (kNumMaxValueAfterReductionTiles + kMaxValueBeforeReductionTiles) * bfloat16_single_tile_size_bytes;
     const uint64_t exp_sum_memory =
         (kNumExpSumBeforeReductionTiles + kNumExpSumAfterReductionTiles) * float32_single_tile_size_bytes;
     const uint64_t input_memory =
-        Wt * bfloat16_single_tile_size_bytes + 2U * bfloat16_single_tile_size_bytes + uint32_read_page_size;
+        /* inpunt */ (Wt * bfloat16_single_tile_size_bytes) +
+        /* target */ (uint32_read_page_size * kNumTargetIndexesTiles) +
+        /* grad */ (kNumGradTiles * bfloat16_single_tile_size_bytes);
 
     // Total L1 memory required
     const uint64_t required_L1_in_bytes =
-        input_memory + mask_scaler_maxmask_memory + max_value_memory + exp_sum_memory + output_memory;
+        input_memory + masks_memory + scalers_memory + max_value_memory + exp_sum_memory + output_memory;
     // Is everything fits in L1
     const bool everything_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
 
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
-    const uint32_t num_output_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
+    const uint32_t num_output_tiles = twice_block_size;
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
@@ -345,15 +344,14 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     auto cb_reduction_scaler = create_circular_buffer(
         program, all_cores, KReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
-
-    // temporary output buffer, used to store debug data
-    auto cb_temp_output = create_circular_buffer(
-        program, all_cores, tt::CBIndex::c_11, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
+    auto cb_grad = create_circular_buffer(
+        program, all_cores, KGradCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumGradTiles);
 
     auto cb_mat_mul_reduce =
-        create_circular_buffer(program, all_cores, tt::CBIndex::c_12, data_format, bfloat16_single_tile_size_bytes, 1U);
+        create_circular_buffer(program, all_cores, kMatMulCbIndex, data_format, bfloat16_single_tile_size_bytes, 1U);
+
+    auto cb_output = create_circular_buffer(
+        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -371,14 +369,13 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         "Target buffer must be in DRAM. Target buffer of type {}",
         magic_enum::enum_name(target_buffer->buffer_type()));
 
-    // auto* output_buffer = output.buffer();
-    // TT_FATAL(
-    //     output_buffer->buffer_type() == ttnn::BufferType::DRAM,
-    //     "Output buffer must be in DRAM. Output buffer of type {}",
-    //     magic_enum::enum_name(output_buffer->buffer_type()));
+    auto* grad_buffer = grad.buffer();
+    TT_FATAL(
+        grad_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        "Grad buffer must be in DRAM. Grad buffer of type {}",
+        magic_enum::enum_name(grad_buffer->buffer_type()));
 
-    // [temp debug]
-    auto* output_buffer = output[0].buffer();
+    auto* output_buffer = output.buffer();
     TT_FATAL(
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
@@ -412,7 +409,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         kReaderKernelPath);
 
     kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {block_size, Wt}, defines, kWriterKernelPath);
+        program, all_cores, /* writer_compile_args */ {block_size, Wt, scaler_bits}, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for cross_entropy_bw
@@ -447,14 +444,14 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         kernels,
         input_buffer,
         target_buffer,
+        grad_buffer,
         output_buffer,
         num_cores,
         num_cores_y,
         num_rows_per_core_group_1,
         num_rows_per_core_group_2,
         core_group_1,
-        core_group_2,
-        /* [temp debug]*/ output[1].buffer());
+        core_group_2);
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -491,10 +488,8 @@ void CrossEntropyBackwardProgramFactory::override_runtime_arguments(
 
     auto* input_buffer = tensor_args.input.buffer();
     auto* target_buffer = tensor_args.target.buffer();
-    // auto* output_buffer = tensor_return_value.buffer();
-
-    // [temp debug]
-    auto* output_buffer = tensor_return_value[0].buffer();
+    auto* grad_buffer = tensor_args.grad.buffer();
+    auto* output_buffer = tensor_return_value.buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, cross_entropy_bw_reader_kernel_id);
@@ -513,14 +508,13 @@ void CrossEntropyBackwardProgramFactory::override_runtime_arguments(
             auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[kInputBufferIdx] = input_buffer->address();
             runtime_args[kTargetBufferIdx] = target_buffer->address();
+            runtime_args[kGradBufferIdx] = grad_buffer->address();
         }
 
         // Update output buffers for the writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kOutputBufferIdx] = output_buffer->address();
-
-            runtime_args[3] = tensor_return_value[1].buffer()->address();
         }
     }
 }

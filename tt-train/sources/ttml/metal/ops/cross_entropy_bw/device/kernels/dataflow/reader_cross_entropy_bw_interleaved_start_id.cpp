@@ -50,6 +50,7 @@ void kernel_main() {
     uint32_t runtime_args_counter = 0U;
     uint32_t input_address = get_arg_val<uint32_t>(runtime_args_counter++);        // input buffer address
     uint32_t target_address = get_arg_val<uint32_t>(runtime_args_counter++);       // target buffer address
+    uint32_t grad_address = get_arg_val<uint32_t>(runtime_args_counter++);         // grad buffer address
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);  // rows to process in this kernel
     uint32_t start_row =
         get_arg_val<uint32_t>(runtime_args_counter++);  // pre calculated num_rows_written in program factory
@@ -60,8 +61,8 @@ void kernel_main() {
     constexpr uint32_t cb_max_mask_idx = tt::CBIndex::c_3;
     constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_4;
     constexpr uint32_t cb_reduction_scaler_idx = tt::CBIndex::c_9;  // used for reduction
-
-    constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_12;
+    constexpr uint32_t cb_grad_idx = tt::CBIndex::c_10;
+    constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_11;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -70,6 +71,8 @@ void kernel_main() {
     constexpr uint32_t tiled_H = get_compile_time_arg_val(4);
     constexpr uint32_t target_indexes_read_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t packed_scaler = get_compile_time_arg_val(6);
+
+    DPRINT << "block_size: " << block_size << ENDL();
 
     constexpr uint32_t onetile = 1U;
 #ifdef DO_MASK_W
@@ -142,6 +145,15 @@ void kernel_main() {
     const InterleavedAddrGen</* is_dram */ true> target_indexes_address_generator = {
         .bank_base_address = target_address, .page_size = target_indexes_page_size};
 
+    const InterleavedAddrGenFast</* is_dram */ true> grad_address_generator = {
+        .bank_base_address = grad_address, .page_size = tile_bytes, .data_format = data_format};
+
+    cb_reserve_back(cb_grad_idx, onetile);
+    noc_async_read_tile(0, grad_address_generator,
+                        get_write_ptr(cb_grad_idx));  // read gead tile from the grad buffer
+    noc_async_read_barrier();                         // wait until all tiles are read
+    cb_push_back(cb_grad_idx, onetile);               // push the tile to the back of the grad buffer
+
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         // calculate the address of the first tile in the row
         // start_row is the number of rows already processed in other cores
@@ -164,16 +176,29 @@ void kernel_main() {
 
 #ifdef EVERYTHING_FITS_IN_L1
         // read input buffer
-        cb_reserve_back(cb_input_idx, Wt);  // reserve Wt tiles in input buffer ==  wait until cb will has Wt tiles
-        uint32_t l1_write_addr = get_write_ptr(cb_input_idx);  // get the address of the first tile in the input buffer
+        // cb_reserve_back(cb_input_idx, Wt);  // reserve Wt tiles in input buffer ==  wait until cb will has Wt tiles
+        // uint32_t l1_write_addr = get_write_ptr(cb_input_idx);  // get the address of the first tile in the input
+        // buffer
 
-        for (uint32_t j = 0; j < Wt; ++j) {
-            noc_async_read_tile(
-                idx + j, input_address_generator, l1_write_addr);  // read the tile from the input buffer
-            l1_write_addr += tile_bytes;                           // move to the next tile
+        // for (uint32_t j = 0; j < Wt; ++j) {
+        //     noc_async_read_tile(
+        //         idx + j, input_address_generator, l1_write_addr);  // read the tile from the input buffer
+        //     l1_write_addr += tile_bytes;                           // move to the next tile
+        // }
+        // noc_async_read_barrier();        // wait until all tiles are read
+        // cb_push_back(cb_input_idx, Wt);  // push the tile to the back of the input buffer
+
+        for (uint32_t j = 0; j < Wt; j += block_size) {
+            cb_reserve_back(cb_input_idx, block_size);
+            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
+                l1_write_addr += tile_bytes;
+            }
+
+            noc_async_read_barrier();
+            cb_push_back(cb_input_idx, block_size);
         }
-        noc_async_read_barrier();        // wait until all tiles are read
-        cb_push_back(cb_input_idx, Wt);  // push the tile to the back of the input buffer
 
 #else
         // read input buffer by blocks to calculate max value in row

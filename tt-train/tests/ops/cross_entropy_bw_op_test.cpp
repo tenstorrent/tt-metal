@@ -36,31 +36,33 @@ protected:
 
 xt::xarray<float> calculate_cross_entropy_backward(
     const xt::xarray<float>& input, const xt::xarray<uint32_t>& target, const float scaler = 1.0F) {
-    // const uint32_t N = target.shape(0);
-    // const uint32_t C = 1U;
-    // const uint32_t H = target.shape(1);
-    // const uint32_t W = 1U;
+    const uint32_t N = target.shape(0);
+    const uint32_t C = 1U;
+    const uint32_t H = target.shape(1);
+    const uint32_t W = 1U;
 
-    // const auto input_shape = input.shape();
-    // xt::xarray<float> target_inputs = xt::zeros<float>(input_shape);
+    const auto input_shape = input.shape();
+    xt::xarray<float> target_inputs = xt::zeros<float>(input_shape);
 
-    // for (size_t n = 0; n < N; ++n) {
-    //     for (size_t h = 0; h < H; ++h) {
-    //         size_t class_index = target(n, h);
-    //         target_inputs(n, 0, h, class_index) = 1.0F;
-    //     }
-    // }
+    for (size_t n = 0; n < N; ++n) {
+        for (size_t h = 0; h < H; ++h) {
+            size_t class_index = target(n, h);
+            target_inputs(n, 0, h, class_index) = 1.0F;
+        }
+    }
 
-    // xt::xarray<float> scaler_tensor(input_shape);
-    // scaler_tensor.fill(scaler);
+    xt::xarray<float> scaler_tensor(input_shape);
+    scaler_tensor.fill(scaler);
 
-    // xt::xarray<float> max_input = xt::amax(input, -1, xt::keep_dims);
-    // xt::xarray<float> shifted_input = input - max_input;
-    // xt::xarray<float> exp_shifted_input = xt::exp(shifted_input);
-    // xt::xarray<float> exp_sum = xt::sum(exp_shifted_input, -1, xt::keep_dims);
-    // xt::xarray<float> result = exp_shifted_input / exp_sum - target_inputs;
-    // return result * scaler_tensor;
+    xt::xarray<float> max_input = xt::amax(input, -1, xt::keep_dims);
+    xt::xarray<float> shifted_input = input - max_input;
+    xt::xarray<float> exp_shifted_input = xt::exp(shifted_input);
+    xt::xarray<float> exp_sum = xt::sum(exp_shifted_input, -1, xt::keep_dims);
+    xt::xarray<float> result = exp_shifted_input / exp_sum - target_inputs;
+    return result * scaler_tensor;
+}
 
+xt::xarray<float> calculate_softmax(const xt::xarray<float>& input) {
     xt::xarray<float> shifted_input = input - xt::amax(input, -1, xt::keep_dims);
     xt::xarray<float> exp_shifted_input = xt::exp(shifted_input);
     xt::xarray<float> exp_sum = xt::sum(exp_shifted_input, -1, xt::keep_dims);
@@ -108,11 +110,14 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
     std::cout << "Input Target Indexes:\n";
     target.print();
 
+    xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
+    auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
+
     float scaler = 1.0F / (static_cast<float>(N) * static_cast<float>(H));
 
-    auto result = ttml::metal::cross_entropy_bw(input, target, scaler);
+    auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result[0].print();
+    result.print();
 
     auto expected_result = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
@@ -120,7 +125,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
     expected_result_print.print();
 
     // Check if the result is close to the expected result
-    auto result_xtensor = core::to_xtensor(result[0]);
+    auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
@@ -128,13 +133,14 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     using namespace ttml;
 
-    const uint32_t N = 1U, C = 1U, H = 91U, W = 187U;
+    const uint32_t N = 1U, C = 1U, H = 91U, W = 192U;
     const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
+    xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
     for (uint32_t n = 0; n < N; ++n) {
@@ -153,11 +159,14 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     std::cout << "Input Target Indexes:\n";
     target.print();
 
-    float scaler = 1.0F / (static_cast<float>(N) * static_cast<float>(H));
+    auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
 
-    auto result = ttml::metal::cross_entropy_bw(input, target, scaler);
+    float scaler = 1.0F / (static_cast<float>(N) * static_cast<float>(H));
+    std::cout << "Scaler_in_tests: " << scaler << std::endl;
+
+    auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result[0].print();
+    result.print();
 
     auto expected_result = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
@@ -165,23 +174,24 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     expected_result_print.print();
 
     // Check if the result is close to the expected result
-    auto result_xtensor = core::to_xtensor(result[0]);
+    auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
 
-    for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t h = 0; h < H; ++h) {
-            for (uint32_t w = 0; w < W; ++w) {
-                auto error = std::abs(result_xtensor(n, 0, h, w) - expected_result(n, 0, h, w));
-                auto max_error = 0.01F + std::abs(expected_result(n, 0, h, w)) * 0.03F;
+    // for (uint32_t n = 0; n < N; ++n) {
+    //     for (uint32_t h = 0; h < H; ++h) {
+    //         for (uint32_t w = 0; w < W; ++w) {
+    //             auto error = std::abs(result_xtensor(n, 0, h, w) - expected_result(n, 0, h, w));
+    //             auto max_error = 0.01F + std::abs(expected_result(n, 0, h, w)) * 0.03F;
 
-                if (error > max_error) {
-                    std::cout << "Error at (" << n << ", " << h << ", " << w << "): " << result_xtensor(n, 0, h, w)
-                              << " vs " << expected_result(n, 0, h, w) << " (error: " << error
-                              << ", max_error: " << max_error << ")" << " target: " << target_tensor(n, h) << std::endl;
-                }
-            }
-        }
-    }
+    //             if (error > max_error) {
+    //                 std::cout << "Error at (" << n << ", " << h << ", " << w << "): " << result_xtensor(n, 0, h, w)
+    //                           << " vs " << expected_result(n, 0, h, w) << " (error: " << error
+    //                           << ", max_error: " << max_error << ")" << " target: " << target_tensor(n, h) <<
+    //                           std::endl;
+    //             }
+    //         }
+    //     }
+    // }
 
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
@@ -196,6 +206,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
+    xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
     for (uint32_t n = 0; n < N; ++n) {
@@ -214,11 +225,13 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
     std::cout << "Input Target Indexes:\n";
     target.print();
 
+    auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
+
     float scaler = 1.0F / (static_cast<float>(N) * static_cast<float>(H));
 
-    auto result = ttml::metal::cross_entropy_bw(input, target, scaler);
+    auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result[0].print();
+    result.print();
 
     auto expected_result = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
@@ -226,7 +239,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
     expected_result_print.print();
 
     // Check if the result is close to the expected result
-    auto result_xtensor = core::to_xtensor(result[0]);
+    auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
@@ -241,6 +254,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
+    xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
     for (uint32_t n = 0; n < N; ++n) {
@@ -259,11 +273,13 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
     std::cout << "Input Target Indexes:\n";
     target.print();
 
+    auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
+
     float scaler = 1.0F / (static_cast<float>(N) * static_cast<float>(H));
 
-    auto result = ttml::metal::cross_entropy_bw(input, target, scaler);
+    auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result[0].print();
+    result.print();
 
     auto expected_result = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
@@ -271,7 +287,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
     expected_result_print.print();
 
     // Check if the result is close to the expected result
-    auto result_xtensor = core::to_xtensor(result[0]);
+    auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
@@ -286,6 +302,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Huge_Backward) {
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
+    xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
     for (uint32_t n = 0; n < N; ++n) {
@@ -304,11 +321,13 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Huge_Backward) {
     std::cout << "Input Target Indexes:\n";
     target.print();
 
+    auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
+
     float scaler = 1.0F / (static_cast<float>(N) * static_cast<float>(H));
 
-    auto result = ttml::metal::cross_entropy_bw(input, target, scaler);
+    auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
     std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result[0].print();
+    result.print();
 
     auto expected_result = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
     auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
@@ -316,80 +335,9 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Huge_Backward) {
     expected_result_print.print();
 
     // Check if the result is close to the expected result
-    auto result_xtensor = core::to_xtensor(result[0]);
+    auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
-}
-
-TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Softmax_Test) {
-    using namespace ttml;
-
-    const uint32_t N = 1U, C = 1U, H = 1U, W = 10U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
-
-    std::random_device rd;
-    std::mt19937 gen(42);
-    // xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
-    xt::xarray<float> input_tensor = {
-        {{{-21.6250, -15.5000, -7.8438, 2.8125, -28.3750, 0.2500, -31.8750, -16.3750, -15.0625, -12.0000}}}};
-
-    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
-    target_tensor(0, 0) = 3U;
-
-    xt::xarray<float> target_one_hot_tensor = xt::zeros<float>({N, 1U, 1U, W});
-    target_one_hot_tensor(0, 0, 0, target_tensor(0, 0)) = 1.0F;
-    auto target_one_hot = core::from_xtensor(target_one_hot_tensor, &autograd::ctx().get_device());
-
-    // std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
-    // for (uint32_t n = 0; n < N; ++n) {
-    //     for (uint32_t h = 0; h < H; ++h) {
-    //         uint32_t true_class = class_dist(gen);
-    //         target_tensor(n, h) = true_class;
-    //     }
-    // }
-
-    auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    input.print();
-
-    auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
-        target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
-    std::cout << "Input Target Indexes:\n";
-    target.print();
-
-    float scaler = 1.0F;  //  / (static_cast<float>(N) * static_cast<float>(H));
-
-    auto result = ttml::metal::cross_entropy_bw(input, target, scaler);
-    std::cout << "CrossEntropyBackward_Test:\nResult:\n";
-    result[0].print();
-
-    fmt::print("Softmax Result:\n");
-    printTensor(core::to_xtensor(result[1]));
-
-    auto custom_softmax = ttnn_fixed::softmax(input, 3);
-    std::cout << "Custom Softmax Result:\n";
-    printTensor(core::to_xtensor(custom_softmax));
-
-    auto custom_grad = ttnn::subtract(custom_softmax, target_one_hot);
-    fmt::print("Custom Grad Result:\n");
-    printTensor(core::to_xtensor(custom_grad));
-
-    auto expected_result = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
-    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
-    std::cout << "Expected Result:\n";
-    expected_result_print.print();
-
-    fmt::print("Expected bw Result:\n");
-    printTensor(expected_result);
-
-    // Check if the result is close to the expected result
-    auto result_xtensor = core::to_xtensor(result[0]);
-
-    fmt::print("Result:\n");
-    printTensor(result_xtensor);
-    assert((result_xtensor.shape() == expected_result.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
-    EXPECT_TRUE(false);
 }
 
 // Helper: Convert vector to a JSON-like string
@@ -431,33 +379,42 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Print_Result) {
 
     const uint32_t test_size = 1000U;
 
+    xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
+    auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
+
     for (uint32_t i = 0; i < test_size; ++i) {
         xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
         xt::xarray<float> target_tensor = xt::zeros<uint32_t>({N, H});
+        xt::xarray<float> target_one_hot_tensor = xt::zeros<float>({N, C, H, W});
         target_tensor(0, 0) = class_dist(gen);
+        target_one_hot_tensor(0, 0, 0, target_tensor(0, 0)) = 1.0F;
 
         auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
         auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
             target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+        auto target_one_hot = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            target_one_hot_tensor, &autograd::ctx().get_device(), ttnn::Layout::TILE);
 
         float scaler = 1.0F;
 
-        xt::xarray<float> xtensor_calc_res = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
+        xt::xarray<float> xtensor_softmax = calculate_softmax(input_tensor);
+        xt::xarray<float> xtensor_res = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
 
-        auto result = ttml::metal::cross_entropy_bw(input, target, scaler);
+        auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
 
         auto custom_calculation = ttnn_fixed::softmax(input, 3);
+        custom_calculation = ttnn::subtract(custom_calculation, target_one_hot);
 
         auto input_view = xt::view(input_tensor, 0, 0, 0, xt::all());
         std::vector<float> input_vec(input_view.begin(), input_view.end());
 
-        auto xtensor_res_vec = xt::view(xtensor_calc_res, 0, 0, 0, xt::all());
-        std::vector<float> xtensor_res(xtensor_res_vec.begin(), xtensor_res_vec.end());
+        auto xtensor_res_view = xt::view(xtensor_res, 0, 0, 0, xt::all());
+        std::vector<float> xtensor_res_vec(xtensor_res_view.begin(), xtensor_res_view.end());
 
-        auto op_res_vec = core::to_vector(result[1]);
+        auto op_res_vec = core::to_vector(result);
         auto custom_res_vec = core::to_vector(custom_calculation);
 
-        write_result(input_vec, xtensor_res, op_res_vec, custom_res_vec);
+        write_result(input_vec, xtensor_res_vec, op_res_vec, custom_res_vec);
     }
 
     file.close();

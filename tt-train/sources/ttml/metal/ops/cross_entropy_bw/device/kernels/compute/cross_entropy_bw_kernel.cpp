@@ -65,10 +65,9 @@ constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_6;
 constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_7;
 constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_8;
 constexpr auto cb_reduction_scaler = tt::CBIndex::c_9;
-constexpr auto cb_output = tt::CBIndex::c_10;
-
-constexpr auto cb_temp_output = tt::CBIndex::c_11;
-constexpr auto cb_mat_mul_reduce = tt::CBIndex::c_12;
+constexpr auto cb_grad = tt::CBIndex::c_10;
+constexpr auto cb_mat_mul_reduce = tt::CBIndex::c_11;
+constexpr auto cb_output = tt::CBIndex::c_12;
 
 constexpr uint32_t onetile = 1;
 
@@ -83,40 +82,44 @@ constexpr bool do_mask_w = false;
 void find_max_value_in_row() {
     const uint32_t max_value_register = 0;
     const uint32_t tile_register = 1U;
-    cb_wait_front(cb_input, Wt);  // wait until reader kernel has written Wt tiles to input buffer
     cb_reserve_back(cb_max_value_before_reduction, onetile);
     tile_regs_acquire();
     reconfig_data_format(cb_input, cb_scaler);
-    for (uint32_t col = 0; col < Wt; ++col) {
-        auto working_register = col == 0 ? max_value_register : tile_register;
-        copy_tile_init(cb_input);
-        copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
+    for (uint32_t col = 0; col < Wt; col += block_size) {
+        // try to procces data by blocks to improve performance
+        cb_wait_front(cb_input, col + block_size);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            auto working_register = col == 0 ? max_value_register : tile_register;
+            copy_tile_init(cb_input);
+            copy_tile(cb_input, /* tile_idx */ col + block_idx, /* register_idx */ working_register);
 
-        if constexpr (do_mask_w) {
-            if (col + 1 == Wt) {
-                // this is limitation of the function mask_tile
-                // mask tile currently does not work for mask register that is not next to data register
-                const uint32_t mask_register = working_register + 1U;  // mask register should be next to data register
+            if constexpr (do_mask_w) {
+                if (col + 1 == Wt) {
+                    // this is limitation of the function mask_tile
+                    // mask tile currently does not work for mask register that is not next to data register
+                    const uint32_t mask_register =
+                        working_register + 1U;  // mask register should be next to data register
 
-                // the next 4 lines are important because we overwrite what's in the trash padding.
-                // it's possible that the padding contains a NaN, and operations like NaN + (-inf) = NaN,
-                // instead of the expected -inf. similarly, -inf * 0 = NaN.
-                copy_tile_init(cb_mask);
-                copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-                mask_tile_init();
-                mask_tile(working_register, mask_register);  // mask should be next to tile register.
+                    // the next 4 lines are important because we overwrite what's in the trash padding.
+                    // it's possible that the padding contains a NaN, and operations like NaN + (-inf) = NaN,
+                    // instead of the expected -inf. similarly, -inf * 0 = NaN.
+                    copy_tile_init(cb_mask);
+                    copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+                    mask_tile_init();
+                    mask_tile(working_register, mask_register);  // mask should be next to tile register.
 
-                copy_tile_init(cb_max_mask);
-                copy_tile(cb_max_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+                    copy_tile_init(cb_max_mask);
+                    copy_tile(cb_max_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
-                add_binary_tile_init();
-                add_binary_tile(working_register, mask_register);
+                    add_binary_tile_init();
+                    add_binary_tile(working_register, mask_register);
+                }
             }
-        }
 
-        if (col > 0) {
-            max_tile_init();
-            max_tile(max_value_register, tile_register);
+            if (col > 0) {
+                max_tile_init();
+                max_tile(max_value_register, tile_register);
+            }
         }
     }
     tile_regs_commit();
@@ -225,27 +228,27 @@ void calculate_sum_exp_x() {
     cb_reserve_back(cb_exp_sum_before_reduction, onetile);
     tile_regs_acquire();
 
-    // const uint32_t max_value_register = 3U;
-    // reconfig_data_format(cb_max_value_after_reduction, cb_input);
-    // unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
-    // unary_bcast<BroadcastType::COL>(
-    //     cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
+    const uint32_t max_value_register = 3U;
+    reconfig_data_format(cb_max_value_after_reduction, cb_input);
+    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    unary_bcast<BroadcastType::COL>(
+        cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
     for (uint32_t col = 0; col < Wt; ++col) {
         auto working_register = col == 0 ? accum_register : tile_register;
 
-        // copy_tile_init(cb_input);
-        // copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
+        copy_tile_init(cb_input);
+        copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
 
-        // sub_binary_tile_init();
-        // sub_binary_tile(working_register, max_value_register);  // subtract max value from each tile
+        sub_binary_tile_init();
+        sub_binary_tile(working_register, max_value_register);  // subtract max value from each tile
 
-        sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
-        sub_tiles_bcast<BroadcastType::COL>(
-            cb_input,
-            cb_max_value_after_reduction,
-            /* tile_idx */ col,
-            /* tile_idx */ 0,
-            /* register idx */ working_register);
+        // sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
+        // sub_tiles_bcast<BroadcastType::COL>(
+        //     cb_input,
+        //     cb_max_value_after_reduction,
+        //     /* tile_idx */ col,
+        //     /* tile_idx */ 0,
+        //     /* register idx */ working_register);
 
         exp_tile_init<false>();
         exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
@@ -390,6 +393,7 @@ void MAIN {
     }
     cb_wait_front(cb_scaler, onetile);
     cb_wait_front(cb_reduction_scaler, onetile);
+    cb_wait_front(cb_grad, onetile);
 
     init_sfpu(cb_input, cb_output);
     binary_op_init_common(cb_input, cb_input, cb_output);
@@ -414,7 +418,6 @@ void MAIN {
             cb_wait_front(cb_input, block_size);
 #endif
             cb_reserve_back(cb_output, block_size);
-            cb_reserve_back(cb_temp_output, block_size);
             tile_regs_acquire();
 
             reconfig_data_format(cb_max_value_after_reduction, cb_max_value_after_reduction);
@@ -427,20 +430,14 @@ void MAIN {
             unary_bcast<BroadcastType::COL>(
                 cb_exp_sum_after_reduction, /* tile idx */ 0, /* reg tile idx */ sum_exp_register);
 
-            reconfig_data_format(cb_scaler, cb_scaler);
-            copy_tile_init(cb_scaler);
-            copy_tile(cb_scaler, /* tile_idx */ 0, /* register_idx */ scaler_register);
+            // reconfig_data_format(cb_scaler, cb_scaler);
+            // copy_tile_init(cb_scaler);
+            // copy_tile(cb_scaler, /* tile_idx */ 0, /* register_idx */ scaler_register);
 
-            // tile_regs_acquire();
-
-            // reconfig_data_format(cb_scaler, cb_exp_sum_after_reduction);
-            // mul_bcast_cols_init_short(cb_scaler, cb_exp_sum_after_reduction);
-            // mul_tiles_bcast<BroadcastType::COL>(
-            //     cb_scaler,
-            //     cb_exp_sum_after_reduction,
-            //     /* tile_idx */ 0,
-            //     /* tile_idx */ 0,
-            //     /* register idx */ block_size);
+            reconfig_data_format(cb_grad, cb_scaler);
+            mul_tiles_bcast_scalar_init_short(cb_scaler, cb_grad);
+            mul_tiles_bcast_scalar(
+                cb_scaler, cb_grad, /* tile_idx */ 0, /* tile_idx */ 0, /* register idx */ scaler_register);
 
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 // tile_regs_acquire();
@@ -502,11 +499,9 @@ void MAIN {
             pack_reconfig_data_format(cb_output);
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 pack_tile(block_idx, cb_output);
-                pack_tile(block_idx, cb_temp_output);
             }
             tile_regs_release();
             cb_push_back(cb_output, block_size);
-            cb_push_back(cb_temp_output, block_size);
 
 #ifndef EVERYTHING_FITS_IN_L1
             cb_pop_front(cb_input, block_size);

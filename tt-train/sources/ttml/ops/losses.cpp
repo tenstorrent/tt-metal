@@ -89,8 +89,8 @@ autograd::TensorPtr cross_entropy_loss_without_reduce_(
         // auto custom_grad = ttnn::subtract(ttnn_fixed::softmax(prediction->get_value(), 3), target_one_hot_tensor);
         // auto custom_grad_xtensor = core::to_xtensor(custom_grad);
 
-        auto res = ttml::metal::cross_entropy_bw(prediction->get_value(), target->get_value(), scaler);
-        auto grad = res[0];
+        auto grad =
+            ttml::metal::cross_entropy_bw(prediction->get_value(), target->get_value(), out->get_grad(), scaler);
 
         // debug print of softmax difference
         // auto bw_softmax = core::to_xtensor(res[0]);
@@ -134,7 +134,7 @@ autograd::TensorPtr cross_entropy_loss_without_reduce_(
         // }
         // ---------------------- end of debug prints-----------------
 
-        grad = ttnn::multiply(grad, out->get_grad());
+        // grad = ttnn::multiply(grad, out->get_grad());
         prediction->add_grad(grad);
     };
 
@@ -171,9 +171,9 @@ autograd::TensorPtr cross_entropy_loss(
     autograd::GradFunction grad = [target, prediction, out]() {
         auto volume = target->get_value().get_logical_volume();
         float scaler = 1.0F / static_cast<float>(volume);
-        auto res = ttml::metal::cross_entropy_bw(prediction->get_value(), target->get_value(), scaler);
-        auto grad = res[0];
-        grad = ttnn::multiply(grad, out->get_grad());
+        auto grad =
+            ttml::metal::cross_entropy_bw(prediction->get_value(), target->get_value(), out->get_grad(), scaler);
+        // grad = ttnn::multiply(grad, out->get_grad());
         prediction->add_grad(grad);
     };
 
