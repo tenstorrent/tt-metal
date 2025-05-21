@@ -13,43 +13,7 @@ from models.demos.llama3_subdevices.tt.llama_common import (
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from pathlib import Path
-
-
-def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: LlamaOptimizations):
-    """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
-    # Get model size (e.g., "1b", "3b", etc.)
-    model_size = model_name.split("-")[1].lower()
-
-    # Read PERF.md
-    perf_file = Path(__file__).parent.parent / "PERF.md"
-    with open(perf_file, "r") as f:
-        content = f.read()
-
-    # Split into sections based on optimization mode
-    sections = content.split("## ")
-    target_section = next(s for s in sections if s.startswith(f"LlamaOptimizations.{optimizations.__name__}\n"))
-
-    # Parse the table and find the row for our model and device
-    rows = [
-        line.split("|")[1:]  # Each row starts with a separator
-        for line in target_section.replace(" ", "").split("\n")
-        if f"|{model_size}|{device_name}|" in line
-    ]
-    if not rows:
-        raise ValueError(
-            f"Could not find accuracy data for {model_size} on {device_name} in {optimizations.__name__} mode"
-        )
-
-    assert (
-        len(rows) == 1
-    ), f"Found multiple rows for {model_size} on {device_name} in {optimizations.__name__} mode in PERF.md"
-    row = rows[0]
-    top1_acc = float(row[2].strip())
-    top5_acc = float(row[3].strip())
-
-    # Allow for rounding
-    return top1_acc - 0.5, top5_acc - 0.5
+from tqdm import tqdm
 
 
 @torch.no_grad()
@@ -59,7 +23,7 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 )
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
-    ((512, 128, 1024),),
+    ((512, 511, 128 * 1024),),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -104,7 +68,14 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 23887872,
+            "worker_l1_size": 1344544,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
     indirect=True,
 )
 def test_tt_model_acc(
@@ -142,9 +113,6 @@ def test_tt_model_acc(
     logger.info("Loading weights...")
     state_dict = model_args.load_state_dict()
     logger.info("Finished loading weights...")
-
-    # Load the reference data
-    model_size = model_args.model_name.split("-")[1].lower()  # e.g., "1b", "3b", "8b", "70b"
 
     if use_reference_file:
         # Existing reference file loading logic
@@ -205,13 +173,15 @@ def test_tt_model_acc(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        enable_prefetcher_performance_mode=True,
     )
     # Initialize embedding
     embd = HostEmbedding(model_args)
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
+    current_pos = torch.tensor([0 for b in range(model_args.max_batch_size)])
     current_pos_tensor = ttnn.from_torch(
-        torch.tensor([0 for b in range(model_args.max_batch_size)]),
+        current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
@@ -220,17 +190,99 @@ def test_tt_model_acc(
             mesh_shape=model_args.cluster_shape,
         ),
     )
-    current_pos = torch.tensor([0 for b in range(model_args.max_batch_size)])
     sub_core_grids = ttnn.CoreRangeSet(
         [
             ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
             ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
         ]
     )
+
+    # Get the first input tensors
+    _, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+
+    ref_token = input_ids[0, 0].item()  # First token
+    ref_token = torch.tensor([[ref_token]], dtype=torch.int32)
+    pt_decode_input = embd(ref_token).view(1, 1, -1).expand(32, -1, -1)
+
+    decode_input = model_args.prepare_residual_tensor_decode(
+        pt_decode_input,
+        model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+    )
+
+    def run_model():
+        rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+
+        tt_out = tt_model(
+            decode_input,
+            current_pos_tensor,
+            rot_mats=rot_mats,
+            mode="decode",
+            page_table=page_table_tt,
+        )
+
+        tt_out_gathered = tt_model.tt_ccl.line_all_gather(
+            tt_out[0],
+            dim=3,
+            num_links=2,
+            cluster_axis=0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            buffer_key="SAMPLING",
+        )
+        tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
+        tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
+            tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids
+        )
+
+        # Update the idxs
+        ttnn.plus_one(
+            current_pos_tensor,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
+        ttnn.plus_one(
+            rot_mat_idxs,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
+
+        return tt_out_tok, tt_out_rm
+
+    # Compile the model
+    logger.info("Compiling model...")
+    tt_out_tok, tt_out_rm = run_model()
+
+    # Capturing trace
+    logger.info("Capturing trace...")
+
+    tt_model.tt_ccl.reset_gather_and_buffer_idx()
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+
+    tt_out_tok, tt_out_rm = run_model()
+
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Reset the decoding position for the proper run of the model
+    current_pos_reset = ttnn.from_torch(
+        current_pos,
+        dtype=ttnn.int32,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            mesh_shape=model_args.cluster_shape,
+        ),
+    )
+
+    # Reset the current position and output token tensors for the real decode run
+    ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
+
+    ttnn.synchronize_device(mesh_device)
+
     # Skip prefill if prefill_len is 0
     if prefill_len > 0:
         logger.info(f"Starting prefill...")
-        for i in range(prefill_len):
+        for i in tqdm(range(prefill_len)):
             # Input is reference token at each step
             ref_token = input_ids[0, i].item()
             # Convert to torch tensor
@@ -238,58 +290,17 @@ def test_tt_model_acc(
             # Get embedding
             pt_decode_input = embd(ref_token).view(1, 1, -1).expand(32, -1, -1)
             # Prepare input for TT model
-            decode_input = model_args.prepare_residual_tensor_decode(
-                pt_decode_input,
-                model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
-            )
-            rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
-
-            tt_out = tt_model(
-                decode_input,
-                current_pos_tensor,
-                rot_mats=rot_mats,
-                mode="decode",
-                page_table=page_table_tt,
+            decode_input_new = model_args.prepare_residual_tensor_decode(
+                pt_decode_input, model_args.model_config["DECODE_RESIDUAL_MEMCFG"], on_host=True
             )
 
-            tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-                tt_out[0],
-                dim=3,
-                num_links=2,
-                cluster_axis=0,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                buffer_key="SAMPLING",
-            )
-            tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-            tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-                tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids
-            )
-            tt_out_tok = ttnn.to_torch(
-                tt_out_tok,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device,
-                    dims=(3, 1) if model_args.is_galaxy else (1, 3),
-                    mesh_shape=model_args.cluster_shape,
-                ),
-            )[0, 0, :32, 0].view(32, 1)
-            print("output", tokenizer.decode([ref_token]), tokenizer.decode([tt_out_tok.squeeze(1).tolist()[0]]))
-            ttnn.plus_one(
-                current_pos_tensor,
-                sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-            )
+            # Run the trace with a new input
+            ttnn.copy_host_to_device_tensor(decode_input_new, decode_input)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
 
-            current_pos += 1
     # Start decoding
     logger.info(f"Starting decode...")
-    generation_start_pos = prefill_len
     generation_length = decode_len
-
-    # Initial positions
-    decoding_pos = [generation_start_pos] * model_args.max_batch_size
-    current_pos = torch.tensor([decoding_pos[b] for b in range(model_args.max_batch_size)])
-
-    # Get cos/sin matrices for the current position of each user
-    rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
     # Print table header
     if use_reference_file:
@@ -312,25 +323,14 @@ def test_tt_model_acc(
         # Get embedding
         pt_decode_input = embd(ref_token).view(1, 1, -1).expand(32, -1, -1)
         # Prepare input for TT model
-        decode_input = model_args.prepare_residual_tensor_decode(
-            pt_decode_input,
-            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+        decode_input_new = model_args.prepare_residual_tensor_decode(
+            pt_decode_input, model_args.model_config["DECODE_RESIDUAL_MEMCFG"], on_host=True
         )
-        # Run TT model
-        tt_out = tt_model(
-            decode_input,
-            current_pos_tensor,
-            rot_mats=rot_mats,
-            mode="decode",
-            page_table=page_table_tt,
-        )
-        tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-            tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
-        )
-        tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-        tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-            tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids
-        )
+
+        # Run the trace with a new input
+        ttnn.copy_host_to_device_tensor(decode_input_new, decode_input)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+
         if not use_reference_file:
             tt_logits = ttnn.to_torch(
                 tt_out_rm,
@@ -340,7 +340,6 @@ def test_tt_model_acc(
                     mesh_shape=model_args.cluster_shape,
                 ),
             )[0, 0, 0, :]
-        ttnn.deallocate(tt_out_rm)
 
         tt_argmax_token = ttnn.to_torch(
             tt_out_tok,
@@ -350,15 +349,6 @@ def test_tt_model_acc(
                 mesh_shape=model_args.cluster_shape,
             ),
         )[0, 0, 0, 0]
-
-        ttnn.plus_one(
-            current_pos_tensor,
-            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-        )
-
-        # Update rot_mats for next iteration
-        current_pos += 1
-        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
         # Modify the accuracy checking section when using reference text
         if not use_reference_file:
@@ -455,13 +445,6 @@ def test_tt_model_acc(
                 expected = " | ".join(sanitize(t) for t in error["expected"])
                 true_word = sanitize(tokenizer.decode([true_token]))
                 logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
-
-    # Get accuracy thresholds from PERF.md
-    # min_top1_acc, min_top5_acc = get_accuracy_thresholds(
-    #     model_args.model_name,
-    #     model_args.device_name,
-    #     optimizations,s
-    # )
 
     tt_model.tt_ccl.close()
 
