@@ -818,8 +818,7 @@ int main(int argc, char** argv) {
             "BM_pgm_dispatch/tensix_eth_2",
             BM_pgm_dispatch,
             TestInfo{
-                .iterations = 1,
-                .warmup_iterations = 10,
+                .warmup_iterations = 5000,
                 .n_args = 16,
                 .n_kgs = std::get<0>(core_count),
                 .erisc_enabled = true,
@@ -831,8 +830,7 @@ int main(int argc, char** argv) {
             "BM_pgm_dispatch/tensix_eth_2_4_shadow",
             BM_pgm_dispatch,
             TestInfo{
-                .iterations = 1,
-                .warmup_iterations = 10,
+                .warmup_iterations = 5000,
                 .slow_kernel_cycles = 40000,
                 .nfast_kernels = 4,
                 .n_args = 16,
