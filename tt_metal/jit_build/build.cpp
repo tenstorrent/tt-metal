@@ -242,6 +242,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DDISABLE_RELAXED_MEMORY_ORDERING ";
     }
 
+    if (rtoptions.get_gathering_enabled()) {
+        this->defines_ += "-DENABLE_GATHERING ";
+    }
+
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
         this->defines_ += "-DROUTING_FW_ENABLED ";
     }
