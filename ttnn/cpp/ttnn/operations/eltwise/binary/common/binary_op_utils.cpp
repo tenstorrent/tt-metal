@@ -189,7 +189,7 @@ std::map<std::string, std::string> get_defines_fp32(
                 new_defines.insert({"ADD_INT_INIT", fmt::format("add_int_tile_init();")});
                 op_name = "add_int32_tile";
             } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
-                new_defines.insert({"ADD_UINT32_INIT", fmt::format("add_uint32_tile_init();")});
+                new_defines.insert({"ADD_INT_INIT", fmt::format("add_int_tile_init();")});
                 op_name = "add_uint32_tile";
             } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
                 new_defines.insert({"ADD_INT_INIT", fmt::format("add_int_tile_init();")});
