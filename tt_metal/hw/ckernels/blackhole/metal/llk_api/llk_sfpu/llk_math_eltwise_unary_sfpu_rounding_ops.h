@@ -19,30 +19,31 @@ inline void llk_math_eltwise_unary_sfpu_rounding_op_init() {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_floor(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_floor<APPROXIMATE>, dst_index, vector_mode);
+        ckernel::sfpu::_calculate_floor_<APPROXIMATE, false>, dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_floor_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_floor_float32<APPROXIMATE>, dst_index, vector_mode);
+        ckernel::sfpu::_calculate_floor_<APPROXIMATE, true>, dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_ceil(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_ceil<APPROXIMATE>, dst_index, vector_mode);
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::_calculate_ceil_<APPROXIMATE, false>, dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_ceil_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_ceil_float32<APPROXIMATE>, dst_index, vector_mode);
+        ckernel::sfpu::_calculate_ceil_<APPROXIMATE, true>, dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_round(uint dst_index, int decimals, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_round<APPROXIMATE>, dst_index, vector_mode, decimals);
+        ckernel::sfpu::_calculate_round_<APPROXIMATE>, dst_index, vector_mode, decimals);
 }
 
 }  // namespace ckernel
