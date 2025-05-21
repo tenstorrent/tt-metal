@@ -209,6 +209,11 @@ install_gcc() {
 
     apt-get install -y --no-install-recommends g++-$GCC_VER gcc-$GCC_VER
 
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-$GCC_VER $GCC_VER
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-$GCC_VER $GCC_VER
+    update-alternatives --set gcc /usr/bin/gcc-$GCC_VER
+    update-alternatives --set g++ /usr/bin/g++-$GCC_VER
+
     echo "Using g++ version: $(g++ --version | head -n1)"
 }
 
