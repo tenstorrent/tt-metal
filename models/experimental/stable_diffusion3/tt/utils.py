@@ -29,8 +29,8 @@ def to_torch(
     if shard_dim is not None:
         mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim)
 
-    if mesh_composer is None and tensor.storage_type() == ttnn.StorageType.MULTI_DEVICE:
-        tensor = ttnn.get_device_tensor(tensor, tensor.device().id())
+    if mesh_composer is None:
+        tensor = ttnn.get_device_tensors(tensor)[0]
 
     result = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
 
