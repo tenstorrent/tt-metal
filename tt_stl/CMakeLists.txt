@@ -1,3 +1,5 @@
+project(tt_stl)
+
 add_library(tt_stl INTERFACE)
 add_library(TT::STL ALIAS tt_stl)
 

@@ -1,7 +1,7 @@
 # Smoke tests (fast, not necessarily thorough)
 add_library(unit_tests_stl_smoke OBJECT)
 add_library(TT::Metalium::Test::STL::Smoke ALIAS unit_tests_stl_smoke)
-TT_ENABLE_UNITY_BUILD(unit_tests_stl_smoke)
+#TT_ENABLE_UNITY_BUILD(unit_tests_stl_smoke)
 
 target_sources(
     unit_tests_stl_smoke
@@ -12,8 +12,14 @@ target_sources(
         test_span.cpp
         test_strong_type.cpp
 )
-target_include_directories(unit_tests_stl_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(unit_tests_stl_smoke PRIVATE test_metal_common_libs)
+target_include_directories(unit_tests_stl_smoke PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(
+    unit_tests_stl_smoke
+    PRIVATE
+        gmock
+        gtest
+        gtest_main
+)
 
 add_executable(unit_tests_stl)
 target_link_libraries(unit_tests_stl PRIVATE TT::Metalium::Test::STL::Smoke)
