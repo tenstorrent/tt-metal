@@ -395,7 +395,7 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def(
         py::init<
             DataType,
-            DataType,
+            std::optional<DataType>,
             string,
             bool,
             bool,
@@ -416,7 +416,7 @@ void py_bind_conv2d(py::module& module) {
             bool>(),
         py::kw_only(),
         py::arg("dtype") = DataType::BFLOAT16,
-        py::arg("weights_dtype") = DataType::BFLOAT16,
+        py::arg("weights_dtype") = std::nullopt,
         py::arg("activation") = "",
         py::arg("deallocate_activation") = false,
         py::arg("reallocate_halo_output") = true,
@@ -440,9 +440,10 @@ void py_bind_conv2d(py::module& module) {
         &Conv2dConfig::dtype,
         R"doc(Specifies the data type of the output tensor. Supports ttnn.float32, ttnn.bfloat16 and ttnn.bfloat8_b. )doc");
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
-        Specifies the data type of the weights & bias tensor if the Conv2D op is responsible for preparing the weights.
+        Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
-        If ttnn.bfloat8_b is selected, then the weights should be passed in as ttnn.float32.
+        If unspecified, the preprocessed weights will be in the same format as the input weights.
+        If ttnn.bfloat8_b is selected, then the weights should be passed in as ttnn.bfloat16 or ttnn.float32 in row major format.
     )doc");
     py_conv_config.def_readwrite(
         "activation",
