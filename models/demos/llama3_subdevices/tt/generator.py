@@ -310,8 +310,8 @@ class Generator:
         assert (
             sampling_params is None or sampling_params.temperature == 0
         ), "Currently only supporting greedy decoding (temperature=0) on device"
-        argmax_on_device = (
-            False if -1 not in start_pos else (sampling_params is not None and sampling_params.temperature == 0)
+        argmax_on_device = torch.all(start_pos[1:] == -1).item() and (
+            sampling_params is not None and sampling_params.temperature == 0
         )
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
@@ -509,7 +509,14 @@ class Generator:
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
-        return page_table[:, :num_blocks]
+        page_table = page_table[:, :num_blocks]
+        # Pad page table to 32 users
+        b = page_table.shape[0]
+        padded_b = 32 - b
+        padded_page_table = torch.cat(
+            [page_table, torch.ones(padded_b, page_table.shape[1], dtype=torch.int32) * -1], dim=0
+        )
+        return padded_page_table
 
     ## Destructor (used to delete ttnn trace if exists)
 
