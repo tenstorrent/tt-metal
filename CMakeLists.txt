@@ -239,7 +239,6 @@ target_sources(metal_common_pch PRIVATE metal_common_pch.cpp)
 target_precompile_headers(
     metal_common_pch
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
         <fmt/core.h>
         <fmt/format.h>
         <nlohmann/json.hpp>
