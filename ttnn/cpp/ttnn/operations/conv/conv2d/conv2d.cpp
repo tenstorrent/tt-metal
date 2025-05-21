@@ -279,6 +279,9 @@ Result conv2d_DRAM(
         const uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
 
         if (!conv_config.shard_layout.has_value()) {
+            if (!conv_config.weights_dtype.has_value()) {
+                conv_config.weights_dtype = weight_tensor.dtype();
+            }
             conv_config = determine_conv_config_for_auto_shard(
                 conv_config,
                 mm_conv,
@@ -406,6 +409,9 @@ Result conv2d_L1(
 
     bool auto_shard = false;
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
+        if (!conv_config.weights_dtype.has_value()) {
+            conv_config.weights_dtype = weight_tensor.dtype();
+        }
         // In this case we deduce the shard layout.
         conv_config = determine_conv_config_for_auto_shard(
             conv_config,
