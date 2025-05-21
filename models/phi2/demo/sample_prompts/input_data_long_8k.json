@@ -1,7 +1,0 @@
-[
-    {
-        "prompt": "Explicitly state the quotes directly taken from the book inside double quotes like this: \n A. < add quote> \n Metaphor: \n B. < add quote> \n Metaphor: \n C. < add quote> \n Metaphor: \n with the metaphors after each quote. Double-check that the quotes are from the text specified above and that the metaphors relate to AI. End your answer after the 3 quotes / metaphors are finished.",
-        "context": "https://www.gutenberg.org/cache/epub/84/pg84.txt",
-        "max_length": 32000
-    }
-]
