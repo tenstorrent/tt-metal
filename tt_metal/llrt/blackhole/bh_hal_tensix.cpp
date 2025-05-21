@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -10,6 +10,7 @@
 
 #include "assert.hpp"
 #include "blackhole/bh_hal.hpp"
+#include "blackhole/bh_hal_tensix_asserts.hpp"
 #include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
@@ -69,8 +70,8 @@ HalCoreInfoType create_tensix_mem_map() {
         uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
         processor_types.resize(num_processors);
         for (size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
-            DeviceAddr fw_base, local_init, fw_launch;
-            uint32_t fw_launch_value;
+            DeviceAddr fw_base{}, local_init{}, fw_launch{};
+            uint32_t fw_launch_value{};
             switch (processor_class_idx) {
                 case 0: {
                     fw_base = MEM_BRISC_FIRMWARE_BASE;

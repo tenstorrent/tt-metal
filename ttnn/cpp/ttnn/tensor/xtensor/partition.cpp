@@ -225,7 +225,7 @@ std::vector<Tensor> chunk_impl(
             // Create chunks pinned to the original buffer.
             auto& [data, shape] = chunk;
             tt::tt_metal::HostBuffer chunk_buffer(data, buffer.pin());
-            return Tensor(tt::tt_metal::HostStorage(std::move(chunk_buffer)), TensorSpec(shape, layout));
+            return Tensor(std::move(chunk_buffer), TensorSpec(shape, layout));
         });
         return tensors;
     } else {

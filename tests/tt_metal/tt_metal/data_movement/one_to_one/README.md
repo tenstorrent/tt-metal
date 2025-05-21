@@ -18,7 +18,7 @@ Test expectations are that pcc checks pass and sufficient test attribute data is
 | page_size_bytes           | uint32_t              | Size of a page in bytes. Arbitrary value with a minimum of flit size per architecture. |
 | l1_data_format            | DataFormat            | Data format data that will be moved. |
 | master_core_coord         | CoreCoord             | Logical coordinates for the sender core. |
-| slave_core_coord          | CoreCoord             | Logical coordinates for the receiver core. |
+| subordinate_core_coord    | CoreCoord             | Logical coordinates for the receiver core. |
 | virtual_channel           | N/A                   | (1) Option to specify unicast VC for each transaction, (2) Option for a sub-test that uses a separate VC for each transaction (TODO)|
 | noc                       | N/A                   | Specify which NOC to use for the test, (1) Use only one specified NOC, (2) Use both NOCs (TODO)|
 | posted                    | N/A                   | Posted flag. Determines if write is posted or non-posted (TODO)|

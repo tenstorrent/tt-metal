@@ -59,7 +59,7 @@ def test_bert_attention_inference(
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=inputs_mesh_mapper,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     tt_output = bert_attention(

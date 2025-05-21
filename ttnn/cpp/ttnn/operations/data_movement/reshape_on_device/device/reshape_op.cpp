@@ -24,10 +24,10 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
         "Only tile and row major reshape supported!");
 
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Use ttnn::reshape for reshaping sharded inputs");
     TT_FATAL(
-        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Reshape does not currently support sharding. Use ttnn::reshape for reshaping sharded inputs");
 
     if (input_tensor_a.get_layout() == Layout::TILE) {

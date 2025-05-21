@@ -231,6 +231,19 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         cached_routing_fields.value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
 }
 
+FORCE_INLINE void update_packet_header_for_next_hop(
+    volatile tt_l1_ptr tt::tt_fabric::LowLatencyMeshPacketHeader* packet_header,
+    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
+    // This is the hop index. At every ethernet hop, we increment by 1
+    // so that the next receiver indexes into its respecive hop command
+    // in packet_header.route_buffer[]
+    packet_header->routing_fields.value = cached_routing_fields.value + 1;
+}
+
+FORCE_INLINE void update_packet_header_for_next_hop(
+    volatile tt_l1_ptr tt::tt_fabric::MeshPacketHeader* packet_header,
+    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {}
+
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring
 //
@@ -241,7 +254,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
 // This function does a write, so needs to be volatile to avoid compiler optimizations
-template <uint8_t NUM_SENDER_BUFFERS, bool enable_ring_support>
+template <uint8_t NUM_SENDER_BUFFERS, bool enable_ring_support, bool stateful_api>
 FORCE_INLINE void forward_payload_to_downstream_edm(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint16_t payload_size_bytes,
@@ -256,6 +269,7 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     update_packet_header_for_next_hop(packet_header, cached_routing_fields);
     downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
         enable_ring_support,
-        tt::tt_fabric::edm_to_downstream_noc>(
+        tt::tt_fabric::edm_to_downstream_noc,
+        stateful_api>(
         reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
 }

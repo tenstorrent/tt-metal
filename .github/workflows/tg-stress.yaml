@@ -27,6 +27,7 @@ on:
 
 jobs:
   stress-4u:
+    if: ${{ inputs.topology-4u }}
     runs-on:
       - ${{ inputs.extra-tag }}
       - config-tg
@@ -39,7 +40,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
         TT_METAL_ENABLE_ERISC_IRAM: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -69,10 +70,11 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U06F3ER8X9A # Stuti Raizada
+          owner: U053W15B6JF # Djordje Ivanovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   stress-6u:
+    if: ${{ inputs.topology-6u }}
     runs-on:
       - ${{ inputs.extra-tag }}
       - topology-6u
@@ -85,7 +87,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
         TT_METAL_ENABLE_ERISC_IRAM: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -115,6 +117,6 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U06F3ER8X9A # Stuti Raizada
+          owner: U053W15B6JF # Djordje Ivanovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

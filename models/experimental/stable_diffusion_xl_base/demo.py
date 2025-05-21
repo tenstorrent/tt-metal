@@ -11,6 +11,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
+from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 
 
 # Copied from sdxl pipeline
@@ -108,6 +109,7 @@ def run_demo_inference(
     prompt,
     num_inference_steps,
     classifier_free_guidance,
+    vae_on_device,
 ):
     torch.manual_seed(0)
 
@@ -141,6 +143,7 @@ def run_demo_inference(
         conv_weights_dtype=ttnn.bfloat16,
         transformer_weights_dtype=ttnn.bfloat16,
     )
+    tt_vae = TtAutoencoderKL(ttnn_device, pipeline.vae.state_dict()) if vae_on_device else None
 
     cpu_device = "cpu"
 
@@ -355,14 +358,32 @@ def run_demo_inference(
     # VAE upcasting to float32 is happening in the reference SDXL demo if VAE dtype is float16. If it's bfloat16, it will not be upcasted.
     latents = latents / pipeline.vae.config.scaling_factor
 
-    image = pipeline.vae.decode(latents, return_dict=False)[0]
+    if vae_on_device:
+        # Workaround for #22017
+        ttnn_device.disable_and_clear_program_cache()
+
+        B, C, H, W = list(latents.shape)
+        latents = torch.permute(latents, (0, 2, 3, 1))
+        latents = latents.reshape(1, 1, B * H * W, C)
+        ttnn_latents = ttnn.from_torch(
+            latents,
+            dtype=ttnn.bfloat16,
+            device=ttnn_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        logger.info("Running TT VAE")
+        image = tt_vae.forward(ttnn_latents, [B, C, H, W])
+    else:
+        image = pipeline.vae.decode(latents, return_dict=False)[0]
     image = pipeline.image_processor.postprocess(image, output_type="pil")[0]
 
     image.save("output.png")
     logger.info(f"Image saved to output.png")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 6 * 16384}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),
@@ -379,16 +400,26 @@ def run_demo_inference(
     ],
     ids=("with_classifier_free_guidance", "no_classifier_free_guidance"),
 )
+@pytest.mark.parametrize(
+    "vae_on_device",
+    [
+        (True),
+        (False),
+    ],
+    ids=("device_vae", "host_vae"),
+)
 def test_demo(
     device,
     use_program_cache,
     prompt,
     num_inference_steps,
     classifier_free_guidance,
+    vae_on_device,
 ):
     return run_demo_inference(
         device,
         prompt,
         num_inference_steps,
         classifier_free_guidance,
+        vae_on_device=vae_on_device,
     )

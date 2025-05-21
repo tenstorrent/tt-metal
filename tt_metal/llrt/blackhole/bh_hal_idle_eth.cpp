@@ -6,7 +6,7 @@
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +14,7 @@
 
 #include "assert.hpp"
 #include "blackhole/bh_hal.hpp"
+#include "blackhole/bh_hal_eth_asserts.hpp"
 #include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
@@ -78,9 +79,9 @@ HalCoreInfoType create_idle_eth_mem_map() {
                 fw_launch_value = fw_base;
             } break;
             case EthProcessorTypes::DM1: {
-                fw_base = MEM_SLAVE_IERISC_FIRMWARE_BASE;
-                local_init = MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                fw_launch = SLAVE_IERISC_RESET_PC;
+                fw_base = MEM_SUBORDINATE_IERISC_FIRMWARE_BASE;
+                local_init = MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+                fw_launch = SUBORDINATE_IERISC_RESET_PC;
                 fw_launch_value = fw_base;
             } break;
             default:

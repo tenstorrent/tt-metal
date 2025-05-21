@@ -8,6 +8,7 @@
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/types.hpp"
 
 #include <tracy/Tracy.hpp>
@@ -40,7 +41,7 @@ ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int
     }
     if (has_zero && index_of_negative_1 != -1) {
         std::string error_msg = "cannot reshape tensor of 0 elements into shape (";
-        for(auto & s: shape) {
+        for (auto& s : shape) {
             error_msg += std::to_string(s) + ",";
         }
         error_msg += ") because the unspecified dimension size -1 can be any value and is ambiguous";
@@ -101,37 +102,30 @@ bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == St
 
 Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)>& transform_func) {
     TT_FATAL(is_multi_device_host_tensor(tensor), "transform only supports multi-device host tensors");
-    auto input_tensors = ttnn::distributed::get_device_tensors(tensor);
-    std::vector<Tensor> output_tensors;
-    output_tensors.reserve(input_tensors.size());
-    std::transform(
-        input_tensors.begin(), input_tensors.end(), std::back_inserter(output_tensors), [&](const auto& device_tensor) {
-            return transform_func(device_tensor);
-        });
-    return ttnn::distributed::aggregate_as_tensor(
-        output_tensors, ttnn::distributed::get_distributed_tensor_config_from_tensor(tensor));
+    const auto& storage = std::get<MultiDeviceHostStorage>(tensor.storage());
+
+    std::vector<TensorSpec> transformed_specs;
+    std::vector<HostBuffer> transformed_buffers;
+    transformed_buffers.reserve(storage.num_buffers());
+    transformed_specs.reserve(storage.num_buffers());
+    for (size_t i = 0; i < storage.num_buffers(); i++) {
+        Tensor transformed_tensor_shard = transform_func(Tensor(storage.get_buffer(i), storage.get_tensor_spec(i)));
+        transformed_specs.push_back(transformed_tensor_shard.get_tensor_spec());
+        auto* host_storage = std::get_if<HostStorage>(&transformed_tensor_shard.get_storage());
+        TT_FATAL(host_storage != nullptr, "transform function must return a host tensor");
+        transformed_buffers.push_back(std::move(host_storage->buffer));
+    }
+    TensorSpec reference_spec = transformed_specs.front();
+    MultiDeviceHostStorage transformed_storage(std::move(transformed_buffers), std::move(transformed_specs));
+    return Tensor(std::move(transformed_storage), reference_spec, tensor.get_distributed_tensor_config());
 }
 
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
     TT_FATAL(is_multi_device_host_tensor(tensor), "apply only supports multi-device host tensors");
-    auto input_tensors = ttnn::distributed::get_device_tensors(tensor);
-    for (const auto& device_tensor : input_tensors) {
-        callable(device_tensor);
+    const auto& storage = std::get<MultiDeviceHostStorage>(tensor.storage());
+    for (size_t i = 0; i < storage.num_buffers(); i++) {
+        callable(Tensor(storage.get_buffer(i), storage.get_tensor_spec(i)));
     }
-}
-
-Tensor get_shard_for_device(const Tensor& tensor, IDevice* target_device, std::optional<int> buffer_index) {
-    ZoneScopedN("GetShardForDevice");
-    auto& storage = tensor.tensor_attributes->get_storage();
-    return std::visit(
-        tt::stl::overloaded{
-            [buffer_index](const MultiDeviceHostStorage& s) {
-                return Tensor{HostStorage{s.get_buffer(buffer_index.value())}, s.get_tensor_spec(buffer_index.value())};
-            },
-            [&tensor](const HostStorage& s) { return tensor; },
-            [&tensor](const DeviceStorage& s) { return tensor; },
-        },
-        storage);
 }
 
 ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {

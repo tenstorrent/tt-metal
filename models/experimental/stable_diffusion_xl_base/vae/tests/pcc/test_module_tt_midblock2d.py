@@ -22,7 +22,6 @@ def test_vae_midblock(device, input_shape, use_program_cache, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
     )
-    # vae = pipe.vae
     vae.eval()
     state_dict = vae.state_dict()
 
@@ -52,4 +51,4 @@ def test_vae_midblock(device, input_shape, use_program_cache, reset_seeds):
     del vae
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

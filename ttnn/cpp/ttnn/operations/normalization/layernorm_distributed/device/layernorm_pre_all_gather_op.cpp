@@ -26,7 +26,8 @@ void LayerNormPreAllGather::validate(const std::vector<Tensor>& input_tensors) c
 
     TT_FATAL(tensor.get_layout() == Layout::TILE, "Only tilized inputs supported.");
     TT_FATAL(
-        tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Only interleaved inputs supported.");
+        tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Only interleaved inputs supported.");
     TT_FATAL(
         tensor.get_dtype() == DataType::BFLOAT16 || tensor.get_dtype() == DataType::BFLOAT8_B ||
             tensor.get_dtype() == DataType::FLOAT32,

@@ -103,10 +103,13 @@ void kernel_main() {
     }
 
     index_b_offset = 0;
+    constexpr uint32_t row_tile_max_index = num_cols_tile_gamma_beta;
+
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
         uint32_t input_mask_tile_id = input_mask_tile_start_id;
         index_g_offset = 0;
         row_offset = num_cols_per_group;
+
         for (uint32_t i = 0; i < num_groups_per_core; ++i) {
             cb_reserve_back(cb_input_mask, block_w);
             uint32_t l1_write_addr_input_mask = get_write_ptr(cb_input_mask);
@@ -188,13 +191,18 @@ void kernel_main() {
                 }
                 cb_wait_front(cb_out, out_block_hw_normal);
                 uint32_t l1_read_addr = get_read_ptr(cb_out);
+
                 for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                     for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                        noc_async_write_tile(
-                            out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
-                                index_g_offset,
-                            dst_a,
-                            l1_read_addr);
+                        // Checks, only relavent to the last group, that we are not indexing out of bounds
+                        // for the cases where our last group does not span the length of our max tile span for a group
+                        if ((index_g_offset + nt) < row_tile_max_index) {
+                            noc_async_write_tile(
+                                out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                    index_b_offset + index_g_offset,
+                                dst_a,
+                                l1_read_addr);
+                        }
                         l1_read_addr += single_tile_size_bytes;
                     }
                     // l1_read_addr += (single_tile_size_bytes * (block_w-block_w_curr));

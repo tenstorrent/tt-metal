@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from transformers import FalconForCausalLM
+
+import ttnn
 from models.utility_functions import tt_tensors_to_torch_tensors
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, mesh_device):

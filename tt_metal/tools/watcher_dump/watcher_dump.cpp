@@ -14,7 +14,7 @@
 #include "impl/debug/noc_logging.hpp"
 #include "impl/debug/watcher_server.hpp"
 #include "impl/dispatch/debug_tools.hpp"
-#include "system_memory_manager.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -147,9 +147,11 @@ int main(int argc, char* argv[]) {
         } else if (s == "-w" || s == "--dump-watcher") {
             dump_watcher = true;
         } else if (s == "-c" || s == "--dump-cqs") {
-            dump_cqs = true;
+            cout << "CQ dumping currently disabled" << endl;
+            // dump_cqs = true;
         } else if (s == "--dump-cqs-data") {
-            dump_cqs_raw_data = true;
+            cout << "CQ raw data dumping currently disabled" << endl;
+            // dump_cqs_raw_data = true;
         } else if (s == "--dump-noc-transfer-data") {
             tt::tt_metal::MetalContext::instance().rtoptions().set_record_noc_transfers(true);
             dump_noc_xfers = true;

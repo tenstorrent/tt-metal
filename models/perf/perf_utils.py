@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import csv
+import re
+import time
 from os import listdir
 from os.path import isfile, join
-import time
+
 import git
 from loguru import logger
-import re
-import csv
 
 today = time.strftime("%Y_%m_%d")
 

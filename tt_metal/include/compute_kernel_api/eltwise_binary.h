@@ -204,7 +204,7 @@ ALWI void binary_dest_reuse_tiles_init(uint32_t icb0) {
  * the DST register buffer into SRCA. The binary operation will operate on SRCA & SRCB inputs, and the result will be
  * written back to the DST register buffer specified by idst. Similar to DST_TO_SRCA, if binary_reuse_dest =
  * EltwiseBinaryReuseDestType::DST_TO_SRCB, then tile specified by idst will be loaded from the DST into SRCB register
- * buffer. DST_TO_SRCB feature is not available for Grayskull, only Wormhole.
+ * buffer.
  *
  * EltwiseBinaryReuseDestType::DST_TO_SRCA and EltwiseBinaryReuseDestType::DST_TO_SRCB assume that another operation has
  * populated the dest register, otherwise dest will contain zeroes.

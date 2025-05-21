@@ -35,7 +35,7 @@ flatbuffer::TensorMemoryLayout to_flatbuffer(TensorMemoryLayout layout) {
 // For page sizes, keep lambda usage consistent across types.
 static inline uint32_t to_flatbuffer(const uint32_t& value) { return value; }
 
-// Original type defined in circular_buffer_types.hpp
+// Original type defined in circular_buffer_config.hpp
 flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
     const CircularBufferConfig& config, flatbuffers::FlatBufferBuilder& builder) {
     // Convert optional arrays of various types to Flatbuffers vectors.

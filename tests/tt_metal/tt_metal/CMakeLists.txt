@@ -112,7 +112,7 @@ target_sources(
             test_kernels/misc/add_two_ints.cpp
             test_kernels/misc/brisc_print.cpp
             test_kernels/misc/circular_buffer/cb_non_blocking_master_test_kernel.cpp
-            test_kernels/misc/circular_buffer/cb_non_blocking_slave_test_kernel.cpp
+            test_kernels/misc/circular_buffer/cb_non_blocking_subordinate_test_kernel.cpp
             test_kernels/misc/dprint_raise_wait_brisc.cpp
             test_kernels/misc/dprint_raise_wait_ncrisc.cpp
             test_kernels/misc/erisc_print.cpp

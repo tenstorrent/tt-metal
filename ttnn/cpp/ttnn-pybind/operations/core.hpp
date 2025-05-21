@@ -9,7 +9,7 @@
 #include <optional>
 
 #include "pybind11/cast.h"
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/work_split.hpp>
 

@@ -38,7 +38,7 @@ void validate_pool2d(
         tt::constants::TILE_WIDTH);
 
     // check that C dimnenion is a multiple of num_shards_c for all but height sharding
-    TensorMemoryLayout in_memory_layout = input.memory_config().memory_layout;
+    TensorMemoryLayout in_memory_layout = input.memory_config().memory_layout();
     if (in_memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_shards_c = sliding_window_config.num_cores_c;
         TT_FATAL(
@@ -94,15 +94,18 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     const ttnn::Shape output_shape({1, 1, out_nhw, out_c});
 
     auto mem_config = out_mem_config;
-    if (mem_config.shard_spec.has_value()) {
-        mem_config.shard_spec->shape[1] = input.shard_spec()->shape[1];
+    if (mem_config.shard_spec().has_value()) {
+        auto shard_spec = mem_config.shard_spec().value();
+        shard_spec.shape[1] = input.shard_spec().value().shape[1];
+        mem_config = mem_config.with_shard_spec(shard_spec);
     } else {
         uint32_t ncores = input.shard_spec().value().num_cores();
         TT_FATAL(ncores == sliding_window_config.num_cores_nhw, "Number of cores should match");
         uint32_t out_nhw_per_core = output_shape[0] * output_shape[1] * output_shape[2] / ncores;
         CoreRangeSet shard_grid = sliding_window_config.core_range_set;
         std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_padded_shape()[-1]};
-        mem_config.shard_spec = tt::tt_metal::ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
+        mem_config =
+            mem_config.with_shard_spec(tt::tt_metal::ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR});
     }
 
     return TensorSpec(

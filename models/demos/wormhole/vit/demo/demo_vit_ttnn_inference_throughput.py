@@ -2,26 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-
-import torch
-import transformers
-from transformers import AutoImageProcessor
-from loguru import logger
 import time
 
-import ttnn
+import pytest
+import torch
+import transformers
+from loguru import logger
+from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
+import ttnn
 from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
-from models.utility_functions import torch2tt_tensor, is_blackhole
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_data_loader, get_batch
-
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-)
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_blackhole,
+    torch2tt_tensor,
+)
 
 
 def get_expected_times(functional_vit):
@@ -48,7 +47,6 @@ def test_vit(device, use_program_cache):
     sequence_size = 224
 
     config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained(model_name, config=config)
     config = ttnn_optimized_sharded_vit_wh.update_model_config(config, batch_size)
     image_processor = AutoImageProcessor.from_pretrained(model_name)
@@ -101,18 +99,18 @@ def test_vit(device, use_program_cache):
         torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
         torch_pixel_values = torch.nn.functional.pad(torch_pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
         batch_size, img_h, img_w, img_c = torch_pixel_values.shape  # permuted input NHWC
-        patch_size = 16
+        patch_size = config.patch_size
         torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
         N, H, W, C = torch_pixel_values.shape
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 0),
+                    ttnn.CoreCoord(7, 1),
                 ),
             }
         )
-        n_cores = 8
+        n_cores = 16
         shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
         output = None

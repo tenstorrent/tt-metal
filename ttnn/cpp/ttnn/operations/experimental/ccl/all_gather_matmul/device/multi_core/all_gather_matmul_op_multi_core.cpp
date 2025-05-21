@@ -270,9 +270,9 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
                 matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
                     program,
                     all_gather_output_tensor,
-                    weight_tensor,
+                    {weight_tensor},
                     bias,
-                    matmul_output_tensor,
+                    {matmul_output_tensor},
                     bcast_batch,
                     compute_kernel_config,
                     config,

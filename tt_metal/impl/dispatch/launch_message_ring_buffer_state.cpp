@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 
 namespace tt::tt_metal {
 

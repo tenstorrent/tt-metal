@@ -3,15 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch
 from typing import Optional
 
-import ttnn
-from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel
-from models.demos.metal_BERT_large_11.tt.ffn import TtFeedForwardModel
-from models.demos.metal_BERT_large_11.tt import custom_matmuls
-from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
+import torch
 from tt_lib.utils import pad_weight
+
+import ttnn
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
+from models.demos.metal_BERT_large_11.tt.ffn import TtFeedForwardModel
+from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel
+from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 
 
 class TtBertEncoder:

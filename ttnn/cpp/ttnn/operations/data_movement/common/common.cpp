@@ -203,7 +203,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
     auto rank = logical_shape.rank();
     TT_FATAL(rank >= 2, "rank of tensor to shard must be at least 2.");
 
-    ttnn::TensorMemoryLayout tensor_memory_layout;
+    ttnn::TensorMemoryLayout tensor_memory_layout{};
     if (strategy == ShardStrategy::BLOCK) {
         tensor_memory_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED;
     } else if (strategy == ShardStrategy::WIDTH) {

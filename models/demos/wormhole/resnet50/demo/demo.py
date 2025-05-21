@@ -4,12 +4,13 @@
 
 
 import pytest
-from models.demos.ttnn_resnet.demo.demo import run_resnet_imagenet_inference, run_resnet_inference
-from models.utility_functions import run_for_wormhole_b0
+
 import ttnn
+from models.demos.ttnn_resnet.demo.demo import run_resnet_imagenet_inference, run_resnet_inference
 from models.demos.wormhole.resnet50.tests.test_resnet50_performant_imagenet import (
     test_run_resnet50_trace_2cqs_inference,
 )
+from models.utility_functions import run_for_wormhole_b0
 
 test_run_resnet50_trace_2cqs_inference.__test__ = False
 

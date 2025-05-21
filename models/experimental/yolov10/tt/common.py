@@ -73,7 +73,6 @@ class TtYolov10Conv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            input_channels_alignment=32,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
             enable_subblock_padding=False,

@@ -19,27 +19,47 @@ void bind_cumsum_operation(py::module& module) {
     auto docstring =
         R"doc(
         Returns cumulative sum of `input` along dimension `dim`
-
         For a given `input` of size N, the `output` will also contain N elements and be such that:
-
-        ``y_i = x_0 + x_1 + ... = x_{i-1} + x_i``
-
         This function is fundamentally identical to `torch.cumsum()`
 
-        Parameters:
-            * `input` (ttnn.Tensor) input tensor
-            * `dim` (int)
+        Args:
+            input (ttnn.Tensor): input tensor
+            dim (int): dimension along which to compute cumulative sum
 
-        Keywords Arguments:
-            * `dtype` (ttnn.DataType, optional) desired output type. If specified then input tensor will be casted to `dtype` before processing.
-            * `output` (ttnn.Tensor, optional) preallocated output. If specified, `output` must have same shape as `input`, and must be on the same device.
+        Keyword Args:
+            dtype (ttnn.DataType, optional): desired output type. If specified then input tensor will be casted to `dtype` before processing.
+            output (ttnn.Tensor, optional): preallocated output. If specified, `output` must have same shape as `input`, and must be on the same device.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+
 
         Note:
-            If both `dtype` and `output` are specified then `output.dtype` must be `dtype`
+            If both `dtype` and `output` are specified then `output.dtype` must be `dtype`)
+
+            Supported dtypes, layout, ranks and `dim` values:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+                 - dim
+               * - BFLOAT16, FLOAT32
+                 - TILE
+                 - 1, 2, 3, 4, 5
+                 - -rank <= dim < rank
+               * - INT32, UINT32
+                 - TILE
+                 - 3, 4, 5
+                 - dim in {0, 1, ..., rank - 3} or dim in {-rank, -rank + 1, ..., -3}
 
         Example:
 
         .. code-block:: python
+
             import torch
             import ttnn
 
@@ -47,7 +67,7 @@ void bind_cumsum_operation(py::module& module) {
             torch_input = torch.rand([2, 3, 4])
             tensor_input = ttnn.from_torch(torch_input, device=device)
 
-            # Apply `ttnn.experimental.cumsum()` on `dim=0`
+            # Apply ttnn.experimental.cumsum() on dim=0
             tensor_output = ttnn.experimental.cumsum(tensor_input, dim=0)
 
             # With preallocated output and dtype
@@ -60,7 +80,7 @@ void bind_cumsum_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::experimental::cumsum,
-        "ttnn.experimental.cumsum()",
+        docstring,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,

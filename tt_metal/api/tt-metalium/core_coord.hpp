@@ -221,6 +221,9 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
 std::vector<CoreCoord> corerange_to_cores(
     const CoreRangeSet& crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false);
 
+CoreRangeSet select_from_corerange(
+    const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise = false);
+
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b);
 
 template <>

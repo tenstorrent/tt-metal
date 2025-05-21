@@ -10,7 +10,6 @@
 #include "core_coord.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
-#include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
@@ -101,6 +100,7 @@ public:
         } else if (d_variant) {
             this->logical_core_ = core_manager.prefetcher_d_core(device_id, channel, cq_id);
         }
+        this->kernel_type_ = FDKernelType::DISPATCH;
     }
     void CreateKernel() override;
     void GenerateStaticConfigs() override;

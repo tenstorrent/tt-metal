@@ -8,7 +8,6 @@
 
 #include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "fd_kernel.hpp"
-#include "system_memory_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 struct eth_tunneler_static_config_t {

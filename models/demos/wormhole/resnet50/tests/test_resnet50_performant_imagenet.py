@@ -3,18 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
 import torch
 from loguru import logger
-
-from models.utility_functions import run_for_wormhole_b0
-from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50Trace2CQ
-from models.demos.ttnn_resnet.tests.demo_utils import get_data_loader, get_batch
-from transformers import AutoImageProcessor
-from models.utility_functions import (
-    profiler,
-)
 from tqdm import tqdm
+from transformers import AutoImageProcessor
+
+import ttnn
+from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
+from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50Trace2CQ
+from models.utility_functions import profiler, run_for_wormhole_b0
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 

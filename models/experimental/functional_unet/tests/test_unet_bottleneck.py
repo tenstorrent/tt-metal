@@ -14,12 +14,16 @@ from models.experimental.functional_unet.tt.model_preprocessing import (
 )
 from models.experimental.functional_unet.tt import unet_shallow_torch
 from models.experimental.functional_unet.tt import unet_shallow_ttnn
-from models.experimental.functional_unet.tests.common import is_n300_with_eth_dispatch_cores, check_pcc_conv
+from models.experimental.functional_unet.tests.common import (
+    is_n300_with_eth_dispatch_cores,
+    check_pcc_conv,
+    UNET_L1_SMALL_REGION_SIZE,
+)
 
 
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [4])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_bottleneck(batch: int, groups: int, device: ttnn.Device, reset_seeds):
     torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
@@ -43,7 +47,7 @@ def test_unet_bottleneck(batch: int, groups: int, device: ttnn.Device, reset_see
 
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [4])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_bottleneck_multi_device(batch: int, groups: int, mesh_device: ttnn.MeshDevice, reset_seeds):
     if not is_n300_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300")

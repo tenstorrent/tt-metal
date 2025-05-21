@@ -15,8 +15,11 @@
 #include "compute_kernel_api/add_uint16_sfpu.h"
 #include "compute_kernel_api/sub_int32_sfpu.h"
 #include "compute_kernel_api/sub_uint16_sfpu.h"
+#include "compute_kernel_api/mul_uint16_sfpu.h"
 #include "compute_kernel_api/quantization.h"
 #include "compute_kernel_api/binary_max_min.h"
+#include "compute_kernel_api/gcd.h"
+#include "compute_kernel_api/lcm.h"
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"

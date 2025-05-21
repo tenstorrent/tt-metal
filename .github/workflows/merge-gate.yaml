@@ -90,7 +90,7 @@ jobs:
     secrets: inherit
     with:
       build-type: TSan
-      version: 22.04
+      version: 24.04
       skip-tt-train: false
       publish-artifact: false
 

@@ -22,7 +22,7 @@ void Prod_op::validate(const std::vector<tt::tt_metal::Tensor>& input_tensors) c
     TT_FATAL(input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL((input_tensor_a.get_layout() == tt::tt_metal::Layout::TILE), "Input Layout must be tilized");
-    TT_FATAL(input_tensor_a.memory_config().memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(input_tensor_a.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED, "Error");
     TT_FATAL(
         input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
         "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",

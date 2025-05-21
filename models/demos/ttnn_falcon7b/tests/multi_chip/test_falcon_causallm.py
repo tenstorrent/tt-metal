@@ -2,28 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-from loguru import logger
+import torch
 import transformers
-import ttnn
-from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.ttnn_falcon7b.tt.model_config import (
-    get_model_config,
-    get_tt_cache_path,
-)
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
-from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-from models.demos.ttnn_falcon7b.tt.common import (
-    create_custom_preprocessor,
-    create_kv_cache,
-)
-
 from loguru import logger
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn.model_preprocessing import preprocess_model_parameters
 
+import ttnn
+from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
+from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh, ShardTensorToMesh
 
 PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
 
@@ -75,6 +65,7 @@ def test_falcon_causal_lm(
     expected_pcc,
     model_config_str,
     num_loops,
+    model_location_generator,
 ):
     torch.manual_seed(0)
     batch = device_batch_size * mesh_device.get_num_devices()
@@ -83,10 +74,12 @@ def test_falcon_causal_lm(
     else:
         shard_dim = 0
 
-    configuration = transformers.FalconConfig.from_pretrained(model_version)
+    model_location_or_version = model_location_generator(model_version, download_if_ci_v2=True)
+
+    configuration = transformers.FalconConfig.from_pretrained(model_location_or_version)
     configuration.num_hidden_layers = num_layers
     model = transformers.models.falcon.modeling_falcon.FalconForCausalLM.from_pretrained(
-        model_version, config=configuration
+        model_location_or_version, config=configuration
     ).eval()
     model_config = get_model_config(model_config_str)
     dtype = model_config["DEFAULT_DTYPE"]

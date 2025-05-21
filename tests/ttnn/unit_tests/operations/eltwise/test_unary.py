@@ -508,6 +508,24 @@ def test_unary_ceil(input_shapes, device):
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
 
 
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
+    ttnn_function = ttnn.alt_complex_rotate90
+    golden_function = ttnn.get_golden_function(ttnn_function)
+
+    torch.manual_seed(0)
+
+    tt_input = ttnn.from_torch(torch.randn([h, w]), device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    torch_input = ttnn.to_torch(tt_input)
+
+    torch_output = golden_function(torch_input, device=device)
+    tt_output = ttnn_function(tt_input)
+
+    assert torch.equal(torch_output, ttnn.to_torch(tt_output))
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -604,7 +622,8 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
 )
 @pytest.mark.parametrize("scalar", [-100, -54, -1, 0, 1, 13, 29])
 @pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq])
-def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
     torch.manual_seed(213919)
 
     # Generate a uniform range of values across the valid int32 range
@@ -616,9 +635,12 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
 
+    if is_wormhole_b0() and use_legacy == False and ((in_data - scalar) < -2147483647).any():
+        pytest.xfail("Overflow occurs as in case of binary_ng, sub_tile is called")
+
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_op(input_tensor, scalar)
+    output_tensor = ttnn_op(input_tensor, scalar, use_legacy=use_legacy)
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden_tensor = golden_function(in_data, scalar)
 

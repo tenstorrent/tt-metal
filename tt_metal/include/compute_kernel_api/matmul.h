@@ -11,7 +11,9 @@
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
 #endif
-
+#ifndef MM_THROTTLE
+#define MM_THROTTLE 0
+#endif
 namespace ckernel {
 
 // clang-format off
@@ -32,7 +34,7 @@ ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, co
     UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
 
@@ -67,7 +69,7 @@ ALWI void matmul_tiles(
     uint32_t idst,
     const uint32_t transpose) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
-    MATH((llk_math_matmul<MATH_FIDELITY>(idst, transpose)));
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose)));
 }
 
 // clang-format off
@@ -86,7 +88,7 @@ ALWI void matmul_tiles(
  // clang-format on
 template <uint32_t num_faces = 4>
 ALWI void matmul_tiles_math(uint32_t idst) {
-    MATH((llk_math_matmul<MATH_FIDELITY, num_faces>(idst)));
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, num_faces>(idst)));
 }
 
 // clang-format off
@@ -104,7 +106,7 @@ ALWI void matmul_tiles_math(uint32_t idst) {
  */
 // clang-format on
 ALWI void mm_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0) {
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 }
 
@@ -157,7 +159,7 @@ ALWI void mm_block_init(
     UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
 
@@ -199,7 +201,7 @@ ALWI void matmul_block(
     uint32_t rt_dim,
     uint32_t kt_dim) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul<MATH_FIDELITY>(idst, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose, ct_dim, rt_dim, kt_dim)));
 }
 
 // clang-format off
@@ -227,7 +229,7 @@ ALWI void mm_block_init_short(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 }
 
 // clang-format off

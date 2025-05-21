@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_pybind.hpp"
 #include "cpp/ttnn/operations/data_movement/sharded/reshard/reshard_pybind.hpp"
 #include "cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_pybind.hpp"
@@ -29,6 +29,7 @@
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave_pybind.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape_pybind.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_pybind.hpp"
+#include "ttnn/operations/data_movement/roll/roll_pybind.hpp"
 #include "ttnn/operations/data_movement/view/view_pybind.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_pybind.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_pybind.hpp"
@@ -86,6 +87,7 @@ void py_module(py::module& module) {
     py_bind_squeeze(module);
     py_bind_stack(module);
     py_bind_unsqueeze(module);
+    py_bind_roll(module);
 }
 }  // namespace data_movement
 }  // namespace operations

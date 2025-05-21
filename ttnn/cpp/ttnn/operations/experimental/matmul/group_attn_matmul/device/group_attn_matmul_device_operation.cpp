@@ -48,7 +48,7 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
     // Any sharded memory configs must be HEIGHT_SHARDED and have the same orientation
     ShardOrientation shard_orientation = this->row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
     if (input_tensor_a.is_sharded()) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
         TT_FATAL(
             input_tensor_a.shard_spec().value().orientation == shard_orientation,
             "Any sharded memory configs must have the same shard orientation as one another!");
@@ -60,7 +60,7 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
         TT_FATAL(shard_shape[1] == ashape[3], "Error");
     }
     if (input_tensor_b.is_sharded()) {
-        TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
         TT_FATAL(
             input_tensor_b.shard_spec().value().orientation == shard_orientation,
             "Any sharded memory configs must have the same shard orientation as one another!");
@@ -70,23 +70,23 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
         TT_FATAL(shard_shape[1] == bshape[3], "Error");
     }
     if (this->output_mem_config.is_sharded()) {
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
 
         // If user passes in output_mem_config with shard_spec, assert that it is the same as the one calculated in
         // GroupAttnMatmulDeviceOperation::create_output_tensors
-        if (this->output_mem_config.shard_spec.has_value()) {
+        if (this->output_mem_config.shard_spec().has_value()) {
             const ttnn::Shape output_shape = this->compute_output_specs(input_tensors).at(0).padded_shape();
             const uint32_t num_cores = output_shape[1];
             CoreRangeSet all_cores =
                 num_cores_to_corerangeset(num_cores, this->compute_with_storage_grid_size, this->row_major);
 
-            auto shard_shape = this->output_mem_config.shard_spec.value().shape;
+            auto shard_shape = this->output_mem_config.shard_spec().value().shape;
             TT_FATAL(
-                this->output_mem_config.shard_spec.value().grid == all_cores,
+                this->output_mem_config.shard_spec().value().grid == all_cores,
                 "Shard spec in output mem config must match shard spec calculated in "
                 "GroupAttnMatmulDeviceOperation::create_output_tensors!");
             TT_FATAL(
-                this->output_mem_config.shard_spec.value().orientation == shard_orientation,
+                this->output_mem_config.shard_spec().value().orientation == shard_orientation,
                 "Any sharded memory configs must have the same shard orientation as one another!");
             TT_FATAL(shard_shape[0] == output_shape[2], "Error");
             TT_FATAL(shard_shape[1] == output_shape[3], "Error");
@@ -139,9 +139,7 @@ std::vector<ttnn::TensorSpec> GroupAttnMatmulDeviceOperation::compute_output_spe
 
     if (this->output_mem_config.is_sharded()) {
         auto output_mem_config = this->output_mem_config;
-        if (this->output_mem_config.shard_spec.has_value()) {
-            output_mem_config.shard_spec = this->output_mem_config.shard_spec.value();
-        } else {
+        if (!this->output_mem_config.shard_spec().has_value()) {
             const uint32_t num_cores = output_shape[1];
             CoreRangeSet all_cores =
                 num_cores_to_corerangeset(num_cores, this->compute_with_storage_grid_size, this->row_major);
@@ -149,7 +147,7 @@ std::vector<ttnn::TensorSpec> GroupAttnMatmulDeviceOperation::compute_output_spe
             ShardOrientation shard_orientation =
                 this->row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
             ShardSpec shard_spec = ShardSpec{all_cores, {output_shape[2], output_shape[3]}, shard_orientation};
-            output_mem_config.shard_spec = shard_spec;
+            output_mem_config = output_mem_config.with_shard_spec(shard_spec);
         }
         return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), output_mem_config))};
     }
@@ -197,16 +195,16 @@ operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(const std::
         this->transpose_hw,
         this->out_subblock_w,
         this->compute_with_storage_grid_size.str(),
-        this->output_mem_config.memory_layout,
-        this->output_mem_config.buffer_type,
+        this->output_mem_config.memory_layout(),
+        this->output_mem_config.buffer_type(),
         this->output_dtype,
         this->row_major,
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().memory_layout,
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().buffer_type,
+        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().memory_layout(),
+        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().buffer_type(),
         input_tensor_a.dtype(),
         input_tensor_a.device()->id(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().memory_layout,
-        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().buffer_type,
+        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().memory_layout(),
+        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().buffer_type(),
         input_tensor_b.dtype(),
         input_tensor_b.device()->id());
 }

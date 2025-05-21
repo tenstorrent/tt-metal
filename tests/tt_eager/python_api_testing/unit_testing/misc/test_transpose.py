@@ -56,23 +56,21 @@ def transpose(
         assert device.num_program_cache_entries() == expected_program_cache_size
 
 
-@pytest.mark.skip("Failing on harvested BH, see #21147 (never ran on WH)")
 def test_fold_transpose(device, use_program_cache):
-    N = 32
+    N = 16
     C = 4
     H = 256
     W = 224
     input_shape = (N, C, H, W)
-    ## 128
-    grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 8)),
-            ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(10, 9)),
-        }
-    )
+    ## 64
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+
     sharded_config = ttnn.create_sharded_memory_config_(
         input_shape,
-        grid,
+        shard_grid,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.ShardOrientation.ROW_MAJOR,
     )

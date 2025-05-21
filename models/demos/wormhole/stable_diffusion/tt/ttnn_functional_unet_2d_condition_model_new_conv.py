@@ -2,37 +2,33 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
-import ttnn
 import os
 from typing import Any, Dict, Optional, Tuple, Union
+
 import torch
-import os
+import torch.nn as nn
 from loguru import logger
-from models.utility_functions import is_grayskull
 
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding
-
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_mid_block_2d_cross_attn_new_conv import (
-    unet_mid_block_2d_cross_attn,
-)
-
+import ttnn
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention_down_block_2d_new_conv import (
     cross_attention_down_block_2d,
 )
-
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attn_upblock_new_conv import (
     cross_attention_upblock2d,
 )
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downblock_2d_new_conv import downblock2d
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_mid_block_2d_cross_attn_new_conv import (
+    unet_mid_block_2d_cross_attn,
+)
 
 # Device 0 - New Upblock
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_conv import upblock_2d
-
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pre_process_input,
     get_default_compute_config,
+    pre_process_input,
 )
+from models.utility_functions import is_grayskull
 
 fp32_accum = True
 
@@ -359,7 +355,6 @@ class UNet2DConditionModel:
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=shard_layout,
-            input_channels_alignment=32,
             transpose_shards=False,
             reshard_if_not_optimal=True,
         )
@@ -643,7 +638,6 @@ class UNet2DConditionModel:
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            input_channels_alignment=32,
             act_block_h_override=64,
             transpose_shards=False,
             reshard_if_not_optimal=True,

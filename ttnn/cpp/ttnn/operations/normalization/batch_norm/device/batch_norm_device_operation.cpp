@@ -65,32 +65,32 @@ void BatchNormOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input.get_layout() == Layout::TILE, "Input tensor must be must be tilized");
     TT_FATAL(
-        input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Input tensor must be interleaved");
+        input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Input tensor must be interleaved");
     TT_FATAL(
-        operation_attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Output tensor to eltwise binary must be interleaved");
 
     TT_FATAL(batch_mean.get_layout() == Layout::TILE, "batch_mean tensor must be tilized");
     TT_FATAL(
-        batch_mean.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        batch_mean.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "batch_mean tensor must be interleaved");
 
     TT_FATAL(batch_var.get_layout() == Layout::TILE, "batch_var tensor must be tilized");
     TT_FATAL(
-        batch_var.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        batch_var.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "batch_var tensor must be interleaved");
 
     if (weight.has_value()) {
         TT_FATAL(weight.value().get_layout() == Layout::TILE, "weight tensor must be tilized");
         TT_FATAL(
-            weight.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            weight.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "weight tensor must be interleaved");
     }
 
     if (bias.has_value()) {
         TT_FATAL(bias.value().get_layout() == Layout::TILE, "bias tensor must be tilized");
         TT_FATAL(
-            bias.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            bias.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "bias tensor must be interleaved");
     }
 

@@ -85,7 +85,7 @@ LoRALinearLayer::LoRALinearLayer(const LoRALayerConfig& config, const autograd::
     m_weight(weight) {
     m_weight->set_requires_grad(false);
     m_scale = config.alpha / static_cast<float>(config.rank);
-    auto weight_shape = m_weight->get_value().get_logical_shape();
+    auto weight_shape = m_weight->get_value().logical_shape();
     uint32_t in_features = weight_shape[3];
     uint32_t out_features = weight_shape[2];
     m_lora_a = create_lora_a(config.rank, out_features);

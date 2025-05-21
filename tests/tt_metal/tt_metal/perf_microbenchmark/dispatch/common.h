@@ -555,8 +555,8 @@ void configure_kernel_variant(
         {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual_noc_coords.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(0xff)},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(0xff)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
         {"FD_CORE_TYPE", std::to_string(0)},               // todo, support dispatch on eth
     };
     compile_args.push_back(is_dram_variant);

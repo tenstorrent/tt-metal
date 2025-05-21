@@ -28,7 +28,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/system_memory_manager.hpp>
 
 namespace tt {
 namespace tt_metal {

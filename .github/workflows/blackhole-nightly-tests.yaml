@@ -4,19 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       runner-label:
-          description: 'Optional: BH'
-          required: true
-          type: string
-          default: 'BH'
+        description: 'Valid inputs: ["P100", "P150"] (both cards), ["P100"] (P100 only), ["P150"] (P150 only)'
+        required: false
+        type: string
+        default: '["P100", "P150"]'
   workflow_call:
     inputs:
       runner-label:
-          description: 'Optional: BH'
-          required: false
-          type: string
-          default: 'BH'
+        description: 'Valid inputs: ["P100", "P150"] (both cards), ["P100"] (P100 only), ["P150"] (P150 only)'
+        required: false
+        type: string
+        default: '["P100", "P150"]'
   schedule:
-    - cron: "0 */12 * * *"  # Every day at 0:00 and 12:00 UTC
+    - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
 jobs:
   build-artifact:
@@ -28,8 +28,12 @@ jobs:
   bh-nightly:
     needs: build-artifact
     uses: ./.github/workflows/blackhole-nightly-tests-impl.yaml
+    strategy:
+      matrix:
+        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
     secrets: inherit
     with:
+      runner-label: ${{ matrix.card_type }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -37,9 +41,12 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
+    strategy:
+      matrix:
+        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'BH' }}
+      runner-label: ${{ matrix.card_type }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -47,9 +54,12 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
+    strategy:
+      matrix:
+        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'BH' }}
+      runner-label: ${{ matrix.card_type }}
       timeout: 120
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

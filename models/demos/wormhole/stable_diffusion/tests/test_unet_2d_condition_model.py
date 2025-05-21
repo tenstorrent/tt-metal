@@ -3,21 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import torch
-import pytest
 import time
-from tqdm.auto import tqdm
+
+import pytest
+import torch
 from diffusers import LMSDiscreteScheduler, StableDiffusionPipeline
+from tqdm.auto import tqdm
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_blackhole
-
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
@@ -49,7 +48,6 @@ def unsqueeze_all_params_to_4d(params):
     return params
 
 
-@skip_for_blackhole("Failing on harvested BH, see #21088")
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768}], ids=["device_params=l1_small_size_24576"], indirect=True
 )

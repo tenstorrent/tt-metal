@@ -11,7 +11,6 @@
 #include <utility>
 
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {

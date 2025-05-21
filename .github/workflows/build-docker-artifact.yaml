@@ -210,6 +210,7 @@ jobs:
           docker pull ${CI_BUILD_TAG}
           docker tag ${CI_BUILD_TAG} ${CI_BUILD_LATEST_TAG}
           docker push ${CI_BUILD_LATEST_TAG}
+          docker rmi ${CI_BUILD_TAG} ${CI_BUILD_LATEST_TAG}
 
           # Tag CI Test image
           CI_TEST_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}"
@@ -219,6 +220,7 @@ jobs:
           docker pull ${CI_TEST_TAG}
           docker tag ${CI_TEST_TAG} ${CI_TEST_LATEST_TAG}
           docker push ${CI_TEST_LATEST_TAG}
+          docker rmi ${CI_TEST_TAG} ${CI_TEST_LATEST_TAG}
 
           # Tag Dev image
           DEV_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}"
@@ -228,6 +230,7 @@ jobs:
           docker pull ${DEV_TAG}
           docker tag ${DEV_TAG} ${DEV_LATEST_TAG}
           docker push ${DEV_LATEST_TAG}
+          docker rmi ${DEV_TAG} ${DEV_LATEST_TAG}
 
           # Tag Basic Dev image
           BASIC_DEV_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}"
@@ -237,3 +240,4 @@ jobs:
           docker pull ${BASIC_DEV_TAG}
           docker tag ${BASIC_DEV_TAG} ${BASIC_DEV_LATEST_TAG}
           docker push ${BASIC_DEV_LATEST_TAG}
+          docker rmi ${BASIC_DEV_TAG} ${BASIC_DEV_LATEST_TAG}

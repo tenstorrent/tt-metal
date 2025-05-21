@@ -20,6 +20,7 @@ from models.experimental.functional_unet.tests.common import (
     is_t3k_with_eth_dispatch_cores,
     UNET_FULL_MODEL_PCC,
     UNET_TRACE_REGION_SIZE,
+    UNET_L1_SMALL_REGION_SIZE,
     UNetPerformanceStatistics,
 )
 
@@ -29,7 +30,13 @@ from models.utility_functions import skip_for_grayskull, divup
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    [
+        {
+            "l1_small_size": UNET_L1_SMALL_REGION_SIZE,
+            "trace_region_size": UNET_TRACE_REGION_SIZE,
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -134,7 +141,13 @@ def test_unet_trace_2cq(
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    [
+        {
+            "l1_small_size": UNET_L1_SMALL_REGION_SIZE,
+            "trace_region_size": UNET_TRACE_REGION_SIZE,
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -254,7 +267,13 @@ def test_unet_trace_2cq_multi_device(
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    [
+        {
+            "l1_small_size": UNET_L1_SMALL_REGION_SIZE,
+            "trace_region_size": UNET_TRACE_REGION_SIZE,
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -389,7 +408,13 @@ def test_unet_trace_2cq_same_io(
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    [
+        {
+            "l1_small_size": UNET_L1_SMALL_REGION_SIZE,
+            "trace_region_size": UNET_TRACE_REGION_SIZE,
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(

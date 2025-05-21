@@ -27,17 +27,18 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_trace.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/multi_producer_single_consumer_queue.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/vector_aligned.hpp>
-#include <tt-metalium/worker_config_buffer.hpp>
 #include <umd/device/tt_core_coordinates.h>
 
 namespace tt {
 namespace tt_metal {
 class IDevice;
 class SystemMemoryManager;
+class WorkerConfigBufferMgr;
 namespace distributed {
 class MeshDevice;
 class MeshWorkload;
@@ -51,8 +52,10 @@ namespace tt::tt_metal::distributed {
 class MeshEvent;
 struct MeshBufferReadDescriptor;
 struct MeshReadEventDescriptor;
+struct MeshCoreDataReadDescriptor;
 
-using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
+using MeshCompletionReaderVariant =
+    std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
 class MeshCommandQueue {
     // Main interface to dispatch data and workloads to a MeshDevice
@@ -96,6 +99,8 @@ public:
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         bool blocking) = 0;
+    virtual void enqueue_write(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
 
     // MeshBuffer Read APIs
     virtual void enqueue_read_mesh_buffer(
@@ -103,6 +108,12 @@ public:
     virtual void enqueue_read_shards(
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        bool blocking) = 0;
+    // TODO: does "enqueue" make sense anymore? Return the object by value instead.
+    virtual void enqueue_read(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        DistributedHostBuffer& host_buffer,
+        const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) = 0;
 
     virtual MeshEvent enqueue_record_event(

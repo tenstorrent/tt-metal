@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
 import os
+
+import pytest
+import torch
+
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import skip_for_grayskull

@@ -3,26 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import pytest
-import torch
-from loguru import logger
-
-import transformers
-import ttnn
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
-from models.demos.bert.tt import ttnn_bert, ttnn_optimized_bert, ttnn_optimized_sharded_bert
-
-from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-
-from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import evaluate
+import pytest
+import torch
+import transformers
+from loguru import logger
+from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
+from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
+from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
+from models.demos.bert.tt import ttnn_bert, ttnn_optimized_bert, ttnn_optimized_sharded_bert
+from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):
@@ -57,6 +50,7 @@ def run_bert_question_and_answering_inference(
     bert,
     model_location_generator,
     input_path,
+    iterations,
 ):
     disable_persistent_kernel_cache()
 
@@ -80,6 +74,8 @@ def run_bert_question_and_answering_inference(
     else:
         raise ValueError(f"Unknown bert: {bert}")
 
+    device.disable_and_clear_program_cache()
+
     profiler.start(f"preprocessing_parameter")
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
@@ -90,85 +86,98 @@ def run_bert_question_and_answering_inference(
         device=device,
     )
     profiler.end(f"preprocessing_parameter")
+    preprocessing_parameter = profiler.get("preprocessing_parameter")
 
-    context, question = load_inputs(input_path, batch_size)
+    for iteration in range(iterations):
+        profiler.start(f"iteration_{iteration}")
+        context, question = load_inputs(input_path, batch_size)
 
-    preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
-    preprocess_params["max_seq_len"] = sequence_size
-    inputs = nlp._args_parser({"context": context, "question": question})
-    preprocessed_inputs = []
-    for i in range(batch_size):
-        model_input = next(nlp.preprocess(inputs[0][i], **preprocess_params))
-        single_input = {
-            "example": model_input["example"],
-            "inputs": model_input,
+        preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
+        preprocess_params["max_seq_len"] = sequence_size
+        inputs = nlp._args_parser({"context": context, "question": question})
+        preprocessed_inputs = []
+        for i in range(batch_size):
+            model_input = next(nlp.preprocess(inputs[0][i], **preprocess_params))
+            single_input = {
+                "example": model_input["example"],
+                "inputs": model_input,
+            }
+            preprocessed_inputs.append(single_input)
+
+        bert_input = tokenizer.batch_encode_plus(
+            zip(question, context),
+            max_length=sequence_size,
+            padding="max_length",
+            truncation=True,
+            return_attention_mask=True,
+            return_token_type_ids=True,
+            return_tensors="pt",
+        )
+
+        position_ids = positional_ids(config, bert_input.input_ids)
+        profiler.start(f"end_to_end_inference_{iteration}")
+        profiler.start(f"preprocessing_input")
+        ttnn_bert_inputs = bert.preprocess_inputs(
+            bert_input["input_ids"],
+            bert_input["token_type_ids"],
+            position_ids,
+            bert_input["attention_mask"],
+            device=device,
+        )
+        profiler.end(f"preprocessing_input")
+
+        profiler.start(f"inference_time")
+        tt_output = bert.bert_for_question_answering(
+            config,
+            *ttnn_bert_inputs,
+            parameters=parameters,
+        )
+        profiler.end(f"inference_time")
+        profiler.start(f"post_processing_output_to_string")
+
+        tt_output = (
+            ttnn.to_torch(ttnn.from_device(tt_output)).reshape(batch_size, 1, sequence_size, -1).to(torch.float32)
+        )
+
+        profiler.end(f"end_to_end_inference_{iteration}")
+
+        tt_start_logits = tt_output[..., :, 0].squeeze(1)
+        tt_end_logits = tt_output[..., :, 1].squeeze(1)
+
+        model_answers = {}
+        for i in range(batch_size):
+            tt_res = {
+                "start": tt_start_logits[i],
+                "end": tt_end_logits[i],
+                "example": preprocessed_inputs[i]["example"],
+                **preprocessed_inputs[i]["inputs"],
+            }
+
+            tt_answer = nlp.postprocess([tt_res], **postprocess_params)
+
+            logger.info(f"answer: {tt_answer['answer']}\n")
+            model_answers[i] = tt_answer["answer"]
+
+        profiler.end("post_processing_output_to_string")
+        profiler.end(f"iteration_{iteration}")
+        measurements = {
+            "preprocessing_parameter": preprocessing_parameter,
+            "preprocessing_input": profiler.get("preprocessing_input"),
+            "inference_time": profiler.get("inference_time"),
+            "post_processing": profiler.get("post_processing_output_to_string"),
+            "end_to_end_inference": profiler.get(f"end_to_end_inference_{iteration}"),
+            "iteration": profiler.get(f"iteration_{iteration}"),
         }
-        preprocessed_inputs.append(single_input)
 
-    bert_input = tokenizer.batch_encode_plus(
-        zip(question, context),
-        max_length=sequence_size,
-        padding="max_length",
-        truncation=True,
-        return_attention_mask=True,
-        return_token_type_ids=True,
-        return_tensors="pt",
-    )
-
-    position_ids = positional_ids(config, bert_input.input_ids)
-    profiler.start(f"preprocessing_input")
-    ttnn_bert_inputs = bert.preprocess_inputs(
-        bert_input["input_ids"],
-        bert_input["token_type_ids"],
-        position_ids,
-        bert_input["attention_mask"],
-        device=device,
-    )
-    profiler.end(f"preprocessing_input")
-
-    profiler.start(f"inference_time")
-    tt_output = bert.bert_for_question_answering(
-        config,
-        *ttnn_bert_inputs,
-        parameters=parameters,
-    )
-    profiler.end(f"inference_time")
-
-    tt_output = ttnn.to_torch(ttnn.from_device(tt_output)).reshape(batch_size, 1, sequence_size, -1).to(torch.float32)
-
-    tt_start_logits = tt_output[..., :, 0].squeeze(1)
-    tt_end_logits = tt_output[..., :, 1].squeeze(1)
-
-    model_answers = {}
-    profiler.start("post_processing_output_to_string")
-    for i in range(batch_size):
-        tt_res = {
-            "start": tt_start_logits[i],
-            "end": tt_end_logits[i],
-            "example": preprocessed_inputs[i]["example"],
-            **preprocessed_inputs[i]["inputs"],
-        }
-
-        tt_answer = nlp.postprocess([tt_res], **postprocess_params)
-
-        logger.info(f"answer: {tt_answer['answer']}\n")
-        model_answers[i] = tt_answer["answer"]
-
-    profiler.end("post_processing_output_to_string")
-
-    measurements = {
-        "preprocessing_parameter": profiler.get("preprocessing_parameter"),
-        "preprocessing_input": profiler.get("preprocessing_input"),
-        "inference_time": profiler.get("inference_time"),
-        "post_processing": profiler.get("post_processing_output_to_string"),
-    }
-
-    logger.info(f"tt_model_name: {tt_model_name}")
-    logger.info(f"preprocessing_parameter: {measurements['preprocessing_parameter']} s")
-    logger.info(f"preprocessing_input: {measurements['preprocessing_input']} s")
-    logger.info(f"inference_time: {measurements['inference_time']} s")
-    logger.info(f"post_processing : {measurements['post_processing']} s")
-
+        logger.info(f"tt_model_name: {tt_model_name}")
+        logger.info(f"preprocessing_parameter: {measurements['preprocessing_parameter']} s")
+        logger.info(f"preprocessing_input Iteration {iteration}: {measurements['preprocessing_input']} s")
+        logger.info(f"inference_time Iteration {iteration}: {measurements['inference_time']} s")
+        logger.info(f"post_processing Iteration {iteration}: {measurements['post_processing']} s")
+        logger.info(f"End to end inference Iteration {iteration}: {measurements['end_to_end_inference']} s")
+        logger.info(f"iteration_{iteration} total time: {measurements['iteration']} s")
+        profiler.clear()
+        device.enable_program_cache()
     return measurements
 
 
@@ -277,10 +286,15 @@ def run_bert_question_and_answering_inference_squad_v2(
 
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert, ttnn_optimized_sharded_bert])
+@pytest.mark.parametrize(
+    "n_iterations",
+    ((5),),
+)
 def test_demo(
     input_path,
     model_name,
     bert,
+    n_iterations,
     model_location_generator,
     device,
     use_program_cache,
@@ -296,6 +310,7 @@ def test_demo(
         bert=bert,
         model_location_generator=model_location_generator,
         input_path=input_path,
+        iterations=n_iterations,
     )
 
 

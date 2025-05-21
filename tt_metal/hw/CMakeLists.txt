@@ -7,7 +7,7 @@ set(PROCS
     brisc
     ncrisc
     ierisc
-    slave_ierisc
+    subordinate_ierisc
     trisc=0
     trisc=1
     trisc=2
@@ -41,13 +41,13 @@ foreach(tuple ${SFPI})
             set(SFPI_VERSION "${value}")
         elseif(key STREQUAL "sfpi_url")
             set(SFPI_URL "${value}")
-        elseif(key STREQUAL "sfpi_${SFPI_arch_os}_tgz_md5")
-            set(SFPI_TGZ_MD5 "${value}")
+        elseif(key STREQUAL "sfpi_${SFPI_arch_os}_txz_md5")
+            set(SFPI_TXZ_MD5 "${value}")
         endif()
     endif()
 endforeach()
 
-if(NOT DEFINED SFPI_TGZ_MD5)
+if(NOT DEFINED SFPI_TXZ_MD5)
     message(FATAL_ERROR "SFPI tarball for ${SFPI_arch_os} is not available")
 endif()
 
@@ -55,8 +55,8 @@ include(FetchContent)
 FetchContent_Declare(
     sfpi
     URL
-        "${SFPI_URL}/${SFPI_VERSION}/sfpi-${SFPI_arch_os}.tgz"
-    URL_HASH "MD5=${SFPI_TGZ_MD5}"
+        "${SFPI_URL}/${SFPI_VERSION}/sfpi-${SFPI_arch_os}.txz"
+    URL_HASH "MD5=${SFPI_TXZ_MD5}"
     SOURCE_DIR
     "${PROJECT_SOURCE_DIR}/runtime/sfpi"
 )
@@ -116,8 +116,6 @@ foreach(ARCH IN LISTS ARCHS)
                     -o ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                 DEPENDS
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
-                    ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/memory.ld
-                    ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/sections.ld
                     ${DEV_MEM_MAP}
                 COMMENT "Preprocessing toolchain/${HW_OUTPUT_FILE}"
                 VERBATIM
@@ -139,10 +137,10 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
 endfunction()
 
 # Define the compiler command
-set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++)
 
 # May switch to this someday
-# set(GPP_CMD /opt/tenstorrent/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+# set(GPP_CMD /opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++)
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
@@ -282,7 +280,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/blackhole/metal/llk_api/llk_math_unary_sfpu_api.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_abs.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h
-                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp2.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_expm1.h
@@ -301,6 +298,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add1.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add_int32.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add_uint16.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_alt_complex_rotate90.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_bitwise.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h
@@ -314,7 +312,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_ceil.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_clamp.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h
-                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_copy_dest_values.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_cumsum.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_dropout.h
@@ -378,7 +375,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/blackhole/metal/llk_api/llk_math_unary_datacopy_api.h
                 ckernels/blackhole/metal/llk_api/llk_pack_api.h
                 ckernels/blackhole/metal/llk_api/llk_param_structs.h
-                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_exp.h
@@ -402,7 +398,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_math_unary_datacopy_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_pack_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_param_structs.h
-                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_exp.h
@@ -455,6 +450,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_right_shift.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_left_shift.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_fill.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_alt_complex_rotate90.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_prelu.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_i1.h
                 inc/atomic_rwptr.h
@@ -491,6 +487,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 inc/debug/stack_usage.h
                 inc/debug/watcher_common.h
                 inc/debug/waypoint.h
+                inc/dev_msgs.h
                 inc/ethernet/dataflow_api.h
                 inc/ethernet/erisc.h
                 inc/ethernet/tt_eth_api.h

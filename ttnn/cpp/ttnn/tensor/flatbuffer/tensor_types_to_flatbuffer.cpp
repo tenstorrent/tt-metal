@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor_types_to_flatbuffer.hpp"
+#include "ttnn/tensor/flatbuffer/tensor_types_to_flatbuffer.hpp"
 
 namespace ttnn {
 
@@ -103,11 +103,11 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
 flatbuffers::Offset<flatbuffer::MemoryConfig> to_flatbuffer(
     const tt::tt_metal::MemoryConfig& config, flatbuffers::FlatBufferBuilder& builder) {
     flatbuffers::Offset<flatbuffer::ShardSpec> shard_spec = 0;
-    if (config.shard_spec.has_value()) {
-        shard_spec = to_flatbuffer(*config.shard_spec, builder);
+    if (config.shard_spec().has_value()) {
+        shard_spec = to_flatbuffer(*config.shard_spec(), builder);
     }
     return flatbuffer::CreateMemoryConfig(
-        builder, to_flatbuffer(config.memory_layout), to_flatbuffer(config.buffer_type), shard_spec);
+        builder, to_flatbuffer(config.memory_layout()), to_flatbuffer(config.buffer_type()), shard_spec);
 }
 
 flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(

@@ -65,6 +65,12 @@ jobs:
           }, # Sean Nijjar
           {
             arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
+            name: "T3K ubench - Fabric Mux BW",
+            cmd: "pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_bandwidth.py",
+          }, # Abhishek Agarwal
+          {
+            arch: wormhole_b0,
             runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
             name: "WH Data Movement Regressions",
             cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement --gtest-filter Directed --verbose-log",

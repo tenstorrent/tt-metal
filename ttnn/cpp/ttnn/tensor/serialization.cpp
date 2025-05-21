@@ -122,14 +122,14 @@ void dump_multi_device_host_storage(
 
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         dump_host_storage(output_file, storage.get_buffer(0), dtype);
-        auto spec = storage.specs.at(0);
+        auto spec = storage.get_tensor_spec(0);
         dump_tensor_spec(spec, output_file);
     } else {
         for (int i = 0; i < num_buffers; i++) {
             dump_host_storage(output_file, storage.get_buffer(i), dtype);
         }
-        for (const auto& spec : storage.specs) {
-            dump_tensor_spec(spec, output_file);
+        for (int i = 0; i < num_buffers; i++) {
+            dump_tensor_spec(storage.get_tensor_spec(i), output_file);
         }
     }
 }
@@ -140,12 +140,18 @@ HostStorage load_host_storage(FILE* input_file) {
     safe_fread(&size, sizeof(size), 1, input_file);
     std::vector<T> data(size);
     safe_fread(data.data(), sizeof(T) * size, 1, input_file);
-    auto buffer = host_buffer::create<T>(std::move(data));
+    auto buffer = HostBuffer(std::move(data));
     return {buffer};
 }
 
+// Helper type to bundle storage and strategy together.
+struct DistributedStorage {
+    Storage storage;
+    DistributedTensorConfig strategy;
+};
+
 template <typename T>
-MultiDeviceHostStorage load_multi_device_host_storage(
+DistributedStorage load_multi_device_host_storage(
     FILE* input_file, DataType data_type, Layout layout, MeshDevice* mesh_device) {
     uint64_t num_buffers = 0;
     DistributedTensorConfig strategy;
@@ -159,7 +165,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(
         safe_fread(&size, sizeof(size), 1, input_file);
         std::vector<T> data(size);
         safe_fread(data.data(), sizeof(T) * size, 1, input_file);
-        HostBuffer buffer = host_buffer::create<T>(std::move(data));
+        HostBuffer buffer = HostBuffer(std::move(data));
         buffers.push_back(std::move(buffer));
         auto spec = load_tensor_spec(input_file);
         specs.push_back(spec);
@@ -176,7 +182,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(
             safe_fread(&size, sizeof(size), 1, input_file);
             std::vector<T> data(size);
             safe_fread(data.data(), sizeof(T) * size, 1, input_file);
-            auto buffer = host_buffer::create<T>(std::move(data));
+            auto buffer = HostBuffer(std::move(data));
             buffers.push_back(std::move(buffer));
         }
         for (std::size_t i = 0; i < num_buffers; ++i) {
@@ -184,7 +190,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(
         }
     }
 
-    return {strategy, buffers, specs};
+    return {MultiDeviceHostStorage{std::move(buffers), std::move(specs)}, strategy};
 }
 
 HostStorage load_host_storage(FILE* input_file, DataType data_type) {
@@ -211,7 +217,7 @@ HostStorage load_host_storage(FILE* input_file, DataType data_type) {
     }
 }
 
-MultiDeviceHostStorage load_multi_device_host_storage(
+DistributedStorage load_multi_device_host_storage(
     FILE* input_file, DataType data_type, Layout layout, MeshDevice* mesh_device) {
     if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
         using T = std::uint32_t;
@@ -231,13 +237,14 @@ MultiDeviceHostStorage load_multi_device_host_storage(
 }
 
 template <typename T>
-Storage load_storage(FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, T device) {
+DistributedStorage load_storage(
+    FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, T device) {
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
         if constexpr (std::is_same_v<T, MeshDevice*>) {
             return load_multi_device_host_storage(input_file, data_type, layout, device);
         }
     }
-    return load_host_storage(input_file, data_type);
+    return DistributedStorage{load_host_storage(input_file, data_type), ReplicateTensor{}};
 }
 
 template <typename T>
@@ -263,7 +270,7 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
     StorageType storage_type = StorageType::HOST;
     safe_fread(&storage_type, sizeof(storage_type), 1, input_file);
     auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device);
-    Tensor tensor(std::move(storage), spec);
+    Tensor tensor(std::move(storage.storage), spec, storage.strategy);
     if (device != nullptr) {
         tensor = tensor.to_device(device, spec.memory_config());
     }

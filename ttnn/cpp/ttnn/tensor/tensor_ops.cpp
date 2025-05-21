@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor_ops.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "tt_stl/overloaded.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -73,17 +73,6 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
         return output;
     }
 
-    auto workers = input_tensor.get_workers(blocking);
-    if (not workers.size()) {
-        // Tensor is on host and does not have a worker group.
-        // Return immediately. If this is a result of .cpu() called twice,
-        // tensor accessors will stall until tensor is populated.
-        auto output = tt::tt_metal::set_tensor_id(input_tensor);
-        GraphTracker::instance().track_function_end(output);
-        return output;
-    }
-
-    TT_FATAL(workers.size() == 1, "Unexpected number of workers");
     Tensor host_tensor = tensor_impl::to_host_wrapper(input_tensor, blocking, cq_id);
     host_tensor = tt::tt_metal::set_tensor_id(host_tensor);
     GraphTracker::instance().track_function_end(host_tensor);
@@ -116,17 +105,18 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             tt::stl::overloaded{
                 [&](const HostStorage& s) { return tensor_impl::to_layout_wrapper(input_tensor, target_layout); },
                 [&](const MultiDeviceHostStorage& s) {
-                    std::vector<Tensor> shards(s.buffers.size());
-                    for (std::size_t shard_idx = 0; shard_idx < s.buffers.size(); ++shard_idx) {
+                    // TODO: #22045 - Move to `transform` and use OMP parallel for.
+                    std::vector<Tensor> shards(s.num_buffers());
+                    for (std::size_t shard_idx = 0; shard_idx < s.num_buffers(); ++shard_idx) {
                         // Multi-Thread Host tilization of shards.
                         mesh_device->enqueue_to_thread_pool([shard_idx, &s, &shards, target_layout]() {
                             ZoneScopedN("HostTilize");
-                            Tensor shard(s.buffers[shard_idx], s.specs[shard_idx]);
+                            Tensor shard(s.get_buffer(shard_idx), s.get_tensor_spec(shard_idx));
                             shards[shard_idx] = tensor_impl::to_layout_wrapper(shard, target_layout);
                         });
                     }
                     mesh_device->wait_for_thread_pool();
-                    return ttnn::distributed::aggregate_as_tensor(shards, s.strategy);
+                    return ttnn::distributed::aggregate_as_tensor(shards, input_tensor.get_distributed_tensor_config());
                 },
                 [&](const DeviceStorage& s) -> Tensor { TT_THROW("Unexpected storage type"); },
             },

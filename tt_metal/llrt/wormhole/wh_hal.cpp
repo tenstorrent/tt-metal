@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
@@ -117,7 +117,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
             case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
             case DebugErisc: return 0;  // Not managed/checked by us.
             case DebugIErisc: return MEM_IERISC_STACK_SIZE;
-            case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
+            case DebugSubordinateIErisc: return MEM_BRISC_STACK_SIZE;
             case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
             case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
             case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;

@@ -521,6 +521,9 @@ void MeshDevice::enable_program_cache() {
 
 void MeshDevice::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on MeshDevice {}", this->id());
+    if (program_cache_->is_enabled()) {
+        program_cache_->disable();
+    }
     program_cache_->clear();
 }
 
@@ -703,11 +706,6 @@ CommandQueue& MeshDevice::command_queue(size_t cq_id) {
     return reference_device()->command_queue(cq_id);
 }
 
-bool MeshDevice::dispatch_firmware_active() const {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->dispatch_firmware_active(); });
-}
-
 // Trace management
 void MeshDevice::begin_trace(const uint8_t cq_id, const uint32_t tid) {
     TT_THROW("begin_trace() is not supported on MeshDevice");
@@ -834,6 +832,10 @@ void MeshDevice::init_fabric() {
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const {
     return reference_device()->get_programmable_core_type(virtual_core);
+}
+
+HalMemType MeshDevice::get_mem_type_of_core(CoreCoord virtual_core) const {
+    return reference_device()->get_mem_type_of_core(virtual_core);
 }
 
 // Methods for SubDevice Management

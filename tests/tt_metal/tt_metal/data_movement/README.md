@@ -3,12 +3,19 @@
 This test suite addresses the functionality and performance (i.e. bandwidth) of various data movement scenarios.
 
 ## Tests in the Test Suite
-| Name       | ID(s) | Description                                          |
-| ---------- | ----- | ---------------------------------------------------- |
-| DRAM Unary | 0-3   | Transactions between DRAM and a single Tensix core.  |
-| One to One | 4     | Transactions between two Tensix cores.               |
+
+| Name                 | ID(s) | Description                                                                          |
+| ----------           | ----- | ----------------------------------------------------                                 |
+| DRAM Unary           | 0-3   | Transactions between DRAM and a single Tensix core.                                  |
+| One to One           | 4     | Write transactions between two Tensix cores.                                         |
+| One From One         | 5     | Read transactions between two Tensix cores.                                          |
+| One to all           | 6-8   | Writes transaction from one core to all cores.                                       |
+| One to all Multicast | 9-14  | Writes transaction from one core to all cores using multicast.                       |
+| One From All         | 15    | Read transactions between one gatherer Tensix core and multiple sender Tensix cores. |
+| Loopback             | 16    | Does a loopback operation where one cores writes to itself.                          |
 
 ## Running Tests
+### C++ Gtests
 Before running any tests, build the repo with tests: ```./build_metal.sh --build-tests```
 Then, to run the whole test suite execute the following command:
 ```
@@ -19,6 +26,15 @@ To run a single test, add a gtest filter with the name of the test. Example:
 ```
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement gtest_filter="*TensixDataMovementDRAMInterleavedPacketSizes*"
 ```
+
+### Pytest
+For performance checks and more extensive testing, our Python test can be run as follows:
+```
+pytest tests/tt_metal/tt_metal/data_movement <options>
+```
+
+Options can be used to disable new profiling (i.e. use existing results), enable plotting of results etc.
+An exhaustive list of options and their descriptions can be found in `./conftest.py`
 
 ## Adding Tests
 Follow these steps to add new tests to this test suite.
@@ -32,6 +48,7 @@ Follow these steps to add new tests to this test suite.
 4. Assign your test a unique test id to make sure your test results are grouped together and are plotted separately from other tests.
     - Refer to the "Tests in the Test Suite" section for already taken test ids.
     - Preferably use the next integer available.
+    - Update the `test_id_to_name` and `test_bounds` objects with the test id, test name and test bounds.
 5. Create a README file within the test directory that describes:
     1. What your test does,
     2. What the test parameters are,

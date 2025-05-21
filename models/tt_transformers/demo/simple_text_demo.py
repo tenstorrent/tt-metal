@@ -1,30 +1,28 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-from loguru import logger
-from datetime import datetime
 import hashlib
-import requests
 import json
-
-import torch
-import pytest
 import os
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+import requests
+import torch
+from loguru import logger
+
 import ttnn
-
-
+from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.common import (
+    PagedAttentionConfig,
+    create_tt_model,
+    preprocess_inputs_prefill,
+    sample_host,
+)
 from models.tt_transformers.tt.generator import Generator, SamplingParams
 from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
-
-from models.tt_transformers.tt.common import (
-    preprocess_inputs_prefill,
-    PagedAttentionConfig,
-    sample_host,
-    create_tt_model,
-)
-from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -436,6 +434,7 @@ def test_demo_text(
     max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
     batch_size = request.config.getoption("--batch_size") or batch_size
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
+    data_parallel = request.config.getoption("--data_parallel") or data_parallel
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
@@ -459,23 +458,17 @@ def test_demo_text(
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
-    llama_dir = os.getenv("LLAMA_DIR")
-    if llama_dir:
-        if (
-            is_ci_env
-            and num_devices == 32
-            and (data_parallel > 4 or (data_parallel == 4 and "3.1-70B" not in llama_dir))
-        ):
-            pytest.skip("CI runs only Llama3 70b DP = 4, TP = 8 on TG")
-        if (
-            is_ci_env
-            and num_devices == 8
-            and data_parallel > 1
-            and not ("3.2-1B" in llama_dir or "3.1-8B" in llama_dir)
-        ):
-            pytest.skip("CI runs only hybrid Llama3 1b and 8b on T3K")
-        if is_ci_env and data_parallel > 1 and batch_size > 1:
-            pytest.skip("CI runs only hybrid with batch 1 per submesh")
+    if is_ci_env:
+        llama_dir = os.getenv("LLAMA_DIR", "")
+        is_31_70b = "3.1-70B" in llama_dir
+        is_32_1b = "3.2-1B" in llama_dir
+        is_31_8b = "3.1-8B" in llama_dir
+        if num_devices == 32 and (data_parallel > 4 or (data_parallel == 4 and not is_31_70b)):
+            pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 on TG")
+        if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b):
+            pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
+        if data_parallel > 1 and batch_size > 1:
+            pytest.skip("CI only runs hybrid with batch 1 per submesh")
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -546,6 +539,13 @@ def test_demo_text(
             max_generated_tokens + max_encoded_prompt_len <= max_seq_len
         ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
 
+        if paged_attention:
+            paged_cache_max_seq_len = (
+                page_params["page_block_size"] * page_params["page_max_num_blocks_per_dp"] / batch_size
+            )
+            assert (
+                max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
+            ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
@@ -561,7 +561,7 @@ def test_demo_text(
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt[::batch_size, :],  # Warmup prefill for each device
+            input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
@@ -793,60 +793,37 @@ def test_demo_text(
 
     # Benchmark targets
     supported_models = ["Llama3.2-1B", "Llama3.2-3B", "Llama3.1-8B", "Llama3.2-11B", "Llama3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
+    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
 
     tt_device_name = model_args[0].device_name
+    model_name = model_args[0].base_model_name
 
-    if model_args[0].base_model_name in supported_models:
+    if model_name in supported_models:
         assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
 
-        # Set the target times to first token for every combination of device and model
-        target_prefill_tok_s = {
-            "N150_Llama3.2-1B": 1050,  # TODO Update target
-            "N300_Llama3.2-1B": 1050,  # TODO Update target
-            "T3K_Llama3.2-1B": 1050,  # TODO Update target
-            "TG_Llama3.2-1B": 1050,  # TODO Update target
-            #
-            "N150_Llama3.2-3B": 1050,  # TODO Update target
-            "N300_Llama3.2-3B": 1050,  # TODO Update target
-            "T3K_Llama3.2-3B": 1050,  # TODO Update target
-            "TG_Llama3.2-3B": 1050,  # TODO Update target
-            #
-            "N150_Llama3.1-8B": 1050,
-            "P150_Llama3.1-8B": 1050,
-            "N300_Llama3.1-8B": 1050,
-            "P300_Llama3.1-8B": 1050,
-            "T3K_Llama3.1-8B": 1050,
-            "TG_Llama3.1-8B": 1050,
-            #
-            "N150_Llama3.2-11B": 1050,  # TODO Update target
-            "N300_Llama3.2-11B": 1050,  # TODO Update target
-            "T3K_Llama3.2-11B": 1050,  # TODO Update target
-            "TG_Llama3.2-11B": 1050,  # TODO Update target
-            #
-            "N150_Llama3.1-70B": 1050,  # TODO Update target
-            "N300_Llama3.1-70B": 1050,  # TODO Update target
-            "T3K_Llama3.1-70B": 1050,  # TODO Update target
-            "TG_Llama3.1-70B": 1050,  # TODO Update target
-            #
-            "N150_Mistral-7B": 1050,
-            "N300_Mistral-7B": 1050,
-            "T3K_Mistral-7B": 1050,
-        }[f"{tt_device_name}_{model_args[0].base_model_name}"]
+        model_device_key = f"{tt_device_name}_{model_name}"
 
-        # Set the target decode timesfor every combination of device and model
-        target_decode_tok_s_u = {
-            "N150_Llama3.2-1B": 160,  # TODO Update target
+        # Set the target prefill t/s for every combination of device and model (optional - for tracking benchmark data)
+        dict_target_prefill_tok_s = {}  # TODO: add prefill targets for model-device combinations
+        if model_device_key in dict_target_prefill_tok_s:
+            target_prefill_tok_s = dict_target_prefill_tok_s[model_device_key]
+        else:
+            target_prefill_tok_s = None
+            logger.info(f"Model {model_name} does not have prefill targets set for device {tt_device_name}")
+
+        # Set the target decode t/s/u for every combination of device and model (optional - for tracking benchmark data)
+        dict_target_decode_tok_s_u = {
+            "N150_Llama3.2-1B": 160,
             "N300_Llama3.2-1B": 250,  # TODO Update target
             "T3K_Llama3.2-1B": 300,  # TODO Update target
             "TG_Llama3.2-1B": 300,  # TODO Update target
             #
-            "N150_Llama3.2-3B": 60,  # TODO Update target
+            "N150_Llama3.2-3B": 60,
             "N300_Llama3.2-3B": 100,  # TODO Update target
             "T3K_Llama3.2-3B": 150,  # TODO Update target
             "TG_Llama3.2-3B": 150,  # TODO Update target
             #
-            "N150_Llama3.1-8B": 23,  # TODO Update target
+            "N150_Llama3.1-8B": 23,
             "P150_Llama3.1-8B": 23,  # TODO Update target
             "N300_Llama3.1-8B": 38,
             "P300_Llama3.1-8B": 38,
@@ -865,16 +842,21 @@ def test_demo_text(
             "N300_Mistral-7B": 38,  # TODO Update target
             "T3K_Mistral-7B": 45,  # TODO Update target
             "TG_Mistral-7B": 45,  # TODO Update target
-        }[f"{tt_device_name}_{model_args[0].base_model_name}"]
+        }
+        if model_device_key in dict_target_decode_tok_s_u:
+            target_decode_tok_s_u = dict_target_decode_tok_s_u[model_device_key]
+        else:
+            target_decode_tok_s_u = None
+            logger.info(f"Model {model_name} does not have decode targets set for device {tt_device_name}")
 
-        target_decode_tok_s = target_decode_tok_s_u * global_batch_size
+        target_decode_tok_s = target_decode_tok_s_u * global_batch_size if target_decode_tok_s_u else None
         targets = {
             "prefill_t/s": target_prefill_tok_s,
             "decode_t/s": target_decode_tok_s,
             "decode_t/s/u": target_decode_tok_s_u,
         }
     else:
-        logger.warning(f"Model {model_args[0].base_model_name} does not have performance targets set")
+        logger.info(f"Model {model_name} does not have performance targets set")
         targets = {}
 
     # Save benchmark data for CI dashboard
@@ -912,7 +894,7 @@ def test_demo_text(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
-            ml_model_name=model_args[0].base_model_name,
+            ml_model_name=model_name,
             ml_model_type="llm",
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,

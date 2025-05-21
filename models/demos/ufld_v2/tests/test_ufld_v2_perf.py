@@ -3,22 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import ttnn
 import time
-import torch
+
 import pytest
+import torch
 from loguru import logger
-from models.utility_functions import is_wormhole_b0
-from models.perf.perf_utils import prep_perf_report
-from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_parameters
+
+import ttnn
 from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
+from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
-    enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_wormhole_b0,
     run_for_wormhole_b0,
 )
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args
 from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_preprocessor_whole_model
 
 

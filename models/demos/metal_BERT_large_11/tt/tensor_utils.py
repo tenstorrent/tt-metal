@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Callable
-import ttnn
+from typing import Callable, Optional
+
 from loguru import logger
+
+import ttnn
 
 
 def load_or_compute_and_cache(

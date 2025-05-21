@@ -120,7 +120,7 @@ The log file will contain lines such as the following:
 - The run message ``rmsg`` sent from the host to the device, says the kernel was Device ``D`` dispatched, BRISC is
   using NOC ``0`` (NCRISC is using the other NOC, NOC 1), the host run state is Go ``G`` and each of BRISC, NCRISC and
   TRISC kernels are running (capital ``BNT``; lowercase would signify no kernel running)
-- The slave message ``smsg`` sent from BRISC to the other RISC Vs are all Go ``G``; ``D`` would indicate Done
+- The subordinate message ``smsg`` sent from BRISC to the other RISC Vs are all Go ``G``; ``D`` would indicate Done
 - The kernel IDs ``k_ids`` running are ``4`` on BRISC, ``3`` on NCRISC and ``5`` on TRISC; look further down the log file
   to see the names and paths to those kernels
 

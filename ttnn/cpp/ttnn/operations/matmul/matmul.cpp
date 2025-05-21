@@ -189,6 +189,11 @@ Tensor MatmulOperation::invoke(
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
     bool user_run_batched = detail::is_input_batched(input_tensor_b.get_logical_shape());
+    const bool untilize_out =
+        program_config.has_value() &&
+                std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())
+            ? std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value()).untilize_out
+            : false;
     return bound_matmul(
         input_tensor_a,
         input_tensor_b,
@@ -199,7 +204,7 @@ Tensor MatmulOperation::invoke(
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
             dtype,
             compute_kernel_config,
-            /*untilize_out=*/false,
+            untilize_out,
             user_core_coord,
             get_fused_activation(activation),
             user_run_batched,
@@ -255,6 +260,55 @@ Tensor LinearOperation::invoke(
             global_cb,
             sub_device_id},
         /*queue_id=*/0,
+        optional_output_tensor);
+}
+
+std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
+    const Tensor& input_tensor_a,
+    const std::vector<Tensor>& input_tensors_b,
+    const bool transpose_a,
+    const bool transpose_b,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const DataType> dtype,
+    const std::optional<const MatmulProgramConfig>& program_config,
+    const std::optional<const std::string>& activation,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const CoreGrid> core_grid,
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    TT_FATAL(transpose_a == false, "cannot transpose A in batched matmul");
+    TT_FATAL(transpose_b == false, "cannot transpose B in batched matmul");
+    TT_FATAL(memory_config.has_value(), "memory_config must be provided");
+    TT_FATAL(program_config.has_value(), "program_config must be provided");
+    TT_FATAL(!activation.has_value(), "activation must not be provided");
+    TT_FATAL(!core_grid.has_value(), "core_grid must not be provided");
+    TT_FATAL(!output_tile.has_value(), "output_tile must not be provided");
+    TT_FATAL(!optional_output_tensor.has_value(), "optional_output_tensor must not be provided");
+    TT_FATAL(global_cb.has_value(), "global_cb must be provided");
+    TT_FATAL(sub_device_id.has_value(), "sub_device_id must be provided");
+
+    return matmul_batched_weights(
+        input_tensor_a,
+        input_tensors_b,
+        /*bias=*/std::nullopt,
+        Matmul{
+            program_config,
+            /*bcast_batch=*/std::nullopt,
+            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
+            dtype,
+            compute_kernel_config,
+            /*untilize_out=*/false,
+            /*user_core_coord*/ std::nullopt,
+            get_fused_activation(activation),
+            /*user_run_batched=*/false,
+            transpose_a,
+            transpose_b,
+            output_tile,
+            global_cb,
+            sub_device_id},
+        DefaultQueueId,
         optional_output_tensor);
 }
 

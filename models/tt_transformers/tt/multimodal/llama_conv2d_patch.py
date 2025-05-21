@@ -5,10 +5,8 @@
 import torch
 
 import ttnn
-from models.utility_functions import (
-    nearest_32,
-)
 from models.common.lightweightmodule import LightweightModule
+from models.utility_functions import nearest_32
 
 
 class TtLlamaConv2dPatch(LightweightModule):

@@ -6,7 +6,7 @@ target_sources(
     unit_tests_dispatch_smoke
     PRIVATE
         dispatch_buffer/test_sub_device.cpp
-        dispatch_device/test_enqueue_read_write_l1.cpp
+        dispatch_device/test_enqueue_read_write_core.cpp
         dispatch_event/test_EnqueueWaitForEvent.cpp
         dispatch_event/test_events.cpp
         dispatch_program/test_dispatch_stress.cpp

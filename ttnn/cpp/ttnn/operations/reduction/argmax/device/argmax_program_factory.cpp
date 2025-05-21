@@ -6,9 +6,11 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
@@ -186,10 +188,6 @@ operation::ProgramWithCallbacks argmax_single_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
-// NOC transactions need to be 32B aligned.
-// So, for bfloat16 dtype, we need at least 16 units per core to avoid unaligned accesses.
-constexpr uint32_t min_red_dim_units_per_core = 16;
-
 /*
  * Design of argmax_multi_core:
  *
@@ -288,6 +286,17 @@ operation::ProgramWithCallbacks argmax_multi_core(
 
     const tt::tt_metal::IDevice* device = output.device();
 
+    const auto src_buffer = input.buffer();
+    const auto dst_buffer = output.buffer();
+    const auto src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const auto dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+    // NOC transactions need to be aligned.
+    // So, for bfloat16 dtype, we need at least 16/32 units per core (depending on alignment) to avoid unaligned
+    // accesses.
+    const auto alignment = src_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
+    const auto min_red_dim_units_per_core = alignment / bfloat16::SIZEOF;
+
     // Distribute work to cores
     auto [all_cores, cores0, cores1, red_dim_units0, red_dim_units1] =
         distribute_work_to_cores(device, red_dim_units, min_red_dim_units_per_core, sub_core_grids);
@@ -338,11 +347,6 @@ operation::ProgramWithCallbacks argmax_multi_core(
         tt::tt_metal::CircularBufferConfig(red_vals_page_size, {{red_vals_cb_idx, input_cb_data_format}})
             .set_page_size(red_vals_cb_idx, red_vals_page_size);
     const auto cb_red_vals = tt::tt_metal::CreateCircularBuffer(program, all_cores, red_vals_cb_config);
-
-    const auto src_buffer = input.buffer();
-    const auto dst_buffer = output.buffer();
-    const auto src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const auto dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input.get_logical_volume() / inner_dim_units / red_dim_units;

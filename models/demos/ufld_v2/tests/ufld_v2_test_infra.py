@@ -2,15 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_wormhole_b0, divup
-from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_parameters
+
+import ttnn
 from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
-from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args
+from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_preprocessor_whole_model
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def load_torch_model():

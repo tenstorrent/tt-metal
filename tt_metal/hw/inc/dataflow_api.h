@@ -517,16 +517,18 @@ void noc_async_read_one_packet(
  *
  * Return value: None
  *
- * | Argument          | Description                                        | Data type | Valid range                              | required |
- * |-------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
- * | src_noc_addr      | Encoding of the source NOC location (x,y)+address  | uint64_t  | DOX-TODO (ref to explain valid coords)   | Yes      |
- * | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB                                   | Yes      |
- * | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | Yes      |
+ * | Argument                          | Description                                        | Data type | Valid range                              | required |
+ * |-----------------------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
+ * | src_noc_addr                      | Encoding of the source NOC location (x,y)+address  | uint64_t  | DOX-TODO (ref to explain valid coords)   | True     |
+ * | dst_local_l1_addr                 | Address in local L1 memory                         | uint32_t  | 0..1MB                                   | True     |
+ * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | True     |
+ * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                                   | False    |
+ * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number                      | False    |
  */
 // clang-format on
-template <uint32_t max_page_size>
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
 inline void noc_async_read(
-    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc) {
+    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -914,11 +916,13 @@ FORCE_INLINE void noc_async_read_tile(
  *
  * Return value: None
  *
- * | Argument          | Description                                             | Type     | Valid Range                                                    | Required |
- * |-------------------|---------------------------------------------------------|----------|----------------------------------------------------------------|----------|
- * | src_local_l1_addr | Source address in local L1 memory                       | uint32_t | 0..1MB                                                         | True     |
- * | dst_noc_addr      | Encoding of the destination NOC location (x,y)+address  | uint64_t | DOX-TODO (insert a reference to what constitutes valid coords) | True     |
- * | size              | Size of data transfer in bytes                          | uint32_t | 0..1MB                                                         | True     |
+ * | Argument                          | Description                                             | Type     | Valid Range                                                    | Required |
+ * |-----------------------------------|---------------------------------------------------------|----------|----------------------------------------------------------------|----------|
+ * | src_local_l1_addr                 | Source address in local L1 memory                       | uint32_t | 0..1MB                                                         | True     |
+ * | dst_noc_addr                      | Encoding of the destination NOC location (x,y)+address  | uint64_t | DOX-TODO (insert a reference to what constitutes valid coords) | True     |
+ * | size                              | Size of data transfer in bytes                          | uint32_t | 0..1MB                                                         | True     |
+ * | noc                               | Which NOC to use for the transaction                    | uint8_t  | 0 or 1                                                         | False    |
+ * | max_page_size (template argument) | Maximum size of a single transaction in bytes           | uint32_t | Any uint32_t number                                            | False    |
  */
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
@@ -1164,6 +1168,10 @@ inline void noc_async_write_multicast_loopback_src(
  * core.
  *
  * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_START);
@@ -1189,6 +1197,10 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
  * core.
  *
  * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
  */
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
@@ -1543,23 +1555,21 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
  * The Tensix core executing this function call initiates an atomic increment
  * (with 32-bit wrap) of a remote Tensix core L1 memory address. This L1 memory
  * address is used as a semaphore of size 4 Bytes, as a synchronization
- * mechanism.
+ * mechanism. Refer to <arch>/noc/noc.h for the documentation of noc_atomic_increment.
  *
  * Return value: None
  *
- * | Argument  | Description                                                    | Type     | Valid Range                                                   | Required |
- * |-----------|----------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | addr      | Encoding of the destination location (x,y)+address             | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | incr      | The value to increment by                                      | uint32_t | Any uint32_t value                                            | True     |
+ * | Argument                   | Description                                                      | Type     | Valid Range                                                   | Required |
+ * |----------------------------|------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
+ * | addr                       | Encoding of the destination location (x,y)+address               | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
+ * | incr                       | The value to increment by                                        | uint32_t | Any uint32_t value                                            | True     |
+ * | noc_id                     | Which NOC to use for the transaction                             | uint8_t  | 0 or 1                                                        | False    |
+ * | posted (template argument) | Whether the call is posted or nonposted (i.e. needs to be acked) | uint32_t | true or false                                                 | False    |
  */
 // clang-format on
 template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc(
     uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    /*
-    [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]
-    Generic increment with 32-bit wrap.
-  */
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, addr, 0, vc);
 
     WAYPOINT("NSIW");
@@ -1649,10 +1659,8 @@ FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
 
     WAYPOINT("NRDW");
-#ifndef ARCH_GRAYSKULL
     ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
         noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
-#endif
     WAYPOINT("NRDD");
 }
 
@@ -1661,9 +1669,7 @@ void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = 
     RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
 
     WAYPOINT("NSTW");
-#ifndef ARCH_GRAYSKULL
     ncrisc_noc_set_transaction_id(noc, read_cmd_buf, trid);
-#endif
     WAYPOINT("NSTD");
 }
 
@@ -1671,9 +1677,9 @@ FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_WITH_TRID);
-#ifndef ARCH_GRAYSKULL
-    while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid));
-#endif
+    while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid)) {
+        continue;
+    }
     invalidate_l1_cache();
     WAYPOINT("NBTD");
 }
@@ -1801,9 +1807,9 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
 FORCE_INLINE
 void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NWTW");
-#ifndef ARCH_GRAYSKULL
-    while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid));
-#endif
+    while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid)) {
+        continue;
+    }
     invalidate_l1_cache();
     WAYPOINT("NWTD");
 }

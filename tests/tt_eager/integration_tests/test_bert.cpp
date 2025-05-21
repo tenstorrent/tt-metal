@@ -42,10 +42,10 @@ using Parameters = std::map<std::string, ttnn::Tensor>;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-ttnn::MemoryConfig l1_memory_config = ttnn::MemoryConfig{
-    .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::L1};
-ttnn::MemoryConfig dram_memory_config = ttnn::MemoryConfig{
-    .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
+ttnn::MemoryConfig l1_memory_config =
+    ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+ttnn::MemoryConfig dram_memory_config =
+    ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
 ttnn::Tensor encoder(
     ttnn::Tensor&& hidden_states,

@@ -92,6 +92,7 @@ void WriteToBuffer(std::shared_ptr<Buffer> buffer, const std::vector<DType>& hos
     WriteToBuffer(*buffer, host_buffer);
 }
 
+// TODO: Remove shard_order from this function
 void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, bool shard_order = false);
 /**
  * Copies data from a buffer into a host buffer

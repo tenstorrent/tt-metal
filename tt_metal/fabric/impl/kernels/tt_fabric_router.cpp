@@ -33,7 +33,7 @@ uint32_t sync_val;
 uint32_t router_mask;
 uint32_t master_router_chan;
 uint64_t xy_local_addr;
-bool terminated_slave_routers = false;
+bool terminated_subordinate_routers = false;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
@@ -118,7 +118,7 @@ void kernel_main() {
         // wait for all device routers to have incremented the sync semaphore.
         // sync_val is equal to number of tt-fabric routers running on a device.
         wait_for_notification(FABRIC_ROUTER_SYNC_SEM, sync_val - 1);
-        notify_slave_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, sync_val);
+        notify_subordinate_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, sync_val);
         // increment the sync sem to signal host that handshake is complete
         *((volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM) += 1;
     } else {
@@ -223,9 +223,9 @@ void kernel_main() {
             if (*(volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM == 0) {
                 // terminate signal from host sw.
                 if constexpr (is_master) {
-                    if (!terminated_slave_routers) {
-                        notify_slave_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, 0);
-                        terminated_slave_routers = true;
+                    if (!terminated_subordinate_routers) {
+                        notify_subordinate_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, 0);
+                        terminated_subordinate_routers = true;
                     }
                 }
                 if (loop_count >= 0x1000) {

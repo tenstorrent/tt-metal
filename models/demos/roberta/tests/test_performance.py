@@ -3,22 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import ttnn
 import time
-import torch
-import pytest
-import transformers
 
+import pytest
+import torch
+import transformers
 from loguru import logger
-from models.demos.bert.tt import ttnn_optimized_bert
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.utility_functions import (
-    is_grayskull,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-)
+import ttnn
+from models.demos.bert.tt import ttnn_optimized_bert
 from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, is_grayskull
 
 
 def get_expected_times(bert):

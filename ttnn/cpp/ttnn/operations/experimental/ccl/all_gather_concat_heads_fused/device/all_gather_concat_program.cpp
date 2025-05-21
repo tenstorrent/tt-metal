@@ -141,12 +141,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const uint32_t logical_dim_2 = input_tensor.get_logical_shape()[2];
     const auto input_tensor_num_pages =
         input_tensor.get_logical_shape()[0] * input_tensor.get_logical_shape()[1] * logical_dim_2;
-    const auto input_tensor_cores = input_tensor.memory_config().shard_spec->grid;
-    const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec->shape;
+    const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
+    const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec()->shape;
     const auto input_tensor_shard_num_pages = logical_dim_2;
 
-    const auto output_interm_tensor_cores = temp_tensor.memory_config().shard_spec->grid;
-    const auto output_interm_tensor_shard_shape = temp_tensor.memory_config().shard_spec->shape;
+    const auto output_interm_tensor_cores = temp_tensor.memory_config().shard_spec()->grid;
+    const auto output_interm_tensor_shard_shape = temp_tensor.memory_config().shard_spec()->shape;
     const auto output_interm_tensor_shard_num_pages = logical_dim_2;
     const auto row_size = input_tensor.get_padded_shape()[-1] / 2 * output_tensor.element_size();
 
@@ -188,7 +188,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
@@ -269,7 +269,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         noc_y_coords.push_back(mesh_device->worker_core_from_logical_core(in_cores_vec[i]).y);
     }
 
-    auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec->shape;
+    auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec()->shape;
     // create concat semaphore for each link
     uint32_t concat_semaphore_id = tt::tt_metal::CreateSemaphore(program, sem_cores_updated, 0);
     uint32_t concat_semaphore_id2 = tt::tt_metal::CreateSemaphore(program, sem_cores_updated, 0);
@@ -589,7 +589,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
             uint32_t q_base_addr = temp_tensor.buffer()->address();
             uint32_t q_start_addr = q_base_addr;
-            uint32_t idx = 0;
             for (const auto& core : sender_worker_cores) {
                 auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
@@ -598,8 +597,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = q_start_addr;
                 worker_writer_sender_runtime_args[1] = semaphore.address();
-
-                idx++;
             }
 
             for (uint32_t i = 0; i < num_concat_worker_cores; ++i) {

@@ -8,7 +8,7 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
 #include "ttnn/operations/math.hpp"
@@ -26,7 +26,7 @@ namespace ttnn::operations::normalization {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) {
-    return input_tensor.memory_config().buffer_type == tt::tt_metal::BufferType::DRAM;
+    return input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
 }
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;

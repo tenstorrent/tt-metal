@@ -367,12 +367,12 @@ operation::ProgramWithCallbacks downsample_single_core(
 
     uint32_t ncores_x_full_grid = device->compute_with_storage_grid_size().x;
     auto [num_cores_height_sliced, num_cores_width_sliced] = get_num_cores_height_width_sliced(
-        a.shard_spec().value().grid, a.memory_config().memory_layout, a.shard_spec().value().orientation);
+        a.shard_spec().value().grid, a.memory_config().memory_layout(), a.shard_spec().value().orientation);
     uint32_t num_cores = num_cores_height_sliced * num_cores_width_sliced;
     auto all_cores = a.shard_spec().value().grid;
-    auto memory_layout = a.memory_config().memory_layout;
+    auto memory_layout = a.memory_config().memory_layout();
     TT_ASSERT(all_cores == output.shard_spec().value().grid);
-    TT_ASSERT(memory_layout == output.memory_config().memory_layout);
+    TT_ASSERT(memory_layout == output.memory_config().memory_layout());
     TT_ASSERT(
         memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {

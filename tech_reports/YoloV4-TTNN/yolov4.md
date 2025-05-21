@@ -232,7 +232,6 @@ class Conv:
             fp32_dest_acc_enabled=False,
             act_block_w_div=1,
             packer_l1_accum_enabled=False,
-            input_channels_alignment=16 if self.input_params[3] < 16 else 32,
             transpose_shards=False,
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,

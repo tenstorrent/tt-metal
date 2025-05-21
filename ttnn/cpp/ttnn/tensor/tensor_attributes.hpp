@@ -13,17 +13,21 @@ namespace tt::tt_metal {
 
 class TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
 public:
-    explicit TensorAttributes(TensorSpec tensor_spec);
-    TensorAttributes(Storage storage, TensorSpec tensor_spec);
+    TensorAttributes(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
 
     // Getters and setters.
     const Storage& get_storage() const;
-    const TensorSpec& get_tensor_spec() const;
     Storage& get_storage();
+    const TensorSpec& get_tensor_spec() const;
+    const DistributedTensorConfig& get_distributed_tensor_config() const;
+
+    // Determines mesh coordinates for the tensor based on the strategy and the mesh shape.
+    std::vector<distributed::MeshCoordinate> determine_distribution(const distributed::MeshShape& mesh_shape) const;
 
 private:
     Storage storage_;
     TensorSpec tensor_spec_;
+    DistributedTensorConfig distributed_tensor_config_;
 };
 
 }  // namespace tt::tt_metal

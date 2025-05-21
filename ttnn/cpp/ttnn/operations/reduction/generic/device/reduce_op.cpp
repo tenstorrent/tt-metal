@@ -45,30 +45,30 @@ void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
     if (this->dim == ReduceOpDim::H) {
         if (input_tensor.memory_config().is_sharded()) {
             TT_FATAL(
-                input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+                input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
                 "Illegal input memory config {} for sharded reduction along H!",
-                input_tensor.memory_config().memory_layout);
+                input_tensor.memory_config().memory_layout());
         } else {
             TT_FATAL(
-                input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+                input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "Illegal input memory config {} for reduction along H!",
-                input_tensor.memory_config().memory_layout);
+                input_tensor.memory_config().memory_layout());
         }
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout,
+            input_tensor.memory_config().memory_layout() == this->output_mem_config.memory_layout(),
             "Illegal input memory config {} and output memory config {} for reduction along H!",
-            input_tensor.memory_config().memory_layout,
-            this->output_mem_config.memory_layout);
+            input_tensor.memory_config().memory_layout(),
+            this->output_mem_config.memory_layout());
     } else {
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Illegal input memory config {} for reduction along {}!",
-            input_tensor.memory_config().memory_layout,
+            input_tensor.memory_config().memory_layout(),
             this->dim);
         TT_FATAL(
-            this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Illegal output memory config {} for reduction along {}!",
-            this->output_mem_config.memory_layout,
+            this->output_mem_config.memory_layout(),
             this->dim);
     }
 }
@@ -102,7 +102,7 @@ std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Ten
     if (output_mem_config.is_sharded()) {
         auto shard_spec = input_tensor.shard_spec().value();  // TODO: This will segfault if input is not sharded...
         shard_spec.shape[0] = output_padded_shape.volume() / output_padded_shape[-1];
-        output_mem_config.shard_spec = shard_spec;
+        output_mem_config = output_mem_config.with_shard_spec(shard_spec);
     }
 
     return {ttnn::TensorSpec(

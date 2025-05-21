@@ -8,7 +8,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
 #include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
@@ -53,12 +53,22 @@ private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
     ~MetalContext();
+    void teardown();
+
+    void clear_l1_state(chip_id_t device_id);
+    void clear_dram_state(chip_id_t device_id);
+    void clear_launch_messages_on_eth_cores(chip_id_t device_id);
 
     bool initialized_ = false;
+    bool teardown_registered_ = false;
 
     uint8_t num_hw_cqs_ = 0;
     BankMapping l1_bank_remap_;
     DispatchCoreConfig dispatch_core_config_;
+    size_t fw_compile_hash_ = 0;  // To check if FW recompilation is needed
+
+    // Used to track which FW has been built already
+    std::unordered_set<uint32_t> firmware_built_keys_;
 
     llrt::RunTimeOptions rtoptions_;
     std::unique_ptr<Cluster> cluster_;

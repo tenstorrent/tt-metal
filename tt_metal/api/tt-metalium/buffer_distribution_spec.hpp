@@ -25,7 +25,9 @@ public:
                page_distribution_spec_.get_max_num_shards_per_target();
     }
     size_t num_cores() const { return cores_.size(); }
-    std::vector<CoreCoord> get_cores() const { return cores_; }
+    const std::vector<CoreCoord>& get_cores() const { return cores_; }
+
+    const std::vector<DistributionSpec::TargetData>& get_page_mapping(DistributionSpec::MappingMode mapping_mode);
 
 private:
     BufferDistributionSpec(const DistributionSpec& page_distribution_spec, const std::vector<CoreCoord>& cores);

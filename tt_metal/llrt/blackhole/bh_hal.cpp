@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
@@ -88,7 +88,7 @@ void Hal::initialize_bh() {
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
-            (addr == IERISC_RESET_PC || addr == SLAVE_IERISC_RESET_PC));  // used to program start addr for eth FW
+            (addr == IERISC_RESET_PC || addr == SUBORDINATE_IERISC_RESET_PC));  // used to program start addr for eth FW
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
@@ -109,7 +109,7 @@ void Hal::initialize_bh() {
             case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
             case DebugErisc: return 0;  // Not managed/checked by us.
             case DebugIErisc: return MEM_IERISC_STACK_SIZE;
-            case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
+            case DebugSubordinateIErisc: return MEM_BRISC_STACK_SIZE;
             case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
             case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
             case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
