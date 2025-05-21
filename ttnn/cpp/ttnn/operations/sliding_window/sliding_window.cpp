@@ -90,6 +90,14 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
     if (ceil_mode) {
         output_h = std::ceil(eff_size_h / stride_hw.first) + 1;
         output_w = std::ceil(eff_size_w / stride_hw.second) + 1;
+        if (is_avg_pool) {
+            if (output_h - 1 * stride_hw.first >= input_hw.first + padding[0]) {
+                output_h--;
+            }
+            if (output_w - 1 * stride_hw.second >= input_hw.second + padding[2]) {
+                output_w--;
+            }
+        }
     } else {
         output_h = std::floor(eff_size_h / stride_hw.first) + 1;
         output_w = std::floor(eff_size_w / stride_hw.second) + 1;

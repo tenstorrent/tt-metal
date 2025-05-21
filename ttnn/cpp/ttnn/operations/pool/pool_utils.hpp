@@ -30,10 +30,11 @@ uint32_t get_bf16_pool_scalar(
     std::optional<bool> ceil_mode = std::nullopt,
     std::optional<uint32_t> ceil_h = std::nullopt,
     std::optional<uint32_t> ceil_w = std::nullopt,
-    std::optional<uint32_t> out_x = std::nullopt,
-    std::optional<uint32_t> out_y = std::nullopt,
+    std::optional<bool> count_include_pad = std::nullopt,
     std::optional<uint32_t> pad_h = std::nullopt,
     std::optional<uint32_t> pad_w = std::nullopt,
+    std::optional<uint32_t> out_x = std::nullopt,
+    std::optional<uint32_t> out_y = std::nullopt,
     std::optional<uint32_t> out_nhw_per_core = std::nullopt,
     std::vector<uint32_t>* sinchronization_indexes = nullptr,
     std::vector<uint32_t>* scalars = nullptr);

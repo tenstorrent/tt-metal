@@ -25,10 +25,11 @@ uint32_t get_bf16_pool_scalar(
     std::optional<bool> ceil_mode,
     std::optional<uint32_t> ceil_h,
     std::optional<uint32_t> ceil_w,
-    std::optional<uint32_t> out_x,
-    std::optional<uint32_t> out_y,
+    std::optional<bool> count_include_pad,
     std::optional<uint32_t> pad_h,
     std::optional<uint32_t> pad_w,
+    std::optional<uint32_t> out_x,
+    std::optional<uint32_t> out_y,
     std::optional<uint32_t> out_nhw_per_core,
     std::vector<uint32_t>* sinchronization_indexes,
     std::vector<uint32_t>* scalars) {
@@ -60,34 +61,52 @@ uint32_t get_bf16_pool_scalar(
                 if (sinchronization_indexes != nullptr) {
                     sinchronization_indexes->push_back(0);
                 }
-            } else if (ceil_mode.value_or(false) && (ceil_w.value_or(0) > 0 || ceil_h.value_or(0) > 0)) {
+            } else if (
+                (ceil_mode.value_or(false) && (ceil_w.value_or(0) > 0 || ceil_h.value_or(0) > 0)) ||
+                (!count_include_pad.value_or(true) && (pad_h.value_or(0) > 0 || pad_w.value_or(0) > 0))) {
                 for (uint32_t i = 0; i < out_nhw_per_core.value(); i++) {
-                    // Initial kernel window start based on stride and padding
-                    int hstart = out_x_stick * stride_h.value_or(1) - pad_h.value_or(0);
-                    int wstart = out_y_stick * stride_w.value_or(1) - pad_w.value_or(0);
+                    // Cache values to avoid repeated calls
+                    int stride_h_val = stride_h.value_or(1);
+                    int stride_w_val = stride_w.value_or(1);
+                    int pad_h_val = pad_h.value_or(0);
+                    int pad_w_val = pad_w.value_or(0);
+                    int in_h_val = static_cast<int>(in_h.value_or(0));
+                    int in_w_val = static_cast<int>(in_w.value_or(0));
+
+                    // Compute kernel window bounds
+                    int hstart = out_x_stick * stride_h_val - pad_h_val;
+                    int wstart = out_y_stick * stride_w_val - pad_w_val;
                     int hend = hstart + kernel_h;
                     int wend = wstart + kernel_w;
 
-                    // Clip kernel window to input bounds
+                    // Clip to input bounds
                     int valid_hstart = std::max(hstart, 0);
                     int valid_wstart = std::max(wstart, 0);
-                    int valid_hend = std::min(hend, static_cast<int>(in_h.value_or(0)));
-                    int valid_wend = std::min(wend, static_cast<int>(in_w.value_or(0)));
+                    int valid_hend = std::min(hend, in_h_val);
+                    int valid_wend = std::min(wend, in_w_val);
 
                     int effective_h = valid_hend - valid_hstart;
                     int effective_w = valid_wend - valid_wstart;
 
-                    int pool_area;
+                    int pool_area = 0;
 
-                    // Count how many *actual* kernel elements fall within the padded input bounds
-                    pool_area = (hend - hstart) * (wend - wstart);
-                    pool_area -= ((hend > (int)in_h.value_or(0)) ? (hend - in_h.value_or(0)) : 0) * kernel_w;
-                    pool_area -= ((wend > (int)in_w.value_or(0)) ? (wend - in_w.value_or(0)) : 0) * kernel_h;
-                    // Remove doubly subtracted corner if both overflows happened
-                    if (hend > (int)in_h.value_or(0) && wend > (int)in_w.value_or(0)) {
-                        pool_area += (hend - in_h.value_or(0)) * (wend - in_w.value_or(0));
+                    if (count_include_pad.value_or(true)) {
+                        pool_area = (hend - hstart) * (wend - wstart);
+
+                        int pad_h_over = std::max(hend - in_h_val - pad_h_val, 0);
+                        int pad_w_over = std::max(wend - in_w_val - pad_w_val, 0);
+
+                        pool_area -= pad_h_over * kernel_w;
+                        pool_area -= pad_w_over * kernel_h;
+
+                        if (pad_h_over > 0 && pad_w_over > 0) {
+                            pool_area += pad_h_over * pad_w_over;
+                        }
+
+                        pool_area = std::max(1, pool_area);  // Prevent division by zero
+                    } else {
+                        pool_area = (effective_h > 0 && effective_w > 0) ? effective_h * effective_w : 0;
                     }
-                    pool_area = std::max(1, pool_area);  // Avoid division by zero
 
                     float value = pool_area > 0 ? 1.f / (float)pool_area : 0.f;
                     uint32_t area_signature = pool_area;

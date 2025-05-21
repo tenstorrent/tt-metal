@@ -144,7 +144,7 @@ void bind_avg_pool2d_operation(py::module& module) {
             stride (List of [int]): the (h, w) stride of the kernel window.
             padding (List of [int]): the (h, w) padding of the input tensor.
             ceil_mode (bool): When True, uses 'ceiling' function instead of 'floor' function in the formula to compute output shape. Default: False.
-            #count_include_pad (bool): When True, includes zero-padding in the avg calculation. Default: True.
+            count_include_pad (bool): When True, includes zero-padding in the avg calculation. Default: True.
             divisor_override (int, optional): If specified, it will be used as a divisor, otherwise size of the pooling region will be used. Default: None. Not currently supported in ttnn.
 
         Keyword Args:
@@ -181,6 +181,7 @@ void bind_avg_pool2d_operation(py::module& module) {
                             padding=[pad_h, pad_w],
                             dilation=[dilation_h, dilation_w],
                             ceil_mode=False,
+                            count_include_pad=True,
                             divisor_override=None,
                             memory_config=None,
                             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -198,6 +199,7 @@ void bind_avg_pool2d_operation(py::module& module) {
                std::array<uint32_t, 2> stride,
                std::array<uint32_t, 2> padding,
                bool ceil_mode,
+               bool count_include_pad,
                std::optional<int32_t> divisor_override,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
@@ -214,6 +216,7 @@ void bind_avg_pool2d_operation(py::module& module) {
                     stride,
                     padding,
                     ceil_mode,
+                    count_include_pad,
                     divisor_override,
                     memory_config,
                     applied_shard_scheme,
@@ -228,6 +231,7 @@ void bind_avg_pool2d_operation(py::module& module) {
             py::arg("stride"),
             py::arg("padding"),
             py::arg("ceil_mode") = false,
+            py::arg("count_include_pad") = true,
             py::arg("divisor_override") = std::nullopt,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,

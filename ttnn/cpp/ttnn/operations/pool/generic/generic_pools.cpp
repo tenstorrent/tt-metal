@@ -31,6 +31,7 @@ static Tensor pool2d_invoke(
     std::array<uint32_t, 2> padding,
     std::optional<std::array<uint32_t, 2>> dilation = std::nullopt,
     bool ceil_mode = false,
+    bool count_include_pad = true,
     std::optional<int32_t> divisor_override = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
@@ -45,6 +46,7 @@ static Tensor pool2d_invoke(
         .padding = {padding.at(0), padding.at(0), padding.at(1), padding.at(1)},
         .dilation_hw = {dilation_h, dilation_w},
         .ceil_mode = ceil_mode,
+        .count_include_pad = count_include_pad,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
     auto output_shape = sliding_window_config.get_output_shape();  // last dim/width is 0
@@ -139,6 +141,7 @@ static Tensor pool2d_invoke(
         .core_range_set = parallel_config.grid,
         .snap_to_tile = false,
         .ceil_mode = ceil_mode,
+        .count_include_pad = count_include_pad,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
 
@@ -198,6 +201,7 @@ Tensor MaxPool2DOp::invoke(
         padding,
         dilation,
         ceil_mode,
+        true,          // count_include_pad
         std::nullopt,  // divisor_override
         memory_config,
         applied_shard_scheme,
@@ -215,6 +219,7 @@ Tensor AvgPool2DOp::invoke(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> padding,
     bool ceil_mode,
+    bool count_include_pad,
     std::optional<int32_t> divisor_override,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
@@ -230,8 +235,9 @@ Tensor AvgPool2DOp::invoke(
         kernel_size,
         stride,
         padding,
-        std::nullopt, // dilation
+        std::nullopt,  // dilation
         ceil_mode,
+        count_include_pad,
         divisor_override,
         memory_config,
         applied_shard_scheme,

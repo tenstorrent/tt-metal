@@ -22,7 +22,7 @@ def randomize_tensor(tensor_map, tensor_shape):
     if tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+        torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16)
     return torch_tensor
 
 
@@ -34,6 +34,7 @@ def run_avg_pool2d(
     stride,
     padding,
     ceil_mode,
+    count_include_pad,
     divisor_override,
     shard_scheme,
 ):
@@ -54,7 +55,7 @@ def run_avg_pool2d(
         stride,
         padding,
         ceil_mode=ceil_mode,
-        count_include_pad=True,
+        count_include_pad=count_include_pad,
         divisor_override=divisor_override,
     )
 
@@ -69,6 +70,7 @@ def run_avg_pool2d(
         stride=stride,
         padding=padding,
         ceil_mode=ceil_mode,
+        count_include_pad=count_include_pad,
         divisor_override=divisor_override,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         applied_shard_scheme=shard_scheme,
@@ -138,6 +140,13 @@ def run_avg_pool2d(
     ],
 )
 @pytest.mark.parametrize(
+    "count_include_pad",
+    [
+        False,
+        True,
+    ],
+)
+@pytest.mark.parametrize(
     "divisor_override",
     [
         None,
@@ -164,6 +173,7 @@ def test_run_avg_pool2d(
     stride,
     padding,
     ceil_mode,
+    count_include_pad,
     divisor_override,
     shard_scheme,
 ):
@@ -188,6 +198,7 @@ def test_run_avg_pool2d(
         stride,
         padding,
         ceil_mode=ceil_mode,
+        count_include_pad=count_include_pad,
         divisor_override=divisor_override,
         shard_scheme=shard_scheme,
     )
