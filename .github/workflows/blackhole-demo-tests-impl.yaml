@@ -32,7 +32,7 @@ jobs:
           {
             name: "Llama3-8B_performance",
             arch: blackhole,
-            cmd:  HF_HOME=/localdev/blackhole_demos/huggingface_data TT_CACHE_PATH=/localdev/blackhole_demos/ttnn_cache HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci,
+            cmd:  HF_HOME=/localdev/blackhole_demos/huggingface_data TT_CACHE_PATH=/localdev/blackhole_demos/tt_cache HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci,
             owner_id: U03PUAKE719 # Miguel Tairum
           }
         ]
@@ -72,7 +72,7 @@ jobs:
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e HF_TOKEN=${{ secrets.HUGGINGFACE_TOKEN }}
-            -v /localdev:/localdev
+            -v /localdev/blackhole_demos:/localdev/blackhole_demos
           install_wheel: true
           run_args: |
             if [[ "${{ matrix.test-group.name }}" == *"Llama"* ]]; then
