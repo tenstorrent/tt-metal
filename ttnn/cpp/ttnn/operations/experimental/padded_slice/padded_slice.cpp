@@ -33,6 +33,8 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     uint32_t input_rank = input_shape.rank();
     auto input_layout = input_tensor.get_layout();
 
+    TT_FATAL(input_rank == 4, "Only 4D tensors are supported for padded_slice");
+
     if (input_rank == 0) {
         return input_tensor;
     }

@@ -11,9 +11,6 @@
 
 namespace ttnn::operations::experimental {
 
-uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_start);
-uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& padded_slice_start);
-
 struct PaddedSliceDeviceOperation {
     const ttnn::Shape padded_slice_start;
     const ttnn::Shape padded_slice_end;

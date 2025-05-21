@@ -10,48 +10,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental {
 
-inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const ttnn::Shape& shape) {
-    return std::accumulate(shape.cbegin(), shape.cend() - 2, 1, std::multiplies<uint32_t>{});
-}
-
-inline __attribute__((always_inline)) uint32_t
-get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_start) {
-    // offset for every dim except last 2
-    uint32_t start_offset = 0;
-    const auto& shape = tensor.get_padded_shape();
-
-    uint32_t num_pages = tensor.volume();
-    if (tensor.get_layout() == Layout::TILE) {
-        num_pages /= tt::constants::TILE_HW;
-    } else {
-        uint32_t page_width = shape[-1];
-        num_pages /= page_width;
-    }
-
-    for (uint32_t dim_outer = 0; dim_outer < shape.rank() - 2; dim_outer++) {
-        uint32_t compressed_dims = 1;
-        for (uint32_t dim_inner = 0; dim_inner <= dim_outer; dim_inner++) {
-            compressed_dims *= shape[dim_inner];
-        }
-        start_offset += (num_pages / compressed_dims) * padded_slice_start[dim_outer];
-    }
-    return start_offset;
-}
-
-uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_start) {
-    uint32_t start_offset = 0;
-
-    if (tensor.get_padded_shape().rank() >= 2) {
-        const auto& shape = tensor.get_padded_shape();
-        uint32_t num_pages = tensor.volume() / shape[-1];
-        uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
-        start_offset = get_upper_start_offset(tensor, padded_slice_start);
-        start_offset += padded_slice_start[-2];
-    }
-
-    return start_offset;
-}
-
 void PaddedSliceDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     using namespace tt::constants;
@@ -63,7 +21,7 @@ void PaddedSliceDeviceOperation::validate_with_output_tensors(
     TT_FATAL(
         input_tensor_a.get_padded_shape().rank() == this->padded_slice_start.rank() &&
             this->padded_slice_start.rank() == this->padded_slice_end.rank(),
-        "Error");
+        "Padded slice start, end and input tensor must all have the same rank");
     for (uint32_t i = 0; i < input_tensor_a.get_padded_shape().rank(); i++) {
         TT_FATAL(
             this->padded_slice_start[i] < input_tensor_a.get_padded_shape()[i],

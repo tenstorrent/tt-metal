@@ -18,6 +18,47 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::detail {
 
+uint32_t get_upper_dims_compressed(const ttnn::Shape& shape) {
+    return std::accumulate(shape.cbegin(), shape.cend() - 2, 1, std::multiplies<uint32_t>{});
+}
+
+uint32_t get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_start) {
+    // offset for every dim except last 2
+    uint32_t start_offset = 0;
+    const auto& shape = tensor.get_padded_shape();
+
+    uint32_t num_pages = tensor.volume();
+    if (tensor.get_layout() == Layout::TILE) {
+        num_pages /= tt::constants::TILE_HW;
+    } else {
+        uint32_t page_width = shape[-1];
+        num_pages /= page_width;
+    }
+
+    for (uint32_t dim_outer = 0; dim_outer < shape.rank() - 2; dim_outer++) {
+        uint32_t compressed_dims = 1;
+        for (uint32_t dim_inner = 0; dim_inner <= dim_outer; dim_inner++) {
+            compressed_dims *= shape[dim_inner];
+        }
+        start_offset += (num_pages / compressed_dims) * padded_slice_start[dim_outer];
+    }
+    return start_offset;
+}
+
+static uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_start) {
+    uint32_t start_offset = 0;
+
+    if (tensor.get_padded_shape().rank() >= 2) {
+        const auto& shape = tensor.get_padded_shape();
+        uint32_t num_pages = tensor.volume() / shape[-1];
+        uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
+        start_offset = get_upper_start_offset(tensor, padded_slice_start);
+        start_offset += padded_slice_start[-2];
+    }
+
+    return start_offset;
+}
+
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_slice_runtime_args_rm_sharded_output(
     const Tensor& input_tensor,
     Tensor& output_tensor,
@@ -131,7 +172,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
         num_sticks_per_core_read,
         num_read_per_barrier);
 
-    uint32_t start_offset = ttnn::operations::experimental::get_rm_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_offset = get_rm_start_offset(input_tensor, output_tensor_start);
     uint32_t core_index = 0;
     for (const auto& core : cores) {
         uint32_t core_w_index = 0;
