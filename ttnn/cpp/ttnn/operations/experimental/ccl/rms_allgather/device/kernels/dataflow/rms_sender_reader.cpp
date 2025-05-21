@@ -20,9 +20,12 @@ void kernel_main() {
     constexpr uint32_t single_tile_size_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t cb_ex_partial2 = get_compile_time_arg_val(10);
     constexpr uint32_t cb_ex2 = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_ex2_global = get_compile_time_arg_val(12);  // E[x2] global reduce
-    constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(12);
+    constexpr uint32_t post_reduce_sender_semaphore_id = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_stats_reduced = get_compile_time_arg_val(14);  // [E[x], E[x^2]] local to sender
+    constexpr uint32_t cb_ex_global = get_compile_time_arg_val(15);      // [E[x], E[X^2]] global to all cores
 
+    uint32_t post_reduce_sender_semaphore_addr = get_semaphore(post_reduce_sender_semaphore_id);
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(2);
@@ -116,6 +119,39 @@ void kernel_main() {
                 cb_external,
                 (num_blocks_second_stage - 1));  // push back partials from all cores -> compute can start reducing now
         }
+        cb_pop_front(cb_partial, 1);
     };
     global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2);
+
+    const uint64_t post_reduce_sender_semaphore_noc_addr = multicast_data_noc | post_reduce_sender_semaphore_addr;
+
+    volatile tt_l1_ptr uint32_t* post_reduce_sender_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_reduce_sender_semaphore_addr);
+    const auto& global_semaphore_set = [&]() __attribute__((always_inline)) {
+        *post_reduce_sender_semaphore_addr_ptr = VALID;
+
+        noc_semaphore_set_multicast_loopback_src(
+            post_reduce_sender_semaphore_addr, post_reduce_sender_semaphore_noc_addr, num_blocks, false, false);
+        noc_async_write_barrier();
+    };
+
+    const auto& post_global_reduce_sender = [&](const uint32_t cb_ex, const uint32_t cb_ex_global)
+                                                __attribute__((always_inline)) {
+                                                    uint32_t l1_read_addr_ex = get_read_ptr(cb_ex);
+                                                    uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
+                                                    noc_async_write_multicast_loopback_src(
+                                                        l1_read_addr_ex,
+                                                        multicast_data_noc | l1_read_addr_ex_global,
+                                                        single_tile_size_bytes,
+                                                        num_blocks,
+                                                        false,
+                                                        false);
+                                                    noc_async_write_barrier();
+                                                };
+    cb_wait_front(cb_stats_reduced, 1);
+    cb_reserve_back(cb_ex_global, 1);
+    post_global_reduce_sender(cb_stats_reduced, cb_ex_global);
+    cb_push_back(cb_ex_global, 1);
+    cb_pop_front(cb_stats_reduced, 1);
+    global_semaphore_set();
 }
