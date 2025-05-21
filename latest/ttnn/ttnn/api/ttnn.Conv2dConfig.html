@@ -363,9 +363,10 @@ This is useful for Block Sharded Conv2D when the device core grid is not a squar
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">weights_dtype</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.weights_dtype" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Specifies the data type of the weights &amp; bias tensor if the Conv2D op is responsible for preparing the weights.
+<p>Optional argument which specifies the data type of the preprocessed weights &amp; bias tensor if the Conv2D op is responsible for preparing the weights.
 Supports ttnn.bfloat16 and ttnn.bfloat8_b.
-If ttnn.bfloat8_b is selected, then the weights should be passed in as ttnn.float32.</p>
+If unspecified, the preprocessed weights will be in the same format as the input weights.
+If ttnn.bfloat8_b is selected, then the weights should be passed in as ttnn.bfloat16 or ttnn.float32 in row major format.</p>
 </dd>
 </dl>
 

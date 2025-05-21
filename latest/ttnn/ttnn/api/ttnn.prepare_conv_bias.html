@@ -172,7 +172,7 @@ The exact format of the weights and bias tensors depends on the input tensor par
 <li><p><strong>dilation</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – spacing between kernel elements.</p></li>
 <li><p><strong>device</strong> (<em>ttnn.IDevice</em>) – the device to use.</p></li>
 <li><p><strong>groups</strong> (<em>int</em>) – number of blocked connections from input channels to output channels.</p></li>
-<li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>None</em>) – configuration for convolution. Default: None</p></li>
+<li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>None</em>) – configuration for convolution. This config must have weights_dtype set to the same dtype as the processed weights tensor. Default: None</p></li>
 <li><p><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>None</em>) – configuration for compute kernel. Default: None</p></li>
 </ul>
 </dd>
