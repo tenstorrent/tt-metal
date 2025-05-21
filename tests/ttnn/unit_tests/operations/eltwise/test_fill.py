@@ -9,7 +9,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal
-from models.utility_functions import skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -35,7 +34,6 @@ def test_fill(device, input_shapes, fill_value):
     assert equal_passed
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "input_shapes",
     (

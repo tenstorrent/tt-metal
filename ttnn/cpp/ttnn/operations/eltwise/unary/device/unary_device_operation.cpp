@@ -18,35 +18,10 @@ namespace {
 void validate_supported_arch_dtype(
     tt::ARCH arch, DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
     switch (op_type) {
-        case UnaryOpType::REMAINDER:
-        case UnaryOpType::FLOOR:
-        case UnaryOpType::CEIL:
-        case UnaryOpType::ROUND:
-        case UnaryOpType::LEFT_SHIFT:
-        case UnaryOpType::RIGHT_SHIFT:
-        case UnaryOpType::MAXIMUM:
-        case UnaryOpType::MINIMUM:
-        case UnaryOpType::LOG1P:
-            TT_FATAL(
-                arch != tt::ARCH::GRAYSKULL,
-                "UnaryOpType '{}' is not supported on Grayskull architecture.",
-                static_cast<int>(op_type));
-            break;
-        case UnaryOpType::FILL:
-           if(arch == tt::ARCH::GRAYSKULL){
-                TT_FATAL(
-                    (input_datatype == DataType::BFLOAT16 || input_datatype == DataType::BFLOAT8_B),
-                    "Unsupported dtype {}. On Grayskull only BFLOAT16/BFLOAT8_B are supported", input_datatype);
-                }
-            break;
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_NOT:
         case UnaryOpType::BITWISE_AND:
         case UnaryOpType::BITWISE_OR:
-            TT_FATAL(
-                arch != tt::ARCH::GRAYSKULL,
-                "UnaryOpType '{}' is not supported on Grayskull architecture (Bitwise operation).",
-                static_cast<int>(op_type));
             TT_FATAL(
                 input_datatype == DataType::INT32,
                 "Unsupported input data type '{}' for UnaryOpType '{}' (Bitwise operation).",
@@ -68,13 +43,6 @@ void validate_supported_arch_dtype(
                 (output_datatype == DataType::BFLOAT16 || output_datatype == DataType::FLOAT32),
                 "Unsupported output data type '{}' for UnaryOpType '{}' (FMOD operation).",
                 static_cast<int>(output_datatype),
-                static_cast<int>(op_type));
-            break;
-        case UnaryOpType::ABS:
-        case UnaryOpType::ABS_INT32:
-            TT_FATAL(
-                !(arch == tt::ARCH::GRAYSKULL && input_datatype == DataType::INT32),
-                "UnaryOpType '{}' (ABS int32 operation) is not supported on Grayskull architecture.",
                 static_cast<int>(op_type));
             break;
         default: return;

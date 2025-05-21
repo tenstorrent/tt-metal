@@ -1745,10 +1745,10 @@ void py_module(py::module& module) {
 
     detail::bind_unary_operation(module, ttnn::expm1, R"doc(\mathrm{{output\_tensor}}_i = \verb|expm1|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_unary_operation(module, ttnn::floor, R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
+    detail::bind_unary_operation(module, ttnn::floor, R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::eqz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-    detail::bind_unary_operation(module, ttnn::ceil, R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
-    detail::bind_unary_operation(module, ttnn::mish, R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc", "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
+    detail::bind_unary_operation(module, ttnn::ceil, R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(module, ttnn::mish, R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc", "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::gez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
     detail::bind_unary_operation(module, ttnn::gtz, R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
 
@@ -1783,7 +1783,6 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::bitwise_not, R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_not|(\mathrm{{input\_tensor}}_i))doc",
     R"doc(Supported input range is [-2147483647, 2147483647].)doc",
     R"doc(INT32)doc",
-    R"doc(Supported for Wormhole_B0 only.)doc",
     R"doc(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32))doc");
     detail::bind_unary_operation(
         module,
@@ -1962,8 +1961,7 @@ void py_module(py::module& module) {
         ttnn::round,
         "decimals", "no. of decimal places to round off to [supported range -6 to 7]",
         R"doc(Round the input tensor to `decimals` decimal places.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(Not supported on Grayskull.)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_composite_int(
         module,
         ttnn::polygamma,
@@ -1991,8 +1989,7 @@ void py_module(py::module& module) {
     detail::bind_unary_composite_float_with_default(
         module,
         ttnn::logit,
-        "eps", "eps", 0.0f,  R"doc(BFLOAT16)doc",
-            R"doc(Not available for Wormhole_B0.)doc");
+        "eps", "eps", 0.0f,  R"doc(BFLOAT16)doc");
 
     detail::bind_unary_composite_rpow(
         module,
@@ -2007,7 +2004,7 @@ void py_module(py::module& module) {
     ttnn::rdiv,
     "value", "denominator value which is actually calculated as numerator float value >= 0",
     "round_mode", "rounding_mode value", "None",
-    R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using round_mode. Support provided only for Wormhole_B0.
+    R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using round_mode.
 
         Input tensor must have BFLOAT16 data type.
 

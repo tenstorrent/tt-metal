@@ -6,7 +6,6 @@ import pytest
 import torch
 import ttnn
 from functools import partial
-from models.utility_functions import skip_for_grayskull
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
@@ -87,7 +86,6 @@ npu_layout = ttnn.Layout.TILE
     "dst_mem_config",
     mem_configs,
 )
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 class TestTypecast:
     def test_run_eltwise_typecast_op(
         self,
@@ -125,7 +123,6 @@ class TestTypecast:
 
 
 @pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_typecast_bf16_to_bfp8_b(device):
     torch.manual_seed(0)
     shape = [32, 32]
@@ -160,7 +157,6 @@ def print_mismatches(cpu, npu, num_max_print):
 @pytest.mark.parametrize("seed", [0, 2, 4, 6, 8])
 @pytest.mark.parametrize("scale", [1, 2, 4, 8, 16, 32, 64, 128, 256, 512])
 @pytest.mark.parametrize("bias", [0, 1, 2, 4, 8, 16, 32, 64, 128])
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_typecast_bf16_to_bfp8_b_various_input(seed, scale, bias, device):
     torch.manual_seed(seed)
     shape = [1024, 1024]
@@ -194,7 +190,6 @@ def test_typecast_bf16_to_bfp8_b_various_input(seed, scale, bias, device):
 @pytest.mark.parametrize("bias", [2])
 # NaN becomes -Inf when converted to bfloat8_b format, skip testing
 @pytest.mark.parametrize("insert_inf, insert_nan", [[True, False]])  # , [False, True], [True, True]])
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_typecast_bf16_to_bfp8_b_with_inf_nan(seed, scale, bias, insert_inf, insert_nan, device):
     torch.manual_seed(seed)
     shape = [1024, 1024]
@@ -230,7 +225,6 @@ def test_typecast_bf16_to_bfp8_b_with_inf_nan(seed, scale, bias, insert_inf, ins
     assert passed
 
 
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_typecast_bfp8_b_to_bf16(device):
     torch.manual_seed(0)
     shape = [1024, 1024]
@@ -250,7 +244,6 @@ def test_typecast_bfp8_b_to_bf16(device):
     assert passed
 
 
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_typecast_fp32_to_bfp8_b(device):
     torch.manual_seed(0)
     shape = [32, 32]
@@ -271,7 +264,6 @@ def test_typecast_fp32_to_bfp8_b(device):
     assert passed
 
 
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_typecast_bfp8_b_to_fp32(device):
     torch.manual_seed(0)
     shape = [1024, 1024]
