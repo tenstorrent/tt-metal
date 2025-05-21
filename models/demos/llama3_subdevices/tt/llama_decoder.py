@@ -147,10 +147,7 @@ class TtTransformerBlock(LightweightModule):
             h = x
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
-            # The x can be deleted in this case
             attn_in_sharded, _ = self.attention_norm(x, h, mode)
-            # if mode == "decode":
-            # x.deallocate(True)
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,
