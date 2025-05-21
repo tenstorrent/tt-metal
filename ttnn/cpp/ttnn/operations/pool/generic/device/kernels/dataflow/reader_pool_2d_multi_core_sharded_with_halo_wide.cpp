@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 1
+#define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -80,9 +80,6 @@ void kernel_main() {
         scalars_cnt = get_arg_val<uint32_t>(0);
         time_for_change = get_arg_val<uint32_t>(runtime_args_before);
     }
-    DPRINT << "scalars_cnt: " << scalars_cnt << ENDL();
-    DPRINT << "reader_indices: " << reader_nindices << ENDL();
-    DPRINT << "time_for_change: " << time_for_change << ENDL();
 
     if (reader_id == 0 && one_scalar_per_core) {
         cb_reserve_back(in_scalar_cb_id, 1);
@@ -98,8 +95,14 @@ void kernel_main() {
             scalar_index++;
             time_for_change = get_arg_val<uint32_t>(runtime_args_before + 2 * scalar_index);
             cb_push_back(in_scalar_cb_id, 1);
-            DPRINT << "time_for_change: " << time_for_change << ENDL();
-            DPRINT << "scalar pushed: " << scalar_index << ENDL();
+        }
+        if (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core && counter >= time_for_change) {
+            uint32_t scalar_val = get_arg_val<uint32_t>(2 * scalar_index + runtime_args_before + 1);
+            cb_reserve_back(in_scalar_cb_id, 1);
+            fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
+            scalar_index++;
+            time_for_change = get_arg_val<uint32_t>(runtime_args_before + 2 * scalar_index);
+            cb_push_back(in_scalar_cb_id, 1);
         }
         if (counter < reader_nindices || one_scalar_per_core) {
             const uint16_t top_left_local_index = reader_indices_ptr[counter++];
