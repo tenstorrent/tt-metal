@@ -26,11 +26,13 @@ ALWI void REL() { release_dst(); }
 
 void apply_fused_scale_mask(
     uint32_t cb_in, uint32_t cb_fused_scale_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
-void apply_fused_attn_mask(uint32_t cb_in, uint32_t cb_fused_attn_mask, uint32_t cb_out, uint32_t _t, uint32_t blk);
+void apply_fused_attn_mask(
+    uint32_t cb_in, uint32_t cb_fused_attn_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
 void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
 void reduce_cb(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, bool use_prev_reduce, uint32_t cb_length_t);
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
 
+uint32_t ncht1 = 0;
 namespace NAMESPACE {
 void MAIN {
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -111,6 +113,11 @@ void MAIN {
             //          //TODO: Add function that does a max reduce and then
             // #endif
             // print_count++;
+            if (ncht == 1) {
+                ncht1 = 1;
+            } else {
+                ncht1 = 0;
+            }
 
             UNPACK(DPRINT << "cur_pass: " << cur_pass << ENDL());
             reconfig_data_format_srca(cb_in0);
@@ -261,9 +268,9 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, const uint32_t cb_length_t, const u
         cb_wait_front(cb_in, blk);
         cb_reserve_back(cb_out, blk);
         tile_regs_acquire();
+        tile_regs_wait();
         copy_tile_to_dst_init_short(cb_in);  // need to copy from CB to DST to be able to run sfpu math
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
-            UNPACK(tt::compute::common::print_full_tile(cb_in, cur_dst, true));
             copy_tile(cb_in, cur_dst, cur_dst);
             // fill_tile(cur_dst, 0);
         }
@@ -271,47 +278,22 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, const uint32_t cb_length_t, const u
         exp_tile_init<false>();
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             exp_tile<false>(cur_dst);  // exp on DST[0]
+            if (ncht1 == 1) {
+                MATH(DPRINT << "iter: " << loop << ENDL());
+                dprint_tensix_dest_reg(cur_dst);
+            }
         }
-        tile_regs_wait();
         tile_regs_commit();
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+            PACK(DPRINT << "iter: " << loop << ENDL());
             pack_tile(cur_dst, cb_out);
+            loop++;
         }
         cb_push_back(cb_out, blk);
         tile_regs_release();
-        loop++;
     }
 }
-// void reduce_cb(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, bool use_prev_reduce, uint32_t cb_length_t) {
-//     // Requirements:
-//     //   cb_length_t of cb_in and cb_out are the same.
-//     //   blk is a divisor of cb_length_t
-//     reconfig_data_format(cb_in, cb_scaler);
-//     pack_reconfig_data_format(cb_out);
-//     const uint32_t dst0 = 0;
-//     const uint32_t dst1 = 1;
-//     tile_regs_acquire();
-//     tile_regs_wait();
-//     reduce_init<true>(cb_in, cb_scaler, cb_out);
-//     cb_wait_front(cb_in, cb_length_t);
-//     for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
-//         reduce_tile(cb_in, cb_scaler, cur_tile, 0, dst0);
-//     }
-//     cb_pop_front(cb_in, cb_length_t);
-//     if (use_prev_reduce) {
-//         cb_wait_front(cb_out, 1);
-//         copy_tile_init(cb_out);
-//         copy_tile(cb_out, 0, dst1);
-//         add_binary_tile_init();
-//         add_binary_tile(dst0, dst1);
-//         cb_pop_front(cb_out, 1);
-//     }
-//     tile_regs_commit();
-//     cb_reserve_back(cb_out, 1);
-//     pack_tile(dst0, cb_out);
-//     cb_push_back(cb_out, 1);
-//     tile_regs_release();
-// }
+
 void reduce_cb(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, bool use_prev_reduce, uint32_t cb_length_t) {
     // Requirements:
     //   cb_length_t of cb_in and cb_out are the same.
@@ -319,15 +301,24 @@ void reduce_cb(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, bool use_pre
     pack_reconfig_data_format(cb_out);
     const uint32_t dst0 = 0;
     const uint32_t dst1 = 1;
-    cb_wait_front(cb_in, cb_length_t);
+    // cb_wait_front(cb_in, cb_length_t);
     tile_regs_acquire();
     tile_regs_wait();
     reduce_init_delta<true>(cb_in, cb_scaler, cb_out);
     for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
-        reduce_tile(cb_in, cb_scaler, cur_tile, 0, dst0);
+        cb_wait_front(cb_in, 1);
+        // reduce_tile(cb_in, cb_scaler, cur_tile, 0, dst0);
+        reduce_tile(cb_in, cb_scaler, 0, 0, dst0);
+        if (ncht1 == 1) {
+            // 256 + 88
+            UNPACK(DPRINT << "cur_tile:   " << cur_tile << ENDL());
+            // UNPACK(tt::compute::common::print_full_tile(cb_in, cur_tile));
+            UNPACK(tt::compute::common::print_full_tile(cb_in, 0));
+        }
+        cb_pop_front(cb_in, 1);
     }
     reduce_revert_delta(cb_out);
-    cb_pop_front(cb_in, cb_length_t);
+    // cb_pop_front(cb_in, cb_length_t);
 
     if (use_prev_reduce) {
         cb_wait_front(cb_out, 1);
