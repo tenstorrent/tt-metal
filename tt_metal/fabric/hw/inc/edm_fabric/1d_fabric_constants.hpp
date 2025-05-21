@@ -170,16 +170,10 @@ constexpr size_t sender_3_completed_packet_header_cb_size_headers =
 constexpr size_t sender_4_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 54);
 constexpr size_t sender_4_completed_packet_header_cb_size_headers =
     get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 55);
-constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced = {
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 56) != 0,
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 57) != 0,
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 58) != 0,
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 59) != 0,
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 60) != 0};
-
-constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced = {
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 61) != 0,
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 62) != 0};
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced =
+    fill_array_with_next_n_args<bool, MAIN_CT_ARGS_START_IDX + 56, MAX_NUM_SENDER_CHANNELS>();
+constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced =
+    fill_array_with_next_n_args<bool, MAIN_CT_ARGS_START_IDX + 61, MAX_NUM_RECEIVER_CHANNELS>();
 
 constexpr bool enable_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 63) != 0;
 constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 64) != 0;
