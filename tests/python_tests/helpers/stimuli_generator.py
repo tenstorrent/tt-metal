@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from .format_arg_mapping import format_dict, TileCount
+
+from .format_arg_mapping import TileCount, format_dict
 from .format_config import DataFormat
 
 

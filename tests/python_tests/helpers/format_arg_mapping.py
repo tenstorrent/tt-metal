@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from enum import Enum
-from .format_config import DataFormat
 
+import torch
+
+from .format_config import DataFormat
 
 format_dict = {
     DataFormat.Float32: torch.float32,

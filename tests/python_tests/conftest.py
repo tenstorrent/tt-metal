@@ -3,18 +3,17 @@
 
 import logging
 import os
-import pytest
-import requests
 import subprocess
 import sys
 import time
 
-from requests.exceptions import ConnectionError, Timeout, RequestException
+import pytest
+import requests
+from requests.exceptions import ConnectionError, RequestException, Timeout
+from ttexalens.tt_exalens_lib import arc_msg
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.log_utils import _format_log
-
-from ttexalens.tt_exalens_lib import arc_msg
 
 
 def set_chip_architecture():
