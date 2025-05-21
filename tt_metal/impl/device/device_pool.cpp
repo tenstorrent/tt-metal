@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <device_impl.hpp>
 #include <device_pool.hpp>
 #include <numa.h>
 #include <pthread.h>
@@ -17,6 +16,7 @@
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
+#include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dprint_server.hpp"
 #include "env_lib.hpp"
