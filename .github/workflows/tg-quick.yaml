@@ -19,11 +19,11 @@ on:
       topology-4u:
         required: false
         type: boolean
-        default: true
+        default: false
       topology-6u:
         required: false
         type: boolean
-        default: true
+        default: false
 
 jobs:
   quick-4u:
