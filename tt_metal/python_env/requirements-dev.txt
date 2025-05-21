@@ -102,3 +102,5 @@ seaborn==0.13.2
 medpy==0.5.2 # Required for vanilla unet
 kagglehub==0.2.9
 efficientnet-pytorch==0.7.1
+mmdet==3.3.0
+mmcv==2.1.0
