@@ -6,6 +6,7 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "pad_tile.hpp"
 
 void kernel_main() {
     // COMPILE TIME ARGS
@@ -37,16 +38,18 @@ void kernel_main() {
         return;
     }
     const uint32_t sender_id = get_arg_val<uint32_t>(1);
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + num_storage_cores));
+    const uint32_t in0_last_ktile_w = get_arg_val<uint32_t>(2);
+
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(3 + num_storage_cores));
 
     const uint32_t sender_block_id = sender_id * num_blocks_per_shard;
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in2 = 2;  // Sharded cb
 
-    const uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
+    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
+    constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
 
     uint32_t l1_write_addr_in0;
 
@@ -91,6 +94,12 @@ void kernel_main() {
             // Now we have the block in the CB address, we can mcast to dests!
             uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
 
+            // Zero out padded regions for the very last tile
+            if ((i == num_blocks_per_shard - 1) && (in0_last_ktile_w > 0)) {
+                auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
+                pad_last_ktile<in0_data_format>(in0_last_ktile_w, in0_last_ktile_ptr);
+            }
+
 #ifndef SKIP_MCAST
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_async_write_multicast(
@@ -121,6 +130,12 @@ void kernel_main() {
                 noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
 
                 uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
+
+                // Zero out padded regions for the very last tile
+                if ((block == num_blocks - 1) && (in0_last_ktile_w > 0)) {
+                    auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
+                    pad_last_ktile<in0_data_format>(in0_last_ktile_w, in0_last_ktile_ptr);
+                }
 #ifndef SKIP_MCAST
                 noc_async_write_multicast_loopback_src(
                     local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true);
