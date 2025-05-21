@@ -48,6 +48,8 @@ public:
 
     uint32_t scratch_db_size() const;
 
+    uint32_t ringbuffer_size() const;
+
     uint32_t dispatch_buffer_block_size_pages() const;
 
     uint32_t dispatch_buffer_base() const;
