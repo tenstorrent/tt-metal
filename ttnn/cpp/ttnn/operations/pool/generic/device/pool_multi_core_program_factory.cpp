@@ -299,7 +299,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || divisor_override.has_value()};
+        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || (ceil_pad_h == 0 && ceil_pad_w == 0) ||
+            divisor_override.has_value()};
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -325,7 +326,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || divisor_override.has_value()};
+        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || (ceil_pad_h == 0 && ceil_pad_w == 0) ||
+            divisor_override.has_value()};
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
@@ -375,7 +377,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || divisor_override.has_value()};
+        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || (ceil_pad_h == 0 && ceil_pad_w == 0) ||
+            divisor_override.has_value()};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
