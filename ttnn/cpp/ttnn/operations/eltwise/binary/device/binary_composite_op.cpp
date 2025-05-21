@@ -427,8 +427,6 @@ Tensor run_remainder(
 // Binary remainder will be overloaded by unary remainder in another PR
 Tensor ExecuteBinaryRemainder::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input_a.device()->arch();
-    TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is supported on Wormhole or Blackhole");
     DataType input_dtype = input_a.get_dtype();
 
     float t_nan = tt::tt_metal::hal::get_nan();
@@ -488,8 +486,6 @@ Tensor ExecuteBinaryFmod::invoke(
 }
 
 Tensor _floor_div_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input_a.device()->arch();
-    TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is supported on Wormhole");
     if (value == 0) {
         float t_inf = std::numeric_limits<float>::infinity();
         float t_nan = std::nanf("");
@@ -503,8 +499,6 @@ Tensor _floor_div_overload(const Tensor& input_a, float value, const std::option
 }
 
 Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input_a.device()->arch();
-    TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is supported on Wormhole");
     Tensor temp = ttnn::div(input_a, input_b, true, std::nullopt, std::nullopt, output_mem_config);
     Tensor result = ttnn::div(input_a, input_b, true, "floor", std::nullopt, output_mem_config);
     // floor(nan, inf, -inf) = nan, inf, -inf
