@@ -993,7 +993,7 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
 }  // namespace
 
 template <typename T>
-std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec, T pad_value) {
+std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec) {
     if (logical_data.size() == 0) {
         return {};
     }
@@ -1007,14 +1007,14 @@ std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpe
 
     const auto& physical_shape = tensor_spec.physical_shape();
 
-    auto row_major_physical_data = [&tensor_spec, &physical_shape, pad_value](auto&& logical_data) {
+    auto row_major_physical_data = [&tensor_spec, &physical_shape](auto&& logical_data) {
         const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
 
         if (logical_2d_shape != physical_shape) {
             auto [logical_shard_shape, physical_shard_shape] =
                 CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
 
-            auto row_major_physical_data = std::vector<T>(physical_shape.height() * physical_shape.width(), pad_value);
+            auto row_major_physical_data = std::vector<T>(physical_shape.height() * physical_shape.width(), 0);
 
             size_t physical_stride = physical_shape.width();
 
@@ -1048,17 +1048,16 @@ std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpe
 }
 
 template std::vector<bfloat16> encode_tensor_data<bfloat16>(
-    std::vector<bfloat16>&& logical_data, const TensorSpec& tensor_spec, bfloat16 pad_value);
-template std::vector<float> encode_tensor_data<float>(
-    std::vector<float>&& logical_data, const TensorSpec& tensor_spec, float pad_value);
+    std::vector<bfloat16>&& logical_data, const TensorSpec& tensor_spec);
+template std::vector<float> encode_tensor_data<float>(std::vector<float>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<int32_t> encode_tensor_data<int32_t>(
-    std::vector<int32_t>&& logical_data, const TensorSpec& tensor_spec, int32_t pad_value);
+    std::vector<int32_t>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<uint32_t> encode_tensor_data<uint32_t>(
-    std::vector<uint32_t>&& logical_data, const TensorSpec& tensor_spec, uint32_t pad_value);
+    std::vector<uint32_t>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<uint16_t> encode_tensor_data<uint16_t>(
-    std::vector<uint16_t>&& logical_data, const TensorSpec& tensor_spec, uint16_t pad_value);
+    std::vector<uint16_t>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<uint8_t> encode_tensor_data<uint8_t>(
-    std::vector<uint8_t>&& logical_data, const TensorSpec& tensor_spec, uint8_t pad_value);
+    std::vector<uint8_t>&& logical_data, const TensorSpec& tensor_spec);
 
 template <typename T>
 std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec) {
