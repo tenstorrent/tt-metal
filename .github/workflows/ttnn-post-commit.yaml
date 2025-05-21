@@ -101,7 +101,8 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        ((inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label))
+        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     container:
