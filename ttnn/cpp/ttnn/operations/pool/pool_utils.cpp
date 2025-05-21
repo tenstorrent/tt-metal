@@ -134,10 +134,12 @@ uint32_t get_bf16_pool_scalar(
             if (divisor_override.has_value()) {
                 value = 1. / (float)divisor_override.value();
                 scalars.push_back(bfloat16(value).to_packed());
-            } else if ((ceil_mode && ceil_w > 0) || (!count_include_pad && (pad_h > 0 || pad_w > 0))) {
+            } else if (
+                (ceil_mode.value_or(false) && (ceil_w.value_or(0) > 0 || ceil_h.value_or(0) > 0)) ||
+                (!count_include_pad.value_or(true) && (pad_h.value_or(0) > 0 || pad_w.value_or(0) > 0))) {
                 for (uint32_t i = 0; i < out_nhw_per_core.value(); i++) {
-                    int hstart = out_y_stick * stride_h- pad_h;
-                    int wstart = out_x_stick * stride_w - pad_w;
+                    int hstart = out_x_stick * stride_h- pad_h;
+                    int wstart = out_y_stick * stride_w - pad_w;
                     int hend = ((hstart + (int)kernel_h) < (int)(in_h + pad_h + ceil_w))
                                            ? hstart + (int)kernel_h
                                    : (int)(in_h + pad_h + ceil_w);
@@ -154,6 +156,23 @@ uint32_t get_bf16_pool_scalar(
                     int pool_h = valid_hend - valid_hstart;
                     int pool_w = valid_wend - valid_wstart;
                     int pool_area = (pool_h > 0 && pool_w > 0) ? pool_h * pool_w : 0;
+                    if (count_include_pad) {
+                        pool_area = (hend - hstart) * (wend - wstart);
+
+                        int pad_h_over = std::max(hend - in_h_val - pad_h_val, 0);
+                        int pad_w_over = std::max(wend - in_w_val - pad_w_val, 0);
+
+                        pool_area -= pad_h_over * kernel_w;
+                        pool_area -= pad_w_over * kernel_h;
+
+                        if (pad_h_over > 0 && pad_w_over > 0) {
+                            pool_area += pad_h_over * pad_w_over;
+                        }
+
+                        pool_area = std::max(1, pool_area);  // Prevent division by zero
+                    } else {
+                        pool_area = (effective_h > 0 && effective_w > 0) ? effective_h * effective_w : 0;
+                    }
 
                     float value = pool_area > 0 ? 1.f / (float)pool_area : 0.f;
 

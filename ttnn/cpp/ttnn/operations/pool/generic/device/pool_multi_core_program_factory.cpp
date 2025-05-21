@@ -224,6 +224,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
     bool ceil_mode,
+    bool count_include_pad,
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t num_shards_c,
@@ -438,8 +439,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t bf16_one_u32 = *reinterpret_cast<const uint32_t*>(&one);
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
-    const bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false ||
-                                     (ceil_pad_h == 0 && ceil_pad_w == 0) || divisor_override.has_value();
+     bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
+                               (ceil_mode == false && count_include_pad == true) ||
+                               (ceil_pad_h == 0 && ceil_pad_w == 0 && pad_h == 0 && pad_w == 0);
 
     CBHandle config_cb;
     tt::tt_metal::DeviceStorage scalar_config_storage;
@@ -684,6 +686,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto ceil_pad_h = sliding_window_config.get_ceil_pad_h();
     auto ceil_pad_w = sliding_window_config.get_ceil_pad_w();
     auto ceil_mode = sliding_window_config.ceil_mode;
+    auto count_include_pad = sliding_window_config.count_include_pad;
     auto dilation_h = sliding_window_config.dilation_hw.first;
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
@@ -708,6 +711,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         ceil_pad_h,
         ceil_pad_w,
         ceil_mode,
+        count_include_pad,
         dilation_h,
         dilation_w,
         num_shards_c,
