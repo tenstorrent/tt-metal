@@ -47,6 +47,7 @@
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
 #include "ttnn/operations/experimental/gather/gather_pybind.hpp"
+#include "ttnn/operations/experimental/gather/tosa/gather_tosa_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -103,6 +104,8 @@ void py_module(py::module& module) {
     reduction::detail::bind_cumsum_operation(module);
 
     gather::detail::bind_gather_operation(module);
+
+    tosa::gather::detail::bind_gather_tosa_operation(module);
 
     // CCL ops
     auto m_experimental_ccl =
