@@ -169,9 +169,64 @@ def test_llama_tg_LayerNorm(
         ),
     ],
 )
-# @pytest.mark.parametrize("q_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
-@pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
+@pytest.mark.parametrize("q_layout", [ttnn.TILE_LAYOUT], ids=["tile"])
 def test_llama_tg_ScaledDotProductAttentionDecode(
+    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
+):
+    run_test_sdpa_decode_paged_attention_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        cur_pos=127,
+        block_size=32,
+        q_chunk_size=0,
+        k_chunk_size=0,
+        sharded_in=True,
+        sharded_out=True,
+        start_core=start_core,
+        sub_core_grids=sub_core_grids,
+        q_layout=q_layout,
+    )
+    assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "dtype, q_dtype",
+    [
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+    ],
+    ids=[
+        "bfp8_cache_bf16_act",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size",
+    ([8, 8, 1, 4096, 128, (8, 4)],),  # Llama2-70B
+)
+@pytest.mark.parametrize(
+    "start_core, sub_core_grids",
+    [
+        (
+            ttnn.CoreCoord(1, 0),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
+def test_llama_tg_ScaledDotProductAttentionDecodeRMQ(
     device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
 ):
     run_test_sdpa_decode_paged_attention_single_iter(
