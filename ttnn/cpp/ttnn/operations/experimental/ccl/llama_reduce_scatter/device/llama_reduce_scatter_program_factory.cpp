@@ -237,6 +237,17 @@ CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_
 
 }  // namespace detail
 
+ttnn::device_operation::CachedProgram<LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::shared_variables_t>
+LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_helper(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::Program program{};
+    return LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
+        operation_attributes, mesh_coordinate, tensor_args, tensor_return_value, program);
+}
+
 LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::cached_mesh_workload_t
 LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -246,7 +257,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        auto cached_program = create_at_helper(operation_attributes, coord, tensor_args, tensor_return_value);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -258,7 +269,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& tensor_return_value,
+    tt::tt_metal::Program& program) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
@@ -354,8 +366,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     auto sub_device_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0)));
-
-    tt::tt_metal::Program program{};
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_config().channel_buffer_size_bytes;
     size_t packet_size_bytes = input_tensor.get_dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size)
