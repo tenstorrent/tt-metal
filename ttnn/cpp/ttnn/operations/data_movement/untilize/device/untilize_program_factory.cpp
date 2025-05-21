@@ -1335,14 +1335,14 @@ operation::ProgramWithCallbacks untilize_single_core(
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
 
     // Reader run-time args
-    const std::array reader_kernel_args = {src0_buffer->address(), uint32_t(num_tiles), 0};
+    std::vector<uint32_t> reader_kernel_args = {src0_buffer->address(), uint32_t(num_tiles), 0};
     if (input_is_sharded) {
         shard_builder::extend_sharding_run_time_args(a, reader_kernel_args);
     }
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
     // Writer run-time args
-    const std::array writer_kernel_args = {
+    std::vector<uint32_t> writer_kernel_args = {
         dst_buffer->address(),
         num_sticks,
         stick_size,
