@@ -44,6 +44,7 @@
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
+#include "ttnn/operations/experimental/speculative_sdpa_decode/speculative_sdpa_decode_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -98,6 +99,8 @@ void py_module(py::module& module) {
     reduction::detail::bind_reduction_sort_operation(module);
 
     reduction::detail::bind_cumsum_operation(module);
+
+    speculative_execution::py_bind_speculative_sdpa_decode(module);
 
     // CCL ops
     auto m_experimental_ccl =

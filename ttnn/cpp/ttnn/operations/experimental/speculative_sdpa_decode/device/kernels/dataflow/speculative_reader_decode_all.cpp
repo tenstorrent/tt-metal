@@ -6,8 +6,13 @@
 #include "dataflow_api.h"
 #include <vector>
 
-#include "cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
-#include "dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/speculative_sdpa_decode/device/kernels/speculative_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/speculative_sdpa_decode/device/kernels/dataflow/speculative_dataflow_common.hpp"
+
+#include "debug/dprint.h"  // required in all kernels using DPRINT
+#include "debug/assert.h"
 
 void kernel_main() {
     /*
@@ -35,6 +40,13 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(17) == 1;
     constexpr bool use_attention_mask = get_compile_time_arg_val(18) == 1;
 
+    constexpr uint32_t Spec_chunk_t =
+        get_compile_time_arg_val(19);  // speculative chunk size (in tiles), for the first and last chunk
+    constexpr uint32_t speculative_chunk_size = Spec_chunk_t * tt::constants::TILE_HEIGHT;
+    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(20));  // semaphore for output ready
+    constexpr bool is_output_sharded = get_compile_time_arg_val(21) == 1;
+    constexpr bool ccl_enabled = get_compile_time_arg_val(22) == 1;
+
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t k_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -42,6 +54,10 @@ void kernel_main() {
     const uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mask_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t out_spec_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t priority_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t other_priority_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_page_size = get_arg_val<uint32_t>(arg_idx++);
     const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
     const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
@@ -51,10 +67,28 @@ void kernel_main() {
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
+    constexpr bool is_dram = true;
+
     // idle core
     if (q_addr == 0) {
         return;
     }
+
+    // Compare priority and decide if this device is sender or receiver
+    if constexpr (ccl_enabled) {
+        constexpr uint32_t cb_scratch_id = tt::CBIndex::c_9;
+        auto [max_priority, max_other_priority] =
+            get_max_priority<is_dram, 4 /*priority_scalar_bytes*/, B, cb_scratch_id>(
+                priority_addr, other_priority_addr);
+        DPRINT << "max_priority: " << max_priority << ENDL();
+        DPRINT << "max_other_priority: " << max_other_priority << ENDL();
+        if (max_priority < max_other_priority) {
+            // this device is the receiver, hence reader does nothing
+            DPRINT << "receiver exit early" << ENDL();
+            return;
+        }
+    }
+
     // Get cur_pos
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
@@ -98,11 +132,41 @@ void kernel_main() {
         page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
     }
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
-        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
+    auto
+        [k_num_chunks,
+         k_chunk_start,
+         k_chunk_end,
+         speculative_height_dim_start_tile_offset1,
+         speculative_height_dim_start_tile_offset2,
+         non_spec_height_dim_start_tile_offset,
+         adjusted_cur_pos_for_non_spec,
+         adjusted_cur_pos_for_spec,
+         do_speculative_compute] =
+            get_speculative_runtime_args(
+                cur_pos,
+                cur_batch,
+                core_num_in_reduce,
+                num_cores_per_head,
+                k_chunk_size,
+                speculative_chunk_size,
+                Spec_chunk_t);
     tt_l1_ptr uint32_t* all_output_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_output_cores;
     tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx++));
+
+    DPRINT << "cur_pos: " << cur_pos << ENDL();
+    DPRINT << "k_chunk_size: " << k_chunk_size << ENDL();
+    DPRINT << "speculative_chunk_size: " << speculative_chunk_size << ENDL();
+    DPRINT << "Spec_chunk_t: " << Spec_chunk_t << ENDL();
+    DPRINT << "k_num_chunks: " << k_num_chunks << ENDL();
+    DPRINT << "k_chunk_start: " << k_chunk_start << ENDL();
+    DPRINT << "k_chunk_end: " << k_chunk_end << ENDL();
+    DPRINT << "spec_h_dim_t_offset1: " << speculative_height_dim_start_tile_offset1 << ENDL();
+    DPRINT << "spec_h_dim_t_offset2: " << speculative_height_dim_start_tile_offset2 << ENDL();
+    DPRINT << "non_spec_h_dim_t_offset: " << non_spec_height_dim_start_tile_offset << ENDL();
+    DPRINT << "adj_cur_pos_non_spec: " << adjusted_cur_pos_for_non_spec << ENDL();
+    DPRINT << "adj_cur_pos_spec: " << adjusted_cur_pos_for_spec << ENDL();
+    DPRINT << "do_spec_comp: " << (uint32_t)do_speculative_compute << ENDL();
 
     uint32_t output_core_noc_x = all_output_noc_x[cur_batch];
     uint32_t output_core_noc_y = all_output_noc_y[cur_batch];
@@ -113,9 +177,9 @@ void kernel_main() {
 
     constexpr uint32_t q_chunk_tiles = PNHt * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+    constexpr uint32_t spec_chunk_tiles = Spec_chunk_t * DHt;
     constexpr uint32_t mask_chunk_tiles = PNHt * Sk_chunk_t;
-
-    constexpr bool is_dram = true;
+    constexpr uint32_t spec_mask_chunk_tiles = PNHt * Spec_chunk_t;
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -180,6 +244,99 @@ void kernel_main() {
     const InterleavedAddrGenFast<is_dram> mask_reader = {
         .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
 
+    // Read Speculative chunks to speculate
+    if (do_speculative_compute) {
+        uint32_t speculative_start_offset1 = speculative_height_dim_start_tile_offset1 *
+                                             DHt;  // the first speculative chunk reads from the start of the seqlen
+        uint32_t speculative_start_offset2 = speculative_height_dim_start_tile_offset2 * DHt;
+        for (uint32_t cur_head = cur_head_group * num_heads_per_core;
+             cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
+             ++cur_head) {
+            // Batch and head level offset
+            const uint32_t mask_batch_offset = (cur_batch % Bkv) * PNHt * St;
+            const uint32_t k_batch_offset = (cur_batch % Bkv) * num_kv_heads * St * DHt;
+            const uint32_t v_batch_offset = (cur_batch % Bkv) * num_kv_heads * St * DHt;
+            const uint32_t k_head_offset = cur_head * St * DHt;
+            const uint32_t v_head_offset = cur_head * St * DHt;
+
+            // Read first speculative chunk
+            {
+                //// Compute offset for mask
+                const uint32_t mask_chunk_offset = speculative_height_dim_start_tile_offset1 * Spec_chunk_t;
+                uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
+
+                //// Compute offset for K and V
+                const uint32_t k_chunk_offset = speculative_start_offset1;
+                const uint32_t v_chunk_offset = speculative_start_offset1;
+                uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
+                uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
+
+                read_kv_mask_chunks<
+                    DHt,
+                    Spec_chunk_t,
+                    barrier_threshold,
+                    spec_chunk_tiles,
+                    spec_mask_chunk_tiles,
+                    mask_tile_bytes,
+                    PNHt,
+                    use_attention_mask,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_mask_in>(
+                    0,  // read one chunk only
+                    1,  // read one chunk only
+                    k_start_tile_id,
+                    v_start_tile_id,
+                    mask_start_tile_id,
+                    k_reader,
+                    v_reader,
+                    mask_reader,
+                    k_tile_bytes,
+                    v_tile_bytes,
+                    St);
+            }
+
+            // Read last speculative chunk
+            {
+                //// Compute offset for mask
+                const uint32_t mask_chunk_offset = speculative_height_dim_start_tile_offset2 * Spec_chunk_t;
+                uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
+
+                //// Compute offset for K and V
+                const uint32_t k_chunk_offset = speculative_start_offset2;
+                const uint32_t v_chunk_offset = speculative_start_offset2;
+                uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
+                uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
+
+                read_kv_mask_chunks<
+                    DHt,
+                    Spec_chunk_t,
+                    barrier_threshold,
+                    spec_chunk_tiles,
+                    spec_mask_chunk_tiles,
+                    mask_tile_bytes,
+                    PNHt,
+                    use_attention_mask,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_mask_in>(
+                    0,  // read one chunk only
+                    1,  // read one chunk only
+                    k_start_tile_id,
+                    v_start_tile_id,
+                    mask_start_tile_id,
+                    k_reader,
+                    v_reader,
+                    mask_reader,
+                    k_tile_bytes,
+                    v_tile_bytes,
+                    St);
+            }
+        }
+    }
+
+    // Read Non-speculative chunks to compute
+    uint32_t non_speculative_start_offset = non_spec_height_dim_start_tile_offset * DHt;
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
@@ -220,7 +377,7 @@ void kernel_main() {
                         mask_tile_bytes,
                         barrier_threshold,
                         PNHt,
-                        Sk_chunk_t>(PSt, mask_start_tile_id, mask_reader);
+                        Sk_chunk_t>(St, mask_start_tile_id, mask_reader);
                 }
 
                 // Read V chunk in row major order, write in row-major order
@@ -258,8 +415,8 @@ void kernel_main() {
             // Then, read K, V, Mask k_chunk_tiles at a time
             const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t * DHt;
             const uint32_t v_chunk_offset = k_chunk_start * Sk_chunk_t * DHt;
-            uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
-            uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
+            uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset + non_speculative_start_offset;
+            uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset + non_speculative_start_offset;
 
             read_kv_mask_chunks<
                 DHt,
@@ -283,7 +440,63 @@ void kernel_main() {
                 mask_reader,
                 k_tile_bytes,
                 v_tile_bytes,
-                PSt);
+                St);
+        }
+    }
+
+    // if do verification, we wait for semaphore to know that ground truth output and speculative output are written to
+    // output tensor memory assume output core also does verification
+    if (is_output_core) {
+        volatile tt_l1_ptr uint32_t* output_semaphore_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_semaphore_addr);
+        // num signals to wait is the 2*num_reducer_cores (1 signal for speculative and 1 for ground truth per head)
+        DPRINT << "waiting for output done semaphore \n";
+        noc_semaphore_wait(output_semaphore_addr_ptr, 2 * (num_kv_heads / num_heads_per_core));
+        DPRINT << "got output done semaphore with value " << *output_semaphore_addr_ptr << "\n";
+
+        // ground truth output and speculative output have the same shape and format as input q
+        if constexpr (is_output_sharded) {
+            ASSERT(false);  // TODO: implement sharded output
+        } else {
+            // read ground truth output
+            {
+                const InterleavedAddrGenFast<is_dram> out_reader = {
+                    .bank_base_address = out_addr, .page_size = q_tile_bytes, .data_format = q_data_format};
+                uint32_t q_tile_id = q_batch_offset;
+                cb_reserve_back(cb_q_in, q_chunk_tiles);
+                uint32_t q_write_ptr = get_write_ptr(cb_q_in);
+                for (uint32_t tile = 0; tile < q_chunk_tiles; ++tile) {
+                    noc_async_read_tile(q_tile_id, out_reader, q_write_ptr);
+                    q_tile_id += 1;
+                    q_write_ptr += q_tile_bytes;
+                    if (++barrier_count == barrier_threshold) {
+                        noc_async_read_barrier();
+                        barrier_count = 0;
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_q_in, q_chunk_tiles);
+            }
+
+            // read speculative output
+            {
+                const InterleavedAddrGenFast<is_dram> out_spec_reader = {
+                    .bank_base_address = out_spec_addr, .page_size = q_tile_bytes, .data_format = q_data_format};
+                uint32_t q_tile_id = q_batch_offset;
+                cb_reserve_back(cb_q_in, q_chunk_tiles);
+                uint32_t q_write_ptr = get_write_ptr(cb_q_in);
+                for (uint32_t tile = 0; tile < q_chunk_tiles; ++tile) {
+                    noc_async_read_tile(q_tile_id, out_spec_reader, q_write_ptr);
+                    q_tile_id += 1;
+                    q_write_ptr += q_tile_bytes;
+                    if (++barrier_count == barrier_threshold) {
+                        noc_async_read_barrier();
+                        barrier_count = 0;
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_q_in, q_chunk_tiles);
+            }
         }
     }
 }

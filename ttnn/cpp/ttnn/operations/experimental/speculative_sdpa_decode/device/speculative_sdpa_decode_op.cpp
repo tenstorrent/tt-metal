@@ -2,19 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sdpa_decode_op.hpp"
+#include "speculative_sdpa_decode_op.hpp"
 
-#include "sdpa_decode_program_factory.hpp"
+#include "speculative_sdpa_decode_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::experimental::speculative_execution {
 
-void ScaledDotProductAttentionDecode::validate(
+void SpeculativeScaledDotProductAttentionDecode::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");
+
+    // non-causal mode and paged attention are not supported yet
+    TT_FATAL(this->is_causal, "Non-causal mode is not supported yet");
+    TT_FATAL(!this->paged_attention, "Paged attention is not supported yet");
 
     for (auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
@@ -200,16 +204,80 @@ void ScaledDotProductAttentionDecode::validate(
             q_shape_unpadded[2],
             k_shape[1]);
     }
+
+    TT_FATAL(
+        q_shape_unpadded[2] <= 32, "Speculative flash decode only supports <= 32 q heads, got {}", q_shape_unpadded[2]);
+
+    if (this->ccl_enabled) {
+        TT_FATAL(
+            optional_input_tensors.at(3).has_value() && optional_input_tensors.at(4).has_value(),
+            "Must have priority and other priority tensors for ccl enabled");
+        TT_FATAL(this->semaphore.has_value(), "Must have semaphore for ccl enabled");
+        TT_FATAL(!output_mem_config.is_sharded(), "Sharded output not supported for ccl enabled");
+    }
+
+    if (optional_input_tensors.at(3).has_value()) {
+        const auto B = q_shape[1];
+        const auto& priority_tensor = optional_input_tensors.at(3).value();
+        TT_FATAL(
+            priority_tensor.get_dtype() == DataType::INT32,
+            "Expect priority tensor to be INT32, got {}",
+            priority_tensor.get_dtype());
+        TT_FATAL(
+            priority_tensor.get_layout() == Layout::TILE,
+            "Expect priority tensor to be TILE_LAYOUT, got {}",
+            priority_tensor.get_layout());
+        const auto priority_shape = priority_tensor.get_logical_shape();
+        ;
+        TT_FATAL(
+            (priority_shape[0] == 1) && (priority_shape[1] == 1) && (priority_shape[2] == 32) &&
+                (priority_shape[3] == 32),
+            "Expect priority tensor to be [1, 1, B, 32], got {}",
+            priority_shape);
+    }
+    if (optional_input_tensors.at(4).has_value()) {
+        const auto B = q_shape[1];
+        const auto& other_priority_tensor = optional_input_tensors.at(4).value();
+        TT_FATAL(
+            other_priority_tensor.get_dtype() == DataType::INT32,
+            "Expect priority tensor to be INT32, got {}",
+            other_priority_tensor.get_dtype());
+        TT_FATAL(
+            other_priority_tensor.get_layout() == Layout::TILE,
+            "Expect priority tensor to be TILE_LAYOUT, got {}",
+            other_priority_tensor.get_layout());
+        const auto other_priority_shape = other_priority_tensor.get_logical_shape();
+        ;
+        TT_FATAL(
+            (other_priority_shape[0] == 1) && (other_priority_shape[1] == 1) && (other_priority_shape[2] == 32) &&
+                (other_priority_shape[3] == 32),
+            "Expect other priority tensor to be [1, 1, B, 32], got {}",
+            other_priority_shape);
+    }
 }
 
-std::vector<TensorSpec> ScaledDotProductAttentionDecode::compute_output_specs(
+std::vector<TensorSpec> SpeculativeScaledDotProductAttentionDecode::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     auto& input = input_tensors.at(0);
-    return {TensorSpec(
-        input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+    auto full_output = TensorSpec(
+        input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
+    auto speculated_output = TensorSpec(
+        input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
+
+    auto batch_size = input.get_logical_shape()[1];
+    ttnn::Shape spec_stat_shape{1, 1, batch_size, 1};
+    MemoryConfig stat_mem_cfg = MemoryConfig{
+        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        .buffer_type = BufferType::DRAM,
+        .shard_spec = std::nullopt};
+    auto l2_dist_tensor =
+        TensorSpec(spec_stat_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), stat_mem_cfg));
+    auto l2_norm_tensor =
+        TensorSpec(spec_stat_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), stat_mem_cfg));
+    return {full_output, speculated_output, l2_dist_tensor, l2_norm_tensor};
 }
 
-operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
+operation::ProgramWithCallbacks SpeculativeScaledDotProductAttentionDecode::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -220,37 +288,68 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
     auto& cur_pos_tensor = optional_input_tensors.at(0);
     auto& page_table_tensor = optional_input_tensors.at(1);
     auto& attn_mask = optional_input_tensors.at(2);
+    auto& priority_tensor = optional_input_tensors.at(3);
+    auto& other_priority_tensor = optional_input_tensors.at(4);
 
-    auto& output_tensor = output_tensors.at(0);
+    auto& full_output_tensor = output_tensors.at(0);
+    auto& speculated_output_tensor = output_tensors.at(1);
+    auto& l2_dist_tensor = output_tensors.at(2);
+    auto& l2_norm_tensor = output_tensors.at(3);
 
+    // set default values for scale, lambda if not provided
     auto scale = this->scale;
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_padded_shape()[-1]));
     }
 
-    return detail::sdpa_decode_multi_core(
+    auto lambda = this->lambda_;
+    if (not lambda.has_value()) {
+        lambda = 0.2f;
+    }
+
+    // speculative_chunk_size should be the same as k_chunk_size
+    uint32_t speculative_chunk_size = this->k_chunk_size;
+
+    return detail::speculative_sdpa_decode_multi_core(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
         cur_pos_tensor,
         page_table_tensor,
         attn_mask,
-        output_tensor,
+        priority_tensor,
+        other_priority_tensor,
+        full_output_tensor,
+        speculated_output_tensor,
+        l2_dist_tensor,
+        l2_norm_tensor,
         this->is_causal,
         this->cur_pos,
         scale,
+        lambda,
         this->compute_kernel_config,
         this->program_config,
         this->k_chunk_size,
-        this->share_cache);
+        speculative_chunk_size,
+        this->share_cache,
+        // ccl related
+        this->ccl_enabled,
+        this->num_devices,
+        this->device_index,
+        this->topology,
+        this->semaphore,
+        this->forward_device,
+        this->backward_device);
 }
 
-operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
+operation::Hash SpeculativeScaledDotProductAttentionDecode::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     bool has_cur_pos = optional_input_tensors.at(0).has_value();
     bool has_attn_mask = optional_input_tensors.at(2).has_value();
-    return operation::hash_operation<ScaledDotProductAttentionDecode>(
+    bool has_priority = optional_input_tensors.at(3).has_value();
+    return operation::hash_operation<SpeculativeScaledDotProductAttentionDecode>(
+        this->lambda_,
         this->scale,
         this->output_mem_config,
         this->program_config,
@@ -258,11 +357,17 @@ operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
         this->k_chunk_size,
         this->paged_attention,
         this->is_causal,
+        this->ccl_enabled,
+        this->num_devices,
+        this->device_index,
+        this->topology,
+        this->semaphore,
+        this->forward_device,
+        this->backward_device,
         has_attn_mask,
         has_cur_pos,
-        input_tensors,
-        // Hash on page_table_tensor to properly size page table CB
-        optional_input_tensors.at(1));
+        has_priority,
+        input_tensors);
 }
 
-}  // namespace ttnn::operations::transformer
+}  // namespace ttnn::operations::experimental::speculative_execution

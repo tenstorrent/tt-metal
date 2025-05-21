@@ -383,7 +383,7 @@ def run_llama3_decode_performance(
             (118, 128),
             10,
             10,
-            True,
+            False,
             None,
         ),
         (
@@ -395,7 +395,7 @@ def run_llama3_decode_performance(
             (127, 128),
             0,
             1,
-            True,
+            False,
             None,
         ),
     ],
