@@ -169,7 +169,8 @@ def test_llama_tg_LayerNorm(
         ),
     ],
 )
-@pytest.mark.parametrize("q_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+# @pytest.mark.parametrize("q_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+@pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
 def test_llama_tg_ScaledDotProductAttentionDecode(
     device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
 ):

@@ -143,8 +143,8 @@ void MAIN {
         cb_reserve_back(cb_q_in, q_chunk_tiles);
         tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
         cb_push_back(cb_q_in, q_chunk_tiles);
-        cb_pop_front(cb_q_rm, q_chunk_tiles);
         mm_init(cb_q_in, cb_k_in, cb_out_final);
+        cb_pop_front(cb_q_rm, q_chunk_tiles);
     }
 
 #ifdef DYNAMIC_CHUNK_SIZE
