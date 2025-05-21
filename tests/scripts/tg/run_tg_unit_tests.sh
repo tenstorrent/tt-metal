@@ -72,7 +72,7 @@ run_tg_tests() {
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     # TODO: Fix bug and enable Push mode https://github.com/tenstorrent/tt-metal/issues/19999
     #       TG + push mode + fast dispatch has bug at tt::tt_metal::detail::CreateDevices(ids)
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DPushFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricMuxFixture.*"
     TESTS=(
         # Unicast tests
