@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <device_impl.hpp>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <map>
@@ -12,6 +11,7 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
+#include "device/device_impl.hpp"
 #include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
