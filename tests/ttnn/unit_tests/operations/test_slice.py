@@ -1077,3 +1077,34 @@ def test_ttnn_slice_whisper(
 
         ttnn_output = ttnn.to_torch(ttnn_output)
         assert_with_pcc(torch_output, ttnn_output, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, start, end, step, layout",
+    (
+        ([4, 4], 1, [0, 1], [1, 2], 1, ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 28, 56, 96], 2, [0, 0, 0, 0], [1, 16, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),
+        ([10], 1, [2], [7], 1, ttnn.ROW_MAJOR_LAYOUT),
+    ),
+)
+def test_slice_tensor_args(input_shape, dim, start, end, step, layout, device):
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    torch_start_tensor = torch.tensor(start)
+    torch_end_tensor = torch.tensor(end)
+
+    slices = tuple(slice(start[i], end[i]) for i in range(len(start)))
+
+    # Slice the tensor using the slices for each dimension
+    torch_output_tensor = torch_input[slices]
+
+    ttnn_start_tensor = ttnn.from_torch(torch_start_tensor)
+    ttnn_end_tensor = ttnn.from_torch(torch_end_tensor)
+
+    ttnn_tensor = ttnn.from_torch(torch_input, layout=layout, dtype=ttnn.bfloat16, device=device)
+
+    ttnn_output = ttnn.slice(ttnn_tensor, ttnn_start_tensor, ttnn_end_tensor)
+
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
