@@ -4,7 +4,7 @@
 
 #include "moreh_mean_pybind.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 
 namespace ttnn::operations::moreh::moreh_mean {

@@ -92,8 +92,6 @@ def run(
     *,
     device,
 ):
-    device.enable_async(False)
-
     shape = shard_specs["shape"]
     shard_shape = shard_specs["shard_shape"]
 

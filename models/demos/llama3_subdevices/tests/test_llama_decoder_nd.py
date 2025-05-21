@@ -54,7 +54,6 @@ def test_llama_decoder_same(
 ):
     dtype = ttnn.bfloat8_b
     seqlen = 1
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=True)
     model_args.n_layers = 1

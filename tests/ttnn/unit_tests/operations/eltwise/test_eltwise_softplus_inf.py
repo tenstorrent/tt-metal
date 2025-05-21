@@ -11,7 +11,6 @@ import traceback
 
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.utility_functions import skip_for_grayskull
 
 
 def run_eltwise_softplus_tests(
@@ -67,7 +66,6 @@ test_sweep_args = [
 ]
 
 
-@skip_for_grayskull("Softplus is not available in Grayskull")
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, beta, threshold, data_seed",
     (test_sweep_args),

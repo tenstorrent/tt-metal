@@ -6,25 +6,28 @@
 
 #include "compute_kernel_api/transpose_wh.h"
 
-constexpr uint32_t ONE_TILE = 1;
+constexpr uint32_t MAX_BATCH_SIZE = 8;
 
+template <uint32_t BatchSize = 1>
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
-    cb_wait_front(cb_in, ONE_TILE);
+    cb_wait_front(cb_in, BatchSize);
 
     tile_regs_acquire();
     tile_regs_wait();
 
-    transpose_wh_init_short(cb_in);
-    transpose_wh_tile(cb_in, 0, 0);
+    cb_reserve_back(cb_out, BatchSize);
 
-    cb_reserve_back(cb_out, ONE_TILE);
-    pack_tile(0, cb_out);
+    transpose_wh_init_short(cb_in);
+    for (uint32_t i = 0; i < BatchSize; i++) {
+        transpose_wh_tile(cb_in, i, i);
+        pack_tile(i, cb_out);
+    }
 
     tile_regs_commit();
     tile_regs_release();
 
-    cb_push_back(cb_out, ONE_TILE);
-    cb_pop_front(cb_in, ONE_TILE);
+    cb_push_back(cb_out, BatchSize);
+    cb_pop_front(cb_in, BatchSize);
 }
 
 namespace NAMESPACE {
@@ -49,20 +52,32 @@ void MAIN {
 
     constexpr uint32_t output_num_tiles_width = input0_num_tiles_width + input1_num_tiles_width;
 
-    // TODO: Add blocking on transposes to see if it improves performance
     for (uint32_t i = 0; i < input0_num_tiles_height; i++) {
         reconfig_data_format_srca(input0_cb);
         pack_reconfig_data_format(input0_transpose_cb);
-        for (uint32_t j = 0; j < input0_num_tiles_width; j++) {
-            transpose(input0_cb, input0_transpose_cb);
+        if constexpr (input0_num_tiles_width <= MAX_BATCH_SIZE) {
+            transpose<input0_num_tiles_width>(input0_cb, input0_transpose_cb);
+        } else {
+            for (uint32_t j = 0; j < input0_num_tiles_width; j++) {
+                transpose(input0_cb, input0_transpose_cb);
+            }
         }
-        for (uint32_t j = 0; j < input1_num_tiles_width; j++) {
-            transpose(input1_cb, input1_transpose_cb);
+        if constexpr (input1_num_tiles_width <= MAX_BATCH_SIZE) {
+            transpose<input1_num_tiles_width>(input1_cb, input1_transpose_cb);
+        } else {
+            for (uint32_t j = 0; j < input1_num_tiles_width; j++) {
+                transpose(input1_cb, input1_transpose_cb);
+            }
         }
+
         reconfig_data_format_srca(concat_cb);
         pack_reconfig_data_format(output_transpose_cb);
-        for (uint32_t j = 0; j < output_num_tiles_width; j++) {
-            transpose(concat_cb, output_transpose_cb);
+        if constexpr (output_num_tiles_width <= MAX_BATCH_SIZE) {
+            transpose<output_num_tiles_width>(concat_cb, output_transpose_cb);
+        } else {
+            for (uint32_t j = 0; j < output_num_tiles_width; j++) {
+                transpose(concat_cb, output_transpose_cb);
+            }
         }
     }
 }

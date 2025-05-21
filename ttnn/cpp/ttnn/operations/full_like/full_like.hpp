@@ -21,5 +21,5 @@ struct FullLike {
 
 namespace ttnn {
 constexpr auto moreh_full_like =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_full_like", ttnn::operations::full_like::FullLike>();
+    ttnn::register_operation<"ttnn::moreh_full_like", ttnn::operations::full_like::FullLike>();
 }  // namespace ttnn

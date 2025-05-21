@@ -74,6 +74,10 @@ static fs::path get_relative_file_path_from_config(const fs::path& file_path) {
         file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_kernel_dir(), file_path);
     }
 
+    if (!fs::exists(file_path_relative_to_dir)) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_system_kernel_dir(), file_path);
+    }
+
     return file_path_relative_to_dir;
 }
 

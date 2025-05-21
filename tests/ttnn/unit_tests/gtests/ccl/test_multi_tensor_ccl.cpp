@@ -62,7 +62,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AllGather) {
         ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
-        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec, devices[dev_idx]));
+        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(devices[dev_idx]));
     }
     auto all_gathered =
         ttnn::all_gather(tensors, 0, 1, std::nullopt, std::nullopt, std::nullopt, ttnn::ccl::Topology::Linear);
@@ -84,7 +84,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AllGatherAsync) {
         ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
-        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec, devices[dev_idx]));
+        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(devices[dev_idx]));
     }
     auto semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
     auto all_gathered = ttnn::experimental::all_gather_async(
@@ -107,7 +107,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, ReduceScatter) {
         ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(1)));
-        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec, devices[dev_idx]));
+        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(devices[dev_idx]));
     }
     auto reduced = ttnn::reduce_scatter(
         tensors, 3, ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Linear);
@@ -129,7 +129,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AllReduce) {
         ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
     for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
         std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(1)));
-        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec, devices[dev_idx]));
+        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(devices[dev_idx]));
     }
     auto reduced = ttnn::experimental::all_reduce(
         tensors, ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Linear);

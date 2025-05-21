@@ -42,6 +42,7 @@ FORCE_INLINE void run_loop_iteration(
         }
         for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
             while (channel_sync_addrs[i]->bytes_sent != 0) {
+                invalidate_l1_cache();
             }
         }
     } else {
@@ -53,6 +54,7 @@ FORCE_INLINE void run_loop_iteration(
         }
         for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
             while (channel_sync_addrs[i]->bytes_sent != 0) {
+                invalidate_l1_cache();
             }
         }
     }

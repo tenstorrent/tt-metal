@@ -36,13 +36,11 @@ def reset_device_and_replay_binary(reset_device, device, binary_data):
 
 # Simple bringup single op test to see if everything uses host APIs and if it can be light-metal traced.
 @pytest.mark.parametrize("shape", [[1, 3, 1024, 1024], (1, 1, 512, 512), (1, 3, 32, 32)])
-@pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("blocking", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}])
-def test_single_op_test_light_metal_capture(device, reset_device, shape, enable_async, blocking, tmp_path):
+def test_single_op_test_light_metal_capture(device, reset_device, shape, blocking, tmp_path):
     ttnn.light_metal_begin_capture()
 
-    device.enable_async(enable_async)
     device.enable_program_cache()
 
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
@@ -61,13 +59,11 @@ def test_single_op_test_light_metal_capture(device, reset_device, shape, enable_
 
 # Simple bringup, multiple ops in chain
 @pytest.mark.parametrize("shape", [[1, 3, 1024, 1024], (1, 1, 512, 512), (1, 3, 32, 32)])
-@pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("blocking", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}])
-def test_chain_op_test_light_metal_capture(device, reset_device, shape, enable_async, blocking, tmp_path):
+def test_chain_op_test_light_metal_capture(device, reset_device, shape, blocking, tmp_path):
     ttnn.light_metal_begin_capture()
 
-    device.enable_async(enable_async)
     device.enable_program_cache()
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
     input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)

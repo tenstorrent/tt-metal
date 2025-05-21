@@ -49,13 +49,4 @@ auto MoeOperation::invoke(
         std::move(optional_output_tensor));
 }
 
-std::vector<Tensor> MoeOperation::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& expert_mask_tensor = input_tensors.at(1);
-    const auto& topk_mask_tensor = input_tensors.at(2);
-    return {Tensor(
-        tt::tt_metal::operation::get_workers_for_op_output({input_tensor, expert_mask_tensor, topk_mask_tensor}))};
-}
-
 }  // namespace ttnn::operations::reduction

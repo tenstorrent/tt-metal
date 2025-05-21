@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor_layout.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 namespace tt::tt_metal {
 
@@ -33,14 +33,14 @@ Alignment legacyShapeToAlignment(
     }
 
     // SHARDED
-    if (memory_config.shard_spec.has_value()) {
+    if (memory_config.shard_spec().has_value()) {
         TT_FATAL(
             alignment_can_be_2D,
             "Tensor with shape {} ({}) cannot be sharded because alignment will have rank greater than 2!",
             logical_shape,
             legacy_padded_shape);
         if (page_config.get_layout() == Layout::ROW_MAJOR) {
-            const auto& shard_spec = memory_config.shard_spec.value();
+            const auto& shard_spec = memory_config.shard_spec().value();
             if (shard_spec.physical_shard_shape.has_value()) {
                 return Alignment{shard_spec.physical_shard_shape.value()[1]};
             }
@@ -98,7 +98,7 @@ void validate_alignment(const TensorLayout& tensor_layout) {
 void validate_shard_spec(const TensorLayout& tensor_layout) {
     const auto& memory_config = tensor_layout.get_memory_config();
     const auto& layout = tensor_layout.get_layout();
-    if (memory_config.is_sharded() and memory_config.shard_spec.has_value() and layout == Layout::TILE) {
+    if (memory_config.is_sharded() and memory_config.shard_spec().has_value() and layout == Layout::TILE) {
         const auto& physical_shard_shape = tensor_layout.get_physical_shard_shape();
         const auto& tile_shape = tensor_layout.get_tile().get_tile_shape();
         // TODO (issue #17060): Flip to TT_FATAL
@@ -167,7 +167,8 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
     }
 
     TT_FATAL(
-        memory_config_.shard_spec.has_value(), "MemoryConfig must have Shard Spec specified for sharded memory layout");
+        memory_config_.shard_spec().has_value(),
+        "MemoryConfig must have Shard Spec specified for sharded memory layout");
 
     const Shape2D physical_size = compute_physical_shape(shape);
     const Shape2D page_shape = compute_page_shape(physical_size);
@@ -186,7 +187,7 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
     const auto height_in_pages = physical_size.height() / page_shape.height();
     const std::array<uint32_t, 2> tensor2d_shape_in_pages{height_in_pages, width_in_pages};
 
-    auto shard_spec = memory_config_.shard_spec.value();
+    auto shard_spec = memory_config_.shard_spec().value();
 
     switch (shard_spec.mode) {
         case ShardMode::PHYSICAL: break;
@@ -234,18 +235,19 @@ size_t TensorLayout::compute_page_size_bytes(const Shape2D& page_size) const {
 
 Shape2D TensorLayout::get_logical_shard_shape() const {
     TT_FATAL(
-        memory_config_.shard_spec.has_value(), "Shard spec must have value for TensorLayout::get_logical_shard_shape!");
+        memory_config_.shard_spec().has_value(),
+        "Shard spec must have value for TensorLayout::get_logical_shard_shape!");
 
     // In physical mode, shape in shard spec is logical shard shape if no padding
     // Otherwise, not possible to infer logical shard shape in general
-    return Shape2D(memory_config_.shard_spec.value().shape);
+    return Shape2D(memory_config_.shard_spec().value().shape);
 }
 
 Shape2D TensorLayout::get_physical_shard_shape() const {
     TT_FATAL(
-        memory_config_.shard_spec.has_value(),
+        memory_config_.shard_spec().has_value(),
         "Shard spec must have value for TensorLayout::get_physical_shard_shape!");
-    const auto& shard_spec = memory_config_.shard_spec.value();
+    const auto& shard_spec = memory_config_.shard_spec().value();
 
     auto compute_physical_shard_shape_for_logical_mode = [&]() -> Shape2D {
         // TODO: If physical_shard_shape is provided, alignment_ == physical_shard_shape is guaranteed (should we store
@@ -297,7 +299,7 @@ Shape2D TensorLayout::compute_physical_shape(const ttnn::Shape& shape) const {
     size_t height = 1;
 
     // LOGICAL SHARDING
-    if (memory_config_.shard_spec.has_value() and memory_config_.shard_spec.value().mode == ShardMode::LOGICAL) {
+    if (memory_config_.shard_spec().has_value() and memory_config_.shard_spec().value().mode == ShardMode::LOGICAL) {
         // Iterate dims in reverse order
         for (int i = -1; i >= -rank; --i) {
             auto& dim = i == -1 ? width : height;
@@ -357,7 +359,7 @@ Shape2D TensorLayout::compute_physical_shape(const ttnn::Shape& shape) const {
 
 Shape2D TensorLayout::compute_page_shape(const Shape2D& physical_size) const {
     std::optional<Shape2D> physical_shard_shape = std::nullopt;
-    if (memory_config_.shard_spec.has_value()) {
+    if (memory_config_.shard_spec().has_value()) {
         physical_shard_shape = get_physical_shard_shape();
     }
 

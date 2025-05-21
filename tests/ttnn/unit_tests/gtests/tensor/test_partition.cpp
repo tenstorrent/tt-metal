@@ -3,18 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <xtensor/containers/xarray.hpp>
+#include <xtensor/generators/xbuilder.hpp>
+#include <xtensor/utils/xexception.hpp>
+#include <xtensor/core/xiterator.hpp>
+#include <xtensor/core/xlayout.hpp>
+#include <xtensor/core/xmath.hpp>
+#include <xtensor/containers/xstorage.hpp>
+#include <xtensor/core/xtensor_forward.hpp>
+#include <xtensor/utils/xtensor_simd.hpp>
+#include <xtensor/utils/xutils.hpp>
 
 #include <cstdint>
-#include <xtensor/xarray.hpp>
-#include <xtensor/xbuilder.hpp>
-#include <xtensor/xexception.hpp>
-#include <xtensor/xiterator.hpp>
-#include <xtensor/xlayout.hpp>
-#include <xtensor/xmath.hpp>
-#include <xtensor/xstorage.hpp>
-#include <xtensor/xtensor_forward.hpp>
-#include <xtensor/xtensor_simd.hpp>
-#include <xtensor/xutils.hpp>
 #include <tuple>
 #include <vector>
 #include <sys/mman.h>

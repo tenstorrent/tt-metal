@@ -16,7 +16,7 @@ class ResetUtil:
         self.arch = arch
         self.command = os.getenv("TT_SMI_RESET_COMMAND")
         self.args = []
-        if arch not in ["grayskull", "wormhole_b0"]:
+        if arch not in ["grayskull", "wormhole_b0", "blackhole"]:
             raise Exception(f"SWEEPS: Unsupported Architecture for TT-SMI Reset: {arch}")
         if self.command is not None:
             return
@@ -53,6 +53,8 @@ class ResetUtil:
                                 raise Exception(f"SWEEPS: TT-SMI Reset Failed to Find Card ID.")
                             args.append(str(card_id[0]))
                         subprocess.run(["rm", "-f", ".reset.json"])
+                elif arch == "blackhole":
+                    args = ["-r", "0"]
                 smi_process = subprocess.run([executable, *args])
                 if smi_process.returncode == 0:
                     self.command = executable

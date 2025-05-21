@@ -156,7 +156,7 @@ ttnn::Tensor SliceOperation::invoke(
             actual_shape,
             input_tensor.dtype(),
             input_tensor.layout(),
-            input_tensor.device(),
+            input_tensor.mesh_device(),
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
 

@@ -4,7 +4,7 @@
 
 #include <pybind11/pybind11.h>
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_cumsum/moreh_cumsum.hpp"
 
 namespace py = pybind11;

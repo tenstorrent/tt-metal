@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "conv_transpose2d_pybind.hpp"
 #include "conv_transpose2d.hpp"
+#include "prepare_conv_transpose2d_weights.hpp"
 
 namespace py = pybind11;
 
@@ -24,69 +25,54 @@ void py_bind_conv_transpose2d(py::module& module) {
         fractionally-strided convolution or a deconvolution
 
         The input tensor is expected in the following format (N x H x W x C) **differs from PyTorch** where:
-            - N is the batch size
-            - H is the height of the input
-            - W is the width of the input
-            - C is the number of channels in the input
+
+        - N is the batch size
+        - H is the height of the input
+        - W is the width of the input
+        - C is the number of channels in the input
 
         The weight tensor is expected in the following format (C x O / G x K_H x K_W).
         The bias tensor is optional and expected in the following format (O / G ).
         Where:
-            - C is the number of input channels
-            - O is the number of output channels
-            - G is the number of groups
-            - K_H is the height of the kernel
-            - K_W is the width of the kernel
 
-       The shape of the output tensor is given by the following equation :
-            - H_out = (H_in - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1
-            - W_out = (W_in - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1
+        - C is the number of input channels
+        - O is the number of output channels
+        - G is the number of groups
+        - K_H is the height of the kernel
+        - K_W is the width of the kernel
 
-        Keyword Args:
-            input_tensor   (ttnn.Tensor): the input tensor.
-            weight_tensor  (ttnn.Tensor): the weight tensor.
-            device         (ttnn.Device): the device on which to run the operation.
-            in_channels    (int): the number of input channels.
-            out_channels   (int): the number of output channels.
-            batch_size     (int): the batch size.
-            input_height   (int): the input height.
-            input_width    (int): the input width.
-            kernel_size    (list[int]): the kernel size.
-            stride         (list[int]): the stride of the forward Conv2d. Actually corresponds to the dilation of the input_tensor
-            padding        (list[int]): the padding of the forward Conv2d. Increasing padding reduces the output size.
-            output_padding (list[int]): the output padding. Additional padding used when stride > 1, to specify the exact output size.
-            dilation       (list[int]): kernel dilation.
-            groups         (int): the number of groups for grouped convolution.
-            bias_tensor    (ttnn.Tensor, optional): the bias tensor. Defaults to `None`.
-            conv_config    (ttnn.Conv2dConfig, optional): the configuration for the convolution operation. Defaults to `None`.
-            compute_config (ttnn.DeviceComputeKernelConfig, optional): the configuration for the compute kernel. Defaults to `None`.
-            memory_config  (ttnn.MemoryConfig, optional): the memory configuration of the output.
-            mirror_kernel  (bool): Set to true if the op should mirror the kernels along the height & width axes.
-            queue_id       (int): the queue id to use for the operation. Defaults to `0`.
+        The shape of the output tensor is given by the following equation :
 
-        Returns:
-            (ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor): the output tensor, the output height, the output width, & the on-device weight and the bias tensor.
+        - H_out = (H_in - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1
+        - W_out = (W_in - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1
 
-        Example:
-            >>> [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv_transpose2d(
-                    input_tensor=tt_input_tensor,
-                    weight_tensor=tt_weight_tensor,
-                    in_channels=input_channels,
-                    out_channels=output_channels,
-                    device=device,
-                    bias_tensor=tt_bias_tensor,
-                    kernel_size=(filter_height, filter_width),
-                    stride=(stride_h, stride_w),
-                    padding=(pad_h, pad_w),
-                    output_padding=(out_pad_h, out_pad_w),
-                    dilation=(dilation, dilation),
-                    batch_size=batch_size,
-                    input_height=input_height,
-                    input_width=input_width,
-                    conv_config=conv_config,
-                    compute_config=compute_config,
-                    groups=groups,
-                )
+        :param ttnn.Tensor input_tensor:  the input tensor.
+        :param ttnn.Tensor weight_tensor: the weight tensor.
+        :param ttnn.Tensor, None bias_tensor:   optional bias tensor. Default: None
+        :param ttnn.IDevice device:  the device to use.
+        :param int in_channels:  number of input channels.
+        :param int out_channels:  number of output channels.
+        :param int batch_size:  batch size.
+        :param int input_height:  height of the input tensor.
+        :param int input_width:  width of the input tensor.
+        :param tuple[int  , int] kernel_size: size of the convolving kernel.
+        :param tuple[int, int] stride: stride of the cross-correlation.
+        :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+        :param tuple[int, int] dilation: spacing between kernel elements.
+        :param int groups:  number of blocked connections from input channels to output channels.
+        :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
+        :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
+        :param bool mirror_kernel: Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored.
+        :param int queue_id: the queue id to use for the operation. Default: `0`.
+        :param bool return_output_dim:  If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,
+        :param bool return_weights_and_bias:  If true, the op also returns the preprocessed weight and bias on device .
+
+        :return: The output tensor, output height and width, and the preprocessed weights and bias.
+
+        :rtype: [ttnn.Tensor]: the output tensor, when return_output_dim = False and return_weights_and_bias = False
+        :rtype: [ttnn.Tensor, Tuple[int, int]]: the output tensor, and it's height and width, if return_output_dim = True
+        :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height and width, if return_weights_and_bias = True
+        :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height and width, if return_output_dim = True and return_weights_and_bias = True
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv_transpose2d)& self,
@@ -109,6 +95,8 @@ void py_bind_conv_transpose2d(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
                bool mirror_kernel,
+               const bool return_output_dim,
+               const bool return_weights_and_bias,
                QueueId queue_id) -> Result {
                 return self(
                     queue_id,
@@ -130,7 +118,9 @@ void py_bind_conv_transpose2d(py::module& module) {
                     conv_config,
                     compute_config,
                     memory_config,
-                    mirror_kernel);
+                    mirror_kernel,
+                    return_output_dim,
+                    return_weights_and_bias);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -142,16 +132,18 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("input_height"),
             py::arg("input_width"),
             py::arg("kernel_size"),
-            py::arg("stride"),
-            py::arg("padding"),
-            py::arg("output_padding"),
-            py::arg("dilation"),
-            py::arg("groups"),
+            py::arg("stride") = std::array<uint32_t, 2>{1, 1},
+            py::arg("padding") = std::array<uint32_t, 2>{0, 0},
+            py::arg("output_padding") = std::array<uint32_t, 2>{0, 0},
+            py::arg("dilation") = std::array<uint32_t, 2>{1, 1},
+            py::arg("groups") = 1,
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("mirror_kernel") = true,
+            py::arg("return_output_dim") = false,
+            py::arg("return_weights_and_bias") = false,
             py::arg("queue_id") = DefaultQueueId},
 
         ttnn::pybind_overload_t{
@@ -175,6 +167,8 @@ void py_bind_conv_transpose2d(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
                bool mirror_kernel,
+               const bool return_output_dim,
+               const bool return_weights_and_bias,
                QueueId queue_id) -> Result {
                 return self(
                     queue_id,
@@ -196,7 +190,9 @@ void py_bind_conv_transpose2d(py::module& module) {
                     conv_config,
                     compute_config,
                     memory_config,
-                    mirror_kernel);
+                    mirror_kernel,
+                    return_output_dim,
+                    return_weights_and_bias);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -208,17 +204,109 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("input_height"),
             py::arg("input_width"),
             py::arg("kernel_size"),
-            py::arg("stride"),
-            py::arg("padding"),
-            py::arg("output_padding"),
-            py::arg("dilation"),
-            py::arg("groups"),
+            py::arg("stride") = std::array<uint32_t, 2>{1, 1},
+            py::arg("padding") = std::array<uint32_t, 2>{0, 0},
+            py::arg("output_padding") = std::array<uint32_t, 2>{0, 0},
+            py::arg("dilation") = std::array<uint32_t, 2>{1, 1},
+            py::arg("groups") = 1,
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("mirror_kernel") = true,
+            py::arg("return_output_dim") = false,
+            py::arg("return_weights_and_bias") = false,
             py::arg("queue_id") = DefaultQueueId});
+
+    module.def(
+        "prepare_conv_transpose2d_weights",
+        prepare_conv_transpose2d_weights<ttnn::IDevice>,
+        py::kw_only(),
+        py::arg("weight_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_layout"),
+        py::arg("weights_format"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("has_bias"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt,
+        py::arg("mirror_kernel") = true);
+
+    module.def(
+        "prepare_conv_transpose2d_weights",
+        prepare_conv_transpose2d_weights<ttnn::MeshDevice>,
+        py::kw_only(),
+        py::arg("weight_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_layout"),
+        py::arg("weights_format"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("has_bias"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt,
+        py::arg("mirror_kernel") = true);
+
+    module.def(
+        "prepare_conv_transpose2d_bias",
+        prepare_conv_transpose2d_bias<ttnn::IDevice>,
+        py::kw_only(),
+        py::arg("bias_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_layout"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt);
+
+    module.def(
+        "prepare_conv_transpose2d_bias",
+        prepare_conv_transpose2d_bias<ttnn::MeshDevice>,
+        py::kw_only(),
+        py::arg("bias_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("input_layout"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt,
+        py::arg("compute_config") = std::nullopt);
 }
 
 }  // namespace conv_transpose2d

@@ -9,7 +9,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_pcc,
 )
-from models.utility_functions import skip_for_grayskull, torch_random
+from models.utility_functions import torch_random
 from itertools import product as parameters
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -33,7 +33,7 @@ binary_fns = {
     "sub",
     "rsub",
     "mul",
-    "div",
+    "divide",
     "bias_gelu",
 }
 
@@ -106,7 +106,6 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
     return pt, tt
 
 
-@skip_for_grayskull("Possible accuracy issues with grayskull")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     (
@@ -135,7 +134,7 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
         parameters({"logaddexp", "logaddexp2"}, {floor_lhs_ceil_rhs_cos_post}),
         parameters({"ge", "lt", "le"}, {exp_floor_lhs_exp_rhs, log_lhs_sqrt_abs_post}),
         parameters({"logical_and", "logical_or", "logical_xor", "bias_gelu"}, {log_lhs_sqrt_abs_post}),
-        parameters({"div"}, {exp_post, tanh_post, exp2_post, expm1_post, i0_post, tan_post}),
+        parameters({"divide"}, {exp_post, tanh_post, exp2_post, expm1_post, i0_post, tan_post}),
         parameters({"sub"}, {log_post, log2_post, log10_post}),
         parameters({"ldexp"}, {erfinv_post, tan_post, floor_post, ceil_post}),
         parameters({"squared_difference"}, {erfinv_post, i0_post}),
@@ -149,7 +148,7 @@ def test_binary_scalar_ops(a_shape, b_shape, ttnn_fn, activations, device):
     lhs, rhs, post = ([getattr(ttnn.UnaryOpType, op) for op in ops] for ops in activations)
     golden_lhs, golden_rhs, golden_post = ((activation_fns[op] for op in ops) for ops in activations)
     # make 0 exclusive for rhs of div
-    min, max = (1, 0) if ttnn_fn == "div" else (0, 1)
+    min, max = (1, 0) if ttnn_fn == "divide" else (0, 1)
 
     a_pt, a_tt = rand_bf16_gen(a_shape, device)
     b_pt, b_tt = rand_bf16_gen(b_shape, device, min=min, max=max)
@@ -197,7 +196,7 @@ activation_with_param_fns = {
         (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
     ),
 )
-@pytest.mark.parametrize("ttnn_fn", ("add", "sub", "mul", "div"))
+@pytest.mark.parametrize("ttnn_fn", ("add", "sub", "mul", "divide"))
 @pytest.mark.parametrize(
     "post_activations",
     (
@@ -215,7 +214,7 @@ def test_binary_scalar_ops_with_unary_param(a_shape, b_shape, ttnn_fn, post_acti
     post = [(getattr(ttnn.UnaryOpType, op), param) for op, param in post_activations]
     golden_post = ((lambda x: activation_with_param_fns[op](x, param)) for op, param in post_activations)
     # make 0 exclusive for rhs of div
-    min, max = (1, 0) if ttnn_fn == "div" else (0, 1)
+    min, max = (1, 0) if ttnn_fn == "divide" else (0, 1)
 
     a_pt, a_tt = rand_bf16_gen(a_shape, device)
     b_pt, b_tt = rand_bf16_gen(b_shape, device, min=min, max=max)
@@ -496,7 +495,6 @@ def test_binary_sharded_core_grid(device, a_shape, b_shape, sharded_core_grid, m
     assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -512,7 +510,7 @@ def test_binary_sharded_core_grid(device, a_shape, b_shape, sharded_core_grid, m
         ttnn.add,
         ttnn.sub,
         ttnn.mul,
-        ttnn.div,
+        ttnn.divide,
         ttnn.rsub,
         ttnn.eq,
         ttnn.ne,
@@ -564,7 +562,6 @@ def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -580,7 +577,7 @@ def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
         ttnn.add,
         ttnn.sub,
         ttnn.mul,
-        ttnn.div,
+        ttnn.divide,
         ttnn.rsub,
         ttnn.eq,
         ttnn.ne,
@@ -640,7 +637,6 @@ def test_binary_sfpu_opt_out(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -695,7 +691,6 @@ def test_binary_sfpu_bitwise_ops(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -762,7 +757,7 @@ binary_inplace_fns = {
     "add_",
     "sub_",
     "mul_",
-    "div_",
+    "divide_",
     "rsub_",
     "gt_",
     "lt_",
@@ -811,14 +806,13 @@ binary_inplace_fns = {
         parameters({"mul_"}, {log_lhs_sqrt_abs_post}),
     ),
 )
-@skip_for_grayskull("Possible accuracy issues with grayskull")
 def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, device):
     torch.manual_seed(0)
 
     ttnn_op = getattr(ttnn, ttnn_fn)
     lhs, rhs, post = ([getattr(ttnn.UnaryOpType, op) for op in ops] for ops in activations)
     golden_lhs, golden_rhs, golden_post = ((activation_fns[op] for op in ops) for ops in activations)
-    min, max = (1, 0) if ttnn_fn == "div_" else (0, 1)
+    min, max = (1, 0) if ttnn_fn == "divide_" else (0, 1)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
     torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device, min=min, max=max)
@@ -930,7 +924,6 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= pcc
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -1010,7 +1003,7 @@ def test_inplace_binary_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
         "add_",
         "sub_",
         "mul_",
-        "div_",
+        "divide_",
         "rsub_",
         "gt_",
         "lt_",
@@ -1032,7 +1025,6 @@ def test_inplace_binary_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
         torch.Size([920, 1, 256]),
     ),
 )
-@skip_for_grayskull("Possible accuracy issues with grayskull")
 @pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
 def test_inplace_binary_with_scalar(a_shape, scalar, ttnn_fn, device):
     torch.manual_seed(0)
@@ -1083,7 +1075,6 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
         ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
@@ -1241,7 +1232,7 @@ def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, cor
         ttnn.add,
         ttnn.sub,
         ttnn.mul,
-        # ttnn.div,
+        # ttnn.divide,
         # ttnn.rsub,
         ttnn.eq,
         ttnn.ne,
@@ -1888,3 +1879,136 @@ def test_binary_sharded_row_major_layout(
     out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=False)
     out_tt_sharded = ttnn.to_torch(out_tt_sharded)
     torch.testing.assert_close(out_tt_sharded, out_pt)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        [[1, 1, 7, 7], [1, 1, 7, 7]],
+        [[1, 1, 71, 71], [1, 1, 71, 71]],
+        [[7, 71, 71, 7], [7, 71, 71, 7]],
+        [[1, 1, 7, 7], [1, 71, 7, 7]],
+        [[1, 71, 7, 7], [1, 1, 7, 7]],
+        [[71, 1, 7, 7], [1, 1, 7, 7]],
+        [[1, 1, 7, 7], [71, 1, 7, 7]],
+        [[1, 1, 7, 7], [7, 71, 7, 7]],
+        [[7, 71, 7, 7], [1, 1, 7, 7]],
+        [[920, 1, 256], [256]],
+        [[256], [920, 1, 256]],
+    ],
+)
+def test_binary_subtile_no_bcast(a_shape, b_shape, device):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
+    torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device)
+
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+
+
+profile_a_b_shape_pairs = [
+    # ((32, 32), (1, 32)),
+    # ((1280, 320), (1, 320)),
+    # ((8192, 8192), (1, 8192)),
+    # [[1, 1, 8192, 8192], [1, 1, 8192, 8192]],
+    # [[1, 4, 2048, 8192], [1, 1, 2048, 8192]],
+    # [[4, 1, 2048, 8192], [1, 1, 2048, 8192]],
+    [[4, 4, 2048, 2048], [1, 1, 2048, 2048]],
+]
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    ((torch.bfloat16, ttnn.bfloat16),),
+)
+@pytest.mark.parametrize(
+    "memory_config_input",
+    [ttnn.DRAM_MEMORY_CONFIG],
+)
+@pytest.mark.parametrize("a_and_b_shape", profile_a_b_shape_pairs)
+def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input):
+    device.enable_program_cache()
+    torch.manual_seed(0)
+    a_shape, b_shape = a_and_b_shape
+
+    torch_input_tensor_a = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(
+        a_shape
+    )
+    torch_input_tensor_b = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(
+        b_shape
+    )
+
+    torch_result = torch.add(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
+    )
+    for _ in range(2):
+        output = ttnn.add(input_tensor_a, input_tensor_b, memory_config=memory_config_input, use_legacy=False)
+        output = ttnn.to_torch(output)
+
+        assert (
+            output.shape == torch_result.shape
+        ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
+
+        torch.testing.assert_close(torch_result, output)
+        ttnn.synchronize_device(device)
+
+
+@pytest.mark.parametrize(
+    "input_shape_a",
+    [
+        torch.Size([32, 32]),
+        torch.Size([64, 64]),
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+        torch.Size([1, 3, 320, 384]),
+    ],
+)
+@pytest.mark.parametrize("bcast_dim", [ttnn.BcastOpDim.H, ttnn.BcastOpDim.W, ttnn.BcastOpDim.HW])
+@pytest.mark.parametrize("math_op", [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.SUB, ttnn.BcastOpMath.MUL])
+def test_bcast(input_shape_a, device, bcast_dim, math_op):
+    input_shape_b = list(input_shape_a)
+
+    if bcast_dim == ttnn.BcastOpDim.H or bcast_dim == ttnn.BcastOpDim.HW:
+        input_shape_b[-2] = 1
+
+    if bcast_dim == ttnn.BcastOpDim.W or bcast_dim == ttnn.BcastOpDim.HW:
+        input_shape_b[-1] = 1
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16)(
+        input_shape_a
+    )
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-90, high=90, dtype=torch.bfloat16), ttnn.bfloat16)(
+        input_shape_b
+    )
+
+    a_tt = ttnn.from_torch(
+        a_pt,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    b_tt = ttnn.from_torch(
+        b_pt,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    output_tensor = ttnn.bcast(a_tt, b_tt, math_op, bcast_dim)
+
+    golden_function = ttnn.get_golden_function(ttnn.bcast)
+    golden_tensor = golden_function(a_pt, b_pt, math_op, bcast_dim)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor], 0.9999)
+    assert comp_pass

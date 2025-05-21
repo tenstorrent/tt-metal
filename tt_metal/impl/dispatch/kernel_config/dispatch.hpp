@@ -11,12 +11,11 @@
 #include "core_coord.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
-#include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/tt_xy_pair.h>
 
-typedef struct dispatch_static_config {
+struct dispatch_static_config_t {
     std::optional<uint32_t> dispatch_cb_base;  // 0
     std::optional<uint32_t> dispatch_cb_log_page_size;
     std::optional<uint32_t> dispatch_cb_pages;
@@ -50,9 +49,9 @@ typedef struct dispatch_static_config {
 
     // Populated if fabric is being used to talk to downstream
     std::optional<uint32_t> client_interface_addr;
-} dispatch_static_config_t;
+};
 
-typedef struct dispatch_dependent_config {
+struct dispatch_dependent_config_t {
     std::optional<tt_cxy_pair> upstream_logical_core;      // Dependant
     std::optional<tt_cxy_pair> downstream_logical_core;    // Dependant
     std::optional<tt_cxy_pair> downstream_s_logical_core;  // Dependant
@@ -76,7 +75,7 @@ typedef struct dispatch_dependent_config {
     std::optional<uint32_t> downstream_mesh_id;
     std::optional<uint32_t> downstream_dev_id;
     std::optional<uint32_t> outbound_eth_chan;
-} dispatch_dependent_config_t;
+};
 
 class DispatchKernel : public FDKernel {
 public:
@@ -109,6 +108,7 @@ public:
         } else if (d_variant) {
             this->logical_core_ = core_manager.dispatcher_d_core(device_id, channel, cq_id);
         }
+        this->kernel_type_ = FDKernelType::DISPATCH;
     }
 
     void CreateKernel() override;

@@ -9,7 +9,9 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare
 
 
 class TtDownsample2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, stride, padding, dilation, groups):
+    def __init__(
+        self, device, state_dict, module_path, stride, padding, dilation, groups, conv_weights_dtype=ttnn.bfloat16
+    ):
         super().__init__()
 
         self.device = device
@@ -22,7 +24,7 @@ class TtDownsample2D(nn.Module):
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         self.compute_config, self.conv_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device, weights, bias, ttnn.bfloat8_b
+            device, weights, bias, conv_weights_dtype
         )
         self.conv_config.deallocate_activation = False
 

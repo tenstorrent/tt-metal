@@ -23,7 +23,6 @@
 #include "device_utils.hpp"
 #include "host_utils.hpp"
 #include "tt-metalium/program.hpp"
-#include "system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "vector_aligned.hpp"
 #include "work_thread.hpp"
@@ -507,6 +506,7 @@ void register_full_benchmark_suite() {
             {32_KB},
             {1, 2},
             {1, 2},
+            {true},
         });
     ::benchmark::RegisterBenchmark(
         "Multiple MMIO Devices Reading (Same NUMA node)", mem_bench_multi_mmio_devices_reading_same_node)

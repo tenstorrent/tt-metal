@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "alignment.hpp"
+#include "ttnn/tensor/layout/alignment.hpp"
 
 #include <ostream>
 

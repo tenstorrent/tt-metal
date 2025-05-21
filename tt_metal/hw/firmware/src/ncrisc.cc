@@ -25,7 +25,7 @@
 uint32_t halt_stack_ptr_save;
 
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
-volatile tt_l1_ptr uint8_t *const ncrisc_run = &mailboxes->slave_sync.dm1;
+volatile tt_l1_ptr uint8_t *const ncrisc_run = &mailboxes->subordinate_sync.dm1;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -97,12 +97,7 @@ void l1_to_ncrisc_iram_copy_wait() {
 #endif
 
 int main(int argc, char *argv[]) {
-    // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled
-    // Ncrisc does not issue Tensix instructions but to be consistent for all riscs around Tensix we disable it
-#ifdef ARCH_BLACKHOLE
-    disable_gathering();
-#endif
-    configure_l1_data_cache();
+    configure_csr();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 

@@ -81,14 +81,21 @@ def _golden_function(slice, tensor, num_slices, slice_id, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.sharded_to_interleaved_partial, _golden_function)
 
 
-def _golden_function(in0, in1, op, dir, *args, **kwargs):
-    in0 = in0.reshape((in1.shape[0], 1, -1, in0.shape[-1]))
-    if op == ttnn.BcastOpMath.ADD:
+def _golden_function(in0, in1, math_op, bcast_dim, *args, **kwargs):
+    if bcast_dim in {ttnn.BcastOpDim.W, ttnn.BcastOpDim.H, ttnn.BcastOpDim.HW}:
+        in1 = in1.expand(in0.shape)
+    else:
+        raise AssertionError("Invalid bcast dimension")
+
+    if math_op == ttnn.BcastOpMath.ADD:
         res = in0 + in1
-    elif op == ttnn.BcastOpMath.SUB:
+    elif math_op == ttnn.BcastOpMath.SUB:
         res = in0 - in1
-    elif op == ttnn.BcastOpMath.MUL:
+    elif math_op == ttnn.BcastOpMath.MUL:
         res = in0 * in1
+    else:
+        raise AssertionError("Invalid math operation")
+
     return res
 
 

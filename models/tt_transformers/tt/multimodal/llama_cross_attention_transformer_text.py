@@ -3,20 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import ttnn
+
 import torch
 from tqdm import tqdm
-from models.tt_transformers.tt.decoder import TransformerBlock
-from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.common.rmsnorm import RMSNorm
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
+from models.tt_transformers.tt.decoder import TransformerBlock
+from models.tt_transformers.tt.distributed_norm import DistributedNorm
+from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.tt_transformers.tt.rope import RotarySetup
-
-from models.utility_functions import (
-    nearest_32,
-)
+from models.utility_functions import nearest_32
 
 
 def _get_full_row_masked_out_mask(

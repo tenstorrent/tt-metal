@@ -16,7 +16,16 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 
 
 class TtResnetBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, conv_shortcut=False, split_in=1, split_out=1):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        module_path,
+        conv_shortcut=False,
+        split_in=1,
+        split_out=1,
+        conv_weights_dtype=ttnn.bfloat16,
+    ):
         super().__init__()
 
         self.device = device
@@ -55,7 +64,8 @@ class TtResnetBlock2D(nn.Module):
             conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         if split_in > 1:
-            self.norm_core_grid_1 = ttnn.CoreGrid(y=4 if split_in == 2 else 2, x=8)
+            self.norm_1_blocks = 16
+            self.norm_core_grid_1 = ttnn.CoreGrid(y=4 if split_in == 2 else 2, x=1)
             self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
                 device, norm_weights_1, norm_bias_1, self.norm_core_grid_1.y
             )
@@ -63,6 +73,7 @@ class TtResnetBlock2D(nn.Module):
                 self.device, norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
             )
         else:
+            self.norm_1_blocks = 2
             self.norm_core_grid_1 = ttnn.CoreGrid(y=8, x=8)
             self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
                 device, norm_weights_1, norm_bias_1, self.norm_core_grid_1.y
@@ -86,7 +97,7 @@ class TtResnetBlock2D(nn.Module):
                 self.tt_conv1_bias,
                 self.conv1_params,
             ) = prepare_split_conv_params(
-                device, conv_weights_1, conv_bias_1, split_in, split_out, ttnn.bfloat8_b, act_block_h_override=32
+                device, conv_weights_1, conv_bias_1, split_in, split_out, conv_weights_dtype, act_block_h_override=32
             )
         else:
             (
@@ -95,22 +106,22 @@ class TtResnetBlock2D(nn.Module):
                 self.tt_conv1_weights,
                 self.tt_conv1_bias,
                 self.conv1_params,
-            ) = prepare_conv_params(device, conv_weights_1, conv_bias_1, ttnn.bfloat8_b, act_block_h_override=32)
+            ) = prepare_conv_params(device, conv_weights_1, conv_bias_1, conv_weights_dtype, act_block_h_override=32)
         _, _, self.tt_conv2_weights, self.tt_conv2_bias, self.conv2_params = prepare_conv_params(
-            device, conv_weights_2, conv_bias_2, ttnn.bfloat8_b, act_block_h_override=32
+            device, conv_weights_2, conv_bias_2, conv_weights_dtype, act_block_h_override=32
         )
         if conv_shortcut:
             _, _, self.tt_conv3_weights, self.tt_conv3_bias, self.conv3_params = prepare_conv_params(
-                device, conv_weights_3, conv_bias_3, ttnn.bfloat8_b, act_block_h_override=32
+                device, conv_weights_3, conv_bias_3, conv_weights_dtype, act_block_h_override=32
             )
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
         self.tt_time_emb_weights = ttnn.from_torch(
-            torch.permute(time_emb_weights, (1, 0)), ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT
+            torch.permute(time_emb_weights, (1, 0)), conv_weights_dtype, device=device, layout=ttnn.TILE_LAYOUT
         )
         self.tt_time_emb_bias = (
-            ttnn.from_torch(time_emb_bias, ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(time_emb_bias, conv_weights_dtype, device=device, layout=ttnn.TILE_LAYOUT)
             if time_emb_bias is not None
             else None
         )
@@ -130,7 +141,7 @@ class TtResnetBlock2D(nn.Module):
                 core_grid=self.norm_core_grid_1,
                 epsilon=self.norm_eps,
                 inplace=False,
-                num_out_blocks=2,
+                num_out_blocks=self.norm_1_blocks,
             )
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         else:

@@ -6,7 +6,6 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_pcc, data_gen_with_range
-from models.utility_functions import skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -46,7 +45,6 @@ def test_bw_unary_remainder(input_shapes, scalar, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for binary remainder backward")
 def test_bw_binary_remainder(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 30, device, True)
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)

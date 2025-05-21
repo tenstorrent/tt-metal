@@ -26,3 +26,4 @@ function(setup_ttnn_test_target target_name)
 endfunction()
 
 add_subdirectory(unit_tests/gtests)
+add_subdirectory(benchmark/cpp)

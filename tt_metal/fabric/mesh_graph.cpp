@@ -88,11 +88,11 @@ void MeshGraph::add_to_connectivity(
 std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
     chip_id_t src_chip_id, std::uint32_t row_size, std::uint32_t num_chips_in_board, FabricType fabric_type) const {
     std::unordered_map<chip_id_t, RouterEdge> valid_connections;
-    chip_id_t N = src_chip_id - row_size;
-    chip_id_t E = src_chip_id + 1;
-    chip_id_t S = src_chip_id + row_size;
-    chip_id_t W = src_chip_id - 1;
     if (fabric_type == FabricType::MESH) {
+        chip_id_t N = src_chip_id - row_size;
+        chip_id_t E = src_chip_id + 1;
+        chip_id_t S = src_chip_id + row_size;
+        chip_id_t W = src_chip_id - 1;
         if (N >= 0) {
             valid_connections.insert(
                 {N,
@@ -127,6 +127,37 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
         }
     } else if (fabric_type == FabricType::TORUS_1D) {
         // TODO: add support
+    } else if (fabric_type == FabricType::TORUS_2D) {
+        auto row = src_chip_id / row_size;
+        auto col = src_chip_id % row_size;
+        chip_id_t N = (src_chip_id - row_size + num_chips_in_board) % num_chips_in_board;
+        chip_id_t E = row * row_size + (col + 1) % row_size;
+        chip_id_t S = (src_chip_id + row_size) % num_chips_in_board;
+        chip_id_t W = row * row_size + (col - 1 + row_size) % row_size;
+        valid_connections.insert(
+            {N,
+             RouterEdge{
+                 .port_direction = RoutingDirection::N,
+                 .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, N),
+                 .weight = 0}});
+        valid_connections.insert(
+            {E,
+             RouterEdge{
+                 .port_direction = RoutingDirection::E,
+                 .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, E),
+                 .weight = 0}});
+        valid_connections.insert(
+            {S,
+             RouterEdge{
+                 .port_direction = RoutingDirection::S,
+                 .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, S),
+                 .weight = 0}});
+        valid_connections.insert(
+            {W,
+             RouterEdge{
+                 .port_direction = RoutingDirection::W,
+                 .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, W),
+                 .weight = 0}});
     }
     return valid_connections;
 }
@@ -249,9 +280,9 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
                 mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
             }
         }
-        // WEST, start from SW corner
+        // WEST, start from NW corner
         chan_id = 0;
-        for (std::uint32_t chip_id = 0; chip_id < (mesh_size - mesh_ew_size); chip_id += mesh_ew_size) {
+        for (std::uint32_t chip_id = 0; chip_id < mesh_size; chip_id += mesh_ew_size) {
             for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
             }
@@ -270,8 +301,8 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         TT_FATAL(mesh_connection.size() == 2, "MeshGraph: Expecting 2 elements in each Graph connection");
         const auto& [src_mesh_id, src_port_id] = convert_yaml_to_port_id(mesh_connection[0]);
         const auto& [dst_mesh_id, dst_port_id] = convert_yaml_to_port_id(mesh_connection[1]);
-        const auto& src_chip_id = mesh_edge_ports_to_chip_id[src_mesh_id][src_port_id];
-        const auto& dst_chip_id = mesh_edge_ports_to_chip_id[dst_mesh_id][dst_port_id];
+        const auto& src_chip_id = mesh_edge_ports_to_chip_id[src_mesh_id].at(src_port_id);
+        const auto& dst_chip_id = mesh_edge_ports_to_chip_id[dst_mesh_id].at(dst_port_id);
         this->add_to_connectivity(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_port_id.first);
     }
 }

@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-
 #include "dataflow_api.h"
 
 // DRAM to L1 read
@@ -23,19 +21,19 @@ void kernel_main() {
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
 
-    cb_reserve_back(cb_id_in0, total_num_pages);
+    cb_reserve_back(cb_id_in0, 1);
+    uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
     {
         DeviceZoneScopedN("RISCV1");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            // TODO: Change src address to change DRAM/core locations (single/multiple core)
             uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
             noc_async_read(src_noc_addr, l1_write_addr, transaction_size_bytes);
-            noc_async_read_barrier();
 
-            cb_push_back(cb_id_in0, transaction_num_pages);
             src_addr += transaction_size_bytes;
+            l1_write_addr += transaction_size_bytes;
         }
+        noc_async_read_barrier();
     }
+    cb_push_back(cb_id_in0, 1);
 }

@@ -79,8 +79,6 @@ def run(
     *,
     device,
 ):
-    device.enable_async(False)
-
     # Extract the shape and new size (target shape) from view_specs
     shape = view_specs["shape"]
     size = view_specs["size"]  # New shape for the view/reshape operation

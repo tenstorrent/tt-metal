@@ -18,6 +18,5 @@ struct IndexFill {
 }  // namespace ttnn::operations::index_fill
 
 namespace ttnn {
-constexpr auto index_fill =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::index_fill", ttnn::operations::index_fill::IndexFill>();
+constexpr auto index_fill = ttnn::register_operation<"ttnn::index_fill", ttnn::operations::index_fill::IndexFill>();
 }  // namespace ttnn

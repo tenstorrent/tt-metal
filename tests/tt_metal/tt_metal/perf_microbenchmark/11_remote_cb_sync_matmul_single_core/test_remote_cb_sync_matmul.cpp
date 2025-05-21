@@ -9,7 +9,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -38,7 +37,7 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -525,7 +524,7 @@ bool validation_fp16(
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
     auto result_untilized = untilize_swizzled(result_flat_layout, mt * 32, nt * 32);
 
     const auto& in0_values = in0_tensor.get_values();
@@ -817,7 +816,7 @@ int main(int argc, char** argv) {
             // in1
             for (uint32_t i = 0; i < num_layers; ++i) {
                 auto input_vec_tilized = tilize_swizzled(in1_tensor_fp16.get_values(), k, n);
-                auto input_vec_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(input_vec_tilized));
+                auto input_vec_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(input_vec_tilized));
                 vector<uint32_t> packed_input_vec_tile_layout =
                     pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                 in1_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -833,7 +832,7 @@ int main(int argc, char** argv) {
 
             // in0
             auto activations_tilized = tilize_swizzled(in0_tensor_fp16.get_values(), m, k * num_receivers);
-            auto activations_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
+            auto activations_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
             vector<uint32_t> activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
             in0_buffer = create_and_transfer_data_sharded_cb(
                 device,

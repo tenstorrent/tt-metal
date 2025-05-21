@@ -89,6 +89,7 @@ void kernel_main() {
     ASSERT(num_buffers_per_channel > 0);
     auto sender = tt::tt_fabric::WorkerToFabricEdmSender(
         connected_to_persistent_fabric,
+        0,
         eth_sender_noc_x,
         eth_sender_noc_y,
         eth_l1_base_addr,

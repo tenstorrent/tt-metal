@@ -20,11 +20,10 @@ void kernel_main() {
     constexpr uint32_t single_tile_size_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t cb_ex_partial2 = get_compile_time_arg_val(10);
     constexpr uint32_t cb_ex2 = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_ex2_global = get_compile_time_arg_val(12);  // E[x2] global reduce
-    constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(13);
-    constexpr uint32_t post_reduce_sender_semaphore_id = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_stats_reduced = get_compile_time_arg_val(15);  // [E[x], E[x^2]] local to sender
-    constexpr uint32_t cb_ex_global = get_compile_time_arg_val(16);      // [E[x], E[X^2]] global to all cores
+    constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(12);
+    constexpr uint32_t post_reduce_sender_semaphore_id = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_stats_reduced = get_compile_time_arg_val(14);  // [E[x], E[x^2]] local to sender
+    constexpr uint32_t cb_ex_global = get_compile_time_arg_val(15);      // [E[x], E[X^2]] global to all cores
 
     uint32_t post_reduce_sender_semaphore_addr = get_semaphore(post_reduce_sender_semaphore_id);
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);

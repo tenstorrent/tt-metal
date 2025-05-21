@@ -26,6 +26,12 @@ dynamic = ["version"]
 line-length = 120
 include = '^.*(ttnn|tests/scripts|tests/ttnn|tests/tt_eager/python_api_testing|tt_eager/tt_lib|tests/scripts|models/demos|infra|.github)/.*\.py$'
 
+[tool.isort]
+profile = "black"
+line_length = 120
+skip_gitignore = true
+skip = ["__init__.py"]
+
 [tool.ruff]
 line-length = 120
 

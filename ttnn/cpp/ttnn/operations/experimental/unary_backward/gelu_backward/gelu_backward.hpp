@@ -22,7 +22,6 @@ struct GeluBackwardOperation {
 }  // namespace ttnn::operations::experimental
 
 namespace ttnn::experimental {
-constexpr auto gelu_bw = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::gelu_bw",
-    ttnn::operations::experimental::GeluBackwardOperation>();
+constexpr auto gelu_bw =
+    ttnn::register_operation<"ttnn::experimental::gelu_bw", ttnn::operations::experimental::GeluBackwardOperation>();
 }

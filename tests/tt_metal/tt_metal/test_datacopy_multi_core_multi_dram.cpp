@@ -366,12 +366,12 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         log_info(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
         auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
-        auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
+        auto activations_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         pass &= move_tiles_to_dram(device, activations, M, K, src0_dram_addr);
 
         auto identity_tilized = tilize(identity, K * 32, N * 32);
-        auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
+        auto weights_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         pass &= move_tiles_to_dram(device, weights, K, N, src1_dram_addr);
         log_info(LogTest, "Copying inputs to dram complete");
@@ -415,7 +415,7 @@ int main(int argc, char** argv) {
                 tt_metal::detail::ReadFromDeviceDRAMChannel(
                     device, dram_bank, dram_address, single_tile_size, result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
+                auto result_flat_layout = convert_to_flat_layout(tt::stl::make_const_span(result_bfp16));
 
                 // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
                 // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));

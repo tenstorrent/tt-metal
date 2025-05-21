@@ -20,8 +20,7 @@ struct ViewOperation {
 }  // namespace operations::experimental::reshape
 
 namespace experimental {
-constexpr auto view = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::view",
-    ttnn::operations::experimental::reshape::ViewOperation>();
+constexpr auto view =
+    ttnn::register_operation<"ttnn::experimental::view", ttnn::operations::experimental::reshape::ViewOperation>();
 }  // namespace experimental
 }  // namespace ttnn

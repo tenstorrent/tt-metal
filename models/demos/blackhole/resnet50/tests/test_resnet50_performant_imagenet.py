@@ -3,17 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
 import torch
 from loguru import logger
-
-from models.utility_functions import run_for_blackhole
-from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50Trace2CQ
-from models.demos.ttnn_resnet.tests.demo_utils import get_data_loader, get_batch
 from transformers import AutoImageProcessor
-from models.utility_functions import (
-    profiler,
-)
+
+import ttnn
+from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
+from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50Trace2CQ
+from models.utility_functions import profiler, run_for_blackhole
 
 
 @run_for_blackhole()
@@ -27,7 +24,6 @@ from models.utility_functions import (
         (32, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),
     ),
 )
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 def test_run_resnet50_trace_2cqs_inference(
     device,
     use_program_cache,
@@ -36,7 +32,6 @@ def test_run_resnet50_trace_2cqs_inference(
     imagenet_label_dict,
     act_dtype,
     weight_dtype,
-    enable_async_mode,
     model_location_generator,
 ):
     batch_size = batch_size_per_device * device.get_num_devices()

@@ -137,25 +137,21 @@ def run_sub_devices_program(device, create_fabric_sub_device=False):
     device.remove_sub_device_manager(sub_device_manager)
 
 
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize("create_fabric_sub_device", (False, True))
-def test_sub_devices(device, create_fabric_sub_device, enable_async_mode):
+def test_sub_devices(device, create_fabric_sub_device):
     run_sub_devices(device, create_fabric_sub_device)
 
 
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize("create_fabric_sub_device", (False, True))
-def test_sub_devices_mesh(mesh_device, create_fabric_sub_device, enable_async_mode):
+def test_sub_devices_mesh(mesh_device, create_fabric_sub_device):
     run_sub_devices(mesh_device, create_fabric_sub_device)
 
 
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize("create_fabric_sub_device", (False, True))
-def test_sub_device_program(device, create_fabric_sub_device, enable_async_mode):
+def test_sub_device_program(device, create_fabric_sub_device):
     run_sub_devices_program(device, create_fabric_sub_device)
 
 
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize("create_fabric_sub_device", (False, True))
-def test_sub_device_program_mesh(mesh_device, create_fabric_sub_device, enable_async_mode):
+def test_sub_device_program_mesh(mesh_device, create_fabric_sub_device):
     run_sub_devices_program(mesh_device, create_fabric_sub_device)

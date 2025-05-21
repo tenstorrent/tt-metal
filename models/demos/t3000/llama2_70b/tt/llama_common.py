@@ -2,22 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import math
-from loguru import logger
+import os
 import re
+from pathlib import Path
 from typing import Tuple
+
 import numpy as np
 import torch
-import ttnn
-from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 from loguru import logger
-from pathlib import Path
+
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama.generation import (
     load_chunked_checkpoints,
     load_sharded_checkpoints,
 )
 from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 MAX_SEQ_LEN = 4096
 MAX_SEQ_LEN_LLAMA3 = 8192
@@ -27,10 +28,7 @@ UNIT_TEST_N_LAYER = 1
 UNIT_TEST_LAYER_NUM = 0
 UNIT_TEST_START_POS = 0
 UNIT_TEST_GENERATION_LENGTH = 20
-from ttnn import (
-    TensorToMesh,
-    MeshToTensor,
-)
+from ttnn import MeshToTensor, TensorToMesh
 
 
 class ShardTensor2dMesh(TensorToMesh):
@@ -207,7 +205,7 @@ def get_weight_cache_path_galaxy(base_cache_path, tensor_str, device_idx, num_de
 def rms_decomp(x, norm_weight, eps):
     squared = ttnn.pow(x, 2)
     # mean_squared = tt_lib.tensor.mean(squared, )
-    sum_squared = ttnn.sum(squared, 3)
+    sum_squared = ttnn.sum(squared, dim=3, keepdim=True)
     # Tensor is 1,1,32,1+31 now
     mean_squared = ttnn.multiply(sum_squared, (1 / x.shape[-1]))
     mean_squared_eps = ttnn.add(mean_squared, eps)

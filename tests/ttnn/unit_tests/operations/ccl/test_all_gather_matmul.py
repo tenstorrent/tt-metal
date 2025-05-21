@@ -296,13 +296,6 @@ def run_all_gather_matmul_on_t3000_impl(
         )
     ],
 )
-@pytest.mark.parametrize(
-    "enable_async",
-    [
-        True,
-        False,
-    ],
-)
 def test_all_gather_matmul_on_t3000_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -320,7 +313,6 @@ def test_all_gather_matmul_on_t3000_post_commit(
     mem_config_mm,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_matmul_on_t3000_impl(
         t3k_mesh_device,
@@ -398,13 +390,6 @@ def test_all_gather_matmul_on_t3000_post_commit(
         )
     ],
 )
-@pytest.mark.parametrize(
-    "enable_async",
-    [
-        True,
-        False,
-    ],
-)
 def test_all_gather_matmul_1d_on_t3000_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -422,7 +407,6 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     mem_config_mm,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_matmul_on_t3000_impl(
         t3k_mesh_device,
@@ -529,13 +513,6 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     ids=("llama_selfout",),
 )
 @pytest.mark.parametrize(
-    "enable_async",
-    [
-        True,
-        False,
-    ],
-)
-@pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 90112}], indirect=True
 )  # TODO: Update once trace fails
 def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
@@ -556,7 +533,6 @@ def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
     mem_config_weights,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_matmul_on_t3000_impl(
         t3k_mesh_device,

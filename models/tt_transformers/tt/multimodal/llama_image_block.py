@@ -2,12 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
 from models.tt_transformers.tt.multimodal.llama_image_mlp import TtLlamaImageFeedForward
+from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 
 
 class TtLlamaImageTransformerBlock(LightweightModule):

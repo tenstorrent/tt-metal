@@ -111,8 +111,6 @@ def run(
     *,
     device,
 ):
-    device.enable_async(False)
-
     # Extract the weight and indices shape from embedding_specs
     weight_shape = embedding_specs["weight_shape"]
     indices_shape = embedding_specs["indices_shape"]

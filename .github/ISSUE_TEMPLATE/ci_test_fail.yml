@@ -1,0 +1,76 @@
+name: "CI Pipeline Failure Report"
+description: "Report a failing test in a CI pipeline"
+title: "[CI Failure] {{ pipeline_name }} - {{ test_name }}"
+labels: ["ci-bug"]
+body:
+  - type: input
+    id: pipeline_name
+    attributes:
+      label: "Pipeline Name"
+      description: "Name of the failing pipeline"
+      placeholder: "e.g. (TG) TG demo tests"
+    validations:
+      required: true
+
+  - type: input
+    id: test_name
+    attributes:
+      label: "Test Name"
+      description: "Name of the failing test"
+      placeholder: "e.g., tg-demo-tests (Galaxy Llama3 demo tests)"
+    validations:
+      required: true
+
+  - type: input
+    id: test_path
+    attributes:
+      label: "Path to Test in Repo"
+      description: "Relative file path in the repo where the test is defined"
+      placeholder: "e.g., models/demos/llama3_subdevices/demo/demo_decode.py"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: is_nd
+    attributes:
+      label: "Non-Deterministic (ND) failure?"
+      options:
+        - "Yes"
+        - "No"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: hang
+    attributes:
+      label: "Failure type"
+      options:
+        - "Hang"
+        - "Timeout"
+        - "Other"
+    validations:
+      required: true
+
+  - type: input
+    id: pipeline_link
+    attributes:
+      label: "Link to Failing Pipeline for non-ND or Custom Dispatch Run for ND"
+      description: "Paste the link to the CI run showing the failure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: failure_snippet
+    attributes:
+      label: "Failure Signature Snippet"
+      description: "Paste the relevant portion of the error or log output"
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: info
+    attributes:
+      label: "Additional info"
+      description: "Any additional info"
+      render: shell

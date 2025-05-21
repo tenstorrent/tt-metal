@@ -8,7 +8,7 @@
 #include <string>
 
 #include "unary_op_types.hpp"
-#include "cpp/ttnn/tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 namespace ttnn::operations::unary::utils {
 
 UnaryWithParam string_to_unary_with_param(const std::string& name);
@@ -57,6 +57,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::MUL_UNARY_SFPU:
         case UnaryOpType::DIV_UNARY_SFPU:
         case UnaryOpType::UNARY_NE:
+        case UnaryOpType::UNARY_EQ:
         case UnaryOpType::UNARY_GT:
         case UnaryOpType::UNARY_LT:
         case UnaryOpType::TYPECAST:

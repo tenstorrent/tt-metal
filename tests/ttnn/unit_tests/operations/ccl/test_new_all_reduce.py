@@ -12,9 +12,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.utility_functions import skip_for_grayskull
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
-    PREFETCHER_NOC1_GRID,
     num_cores_to_rectangle_grid,
     round_up,
+)
+from models.demos.llama3_subdevices.tt.model_config import (
+    PREFETCHER_NOC1_GRID,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
@@ -48,18 +50,6 @@ NORM_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoor
 LM_HEAD_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 32, SUB_DEVICE_CRS, row_wise=True)
 
 
-def check_mesh_tensor_alloc(tensor):
-    device_tensors = ttnn.get_device_tensors(tensor)
-    buffer_addr = device_tensors[0].buffer_address()
-
-    if len(device_tensors) > 1:
-        for i in range(1, len(device_tensors)):
-            addr = device_tensors[i].buffer_address()
-            if not addr == buffer_addr:
-                return False
-    return True
-
-
 def run_all_reduce_impl(
     mesh_device,
     output_shape,
@@ -74,7 +64,6 @@ def run_all_reduce_impl(
     loopback_size=1,
     num_iters=1,
     warmup_iters=0,
-    enable_async=False,
     trace_mode=False,
     validate_all=True,
     profiler=BenchmarkProfiler(),
@@ -86,11 +75,6 @@ def run_all_reduce_impl(
 
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
-    # Use Async mode based on test input config
-    mesh_device.enable_async(enable_async)
-
-    if enable_async:
-        logger.info(f"Using Async Mode for All Reduce Op Dispatch")
 
     ##################################
     ##### Set up fabric stuff
@@ -167,7 +151,6 @@ def run_all_reduce_impl(
         memory_config=input_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
-    check_mesh_tensor_alloc(tt_input_tensor)
 
     intermediate_tensor = torch.zeros(intermediate_shape)
     tt_intermediate_tensors = []
@@ -181,8 +164,6 @@ def run_all_reduce_impl(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
 
-        # Validate that the tensor is allocated in same location across devices
-        check_mesh_tensor_alloc(tt_intermediate_tensor)
         tt_intermediate_tensors.append(tt_intermediate_tensor)
 
     # All-Reduce Golden
@@ -349,7 +330,6 @@ def run_all_reduce_impl(
         (1000, 100),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
@@ -381,14 +361,13 @@ def test_all_reduce(
     output_core_range_set,
     num_iters,
     warmup_iters,
-    enable_async,
     trace_mode,
     use_program_cache,
     function_level_defaults,
 ):
     if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
         pytest.skip("Skipping LM Head test with bfloat16 due to OOM")
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     profiler = BenchmarkProfiler()
@@ -405,7 +384,6 @@ def test_all_reduce(
         output_core_range_set,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
-        enable_async=enable_async,
         trace_mode=trace_mode,
         validate_all=False,
         profiler=profiler,
@@ -442,7 +420,6 @@ def test_all_reduce(
         (100, 10),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
@@ -474,12 +451,11 @@ def test_all_reduce_loopback(
     output_core_range_set,
     num_iters,
     warmup_iters,
-    enable_async,
     trace_mode,
     use_program_cache,
     function_level_defaults,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     run_all_reduce_impl(
@@ -495,7 +471,6 @@ def test_all_reduce_loopback(
         loopback_size=4,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
-        enable_async=enable_async,
         trace_mode=trace_mode,
         validate_all=False,
     )

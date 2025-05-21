@@ -9,7 +9,6 @@ from typing import Optional
 import torch
 
 import ttnn
-
 from models.experimental.functional_common.attention_mask_functions import (
     get_extended_attention_mask,
     invert_attention_mask,
@@ -91,7 +90,7 @@ def t5_layer_norm(config, hidden_states, *, weight):
     # return ttnn.rms_norm(hidden_states, weight, epsilon=config.layer_norm_epsilon)
 
     squared_hidden_states = ttnn.pow(hidden_states, 2)
-    averaged_squared_hidden_states = ttnn.mean(squared_hidden_states, dim=-1)
+    averaged_squared_hidden_states = ttnn.mean(squared_hidden_states, dim=-1, keepdim=True)
 
     variance = averaged_squared_hidden_states + config.layer_norm_epsilon
     std = ttnn.rsqrt(variance)
@@ -474,7 +473,7 @@ def convert_to_ttnn(model, name):
 
 def custom_preprocessor(model, name):
     import transformers
-    from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_layernorm_parameter
+    from ttnn.model_preprocessing import preprocess_layernorm_parameter, preprocess_linear_weight
 
     parameters = {}
     if isinstance(model, transformers.models.t5.modeling_t5.T5LayerNorm):

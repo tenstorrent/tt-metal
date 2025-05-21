@@ -13,6 +13,7 @@
 #include <tt-metalium/allocator_types.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"

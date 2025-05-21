@@ -65,7 +65,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
 namespace operations::ccl {
 
 Tensor barrier_function(const Tensor& input_tensor, const ttnn::Barrier& barrier_struct) {
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor.mesh_device())};
+    std::vector<Tensor> output_tensors = {input_tensor};
     return tt::tt_metal::operation::run(barrier_struct, {input_tensor}).at(0);
 }
 
@@ -73,18 +73,7 @@ std::vector<Tensor> barrier_function(const std::vector<Tensor>& input_tensors, c
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
-        std::vector<Tensor> cur_output_tensors = {Tensor({input_tensor.device()})};
-        tt::tt_metal::operation::launch_op(
-            [barrier_struct](
-                const std::vector<Tensor>& input_tensors,
-                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-                const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-                const Tensor& input_tensor = input_tensors.at(0);
-                return tt::tt_metal::operation::run(barrier_struct, {input_tensor});
-            },
-            {input_tensor},
-            cur_output_tensors);
-        output_tensors.push_back(cur_output_tensors.at(0));
+        output_tensors.push_back(tt::tt_metal::operation::run(barrier_struct, {input_tensor}).at(0));
     }
     return output_tensors;
 }

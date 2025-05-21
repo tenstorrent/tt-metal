@@ -42,7 +42,6 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
     ),
     TestEntry("tt_eager/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
     TestEntry("tt_eager/tests/tensors/test_raw_host_memory_pointer", "tensors/test_raw_host_memory_pointer"),
-    TestEntry("tt_eager/tests/tensors/test_async_tensor_apis", "tensors/test_async_tensor_apis"),
     # Integration tests
     # void_for_whb0(TestEntry("tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert")),
 )

@@ -63,9 +63,8 @@ std::vector<ttnn::TensorSpec> NlpKVCacheLoadSliceDeviceOperation::compute_output
     auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
     auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(fused_batch_heads, core_grid, true);
     tt::tt_metal::ShardSpec shard_spec{shard_grid, {unpad_length, head_dim}};
-    auto mem_config =
-        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1};
-    mem_config.shard_spec = shard_spec;
+    auto mem_config = tt::tt_metal::MemoryConfig{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
 
     return {TensorSpec(
         Shape(out_shape),

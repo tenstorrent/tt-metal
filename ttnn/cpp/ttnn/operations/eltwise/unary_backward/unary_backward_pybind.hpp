@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/types.hpp"
@@ -1098,15 +1098,15 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
-        Performs backward operations for prod on :attr:`input_tensor` with given :attr:`grad_tensor` along `all_dimensions` or a particular `dim`.
+        Performs backward operations for prod on :attr:`input_tensor` with given :attr:`grad_tensor` along a particular `dim`.
+        If no `dim` is provided, the prod is taken over all dimensions.
 
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            all_dimensions (bool, optional): perform prod backward along all dimensions, ignores dim param. Defaults to `True`.
-            dim (int, optional): dimension to perform prod backward. Defaults to `0`.
+            dim (int, optional): dimension to perform prod backward. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -1131,9 +1131,9 @@ void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operat
 
             >>> grad_tensor = ttnn.from_torch(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> input = ttnn.from_torch(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> all_dimensions = True
             >>> dim =0
-            >>> output = {1}(grad_tensor, input, all_dimensions, dim)
+            >>> output = {1}(grad_tensor, input, dim)
+            >>> all_dims_output = {1}(grad_tensor, input)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());
@@ -1146,16 +1146,14 @@ void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operat
             [](const unary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
-               bool all_dimensions,
-               int64_t dim,
+               const std::optional<int64_t> dim,
                const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, all_dimensions, dim, memory_config);
+                return self(grad_tensor, input_tensor, dim, memory_config);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
             py::kw_only(),
-            py::arg("all_dimensions") = true,
-            py::arg("dim") = 0,
+            py::arg("dim") = std::nullopt,
             py::arg("memory_config") = std::nullopt});
 }
 

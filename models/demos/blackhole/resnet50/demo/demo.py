@@ -4,12 +4,13 @@
 
 
 import pytest
-from models.demos.ttnn_resnet.demo.demo import run_resnet_imagenet_inference, run_resnet_inference
-from models.utility_functions import run_for_blackhole
+
 import ttnn
 from models.demos.blackhole.resnet50.tests.test_resnet50_performant_imagenet import (
     test_run_resnet50_trace_2cqs_inference,
 )
+from models.demos.ttnn_resnet.demo.demo import run_resnet_imagenet_inference, run_resnet_inference
+from models.utility_functions import run_for_blackhole
 
 test_run_resnet50_trace_2cqs_inference.__test__ = False
 
@@ -62,7 +63,6 @@ def test_demo_trace_with_imagenet(
     act_dtype,
     weight_dtype,
     model_location_generator,
-    enable_async_mode=True,
 ):
     test_run_resnet50_trace_2cqs_inference(
         mesh_device,
@@ -72,6 +72,5 @@ def test_demo_trace_with_imagenet(
         imagenet_label_dict,
         act_dtype,
         weight_dtype,
-        enable_async_mode,
         model_location_generator,
     )

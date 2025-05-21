@@ -5,13 +5,11 @@
 import pytest
 import torch
 from diffusers import StableDiffusionPipeline
-
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding
-import pytest
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

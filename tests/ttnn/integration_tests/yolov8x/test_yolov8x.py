@@ -13,12 +13,12 @@ from loguru import logger
 from ultralytics import YOLO
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import disable_persistent_kernel_cache
-from models.experimental.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel, TtConv, TtC2f, TtSppf, TtDFL
-from models.experimental.yolov8x.tt.ttnn_yolov8x_utils import (
+from models.demos.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel, TtConv, TtC2f, TtSppf, TtDFL
+from models.demos.yolov8x.tt.ttnn_yolov8x_utils import (
     ttnn_decode_bboxes,
     custom_preprocessor,
 )
-from models.experimental.yolov8x.reference import yolov8x
+from models.demos.yolov8x.reference import yolov8x
 
 
 def decode_bboxes(distance, anchor_points, xywh=True, dim=1):
@@ -75,8 +75,12 @@ def test_yolov8x_640(device, input_tensor, use_weights_from_ultralytics):
     ttnn_model = TtYolov8xModel(device=device, parameters=parameters)
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
 
-    ttnn_input = input_tensor.permute((0, 2, 3, 1))
-    ttnn_input = ttnn_input.reshape(1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], 3)
+    # pad input channels to 16 to avoid slow interleaved2sharded codepath for 3/8 channels
+    ttnn_input = torch.nn.functional.pad(input_tensor, (0, 0, 0, 0, 0, 13, 0, 0), value=0)
+    ttnn_input = ttnn_input.permute((0, 2, 3, 1))
+    ttnn_input = ttnn_input.reshape(
+        1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], ttnn_input.shape[3]
+    )
     ttnn_input = ttnn.from_torch(ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     with torch.inference_mode():

@@ -26,7 +26,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -171,7 +171,7 @@ Program create_program(IDevice* device, const ProgramAttributes& program_attribu
             .math_approx_mode = program_attributes.math_approx_mode,
             .compile_args = compute_kernel_args});
 
-    return std::move(program);
+    return program;
 }
 
 void assert_kernel_binary_path_exists(

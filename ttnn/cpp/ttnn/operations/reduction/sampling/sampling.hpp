@@ -34,7 +34,6 @@ struct SamplingOperation {
 
 }  // namespace operations::reduction
 
-constexpr auto sampling =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::sampling", ttnn::operations::reduction::SamplingOperation>();
+constexpr auto sampling = ttnn::register_operation<"ttnn::sampling", ttnn::operations::reduction::SamplingOperation>();
 
 }  // namespace ttnn

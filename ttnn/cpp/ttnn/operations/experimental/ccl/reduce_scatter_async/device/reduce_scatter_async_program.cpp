@@ -2067,7 +2067,7 @@ void lower_command_streams_to_noc_commands(
     size_t partial_output_tensor_forward_direction_idx,
     size_t partial_output_tensor_backward_direction_idx) {
 
-    const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
     auto lower_command_streams = [packet_size_bytes](
         std::vector<CoreCoord> const& cores,
@@ -2167,7 +2167,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
         {math_in0_cb, math_in1_cb},
         {math_out_cb}};
 
-    const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
     const size_t page_size = get_page_size(input_tensor);
     std::array<IDevice*, 2> neighbour_devices = {forward_device.value_or(nullptr), backward_device.value_or(nullptr)};

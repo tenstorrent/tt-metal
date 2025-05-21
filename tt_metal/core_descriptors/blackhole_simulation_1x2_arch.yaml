@@ -5,7 +5,7 @@
 #   num of HW command queues:
 #     core descriptor config
 
-blackhole:
+unharvested:
   col:
     1:
       compute_with_storage_grid_range: # Logical only start and end [x, y]

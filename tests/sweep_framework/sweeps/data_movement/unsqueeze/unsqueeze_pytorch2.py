@@ -288,8 +288,6 @@ def run(
     *,
     device,
 ):
-    device.enable_async(False)
-
     # Extract the shape from unsqueeze_specs
     shape = unsqueeze_specs["shape"]
     dim = unsqueeze_specs.get("dim")  # Get the dimension to unsqueeze, if specified

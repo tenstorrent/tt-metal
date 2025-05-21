@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 namespace shard_builder {
@@ -30,10 +30,10 @@ std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
     struct ShardSpec shard_spec = t.shard_spec().value();
     const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
     bool shard_grid_transposed =
-        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+        ((t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
           shard_spec.orientation == ShardOrientation::ROW_MAJOR) ||
-         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+         ((t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+           t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) &&
           shard_spec.orientation == ShardOrientation::COL_MAJOR));
     bool last = false;
     uint32_t held_value = 0;
@@ -76,10 +76,10 @@ std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
     struct ShardSpec shard_spec = t.shard_spec().value();
     const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
     bool shard_grid_transposed =
-        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+        ((t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
           shard_spec.orientation == ShardOrientation::ROW_MAJOR) ||
-         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+         ((t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+           t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) &&
           shard_spec.orientation == ShardOrientation::COL_MAJOR));
     bool last = false;
     uint32_t held_value = 0;
@@ -141,12 +141,12 @@ std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) 
     const tt::tt_metal::IDevice* device = t.device();
     TT_ASSERT(t.is_sharded());
     TT_FATAL(
-        t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "ShardedAddrGenArgBuilder::emit_ct_args was invoked with a tensor containing an unsupported (Sharded) Tensor "
         "Memory Layout: {}",
-        t.memory_config().memory_layout);
+        t.memory_config().memory_layout());
     ShardSpec shard_spec = t.shard_spec().value();
     ShardSpecBuffer buf_shard_spec = t.buffer()->shard_spec();
     const auto& [pages_per_shard_y, pages_per_shard_x] = buf_shard_spec.shape_in_pages();
@@ -158,7 +158,7 @@ std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) 
         : (buf_shard_spec.tensor2d_shape_in_pages[1] == (pages_per_shard_x * get_sharding_core_count(t)))
             ? shard_addr_gen_consts::ContiguityType::NO_SHARD_PADDING
             : shard_addr_gen_consts::ContiguityType::PADDING_IN_RIGHTMOST_SHARD;
-    args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout));  // Memory layout
+    args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout()));  // Memory layout
     args.push_back(static_cast<uint32_t>(get_sharding_core_count(t)));       // The number of sharding cores
     args.push_back(static_cast<uint32_t>(t.buffer()->aligned_page_size()));  // The page size we offset each write to
     TT_FATAL(t.buffer()->aligned_page_size() > 0, "aligned page size is 0");

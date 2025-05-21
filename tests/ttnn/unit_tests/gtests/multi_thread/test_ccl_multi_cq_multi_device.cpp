@@ -69,7 +69,6 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_async(true);
     mesh_device->enable_program_cache();
 
     auto view = mesh_device->get_view();
@@ -125,7 +124,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 
                 auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
-                Tensor input_tensor = Tensor(input_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
+                Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{});
 
                 // Enqueue write_buffer to the read/write command queue and record the event
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), input_tensor, {host_data});
@@ -169,7 +168,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
                 }
                 auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
                 auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer};
-                Tensor dummy_tensor = Tensor(dummy_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
+                Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, ReplicateTensor{});
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
                 dispatch_ops_to_device(device, dummy_tensor, ttnn::QueueId(op_cq_id));
                 promise->set_value();
@@ -216,7 +215,6 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_async(true);
     mesh_device->enable_program_cache();
 
     auto view = mesh_device->get_view();
@@ -276,7 +274,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
                 auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
                 auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
-                Tensor input_tensor = Tensor(input_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
+                Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{});
 
                 // Enqueue write_buffer to the operation`s command queue and record the event
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), input_tensor, {host_data});
@@ -328,7 +326,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
                 }
                 auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
                 auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer};
-                Tensor dummy_tensor = Tensor(dummy_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
+                Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, ReplicateTensor{});
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
                 dispatch_ops_to_device(device, dummy_tensor, ttnn::QueueId(op_cq_id));
                 promise->set_value();

@@ -24,8 +24,6 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "dispatch_fixture.hpp"
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -44,8 +42,6 @@ using namespace tt::test_utils;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
-constexpr std::int32_t MAX_NUM_WORDS =
-    (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE) / WORD_SIZE;
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -302,7 +298,8 @@ namespace tt::tt_metal {
 
 TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
@@ -321,7 +318,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) 
         GTEST_SKIP() << "See GH Issue #18384";
     }
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
@@ -341,7 +339,8 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsNocReadNoSend) {
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& eth_core : device_0->get_active_ethernet_cores(true)) {
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
@@ -368,7 +367,8 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsNocWriteNoReceive) {
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& eth_core : device_0->get_active_ethernet_cores(true)) {
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(

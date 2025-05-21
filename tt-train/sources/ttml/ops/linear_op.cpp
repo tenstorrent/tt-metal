@@ -20,24 +20,26 @@ void ttnn_linear_backward(
     const autograd::TensorPtr& bias,
     const autograd::TensorPtr& out) {
     const auto& tensor_value = tensor->get_value();
-    auto volume_without_features = tensor_value.get_logical_volume() / tensor_value.get_logical_shape()[-1];
-    auto reshaped_tensor =
-        ttnn::reshape(tensor_value, ttnn::Shape({volume_without_features, tensor_value.get_logical_shape()[-1]}));
+    auto volume_without_features =
+        tensor_value.logical_volume() / static_cast<uint64_t>(tensor_value.logical_shape()[-1]);
+    auto reshaped_tensor = ttnn::reshape(
+        tensor_value, ttnn::Shape({static_cast<uint32_t>(volume_without_features), tensor_value.logical_shape()[-1]}));
 
-    auto reshaped_grad =
-        ttnn::reshape(out->get_grad(), ttnn::Shape({volume_without_features, out->get_grad().get_logical_shape()[-1]}));
+    auto reshaped_grad = ttnn::reshape(
+        out->get_grad(),
+        ttnn::Shape({static_cast<uint32_t>(volume_without_features), out->get_grad().logical_shape()[-1]}));
     auto reshaped_weight_grad =
         ttnn_fixed::matmul(reshaped_grad, reshaped_tensor, /* transpose_a */ true, /* transpose_b */ false);
     auto reshaped_tensor_grad =
         ttnn_fixed::matmul(reshaped_grad, weight->get_value(), /* transpose_a */ false, /* transpose_b */ false);
     if (bias) {
         auto reshaped_bias_grad = ttnn_fixed::sum_over_dim(reshaped_grad, /* axis */ 0);
-        auto bias_grad = ttnn::reshape(reshaped_bias_grad, bias->get_value().get_logical_shape());
+        auto bias_grad = ttnn::reshape(reshaped_bias_grad, bias->get_value().logical_shape());
         bias->add_grad(bias_grad);
     }
-    auto weight_grad = ttnn::reshape(reshaped_weight_grad, weight->get_value().get_logical_shape());
+    auto weight_grad = ttnn::reshape(reshaped_weight_grad, weight->get_value().logical_shape());
 
-    auto tensor_grad = ttnn::reshape(reshaped_tensor_grad, tensor_value.get_logical_shape());
+    auto tensor_grad = ttnn::reshape(reshaped_tensor_grad, tensor_value.logical_shape());
 
     tensor->add_grad(tensor_grad);
     weight->add_grad(weight_grad);
@@ -101,8 +103,8 @@ autograd::TensorPtr linear_op(
         /* core_grid */ ttnn::CoreGrid{7, 8}));
 
     autograd::GradFunction grad = [weight, bias, tensor, out]() {
-        auto tensor_shape = tensor->get_value().get_logical_shape();
-        auto grad_shape = out->get_grad().get_logical_shape();
+        auto tensor_shape = tensor->get_value().logical_shape();
+        auto grad_shape = out->get_grad().logical_shape();
         // for some reason, reshape produces wrong values when last dimensions not divisible by TILE
         if (tensor_shape[-2] % TILE_HEIGHT != 0 ||
             tensor_shape[-1] % TILE_WIDTH != 0 && grad_shape[-1] % TILE_WIDTH != 0) {

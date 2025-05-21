@@ -34,7 +34,6 @@ TILE_LAYOUT = Layout.TILE
 
 StorageType = ttnn._ttnn.tensor.StorageType
 DEVICE_STORAGE_TYPE = StorageType.DEVICE
-MULTI_DEVICE_STORAGE_TYPE = StorageType.MULTI_DEVICE
 
 TILE_SIZE = 32
 
@@ -83,3 +82,12 @@ BinaryOpType = ttnn._ttnn.operations.binary.BinaryOpType
 
 BcastOpMath = ttnn._ttnn.types.BcastOpMath
 BcastOpDim = ttnn._ttnn.types.BcastOpDim
+
+CBFormatDescriptor = ttnn._ttnn.program_descriptor.CBFormatDescriptor
+CBDescriptor = ttnn._ttnn.program_descriptor.CBDescriptor
+ReaderConfigDescriptor = ttnn._ttnn.program_descriptor.ReaderConfigDescriptor
+WriterConfigDescriptor = ttnn._ttnn.program_descriptor.WriterConfigDescriptor
+ComputeConfigDescriptor = ttnn._ttnn.program_descriptor.ComputeConfigDescriptor
+KernelDescriptor = ttnn._ttnn.program_descriptor.KernelDescriptor
+SemaphoreDescriptor = ttnn._ttnn.program_descriptor.SemaphoreDescriptor
+ProgramDescriptor = ttnn._ttnn.program_descriptor.ProgramDescriptor

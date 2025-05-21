@@ -43,17 +43,20 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
 )
 @pytest.mark.parametrize(
     "dim",
-    [-4, -3, -2, -1, 0, 1, 2, 3],
+    [-4, -3, -2, -1, 0, 1, 2, 3, None],
 )
-@pytest.mark.parametrize("all_dimensions", [True, False])
-def test_bw_prod(input_shapes, all_dimensions, dim, device):
+def test_bw_prod(input_shapes, dim, device):
+    all_dimensions = dim is None
     in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
     grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device, all_dimensions, dim)
-    if all_dimensions == False:
-        pyt_y = torch.prod(in_data, dim=dim, keepdim=True)
+
+    if all_dimensions:
+        pyt_y = torch.prod(in_data)
+        tt_output_tensor_on_device = ttnn.prod_bw(grad_tensor, input_tensor)
     else:
-        pyt_y = torch.prod(in_data).view(1, 1, 1, 1)
-    tt_output_tensor_on_device = ttnn.prod_bw(grad_tensor, input_tensor, all_dimensions=all_dimensions, dim=dim)
+        pyt_y = torch.prod(in_data, dim=dim, keepdim=True)
+        tt_output_tensor_on_device = ttnn.prod_bw(grad_tensor, input_tensor, dim=dim)
+
     in_data.retain_grad()
     pyt_y.backward(gradient=grad_data)
 
@@ -75,35 +78,8 @@ def test_bw_prod(input_shapes, all_dimensions, dim, device):
 def test_bw_prod_default_both(input_shapes, device):
     in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
     grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device)
-    pyt_y = torch.prod(in_data).view(1, 1, 1, 1)
+    pyt_y = torch.prod(in_data)
     tt_output_tensor_on_device = ttnn.prod_bw(grad_tensor, input_tensor)
-    in_data.retain_grad()
-    pyt_y.backward(gradient=grad_data)
-
-    golden_tensor = [in_data.grad]
-
-    comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
-
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([32, 64, 64, 64])),
-    ),
-)
-@pytest.mark.parametrize("all_dimensions", [True, False])
-def test_bw_prod_default_dim(input_shapes, all_dimensions, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device, all_dimensions)
-    if all_dimensions == False:
-        pyt_y = torch.prod(in_data, dim=0, keepdim=True)
-    else:
-        pyt_y = torch.prod(in_data).view(1, 1, 1, 1)
-    tt_output_tensor_on_device = ttnn.prod_bw(grad_tensor, input_tensor, all_dimensions=all_dimensions)
     in_data.retain_grad()
     pyt_y.backward(gradient=grad_data)
 

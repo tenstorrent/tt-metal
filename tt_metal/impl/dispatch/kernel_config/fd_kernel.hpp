@@ -13,7 +13,6 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "mesh_graph.hpp"
-#include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <umd/device/tt_xy_pair.h>
@@ -32,11 +31,18 @@ enum NOC : uint8_t;
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
 #define UNUSED_SEM_ID 0
 
-typedef struct {
+struct noc_selection_t {
     tt::tt_metal::NOC non_dispatch_noc;  // For communicating with workers/DRAM/host
     tt::tt_metal::NOC upstream_noc;      // For communicating with upstream dispatch modules
     tt::tt_metal::NOC downstream_noc;    // For communicating with downstream dispatch modules
-} noc_selection_t;
+};
+
+enum class FDKernelType : uint32_t {
+    UNSET = 0,
+    VIRTUAL,   // Not a real kernel
+    DISPATCH,  // Dispatch kernels
+    ROUTING,   // Routing/Tunneling kernels
+};
 
 static std::vector<string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",        // PREFETCH
@@ -47,7 +53,7 @@ static std::vector<string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_HD
     "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_H
     "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_D
-    "tt_metal/impl/dispatch/kernels/cq_dispatch_slave.cpp",  // DISPATCH_S
+    "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp",  // DISPATCH_S
     "",                                                      // MUX
     "tt_metal/impl/dispatch/kernels/packet_mux.cpp",         // MUX_D
     "tt_metal/impl/dispatch/kernels/packet_demux.cpp",       // DEMUX
@@ -114,6 +120,7 @@ public:
     virtual CoreType GetCoreType() {
         return tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     }
+    FDKernelType GetKernelType() { return kernel_type_; }
     tt_cxy_pair GetLogicalCore() { return logical_core_; }
     tt_cxy_pair GetVirtualCore() {
         return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
@@ -154,6 +161,7 @@ protected:
     tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
     tt::tt_metal::Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
+    FDKernelType kernel_type_;
     chip_id_t device_id_;
     chip_id_t servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
     int node_id_;

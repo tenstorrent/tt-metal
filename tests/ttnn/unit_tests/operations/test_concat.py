@@ -15,10 +15,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "concat_spec",
     (([[1, 1, 12, 50], [1, 1, 12, 50]], -1),),
 )
-@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
-def test_tiled_concat(device, concat_spec, async_mode):
+def test_tiled_concat(device, concat_spec):
     shapes, dim = concat_spec
-    device.enable_async(async_mode)
     torch_input_tensors = [torch.rand(shape, dtype=torch.bfloat16) for shape in shapes]
     torch_output_tensor = torch.concat(torch_input_tensors, dim=dim)
 
@@ -36,9 +34,7 @@ def test_tiled_concat(device, concat_spec, async_mode):
 @pytest.mark.parametrize("height", [20, 32])
 @pytest.mark.parametrize("width", [4, 32])
 @pytest.mark.parametrize("dim", [0, 1])
-@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
-def test_concat(device, height, width, dim, async_mode):
-    device.enable_async(async_mode)
+def test_concat(device, height, width, dim):
     torch_input_tensor_a = torch.rand((height, width), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((height, width), dtype=torch.bfloat16)
     torch_output_tensor = torch.concat([torch_input_tensor_a, torch_input_tensor_b], dim=dim)
@@ -157,9 +153,7 @@ def test_concat(device, height, width, dim, async_mode):
         ),
     ),
 )
-@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
-def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode, async_mode):
-    device.enable_async(async_mode)
+def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode):
     if cache_mode:
         device.enable_program_cache()
 

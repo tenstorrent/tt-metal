@@ -23,14 +23,12 @@ void generate_noc_transfer_burst_for_tensor_slice(
 
     size_t packet_space_in_bytes_left = packet_size_bytes;
     noc_transfer_burst_out.transfer_burst_groupings.push_back({});
-    bool closed_out_last_group = false;
     bool empty_last_group = false;
     for (size_t w = 0; w < tensor_slice.tensor_slice_shape.w; w++) {
         for (size_t z = 0; z < tensor_slice.tensor_slice_shape.z; z++) {
             for (size_t y = 0; y < tensor_slice.tensor_slice_shape.y; y++) {
                 size_t pages_read = 0;
                 for (size_t x = 0; x < tensor_slice.tensor_slice_shape.x; x += pages_read) {
-                    closed_out_last_group = false;
                     empty_last_group = false;
                     auto offset = ttnn::ccl::Shape4D<uint32_t>{w, z, y, x} + tensor_slice.tensor_slice_offset;
                     auto& transfer_burst_grouping = noc_transfer_burst_out.transfer_burst_groupings.back();
@@ -53,7 +51,6 @@ void generate_noc_transfer_burst_for_tensor_slice(
                         ttnn::ccl::cmd::noc_transfer_info{noc_addr_offset, transfer_size_in_bytes});
 
                     if (packet_space_in_bytes_left < page_size) {
-                        closed_out_last_group = true;
                         packet_space_in_bytes_left = packet_size_bytes;
                         bool last_w = w == tensor_slice.tensor_slice_shape.w - 1;
                         bool last_z = z == tensor_slice.tensor_slice_shape.z - 1;

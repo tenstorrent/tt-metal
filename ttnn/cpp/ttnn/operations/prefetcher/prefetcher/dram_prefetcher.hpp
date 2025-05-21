@@ -6,7 +6,6 @@
 
 #include "ttnn/decorators.hpp"
 
-#include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "device/dram_prefetcher_op.hpp"
 
@@ -23,8 +22,7 @@ struct ExecuteDramPrefetcher {
 
 }  // namespace operations::dram_prefetcher
 
-constexpr auto dram_prefetcher = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::dram_prefetcher",
-    ttnn::operations::dram_prefetcher::ExecuteDramPrefetcher>();
+constexpr auto dram_prefetcher =
+    ttnn::register_operation<"ttnn::dram_prefetcher", ttnn::operations::dram_prefetcher::ExecuteDramPrefetcher>();
 
 }  // namespace ttnn

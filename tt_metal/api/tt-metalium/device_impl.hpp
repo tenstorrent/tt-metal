@@ -12,17 +12,19 @@
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/work_executor_types.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/program_device_map.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/sub_device_manager_tracker.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/trace_buffer.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
+class go_msg_t;
+class launch_msg_t;
 namespace tt::tt_metal {
+class SubDeviceManagerTracker;
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
@@ -156,16 +158,6 @@ public:
     // Puts device into reset
     bool close() override;
 
-    // Calls to enable_async are ignored in effort to forcefully disable async for single device use-cases
-    // MeshDevice calls force_enable_async directly avoiding enable_async call for multi-device use-case
-    void enable_async(bool enable) override;
-    void force_enable_async(bool enable);
-    void synchronize() override;
-    WorkExecutorMode get_worker_mode() override;
-    bool is_worker_queue_empty() const override;
-
-    void push_work(std::function<void()> work, bool blocking) override;
-
     // Program cache interface. Synchronize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache() override;
@@ -174,8 +166,7 @@ public:
     std::size_t num_program_cache_entries() override;
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
-
-    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
+    HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
@@ -193,7 +184,6 @@ public:
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
-    bool dispatch_firmware_active() const override { return dispatch_firmware_active_; };
     // TODO #15944: Temporary api until migration to actual fabric is complete
     std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
@@ -224,13 +214,8 @@ private:
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
+    void clear_dram_state();
     void clear_launch_messages_on_eth_cores();
-    void get_associated_dispatch_virtual_cores(
-        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& my_dispatch_cores,
-        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& other_dispatch_cores);
-
-    void set_worker_mode(const WorkExecutorMode& mode);
-
     void generate_device_bank_to_noc_tables();
 
     void mark_allocations_unsafe();
@@ -246,10 +231,6 @@ private:
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
 
     bool initialized_ = false;
-    // This variable tracks the state of dispatch firmware on device.
-    // It is set to true when dispatch firmware is launched, and reset
-    // after the terimnate command is sent.
-    bool dispatch_firmware_active_ = false;
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
@@ -259,9 +240,6 @@ private:
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
 
-    // Work Executor for this device - can asynchronously process host side work for
-    // all tasks scheduled on this device
-    std::unique_ptr<WorkExecutor> work_executor_;
     uint32_t worker_thread_core_ = 0;
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
@@ -279,6 +257,7 @@ private:
     std::vector<int32_t> l1_bank_offset_map_;
     std::vector<uint16_t> dram_bank_to_noc_xy_;
     std::vector<uint16_t> l1_bank_to_noc_xy_;
+    std::shared_ptr<Buffer> dram_debug_buffer_;
 
     program_cache::detail::ProgramCache program_cache_;
 

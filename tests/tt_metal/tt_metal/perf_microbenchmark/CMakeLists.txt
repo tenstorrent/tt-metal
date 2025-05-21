@@ -15,6 +15,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     routing/test_vc_bi_tunnel_4ep.cpp
     routing/test_vc_loopback_tunnel.cpp
     routing/test_tt_fabric_sanity.cpp
+    routing/test_tt_fabric_mux_bandwidth.cpp
     routing/test_tt_fabric_multi_hop_sanity.cpp
     routing/test_tt_fabric_socket_sanity.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp

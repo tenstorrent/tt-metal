@@ -15,6 +15,7 @@ set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_intersects.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_merge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distribution_spec/test_distribution_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/distribution_spec/test_buffer_distribution_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_banked.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_bit_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_buffer_region.cpp
@@ -24,8 +25,10 @@ set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_global_circular_buffers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_global_semaphores.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_host_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_kernel_compile_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_kernel_creation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_memory_pin.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_noc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_semaphores.cpp

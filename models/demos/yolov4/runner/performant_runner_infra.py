@@ -6,12 +6,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov4.common import (
-    YOLOV4_BOXES_PCC,
-    YOLOV4_CONFS_PCC,
-    get_model_result,
-    load_torch_model,
-)
+from models.demos.yolov4.common import YOLOV4_BOXES_PCC, YOLOV4_CONFS_PCC, get_model_result, load_torch_model
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs, get_region_boxes
 from models.demos.yolov4.tt.model_preprocessing import create_yolov4_model_parameters
 from models.demos.yolov4.tt.yolov4 import TtYOLOv4
@@ -62,7 +57,7 @@ class YOLOv4PerformanceRunnerInfra:
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
             exit("Unsupported device")
-        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
+        num_devices = device.get_num_devices()
         # torch tensor
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 

@@ -9,13 +9,15 @@ run_falcon7b_func() {
 
 run_mistral7b_func() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/demo/demo.py
+  mistral7b=/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db
+  mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
+  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 1200; fail+=$?
 
 }
 
 run_qwen7b_func() {
 
-  QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/demo/demo.py -k instruct --timeout 420
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
 
 }
 
@@ -52,6 +54,10 @@ run_llama3_func() {
 
 }
 
+run_ufld_v2_func() {
+  #ufld_v2
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
+}
 run_vgg_func() {
 
   #VGG11/VGG16
@@ -141,7 +147,13 @@ run_stable_diffusion_func() {
 
 run_mistral7b_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/demo/demo_with_prefill.py
+  # To ensure a proper perf measurement and dashboard upload of Mistral-7B N150, we have to run them on the N300 perf pipeline for now
+  mistral7b=/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db
+  mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
+  # Run Mistral-7B-v0.3 for N150
+  MESH_DEVICE=N150 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600; fail+=$?
+  # Run Mistral-7B-v0.3 for N300
+  MESH_DEVICE=N300 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600; fail+=$?
 
 }
 
@@ -197,13 +209,37 @@ run_whisper_perf() {
 
 run_yolov9c_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/experimental/functional_yolov9c/demo/demo.py --timeout 600
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov9c/demo/demo.py --timeout 600
+
+}
+
+run_mobilenetv2_func(){
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -k "pretrained_weight_true" models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
 
 }
 
 run_yolov8s_world_perf() {
 
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/experimental/yolov8s_world/demo/demo.py --timeout 600
+
+}
+
+run_vanilla_unet_demo() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_vanilla_unet/demo/demo.py::test_unet_demo_single_image
+
+}
+run_yolov8x_perf() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
+
+}
+
+
+run_vgg_unet_demo() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
 
 }
 

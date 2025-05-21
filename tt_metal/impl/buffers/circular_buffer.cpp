@@ -4,7 +4,7 @@
 
 #include <buffer.hpp>
 #include <circular_buffer.hpp>
-#include <global_circular_buffer_impl.hpp>
+#include <global_circular_buffer.hpp>
 #include <array>
 #include <string>
 #include <unordered_map>

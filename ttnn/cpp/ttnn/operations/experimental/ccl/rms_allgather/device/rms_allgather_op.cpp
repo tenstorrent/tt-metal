@@ -32,6 +32,8 @@ tt::tt_metal::operation::Hash RMSAllGather::compute_program_hash(
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
+        optional_input_tensors.at(0).has_value(),
+        optional_input_tensors.at(1).has_value(),
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -51,7 +53,7 @@ void RMSAllGather::validate(
     const auto& gamma = optional_input_tensors.at(1);
     const auto& stats = optional_input_tensors.at(2);
     TT_FATAL(
-        this->output_mem_config.shard_spec.value().orientation == ShardOrientation::ROW_MAJOR,
+        this->output_mem_config.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
         "Minimal version requires row major sharding orientation");
     TT_FATAL(
         a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
@@ -61,9 +63,7 @@ void RMSAllGather::validate(
         a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or
             a.get_dtype() == DataType::BFLOAT8_B,
         "Error");
-    TT_FATAL(
-        a.storage_type() == StorageType::DEVICE || a.storage_type() == StorageType::MULTI_DEVICE,
-        "Operands to frmsnorm need to be on device!");
+    TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to frmsnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
 
     if (b.has_value()) {
@@ -105,11 +105,11 @@ void RMSAllGather::validate(
     if (a.is_sharded()) {
         // TODO: Add support for this (should be similar to interleaved)
         TT_FATAL(
-            a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED,
+            a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
             "Height sharded inputs are not supported.");
         TT_FATAL(
             this->output_mem_config.is_sharded() &&
-                this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED,
+                this->output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
             "Sharded inputs require sharded outputs.");
         if (b.has_value()) {
             TT_FATAL(b.value().is_sharded(), "residual tensor b should be sharded if input a is sharded");
@@ -138,8 +138,8 @@ void RMSAllGather::validate(
                 if (program_config.inplace) {
                     TT_FATAL(this->output_mem_config.is_sharded(), "Error");
                 }
-                TT_FATAL(a.memory_config().buffer_type == this->output_mem_config.buffer_type, "Error");
-                TT_FATAL(a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
+                TT_FATAL(a.memory_config().buffer_type() == this->output_mem_config.buffer_type(), "Error");
+                TT_FATAL(a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
 
                 // tensor shape
                 const auto shape = a.get_padded_shape();
@@ -171,7 +171,7 @@ void RMSAllGather::validate(
                     tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
                     "block_w must equal to K / num_cores.");
                 TT_FATAL(Mt == program_config.block_h, "block_h must equal to M.");
-                TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+                TT_FATAL(a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
                 if (b.has_value()) {
                     TT_FATAL(b.value().is_sharded(), "Error");
                     TT_FATAL(b.value().shard_spec() == shard_spec, "Error");
@@ -185,22 +185,6 @@ void RMSAllGather::validate(
         this->program_config);
 }
 
-static void validate_output_tensor_allocation(const std::vector<Tensor>& output_tensors) {
-    for (const auto& output_tensor : output_tensors) {
-        const auto& buffers = output_tensor.buffers();
-        const auto first_address = buffers.front()->address();
-        TT_FATAL(
-            std::all_of(
-                buffers.begin(),
-                buffers.end(),
-                [&first_address](const auto& buffer) {
-                    return buffer != nullptr && buffer->address() == first_address;
-                }),
-            "Output buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
-            "different addresses across devices.");
-    }
-}
-
 std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensor.get_logical_shape();
@@ -212,7 +196,7 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
             if constexpr (std::is_same_v<
                               ProgramConfigType,
                               ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>) {
-                auto output_shard_spec = this->output_mem_config.shard_spec.value();
+                auto output_shard_spec = this->output_mem_config.shard_spec().value();
                 auto input_shard_spec = input_tensor.shard_spec().value();
                 if (output_shard_spec != input_shard_spec) {
                     output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
@@ -222,8 +206,8 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
                 }
 
                 auto mem_config = this->output_mem_config;
-                if (!mem_config.shard_spec.has_value()) {
-                    mem_config.shard_spec = input_tensor.shard_spec().value();
+                if (!mem_config.shard_spec().has_value()) {
+                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec().value());
                 }
 
                 return {ttnn::TensorSpec(

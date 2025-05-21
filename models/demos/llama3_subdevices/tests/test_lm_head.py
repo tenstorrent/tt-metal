@@ -46,8 +46,6 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    mesh_device.enable_async(True)
-
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, dummy_weights=True)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()

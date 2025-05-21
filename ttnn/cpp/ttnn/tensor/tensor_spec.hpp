@@ -40,8 +40,14 @@ public:
     }
     size_t compute_page_size_bytes() const { return tensor_layout_.compute_page_size_bytes(logical_shape_); }
 
+    TensorSpec with_memory_config(MemoryConfig memory_config) const {
+        TensorSpec result = *this;
+        result.tensor_layout_ = tensor_layout_.with_memory_config(std::move(memory_config));
+        return result;
+    }
+
     static constexpr auto attribute_names = std::forward_as_tuple("logical_shape", "tensor_layout");
-    const auto attribute_values() const { return std::forward_as_tuple(logical_shape_, tensor_layout_); }
+    auto attribute_values() const { return std::forward_as_tuple(logical_shape_, tensor_layout_); }
 
 private:
     ttnn::Shape logical_shape_;

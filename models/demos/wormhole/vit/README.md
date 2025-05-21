@@ -13,30 +13,29 @@ https://huggingface.co/docs/transformers/en/model_doc/vit
 
 To run the demo for question answering using the Bloom model, follow these instructions:
 
--  For Imagenet-21K to test inference accuracy, use the following command to run the demo:
-
-  ```sh
-  pytest --disable-warnings  models/demos/wormhole/vit/demo/demo_vit_ttnn_imagenet_inference.py
-  ```
-
 -  For the inference overall rutime (end-2-end), use the following command to run the demo:
 
   ```sh
-  pytest --disable-warnings  models/demos/wormhole/vit/demo/demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+  pytest --disable-warnings models/demos/wormhole/vit/demo/demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
   ```
 
 -  For running the inference device OPs analysis, use the following command to run the demo:
 
   ```sh
 build_metal.sh --enable-profiler # need build to enable the profiler
-./tt_metal/tools/profiler/profile_this.py -n vit -c "pytest --disable-warnings  models/demos/wormhole/vit/demo/demo_vit_ttnn_inference_device_OPs.py"
+./tt_metal/tools/profiler/profile_this.py -n vit -c "pytest --disable-warnings models/demos/wormhole/vit/demo/demo_vit_ttnn_inference_device_OPs.py"
   ```
 
+-  For Imagenet-21K to test inference accuracy, use the following command to run the demo:
+
+  ```sh
+  pytest --disable-warnings models/demos/wormhole/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
+  ```
 
 
 ## Results
 
-- The Imagenet-21K inference accuracy is 79%
 - Model runtime (host end-2-end) is 1100 FPS
+- The Imagenet-21K inference accuracy is 80%
 
 ---

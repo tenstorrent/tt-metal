@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <assert.hpp>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <logger.hpp>
@@ -111,15 +111,6 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             go_msg, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
     }
-}
-
-void print_worker_cores(chip_id_t chip_id) {
-    std::cout << std::endl << "worker cores: " << std::endl;
-    for (const CoreCoord& core : tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id).get_cores(
-             CoreType::TENSIX, CoordSystem::PHYSICAL)) {
-        std::cout << core.str() << " ";
-    }
-    std::cout << std::endl << std::endl;
 }
 
 ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
@@ -255,7 +246,8 @@ void wait_until_cores_done(
 
         // Print not-done cores
         if (loop_count % 1000 == 0) {
-            log_debug(tt::LogMetal, "Not done phys cores: {}", fmt::join(not_done_phys_cores, " "));
+            log_debug(
+                tt::LogMetal, "Device {}: Not done phys cores: {}", device_id, fmt::join(not_done_phys_cores, " "));
             usleep(100000);
         }
 
@@ -265,7 +257,7 @@ void wait_until_cores_done(
             bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
 
             if (is_done) {
-                log_debug(tt::LogMetal, "Phys cores just done: {}", phys_core.str());
+                log_debug(tt::LogMetal, "Device {}: Phys cores just done: {}", device_id, phys_core.str());
                 it = not_done_phys_cores.erase(it);
             } else {
                 ++it;

@@ -11,7 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "cpp/ttnn/operations/copy.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn {
 
@@ -137,12 +137,12 @@ void AllGather::validate(const std::vector<Tensor>& input_tensors) const {
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
-        input_tensor.memory_config().memory_layout);
+        input_tensor.memory_config().memory_layout());
 
     // Sharding Config checks
     bool input_sharded = input_tensor.is_sharded();
@@ -249,8 +249,11 @@ Tensor all_gather_impl(
         input_tensor.get_logical_shape()[-2],
         input_tensor.get_logical_shape()[-1]};
 
-    const uint32_t w_pad = input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH;
-    const uint32_t h_pad = input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT;
+    const uint32_t unpadded_w = input_tensor.get_logical_shape()[-1];
+    const uint32_t unpadded_h = input_tensor.get_logical_shape()[-2];
+
+    const uint32_t w_pad = tt::round_up(unpadded_w, tt::constants::TILE_WIDTH) - unpadded_w;
+    const uint32_t h_pad = tt::round_up(unpadded_h, tt::constants::TILE_HEIGHT) - unpadded_h;
     bool needs_padding = input_tensor.get_layout() == Layout::TILE && (h_pad != 0 || w_pad != 0);
 
     Tensor input_tensor_padded = input_tensor;

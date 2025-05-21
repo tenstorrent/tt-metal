@@ -1,5 +1,5 @@
 add_library(tt_stl INTERFACE)
-add_library(TT:STL ALIAS tt_stl)
+add_library(TT::STL ALIAS tt_stl)
 
 # FIXME: TT-STL should support down to C++17 (so that TT-Metalium can), but we have headers (eg: <reflect>) in our
 #        public API that is pushing C++20 on consumers
@@ -35,5 +35,14 @@ target_link_libraries(
         magic_enum::magic_enum
         nlohmann_json::nlohmann_json
 )
+
+target_precompile_headers(
+    metal_common_pch # TT::CommonPCH
+    PUBLIC
+        <reflect>
+        tt_stl/reflection.hpp
+)
+
+target_link_libraries(metal_common_pch PRIVATE tt_stl)
 
 install(TARGETS tt_stl EXPORT Metalium FILE_SET api COMPONENT metalium-dev)

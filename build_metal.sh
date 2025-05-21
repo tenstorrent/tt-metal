@@ -281,7 +281,6 @@ if [ "$cpm_use_local_packages" = "ON" ]; then
 fi
 
 if [ "$enable_ccache" = "ON" ]; then
-    cmake_args+=("-DCMAKE_DISABLE_PRECOMPILE_HEADERS=TRUE")
     cmake_args+=("-DENABLE_CCACHE=TRUE")
 fi
 
@@ -334,6 +333,7 @@ fi
 
 if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
+    cmake_args+=("-DTT_INSTALL=OFF")
 fi
 
 if [ "$unity_builds" = "ON" ]; then

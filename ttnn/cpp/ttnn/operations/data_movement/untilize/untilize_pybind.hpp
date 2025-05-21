@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "untilize.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;

@@ -46,14 +46,14 @@
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 
 using std::vector;
 using namespace tt;
@@ -124,7 +124,7 @@ inline std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint3
     return std::vector<uint32_t>(range.begin(), range.begin() + count);
 }
 
-typedef struct test_board {
+struct test_board_t {
     std::vector<chip_id_t> available_chip_ids;
     std::vector<chip_id_t> physical_chip_ids;
     std::vector<std::pair<chip_id_t, std::vector<chip_id_t>>> tx_rx_map;
@@ -134,7 +134,7 @@ typedef struct test_board {
     uint32_t num_chips_to_use;
     std::string mesh_graph_descriptor;
 
-    test_board(std::string& board_type_) {
+    test_board_t(std::string& board_type_) {
         if ("n300" == board_type_) {
             mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml";
             num_chips_to_use = 2;
@@ -410,7 +410,7 @@ typedef struct test_board {
 
         for (auto& [chip_id, neighbor_cnt] : n_hop_neighbors_cnt) {
             uint32_t temp_neighbor_cnt = UINT32_MAX;
-            chip_id_t selected_chip_id;
+            chip_id_t selected_chip_id{};
 
             // check if the key exists, since it could have been erased if the chip id has already been picked
             if (!chip_n_hop_neighbors.contains(chip_id)) {
@@ -510,10 +510,9 @@ typedef struct test_board {
     }
 
     inline void close_devices() { tt::tt_metal::detail::CloseDevices(device_handle_map); }
+};
 
-} test_board_t;
-
-typedef struct test_device {
+struct test_device_t {
     chip_id_t physical_chip_id;
     test_board_t* board_handle;
     tt_metal::IDevice* device_handle;
@@ -532,7 +531,7 @@ typedef struct test_device {
     std::unordered_map<chan_id_t, std::vector<std::pair<uint32_t, CoreCoord>>>
         router_worker_map;  // router chan to worker logical cores
 
-    test_device(chip_id_t chip_id_, test_board_t* board_handle_) {
+    test_device_t(chip_id_t chip_id_, test_board_t* board_handle_) {
         physical_chip_id = chip_id_;
         board_handle = board_handle_;
 
@@ -606,8 +605,9 @@ typedef struct test_device {
             router_compile_args.push_back(direction);
 
             // initialize the semaphore
+            auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
             tt::llrt::write_hex_vec_to_core(
-                device_handle->id(), router_virtual_cores[i], zero_buf, FABRIC_ROUTER_SYNC_SEM);
+                device_handle->id(), router_virtual_cores[i], zero_buf, fabric_router_sync_sem_addr);
 
             auto kernel = tt_metal::CreateKernel(
                 program_handle,
@@ -623,16 +623,18 @@ typedef struct test_device {
     void wait_for_router_sync() {
         uint32_t master_router_status = 0;
         uint32_t expected_val = router_logical_cores.size();
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         while (expected_val != master_router_status) {
             master_router_status = tt::llrt::read_hex_vec_from_core(
-                device_handle->id(), router_virtual_cores[master_router_idx], FABRIC_ROUTER_SYNC_SEM, 4)[0];
+                device_handle->id(), router_virtual_cores[master_router_idx], fabric_router_sync_sem_addr, 4)[0];
         }
     }
 
     void terminate_router_kernels() {
         std::vector<uint32_t> zero_buf(1, 0);
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         tt::llrt::write_hex_vec_to_core(
-            device_handle->id(), router_virtual_cores[master_router_idx], zero_buf, FABRIC_ROUTER_SYNC_SEM);
+            device_handle->id(), router_virtual_cores[master_router_idx], zero_buf, fabric_router_sync_sem_addr);
     }
 
     std::vector<CoreCoord> select_random_worker_cores(uint32_t count) {
@@ -661,7 +663,7 @@ typedef struct test_device {
 
     void get_available_router_cores(
         uint32_t num_hops,
-        std::shared_ptr<test_device>& rx_device,
+        std::shared_ptr<test_device_t>& rx_device,
         std::vector<chan_id_t>& src_routers,
         std::vector<chan_id_t>& dest_routers) {
         // shortest route possible with least number of internal noc hops
@@ -815,10 +817,9 @@ typedef struct test_device {
     inline stl::Span<const chip_id_t> get_intra_chip_neighbors(RoutingDirection routing_direction) {
         return board_handle->get_intra_chip_neighbors(mesh_id, logical_chip_id, routing_direction);
     }
+};
 
-} test_device_t;
-
-typedef struct test_traffic {
+struct test_traffic_t {
     std::shared_ptr<test_device_t> tx_device;
     std::vector<std::shared_ptr<test_device_t>> rx_devices;
     uint32_t num_tx_workers;
@@ -845,7 +846,7 @@ typedef struct test_traffic {
     std::optional<uint32_t> remote_controller_noc_encoding;
     std::optional<uint32_t> remote_controller_mesh_chip_id;
 
-    test_traffic(
+    test_traffic_t(
         std::shared_ptr<test_device_t>& tx_device_,
         std::vector<std::shared_ptr<test_device_t>>& rx_devices_,
         uint32_t num_src_endpoints,
@@ -902,7 +903,7 @@ typedef struct test_traffic {
         }
     }
 
-    void set_remote_controller(test_traffic& reverse_traffic) {
+    void set_remote_controller(test_traffic_t& reverse_traffic) {
         sync_with_remote_controller_kernel = true;
         auto remote_tx_device = reverse_traffic.tx_device;
         controller_outbound_eth_chan = std::get<0>(tx_workers[0]);
@@ -1324,8 +1325,7 @@ typedef struct test_traffic {
             }
         }
     }
-
-} test_traffic_t;
+};
 
 int main(int argc, char **argv) {
 
@@ -1554,9 +1554,15 @@ int main(int argc, char **argv) {
     uint32_t num_available_devices, num_allocated_devices = 0;
 
     std::map<string, string> defines;
+    uint16_t routing_mode;
     if (!push_mode) {
         defines["FVC_MODE_PULL"] = "";
+        routing_mode = (ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PULL);
+    } else {
+        routing_mode = (ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH | ROUTING_MODE_LOW_LATENCY);
     }
+    tt::tt_fabric::set_routing_mode(routing_mode);
+    defines["ROUTING_MODE"] = std::to_string(static_cast<int>(routing_mode));
 
     if (benchmark_mode) {
         prng_seed = 100;
@@ -1705,7 +1711,7 @@ int main(int argc, char **argv) {
 
         uint32_t client_interface_addr = worker_unreserved_base_addr;
         uint32_t client_pull_req_buf_addr =
-            client_interface_addr + sizeof(fabric_pull_client_interface_t) + sizeof(fabric_router_l1_config_t) * 4;
+            client_interface_addr + PULL_CLIENT_INTERFACE_SIZE + sizeof(fabric_router_l1_config_t) * 4;
 
         std::vector<uint32_t> tx_compile_args = {
             data_mode,                         // 0: Data mode. 0 - Packetized Data. 1 Raw Data.

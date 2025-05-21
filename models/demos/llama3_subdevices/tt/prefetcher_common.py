@@ -5,18 +5,12 @@ import ttnn
 import torch
 from loguru import logger
 from models.common.lightweightmodule import LightweightModule
-from tests.ttnn.unit_tests.operations.prefetcher_common import get_core_ranges
+
+from models.demos.llama3_subdevices.tt.model_config import (
+    get_core_ranges,
+)
 
 global_tt_tensor_address = None
-
-
-def get_buffer_address(tensor):
-    addr = []
-    for i, ten in enumerate(ttnn.get_device_tensors(tensor)):
-        addr.append(ten.buffer_address())
-        if len(addr) > 0:
-            assert addr[i - 1] == addr[i], f"Expected {addr[i-1]} == {addr[i]}"
-    return addr[0]
 
 
 class TtLlamaPrefetcherSetup(LightweightModule):
@@ -116,17 +110,9 @@ class TtLlamaPrefetcherSetup(LightweightModule):
                 self.global_cb_size,
             )
 
-    def buffer_address(self, tensor):
-        addr = []
-        for i, ten in enumerate(ttnn.get_device_tensors(tensor)):
-            addr.append(ten.buffer_address())
-            if len(addr) > 0:
-                assert addr[i - 1] == addr[i], f"Expected {addr[i-1]} == {addr[i]}"
-        return addr[0]
-
     def insert_tensor(self, tensor: ttnn.Tensor):
         self.tensors.append(tensor)
-        self.tensor_addrs.append(self.buffer_address(tensor))
+        self.tensor_addrs.append(tensor.buffer_address())
 
     def get_tensor_addrs(self):
         assert (

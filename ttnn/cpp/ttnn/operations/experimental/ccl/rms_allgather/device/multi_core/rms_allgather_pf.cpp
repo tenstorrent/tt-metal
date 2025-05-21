@@ -13,7 +13,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
@@ -44,7 +44,9 @@ namespace ttnn::operations::fused::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const Tensor& input_tensor) {
+    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+}
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
@@ -88,16 +90,15 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     tt::tt_metal::Program program{};
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
-    uint32_t page_size = 0;
     uint32_t output_page_size = 0;
     uint32_t stats_page_size;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.value().get_dtype());
-    if (a.get_layout() == Layout::TILE) {
-        page_size = a.tensor_spec().tile().get_tile_size(in_data_format);
-    } else {
-        page_size = a.buffer()->page_size();
+    tt::DataFormat residual_data_format = in_data_format;
+    if (b)
+    {
+        residual_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().get_dtype());
     }
     if (output.get_layout() == Layout::TILE) {
         output_page_size = output.tensor_spec().tile().get_tile_size(out_data_format);
@@ -132,13 +133,14 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
 
     // Tensor Info
-    const auto input_tensor_cores = a.memory_config().shard_spec->grid;
-    const auto output_tensor_cores = output.memory_config().shard_spec->grid;
-    const auto output_tensor_shard_shape = output.memory_config().shard_spec->shape;
-    const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
+    const auto input_tensor_cores = a.memory_config().shard_spec()->grid;
+    const auto output_tensor_cores = output.memory_config().shard_spec()->grid;
+    const auto stats_tensor_cores = stats.value().memory_config().shard_spec()->grid;
+    const auto stats_tensor_shard_shape = stats.value().memory_config().shard_spec()->shape;
+    const auto stats_tensor_shard_num_pages = stats_tensor_shard_shape[0] * stats_tensor_shard_shape[1] / TILE_HW;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = output_page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
 
@@ -179,6 +181,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                           : tt::DataFormat::Float16_b;
     // tile sizes
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
+    uint32_t residual_single_tile_size = tt::tt_metal::detail::TileSize(residual_data_format);
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
     uint32_t stats_single_tile_size = tt::tt_metal::detail::TileSize(stats_data_format);
@@ -186,6 +189,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
     tt::log_debug("in_data_format: {}", in_data_format);
+    tt::log_debug("res_data_format: {}", residual_data_format);
     tt::log_debug("out_data_format: {}", out_data_format);
     tt::log_debug("cb_data_format: {}", cb_data_format);
     tt::log_debug("gamma_cb_data_format: {}", gamma_cb_data_format);
@@ -257,10 +261,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         num_distributed_devices = post_all_gather_stats_block_tiles;
     }
 
-    uint32_t in0_CB_tiles = in0_block_tiles;
-    uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
+    uint32_t in0_CB_size = in0_block_tiles * in_single_tile_size;
     // block size for in1 (tensor b)
-    uint32_t in1_CB_size = in0_CB_size;
+    uint32_t in1_CB_size = in0_block_tiles * residual_single_tile_size;
     // in2 - scaler
     uint32_t in2_CB_size = bfloat16_tile_size;
     // in3 - eps
@@ -405,6 +408,13 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
     }
 
+    // compute defines
+    // reader defines
+    std::map<string, string> compute_defines;
+    if (b.has_value()) {
+        compute_defines["FUSE_PRE_ADD"] = "1";
+    }
+
     // Create pre circular buffers
 
     // in1 sharded
@@ -441,14 +451,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             .set_page_size(ex_cb_external2_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external2_config);
 
-    // in0 sharded
-    uint32_t pre_in0_cb_index = tt::CBIndex::c_5;
-    tt::tt_metal::CircularBufferConfig pre_in0_cb_config =
-        tt::tt_metal::CircularBufferConfig(in0_CB_size, {{pre_in0_cb_index, in_data_format}})
-            .set_page_size(pre_in0_cb_index, in_single_tile_size)
-            .set_globally_allocated_address(*a.buffer());
-    auto pre_cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, pre_in0_cb_config);
-
     // x
     uint32_t pre_x_cb_index = tt::CBIndex::c_6;
     tt::tt_metal::CircularBufferConfig pre_x_cb_config =
@@ -472,27 +474,57 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, all_cores, cb_reserved_packet_header_config);
 
-    uint32_t add_out_cb_index = tt::CBIndex::c_21;
-    uint32_t in1_cb_index = tt::CBIndex::c_22;
+    uint32_t updated_residual_index = tt::CBIndex::c_21;
+    uint32_t original_input_index = tt::CBIndex::c_22;
+    // All of these take either residual or input as input, one for pre, one for post
+    uint32_t in0_cb_index = tt::CBIndex::c_12;
+    uint32_t pre_in0_cb_index = tt::CBIndex::c_5;
 
     CBHandle cb_in1 = 0;
     CBHandle cb_add_out = 0;
+    CBHandle cb_in0 = 0;
+    CBHandle pre_cb_in0 = 0;
 
     if (b) {
-        tt::tt_metal::CircularBufferConfig add_out_cb_config =
-            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{add_out_cb_index, in_data_format}})
-                .set_page_size(add_out_cb_index, in_single_tile_size)
+        // Tensors that do the b fusing
+        tt::tt_metal::CircularBufferConfig in1_cb_config =
+            tt::tt_metal::CircularBufferConfig(in0_CB_size, {{original_input_index, in_data_format}})
+                .set_page_size(original_input_index, in_single_tile_size)
                 .set_globally_allocated_address(*a.buffer());
+        cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
+
+        tt::tt_metal::CircularBufferConfig add_out_cb_config =
+            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{updated_residual_index, residual_data_format}})
+                .set_page_size(updated_residual_index, residual_single_tile_size)
+                .set_globally_allocated_address(*b.value().buffer());
         cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
 
-        tt::tt_metal::CircularBufferConfig in1_cb_config =
-            tt::tt_metal::CircularBufferConfig(
-                in1_CB_size, {{in1_cb_index, tt::tt_metal::datatype_to_dataformat_converter(b.value().get_dtype())}})
-                .set_page_size(in1_cb_index, in_single_tile_size)
+        // Other CBs should use the now updated b as an input
+        tt::tt_metal::CircularBufferConfig in0_cb_config =
+            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{in0_cb_index, residual_data_format}})
+                .set_page_size(in0_cb_index, residual_single_tile_size)
                 .set_globally_allocated_address(*b.value().buffer());
-        cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
-    }
+        cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
 
+        tt::tt_metal::CircularBufferConfig pre_in0_cb_config =
+            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{pre_in0_cb_index, residual_data_format}})
+                .set_page_size(pre_in0_cb_index, residual_single_tile_size)
+                .set_globally_allocated_address(*b.value().buffer());
+        pre_cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, pre_in0_cb_config);
+    } else {
+        // There is no b so just use a as the input
+        tt::tt_metal::CircularBufferConfig in0_cb_config =
+            tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
+                .set_page_size(in0_cb_index, in_single_tile_size)
+                .set_globally_allocated_address(*a.buffer());
+        cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
+
+        tt::tt_metal::CircularBufferConfig pre_in0_cb_config =
+            tt::tt_metal::CircularBufferConfig(in0_CB_size, {{pre_in0_cb_index, in_data_format}})
+                .set_page_size(pre_in0_cb_index, in_single_tile_size)
+                .set_globally_allocated_address(*a.buffer());
+        pre_cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, pre_in0_cb_config);
+    }
     // Create post circular buffers
 
     // ex_global
@@ -520,14 +552,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                 .set_page_size(in5_cb_index, gamma_single_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, in5_cb_config);
     }
-
-    // in0 sharded
-    uint32_t in0_cb_index = tt::CBIndex::c_12;
-    tt::tt_metal::CircularBufferConfig in0_cb_config =
-        tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
-            .set_page_size(in0_cb_index, in_single_tile_size)
-            .set_globally_allocated_address(*a.buffer());
-    auto cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
 
     // in3 eps
     uint32_t in3_cb_index = tt::CBIndex::c_13;
@@ -603,7 +627,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         (std::uint32_t)single_tile_size,
         (std::uint32_t)ex_cb_partial2_index,
         (std::uint32_t)ex2_cb_index,
-        (std::uint32_t)add_out_cb_index,
         (std::uint32_t)ex_cb_external2_index,
         (std::uint32_t)post_reduce_sender_semaphore_id,
         (std::uint32_t)cb_stats_reduced_index,
@@ -703,11 +726,11 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         pre_in4_cb_index,
         ex_cb_partial2_index,
         ex2_cb_index,
-        add_out_cb_index,
+        updated_residual_index,
         ex_cb_external2_index,
         cb_to_allgather_writer,
         pre_x_cb_index,
-        in1_cb_index,
+        original_input_index,
         pre_in0_cb_index,
         output_cb_index,
         cb_stats_index,
@@ -807,7 +830,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args});
+            .compile_args = compute_compile_time_args,
+            .defines = compute_defines});
     if (num_none_all_to_all_workers > 0) {
         compute_compile_time_args.at(4) = 0;
         compute_kernels_id = CreateKernel(
@@ -818,7 +842,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = math_approx_mode,
-                .compile_args = compute_compile_time_args});
+                .compile_args = compute_compile_time_args,
+                .defines = compute_defines});
     }
 
     // Runtime Args
@@ -866,20 +891,19 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     CoreCoord drain_sync_core;
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
-    auto output_cores_vec = corerange_to_cores(output_tensor_cores, std::nullopt, true);
-    auto cores_per_device = output_cores_vec.size() + ring_size - 1 / ring_size;
-    uint32_t start_core_index_for_device = output_cores_vec.size() / ring_size * ring_index;
+    auto stats_cores_vec = corerange_to_cores(stats_tensor_cores, std::nullopt, true);
+    auto cores_per_device = stats_cores_vec.size() + ring_size - 1 / ring_size;
+    uint32_t start_core_index_for_device = stats_cores_vec.size() / ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
-    auto output_cores_this_device = std::vector<CoreCoord>(
-        output_cores_vec.begin() + start_core_index_for_device, output_cores_vec.begin() + end_core_index_for_device);
+    auto stats_cores_this_device = std::vector<CoreCoord>(
+        stats_cores_vec.begin() + start_core_index_for_device, stats_cores_vec.begin() + end_core_index_for_device);
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
 
         tt::log_debug("core: {}, {}", core.x, core.y);
 
-        uint32_t height_index = 0, width_index = 0;
-        height_index = 0;
+        uint32_t width_index = 0;
         width_index = i;
 
         uint32_t width_index_two_stage = width_index % num_blocks_first_stage;
@@ -972,28 +996,28 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         // all_gather_rts Start at RT index 3 of writer
         std::vector<uint32_t> all_gather_rts = {
-            semaphore.address(),        // out_ready_sem_bank_addr (absolute address)
-            out_ready_sem_wait_value,   // out_ready_sem_wait_value
-            output.buffer()->address()  // tensor_address0
+            semaphore.address(),               // out_ready_sem_bank_addr (absolute address)
+            out_ready_sem_wait_value,          // out_ready_sem_wait_value
+            stats.value().buffer()->address()  // tensor_address0
         };
 
-        if (i < num_links) {
+        if (i == 0) {
             // Add RT values for the all gather core to all_gather_rts
             // Will be appended to the end of writer rt args
             uint32_t base_pages_per_worker = 1 / num_links;
             uint32_t remainder = 1 % num_links;
             uint32_t input_tile_id_start = i * base_pages_per_worker + std::min(i, remainder);
             uint32_t input_tile_id_end = (i + 1) * base_pages_per_worker + std::min(i + 1, remainder);
-            uint32_t output_first_core_tile_start_offset =
-                (ring_index + input_tile_id_start) % output_tensor_shard_num_pages;
-            std::vector<uint32_t> output_tensor_cores_x;
-            std::vector<uint32_t> output_tensor_cores_y;
-            for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
-                 i < (input_tile_id_end + output_tensor_shard_num_pages - 1) / output_tensor_shard_num_pages;
+            uint32_t stats_first_core_tile_start_offset =
+                (ring_index + input_tile_id_start) % stats_tensor_shard_num_pages;
+            std::vector<uint32_t> stats_tensor_cores_x;
+            std::vector<uint32_t> stats_tensor_cores_y;
+            for (uint32_t i = input_tile_id_start / stats_tensor_shard_num_pages;
+                 i < (input_tile_id_end + stats_tensor_shard_num_pages - 1) / stats_tensor_shard_num_pages;
                  i++) {
-                auto this_core = mesh_device->worker_core_from_logical_core(output_cores_this_device[i]);
-                output_tensor_cores_x.push_back(this_core.x);
-                output_tensor_cores_y.push_back(this_core.y);
+                auto this_core = mesh_device->worker_core_from_logical_core(stats_cores_this_device[i]);
+                stats_tensor_cores_x.push_back(this_core.x);
+                stats_tensor_cores_y.push_back(this_core.y);
             }
             if (i == 0) {
                 // drain sync core is the first worker core
@@ -1001,14 +1025,14 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             }
 
             std::vector<uint32_t> base_rt_args = {
-                output_first_core_tile_start_offset,  // first_core_tile_start_offset
-                output_tensor_cores_x.size(),         // num_cores
-                drain_sync_core.x,                    // out_ready_sem_noc0_x
-                drain_sync_core.y                     // out_ready_sem_noc0_y
+                stats_first_core_tile_start_offset,  // first_core_tile_start_offset
+                stats_tensor_cores_x.size(),         // num_cores
+                drain_sync_core.x,                   // out_ready_sem_noc0_x
+                drain_sync_core.y                    // out_ready_sem_noc0_y
             };
             all_gather_rts.insert(all_gather_rts.end(), base_rt_args.begin(), base_rt_args.end());
-            all_gather_rts.insert(all_gather_rts.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
-            all_gather_rts.insert(all_gather_rts.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
+            all_gather_rts.insert(all_gather_rts.end(), stats_tensor_cores_x.begin(), stats_tensor_cores_x.end());
+            all_gather_rts.insert(all_gather_rts.end(), stats_tensor_cores_y.begin(), stats_tensor_cores_y.end());
 
             all_gather_rts.push_back(forward_device.has_value());
             if (forward_device.has_value()) {
@@ -1023,7 +1047,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             }
         }
         // Set writer runtime args
-
         std::vector<uint32_t> write_back_writer_args;
 
         uint32_t num_storage_cores = all_storage_cores.num_cores();
@@ -1151,7 +1174,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             writer_mcast_receiver_args.insert(
                 writer_mcast_receiver_args.end(), all_gather_rts.begin(), all_gather_rts.end());
             writer_mcast_receiver_args.at(0) = writer_mcast_receiver_args.size();
-            // printf("Reader size is %u\n",writer_mcast_receiver_args.at(0));
             std::vector<uint32_t> writer_mcast_post_receiver_args;
             writer_mcast_post_receiver_args.push_back(packed_cinv_value);
             writer_mcast_post_receiver_args.push_back(e.u);
@@ -1196,7 +1218,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             const auto src_buffer_a = input_tensors.at(0).buffer();
             const auto b_tensor = optional_input_tensors.at(0);
             const auto gamma_tensor = optional_input_tensors.at(1);
-            const auto stats_tensor = optional_input_tensors.at(2);
+            const auto stats_tensor = optional_input_tensors.at(2).value();
             const auto dst_buffer = output_tensors.at(0).buffer();
             bool skip_write_back =
                 output_tensors.at(0).shard_spec().value() == input_tensors.at(0).shard_spec().value();
@@ -1214,32 +1236,33 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                 if (writer_kernel_id == writer_mcast_sender_kernels_id) {
                     auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
                     runtime_args[8] = semaphore.address();
-                    runtime_args[10] = dst_buffer->address();
+                    runtime_args[10] = stats_tensor.buffer()->address();
                     // runtime_args[0] holds the start of the post arguments, apply that offset
                     runtime_args[runtime_args[0] + 2] = gamma_address;
                 } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
                     auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
                     runtime_args[8] = semaphore.address();
-                    runtime_args[10] = dst_buffer->address();
+                    runtime_args[10] = stats_tensor.buffer()->address();
                     runtime_args[runtime_args[0] + 2] = gamma_address;
                 }
             }
-            UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *src_buffer_a);
-
+            // Repoint to the input buffers
             if (b_tensor.has_value()) {
-                UpdateDynamicCircularBufferAddress(program, cb_in1, *b_tensor.value().buffer());
-                UpdateDynamicCircularBufferAddress(program, cb_add_out, *src_buffer_a);
+                UpdateDynamicCircularBufferAddress(program, cb_in1, *src_buffer_a);
+                UpdateDynamicCircularBufferAddress(program, cb_add_out, *b_tensor.value().buffer());
+                UpdateDynamicCircularBufferAddress(program, cb_in0, *b_tensor.value().buffer());
+                UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *b_tensor.value().buffer());
+            } else {
+                UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
+                UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *src_buffer_a);
             }
-            UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
             if (!skip_write_back) {
                 UpdateDynamicCircularBufferAddress(program, cb_output_reshard, *dst_buffer);
             } else {
                 UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
             }
-            if (stats_tensor.has_value()) {
-                const auto stats_buffer = optional_input_tensors.at(2).value().buffer();
-                UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_buffer);
-            }
+            const auto stats_buffer = stats_tensor.buffer();
+            UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_buffer);
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

@@ -5,7 +5,7 @@
 #include "unary_op_utils.hpp"
 
 #include <tt-metalium/assert.hpp>
-#include "cpp/ttnn/tensor/types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -229,7 +229,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     "unary_ne_tile_init();",
                     fmt::format("unary_ne_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
-
+            break;
+        case UnaryOpType::UNARY_EQ:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+                op_init_and_name = {"unary_eq_tile_init();", fmt::format("unary_eq_tile_int32({}, {});", idst, param0)};
+            } else {
+                op_init_and_name = {
+                    "unary_eq_tile_init();",
+                    fmt::format("unary_eq_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::UNARY_GT:
             op_init_and_name = {
@@ -428,6 +438,9 @@ std::pair<string, string> get_op_init_and_func_default(
         case UnaryOpType::NEG:
             op_init_and_name = {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
             break;
+        case UnaryOpType::ALT_COMPLEX_ROTATE90:
+            op_init_and_name = {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
+            break;
         case UnaryOpType::MISH: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
@@ -495,6 +508,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::SQUARE);
     } else if (name == "softplus") {
         return UnaryWithParam(UnaryOpType::SOFTPLUS);
+    } else if (name == "alt_complex_rotate90") {
+        return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
     }
     TT_THROW("Unknown unary op: {}", name);
 }

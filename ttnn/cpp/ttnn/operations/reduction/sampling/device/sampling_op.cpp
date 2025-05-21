@@ -15,14 +15,14 @@ void Sampling::validate_with_output_tensors(
     const auto& input_indices_tensor = input_tensors.at(1);
 
     TT_FATAL(
-        input_values_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_values_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for inputs!");
 
     TT_FATAL(input_values_tensor.get_dtype() == DataType::BFLOAT16, "Only BFLOAT16 is supported for inputs!");
     TT_FATAL(input_values_tensor.get_layout() == Layout::TILE, "Only TILE_LAYOUT is supported for inputs!");
 
     TT_FATAL(
-        input_indices_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_indices_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for inputs!");
 
     TT_FATAL(
@@ -53,7 +53,7 @@ void Sampling::validate_with_output_tensors(
             "Only UINT32 & INT32 dtypes are supported for outputs!");
 
         TT_FATAL(
-            optional_output_tensor.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            optional_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only INTERLEAVED memory layout is supported for outputs!");
     }
 

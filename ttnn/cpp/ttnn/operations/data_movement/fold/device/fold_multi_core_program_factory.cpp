@@ -123,7 +123,7 @@ void Fold::MultiCore::override_runtime_arguments(
     uint32_t dst_pixel_size = stride_h * chunk_size;
     uint32_t dst_row_size = stride_h * row_size;
     uint32_t num_dst_rows = num_pixels / (width * stride_h);
-    uint32_t cb_pages_per_dst_row = stride_h * width;
+    uint32_t pixels_per_dst_row = stride_h * width;
 
     uint32_t aligned_pixel_size = round_up_to_mul32(pixel_size);
     uint32_t aligned_dst_pixel_size = round_up_to_mul32(dst_pixel_size);
@@ -150,7 +150,7 @@ void Fold::MultiCore::override_runtime_arguments(
             stride_w,
             num_dst_rows,
             width / stride_w,
-            cb_pages_per_dst_row,
+            pixels_per_dst_row * aligned_pixel_size,
         });
 }
 

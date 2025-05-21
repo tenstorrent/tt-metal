@@ -85,6 +85,7 @@ ub_runtime_packages()
      libc++-17-dev \
      libc++abi-17-dev \
      libstdc++6 \
+     openmpi-bin \
     )
 }
 
@@ -103,6 +104,7 @@ ub_buildtime_packages()
      libc++abi-17-dev \
      build-essential \
      xz-utils \
+     libopenmpi-dev \
     )
 }
 
@@ -216,10 +218,50 @@ install_gcc() {
 }
 
 install_sfpi() {
-    TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR  https://github.com/tenstorrent/sfpi/releases/download/v6.9.0/sfpi-x86_64-Linux.deb
-    apt-get install -y $TEMP_DIR/sfpi-x86_64-Linux.deb
+    local version_file=$(dirname $0)/tt_metal/sfpi-version.sh
+    if ! [[ -r $version_file ]] ; then
+	version_file=$(dirname $0)/sfpi-version.sh
+	if ! [[ -r $version_file ]] ; then
+	    echo "sfpi-version.sh not found" >&2
+	    exit 1
+	fi
+    fi
+    local $(grep -v '^#' $version_file)
+    local sfpi_arch_os=$(uname -m)_$(uname -s)
+    local sfpi_deb_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_deb_md5")
+    if [ -z "$sfpi_deb_md5" ] ; then
+	echo "SFPI debian package for ${sfpi_arch_os} is not available" >&2
+	exit 1
+    fi
+    local TEMP_DIR=$(mktemp -d)
+    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.deb"
+    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.deb" | cut -d' ' -f1) \
+	     != "$sfpi_deb_md5" ] ; then
+	echo "SFPI sfpi-${sfpi_arch_os}.deb md5 mismatch" >&2
+	rm -rf $TEMP_DIR
+	exit 1
+    fi
+    # we must select exactly this version
+    apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
     rm -rf $TEMP_DIR
+}
+
+install_mpi_uflm(){
+    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
+    DEB_FILE="$(basename "$DEB_URL")"
+
+    # 1. Create temp workspace
+    TMP_DIR="$(mktemp -d)"
+    cleanup() { rm -rf "$TMP_DIR"; }
+    trap cleanup EXIT INT TERM
+
+    echo "→ Downloading $DEB_FILE …"
+    wget -q --show-progress -O "$TMP_DIR/$DEB_FILE" "$DEB_URL"
+
+    # 2. Install
+    echo "→ Installing $DEB_FILE …"
+    apt-get update -qq
+    apt-get install -f -y "$TMP_DIR/$DEB_FILE"
 }
 
 # We don't really want to have hugepages dependency
@@ -241,16 +283,17 @@ configure_hugepages() {
 install() {
     if [ $FLAVOR == "ubuntu" ]; then
         echo "Installing packages..."
-
 	case "$mode" in
             runtime)
                 prep_ubuntu_runtime
                 install_sfpi
+                install_mpi_uflm
                 ;;
             build)
                 prep_ubuntu_build
                 install_llvm
                 install_gcc
+                install_mpi_uflm
                 ;;
             baremetal)
                 prep_ubuntu_runtime
@@ -259,6 +302,7 @@ install() {
                 install_llvm
                 install_gcc
                 configure_hugepages
+                install_mpi_uflm
                 ;;
         esac
 

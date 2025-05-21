@@ -14,7 +14,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
@@ -93,7 +93,7 @@ void create_and_read_max_num_semaphores(
     }
 
     tt_metal::detail::CompileProgram(device, program);
-    tt::tt_metal::program_dispatch::finalize_program_offsets(program, device);
+    program.finalize_offsets(device);
 
     ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, program));
 

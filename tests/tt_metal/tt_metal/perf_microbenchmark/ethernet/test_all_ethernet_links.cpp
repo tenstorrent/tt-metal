@@ -4,9 +4,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
-#include <limits>
-#include <random>
 #include <tuple>
 #include <map>
 #include <set>
@@ -24,11 +21,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
 
 #include <tt-metalium/persistent_kernel_cache.hpp>
@@ -274,6 +268,10 @@ private:
                 tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(
                     sender_chip_id, !slow_dispath_mode);
             for (auto logical_active_eth : non_tunneling_eth_cores) {
+                if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                        sender_chip_id, logical_active_eth)) {
+                    continue;
+                }
                 auto sender_eth = tt_cxy_pair(sender_chip_id, logical_active_eth);
                 auto receiver_eth_tuple =
                     tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
@@ -560,18 +558,18 @@ void run(
             device_helper, iteration, sender_stats, receiver_stats, params.num_iterations, false, iteration == 0);
         if (slow_dispath_mode) {
             std::vector<std::thread> threads;
-            for (int i = 0; i < device_helper.devices.size(); ++i) {
-                threads.emplace_back([&]() {
-                    tt_metal::detail::LaunchProgram(
-                        device_helper.devices.at(i), programs.at(device_helper.devices.at(i)->id()));
-                });
-
-                for (auto& thread : threads) {
-                    thread.join();
-                }
+            for (auto device : device_helper.devices) {
+                auto& program = programs.at(device->id());
+                program.set_runtime_id(iteration);
+                threads.emplace_back([&]() { tt_metal::detail::LaunchProgram(device, programs.at(device->id())); });
+            }
+            for (auto& thread : threads) {
+                thread.join();
             }
         } else {
             for (auto device : device_helper.devices) {
+                auto& program = programs.at(device->id());
+                program.set_runtime_id(iteration);
                 tt_metal::EnqueueProgram(device->command_queue(), programs.at(device->id()), false);
             }
             log_info(tt::LogTest, "Iteration {} Calling Finish", iteration);

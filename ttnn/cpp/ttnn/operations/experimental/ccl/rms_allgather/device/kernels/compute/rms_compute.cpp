@@ -31,11 +31,11 @@ void MAIN {
     constexpr uint32_t cb_scaler_global = get_compile_time_arg_val(9);
     constexpr uint32_t cb_ex_partial2 = get_compile_time_arg_val(10);
     constexpr uint32_t cb_ex2 = get_compile_time_arg_val(11);
-    constexpr uint32_t fuse_preadd_cb_in = get_compile_time_arg_val(12);
+    constexpr uint32_t fuse_preadd_cb_in = get_compile_time_arg_val(12);  // original
     constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(13);
     constexpr uint32_t cb_to_allgather_writer = get_compile_time_arg_val(14);  // output
     constexpr uint32_t cb_x = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_in1 = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_in1 = get_compile_time_arg_val(16);  // Residual
     constexpr uint32_t cb_in0 = get_compile_time_arg_val(17);  // Input
 
     // Circular Buffers Post
@@ -78,6 +78,9 @@ void MAIN {
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in0, cb_in1, cb_in);
+    reconfig_data_format(cb_in0, cb_in1);
+    pack_reconfig_data_format(cb_in);
+    reconfig_data_format(cb_in0, cb_in1);
     add_tiles_init(cb_in0, cb_in1);
     cb_reserve_back(cb_in, num_tiles_per_block);
     index_subblock_w_offset = 0;
@@ -99,12 +102,9 @@ void MAIN {
     cb_push_back(cb_in, num_tiles_per_block);
     cb_wait_front(cb_in, num_tiles_per_block);
     pack_reconfig_data_format(cb_in, cb_x2);
+    reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
 #else
     binary_op_init_common(cb_in, cb_in, cb_x2);
-#endif
-
-#ifdef FUSE_PRE_ADD
-    reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
 #endif
 
     // X^2

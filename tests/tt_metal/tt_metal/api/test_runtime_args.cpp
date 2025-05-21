@@ -78,7 +78,7 @@ tt::tt_metal::Program initialize_program_data_movement(
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     tt::tt_metal::detail::CompileProgram(device, program);
-    return std::move(program);
+    return program;
 }
 
 tt::tt_metal::Program initialize_program_data_movement_rta(
@@ -108,7 +108,7 @@ tt::tt_metal::Program initialize_program_data_movement_rta(
             .defines = dm_defines});
 
     tt::tt_metal::detail::CompileProgram(device, program);
-    return std::move(program);
+    return program;
 }
 
 tt::tt_metal::KernelHandle initialize_program_compute(

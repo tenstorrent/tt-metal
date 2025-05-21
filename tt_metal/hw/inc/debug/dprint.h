@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "risc_common.h"
+
 /*
  * Device-side debug print API for device kernels.
  * Works on either one of NC/BR/TR threads.
@@ -350,6 +352,7 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
         // buffer is full - wait for the host reader to flush+update rpos
         WAYPOINT("DPW");
         while (dprint_buffer->aux.rpos < dprint_buffer->aux.wpos) {
+            invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
 #endif
@@ -392,6 +395,7 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
                 dprint_buffer->aux.wpos = wpos;
                 WAYPOINT("DPW");
                 while (dprint_buffer->aux.rpos < dprint_buffer->aux.wpos) {
+                    invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
                     internal_::risc_context_switch();
 #endif

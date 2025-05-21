@@ -315,8 +315,7 @@ def run_llama3_decode_performance(
     ttnn.synchronize_device(mesh_device)
 
     # When getting dispatch device perf, pushing weights fills up profiler buffers.
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     # Sync after dump or execute trace will launch on devices with huge skew
     ttnn.synchronize_device(mesh_device)
@@ -467,8 +466,6 @@ def test_llama_decode_performance(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
-    mesh_device.enable_async(True)
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(

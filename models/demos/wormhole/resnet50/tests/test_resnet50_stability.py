@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import ttnn
-from models.utility_functions import (
-    run_for_wormhole_b0,
-)
 import time
+
+import pytest
 from loguru import logger
+
+import ttnn
 from models.demos.wormhole.resnet50.demo.demo import test_demo_trace_with_imagenet
+from models.utility_functions import run_for_wormhole_b0
 
 test_demo_trace_with_imagenet.__test__ = False
 
@@ -34,7 +34,6 @@ def test_resnet_stability(
     weight_dtype,
     model_location_generator,
     test_duration_seconds,
-    enable_async_mode=True,
 ):
     logger.info(f"Running ResNet50 stability test for {test_duration_seconds} seconds")
 
@@ -53,7 +52,6 @@ def test_resnet_stability(
             act_dtype,
             weight_dtype,
             model_location_generator,
-            enable_async_mode=True,
         )
 
         if time.time() - start > test_duration_seconds:

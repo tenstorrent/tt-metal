@@ -40,15 +40,14 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
     uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
     auto pad_value_const_buffer =
-        tt::tt_metal::owned_buffer::create(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
+        tt::tt_metal::HostBuffer(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
     const Tensor pad_value_const_tensor =
         Tensor(
-            OwnedStorage{pad_value_const_buffer},
+            std::move(pad_value_const_buffer),
             ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
-            .to_device(
-                device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
+            .to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
     Buffer* src0_buffer = a.buffer();
@@ -406,20 +405,14 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
 
             TT_ASSERT(nbatch <= grid_size.y, "Unsupported case with nbatch > grid_size.y!");
 
-            uint32_t ncores_h = 1;
-            uint32_t ntiles_per_core_h = ntiles_h / ncores_h;
             if (nbatch_per_core_h == 0) {
                 // there are multiple cores along h per batch
                 nbatch_per_core_h = 1;
-                ncores_h = ncores_per_batch_h * nbatch;
-                ntiles_per_core_h = ntiles_h / ncores_per_batch_h;
             } else if (ncores_per_batch_h == 0) {
                 // unsupported case. TODO.
                 TT_ASSERT(false);
                 // there are multiple batch per core along h
                 // ncores_per_batch_h = 1;
-                // ncores_h = (uint32_t) ceil((float) nbatch / nbatch_per_core_h);
-                // ntiles_per_core_h = nbatch_per_core_h * ntiles_h;
             } else {
                 TT_THROW("Something went terribly wrong in splitting acrtoss cores");
             }
@@ -474,17 +467,16 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
     uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
     auto pad_value_const_buffer =
-        owned_buffer::create(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
+        tt::tt_metal::HostBuffer(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
     // NOTE: The const buffer is always in L1
     // TODO: make a local buffer for each core?
     const Tensor pad_value_const_tensor =
         Tensor(
-            OwnedStorage{pad_value_const_buffer},
+            std::move(pad_value_const_buffer),
             ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
-            .to_device(
-                device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
+            .to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
     // uint32_t ntiles_h = output_tensor_shape[0] * output_tensor_shape[1] * output_tensor_shape[2] / TILE_HEIGHT;

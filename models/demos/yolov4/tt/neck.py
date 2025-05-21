@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-from models.utility_functions import is_blackhole
 
 import ttnn
 from models.demos.yolov4.tt.common import Conv
+from models.utility_functions import is_blackhole
 
 
 def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:

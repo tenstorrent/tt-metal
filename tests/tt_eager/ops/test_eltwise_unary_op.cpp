@@ -26,7 +26,6 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -36,7 +35,6 @@ using tt::tt_metal::DataType;
 using tt::tt_metal::distributed::MeshDevice;
 
 using tt::tt_metal::Layout;
-using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::Tensor;
 
 namespace detail {
@@ -56,9 +54,9 @@ Tensor gelu_slow(const Tensor& t) { return ttnn::gelu(t, false); }
 
 template <auto UnaryFunction>
 Tensor host_function(const Tensor& input_tensor) {
-    auto input_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(input_tensor);
+    auto input_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor);
 
-    auto output_buffer = tt::tt_metal::owned_buffer::create<bfloat16>(input_tensor.volume());
+    auto output_buffer = std::vector<bfloat16>(input_tensor.volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
         auto value = UnaryFunction(input_buffer[index].to_float());
@@ -66,7 +64,7 @@ Tensor host_function(const Tensor& input_tensor) {
     }
 
     return Tensor(
-        OwnedStorage{output_buffer},
+        tt::tt_metal::HostBuffer(std::move(output_buffer)),
         input_tensor.get_logical_shape(),
         input_tensor.get_dtype(),
         input_tensor.get_layout());
@@ -132,11 +130,7 @@ void test_operation_infrastructure() {
         ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to_layout(Layout::TILE).to_device(device);
 
     ttnn::operations::unary::operation_attributes_t op_args{
-        {UnaryWithParam{UnaryOpType::SQRT}},
-        DataType::BFLOAT16,
-        tt::tt_metal::MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-        false,
-        false};
+        {UnaryWithParam{UnaryOpType::SQRT}}, DataType::BFLOAT16, tt::tt_metal::MemoryConfig{}, false, false};
     ttnn::operations::unary::tensor_args_t tensor_args{input_tensor};
     auto program_hash = ttnn::operations::unary::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
     TT_FATAL(program_hash == 3018574135764717736ULL, "Actual value is {}", program_hash);

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 import models.perf.device_perf_utils as perf_utils
 
 
@@ -19,7 +20,7 @@ import models.perf.device_perf_utils as perf_utils
         ["segformer_mix_ffn", "", 1, 370.0],
         ["segformer_mlp", "", 1, 8900.0],
         ["segformer_model", "", 1, 190.0],
-        ["segformer_overlap_path_embeddings", "", 1, 2050.0],
+        ["segformer_overlap_path_embeddings", "", 1, 2164.0],
         ["segformer_selfoutput", "", 1, 14500.0],
     ],
 )

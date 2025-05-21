@@ -25,7 +25,7 @@ struct InterleavedToShardedPartialOperation {
 
 }  // namespace operations::data_movement
 
-constexpr auto interleaved_to_sharded_partial = ttnn::register_operation_with_auto_launch_op<
+constexpr auto interleaved_to_sharded_partial = ttnn::register_operation<
     "ttnn::interleaved_to_sharded_partial",
     ttnn::operations::data_movement::InterleavedToShardedPartialOperation>();
 }  // namespace ttnn

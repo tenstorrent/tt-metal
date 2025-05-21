@@ -29,11 +29,26 @@ static_assert(
 
 static constexpr std::uint32_t CLIENT_INTERFACE_SIZE = 3280;
 static constexpr std::uint32_t CLIENT_HEADER_BUFFER_ENTRIES = 4;
+static constexpr std::uint32_t GATEKEEPER_INFO_SIZE = 848;
 static constexpr std::uint32_t PULL_CLIENT_INTERFACE_SIZE = 304;
 static constexpr std::uint32_t PUSH_CLIENT_INTERFACE_SIZE = 288;
 static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 static constexpr std::uint32_t PACKET_HEADER_SIZE_BYTES = 48;
 static constexpr std::uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
+
+enum packet_session_command : std::uint32_t {
+    ASYNC_WR = (0x1 << 0),
+    ASYNC_WR_RESP = (0x1 << 1),
+    ASYNC_RD = (0x1 << 2),
+    ASYNC_RD_RESP = (0x1 << 3),
+    DSOCKET_WR = (0x1 << 4),
+    SSOCKET_WR = (0x1 << 5),
+    ATOMIC_INC = (0x1 << 6),
+    ATOMIC_READ_INC = (0x1 << 7),
+    SOCKET_OPEN = (0x1 << 8),
+    SOCKET_CLOSE = (0x1 << 9),
+    SOCKET_CONNECT = (0x1 << 10),
+};
 
 enum eth_chan_magic_values {
     INVALID_DIRECTION = 0xDD,

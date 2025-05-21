@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from transformers import FalconForCausalLM
+
+import ttnn
 from models.utility_functions import tt_tensors_to_torch_tensors
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, mesh_device):
@@ -282,17 +283,6 @@ def concat_device_outputs(mesh_device, tt_out, llm_mode, tt_layer_present, seq_e
     return tt_out, tt_layer_present
 
 
-def get_devices(device):
-    # device is either a ttnn.MeshDevice or a ttnn.Device
-    if type(device) == ttnn.MeshDevice:
-        devices = device.get_devices()
-    elif type(device) == ttnn.Device:
-        devices = [device]
-    else:
-        raise ValueError(f"Unrecognized device type {type(device)}")
-    return devices
-
-
 def tt_from_torch(torch_tensor, dtype=None, device=None, layout=None, memory_config=None, mesh_mapper=None):
     # device is either a ttnn.MeshDevice or a ttnn.Device
     return ttnn.from_torch(
@@ -317,6 +307,4 @@ def get_num_devices(device):
 
 def dump_device_profiler(device):
     # device is either a ttnn.MeshDevice or a ttnn.Device
-    devices = get_devices(device)
-    for device in devices:
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)

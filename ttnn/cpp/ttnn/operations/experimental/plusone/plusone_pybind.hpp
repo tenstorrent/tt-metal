@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "pybind11/pybind_fwd.hpp"
+#include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::experimental::plusone::detail {
 namespace py = pybind11;

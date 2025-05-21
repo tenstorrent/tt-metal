@@ -154,6 +154,7 @@ void kernel_main() {
         generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
     }
 
+    noc_async_write_barrier();  // #19201 BH hang workaround
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {

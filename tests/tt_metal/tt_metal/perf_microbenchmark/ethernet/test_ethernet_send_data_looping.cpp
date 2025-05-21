@@ -16,7 +16,6 @@
 #include <thread>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
-#include "eth_l1_address_map.h"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -240,8 +239,10 @@ int main(int argc, char** argv) {
 
     const auto& device_0 = test_fixture.devices_.at(0);
     const auto& device_1 = test_fixture.devices_.at(1);
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
-    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address = erisc_unreserved_base;
+    const size_t dst_eth_l1_byte_address = erisc_unreserved_base;
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
     assert(active_eth_cores.size() > 0);

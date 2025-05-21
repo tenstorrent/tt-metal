@@ -77,22 +77,4 @@ std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
     return outputs;
 }
 
-OptionalTensors MorehMatmulBackward::create_async_optional_output_tensors(
-    const Tensor& output_grad,
-    const Tensor& input,
-    const Tensor& other,
-    const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor>& input_grad,
-    const std::optional<const Tensor>& other_grad,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    return {
-        are_required_outputs.at(0)
-            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, other}))
-            : std::nullopt,
-        are_required_outputs.at(1)
-            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, other}))
-            : std::nullopt};
-}
-
 }  // namespace ttnn::operations::moreh::moreh_matmul_backward

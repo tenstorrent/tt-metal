@@ -321,20 +321,6 @@ def insert_tensor(report_path, tensor):
                 "address": tensor.buffer_address(),
             }
         )
-    elif ttnn.has_storage_type_of(tensor, ttnn.MULTI_DEVICE_STORAGE_TYPE) and tensor.is_allocated():
-        memory_config = ttnn.get_memory_config(tensor)
-        buffer_type = memory_config.buffer_type.value
-        for device_tensor in ttnn.get_device_tensors(tensor):
-            if device_id is None:
-                device_id = device_tensor.device().id()
-            if address is None:
-                address = device_tensor.buffer_address()
-            device_tensors.append(
-                {
-                    "device_id": device_tensor.device().id(),
-                    "address": device_tensor.buffer_address(),
-                }
-            )
 
     cursor.execute(
         f"""

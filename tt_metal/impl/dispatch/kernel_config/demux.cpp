@@ -4,7 +4,6 @@
 #include "demux.hpp"
 
 #include <host_api.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <map>
 #include <string>
 #include <utility>
@@ -17,6 +16,7 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "eth_tunneler.hpp"
 #include "hal.hpp"
 #include <umd/device/tt_xy_pair.h>
@@ -30,6 +30,8 @@ void DemuxKernel::GenerateStaticConfigs() {
         servicing_device_id_);  // TODO: this can be mmio
     logical_core_ = MetalContext::instance().get_dispatch_core_manager().demux_core(
         servicing_device_id_, channel, placement_cq_id_);
+    kernel_type_ = FDKernelType::ROUTING;
+
     static_config_.endpoint_id_start_index = 0xD1;
     static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
     static_config_.rx_queue_size_words = 0x10000 >> 4;
@@ -185,8 +187,8 @@ void DemuxKernel::CreateKernel() {
         {"UPSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
         {"DOWNSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
         {"DOWNSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
         {"SKIP_NOC_LOGGING", "1"}};
     configure_kernel_variant(dispatch_kernel_file_names[DEMUX], compile_args, defines, false, false, false);
 }

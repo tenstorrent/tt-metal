@@ -1,23 +1,18 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
 from models.tt_transformers.tt.attention import Attention
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.common import (
-    precompute_freqs,
-    PagedAttentionConfig,
-)
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.tt_transformers.tt.rope import RotarySetup
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -66,8 +61,6 @@ def test_attention_inference(
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
-
-    mesh_device.enable_async(True)
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1  # For the unit test, just run a single layer

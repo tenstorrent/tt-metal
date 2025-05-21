@@ -6,7 +6,7 @@
 
 #include "batch_norm.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 namespace py = pybind11;
 namespace ttnn::operations::normalization::detail {
 void bind_batch_norm_operation(pybind11::module& module) {

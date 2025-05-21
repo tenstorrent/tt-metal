@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
@@ -1745,12 +1745,12 @@ void py_module(py::module& module) {
 
     detail::bind_unary_operation(module, ttnn::expm1, R"doc(\mathrm{{output\_tensor}}_i = \verb|expm1|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_unary_operation(module, ttnn::floor, R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
-    detail::bind_unary_operation(module, ttnn::eqz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_operation(module, ttnn::ceil, R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
-    detail::bind_unary_operation(module, ttnn::mish, R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc", "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
-    detail::bind_unary_operation(module, ttnn::gez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_operation(module, ttnn::gtz, R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(module, ttnn::floor, R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(module, ttnn::eqz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+    detail::bind_unary_operation(module, ttnn::ceil, R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(module, ttnn::mish, R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc", "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(module, ttnn::gez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+    detail::bind_unary_operation(module, ttnn::gtz, R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
 
     detail::bind_unary_operation(module, ttnn::i0, R"doc(\mathrm{{output\_tensor}}_i = \verb|i0|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::i1, R"doc(\mathrm{{output\_tensor}}_i = \verb|i1|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1759,15 +1759,15 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::isnan, R"doc(\mathrm{{output\_tensor}}_i = \verb|isnan|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::isneginf, R"doc(\mathrm{{output\_tensor}}_i = \verb|isneginf|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::isposinf, R"doc(\mathrm{{output\_tensor}}_i = \verb|isposinf|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_operation(module, ttnn::lez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ <= 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(module, ttnn::lez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ <= 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
     detail::bind_unary_operation(module, ttnn::log, R"doc(\mathrm{{output\_tensor}}_i = \verb|log|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::log10, R"doc(\mathrm{{output\_tensor}}_i = \verb|log10|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(BFLOAT8_B is only supported in WHB0.)doc");
     detail::bind_unary_operation(module, ttnn::log2, R"doc(\mathrm{{output\_tensor}}_i = \verb|log2|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(BFLOAT8_B is only supported in WHB0.)doc");
     detail::bind_unary_operation(module, ttnn::log1p, R"doc(\mathrm{{output\_tensor}}_i = \verb|log1p|(\mathrm{{input\_tensor}}_i))doc", R"doc([Supported range: [-1, 1e7]])doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::logical_not, R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_operation(module, ttnn::ltz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(module, ttnn::ltz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
     detail::bind_unary_operation(module, ttnn::neg, R"doc(\mathrm{{output\_tensor}}_i = \verb|neg|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_operation(module, ttnn::nez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(module, ttnn::nez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
 
     detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal, R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(BFLOAT8_B is supported only for non-zero inputs. Inputs containing zero may produce inaccurate results due to the characteristics of the block-FP format.)doc");
     detail::bind_unary_operation(module, ttnn::relu, R"doc(\mathrm{{output\_tensor}}_i = \verb|relu|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1783,8 +1783,13 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::bitwise_not, R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_not|(\mathrm{{input\_tensor}}_i))doc",
     R"doc(Supported input range is [-2147483647, 2147483647].)doc",
     R"doc(INT32)doc",
-    R"doc(Supported for Wormhole_B0 only.)doc",
     R"doc(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32))doc");
+    detail::bind_unary_operation(
+        module,
+        ttnn::alt_complex_rotate90,
+        R"doc((\mathrm{{output\_tensor}}_{2i}, \mathrm{{output\_tensor}}_{2i+1}) = (-\mathrm{{input\_tensor}}_{2i+1}, \mathrm{{input\_tensor}}_{2i}))doc",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
+        R"doc(The last dimension of the input tensor must be even.)doc");
 
     //  Unaries with fast_and_approximate_mode
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1956,8 +1961,7 @@ void py_module(py::module& module) {
         ttnn::round,
         "decimals", "no. of decimal places to round off to [supported range -6 to 7]",
         R"doc(Round the input tensor to `decimals` decimal places.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(Not supported on Grayskull.)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_composite_int(
         module,
         ttnn::polygamma,
@@ -1985,8 +1989,7 @@ void py_module(py::module& module) {
     detail::bind_unary_composite_float_with_default(
         module,
         ttnn::logit,
-        "eps", "eps", 0.0f,  R"doc(BFLOAT16)doc",
-            R"doc(Not available for Wormhole_B0.)doc");
+        "eps", "eps", 0.0f,  R"doc(BFLOAT16)doc");
 
     detail::bind_unary_composite_rpow(
         module,
@@ -2001,7 +2004,7 @@ void py_module(py::module& module) {
     ttnn::rdiv,
     "value", "denominator value which is actually calculated as numerator float value >= 0",
     "round_mode", "rounding_mode value", "None",
-    R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using round_mode. Support provided only for Wormhole_B0.
+    R"doc(Performs the element-wise division of a scalar ``value`` by a tensor ``input`` and rounds the result using round_mode.
 
         Input tensor must have BFLOAT16 data type.
 

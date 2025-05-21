@@ -153,7 +153,7 @@ inline void hash_hlk_args(size_t& seed, void* hlk_args, size_t hlk_args_size) {
 
 template <>
 struct std::hash<tt::tt_hlk_desc> {
-    std::size_t operator()(tt::tt_hlk_desc const& obj) const noexcept {
+    std::size_t operator()(tt::tt_hlk_desc const& obj) const {
         std::size_t hash_value = 0;
         for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
             tt::utils::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_buf_dataformat(i)));
@@ -170,9 +170,7 @@ struct std::hash<tt::tt_hlk_desc> {
             hash_hlk_args(hash_value, hlk_args, hlk_args_size);
         } else if (hlk_args == nullptr and hlk_args_size == 0) {
         } else {
-            TT_THROW(
-                "Mismatching values, either hlk_args == nullptr and hlk_args_size == 0 or hlk_args != nullptr and "
-                "hlk_args_size > 0!");
+            TT_THROW("Invalid hlk_args, hlk_args == {}, hlk_args_size == {}", hlk_args, hlk_args_size);
         }
 
         return hash_value;

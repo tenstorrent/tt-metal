@@ -20,11 +20,11 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
+#include "impl/dispatch/dispatch_settings.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 #include "gtest/gtest.h"
 #include "impl/debug/watcher_server.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 

@@ -252,7 +252,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     auto num_cores_total = cores.size();
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     auto total_num_input_sticks = input_tensor.volume() / input_shape[-1];
     const auto num_sticks_per_core = shard_spec.shape[0];
@@ -324,11 +324,11 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
 
     TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
     TT_FATAL(
-        input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-            input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
         "Input tensor should be height or block sharded");
-    bool is_height_sharded = input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
-    bool is_block_sharded = input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     auto shard_spec = input.shard_spec().value();
     auto input_cores = shard_spec.grid;
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
@@ -341,6 +341,11 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
 
     uint32_t output_row_size_bytes = output_shape[-1] * output.element_size();
     uint32_t input_row_size_bytes = shard_spec.shape[1] * input.element_size();
+
+    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                    ? hal::get_dram_alignment()
+                                    : hal::get_l1_alignment();
+    uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
 
     uint32_t max_read_size = 4096;
     if (is_height_sharded) {
@@ -380,8 +385,8 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
         output_cb_data_format);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
-            num_input_sticks_per_core * input_row_size_bytes, {{src0_cb_index, input_cb_data_format}})
-            .set_page_size(src0_cb_index, input_row_size_bytes)
+            num_input_sticks_per_core * input_row_size_bytes_offset, {{src0_cb_index, input_cb_data_format}})
+            .set_page_size(src0_cb_index, input_row_size_bytes_offset)
             .set_globally_allocated_address(*input.buffer());
 
     auto input_cb_handle = tt::tt_metal::CreateCircularBuffer(program, input_cores, cb_src0_config);

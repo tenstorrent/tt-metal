@@ -30,9 +30,15 @@ function(ParseGitDescribe)
             ERROR_QUIET
         )
     endif()
+    if(NOT VERSION_HASH)
+        set(VERSION_HASH ${fallbackHash})
+    endif()
     if(NOT version)
         set(version ${fallbackVersion})
-        set(VERSION_HASH ${fallbackHash})
+        # A shallow Git clone will fail a git describe, but also will not have substitued the fallbackVersion
+        if(version MATCHES "Format")
+            set(version "0.0-alpha0-1-g${VERSION_HASH}-dirty")
+        endif()
     endif()
 
     # Local modifications (dirty), or not
