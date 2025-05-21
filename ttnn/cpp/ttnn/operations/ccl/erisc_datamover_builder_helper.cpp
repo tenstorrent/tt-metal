@@ -129,9 +129,11 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 src_device->id() == device_sequence.front()->id() &&
                 dest_device->id() != device_sequence.back()->id()) {
                 src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
+                dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
             } else if (
                 src_device->id() != device_sequence.front()->id() &&
                 dest_device->id() == device_sequence.back()->id()) {
+                src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
                 dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
             }
 
@@ -151,9 +153,10 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     src_device->id(),
                     edm_builders_forward_direction[src_device->id()].size());
                 tt::log_info(
-                    "src_device {}, dest_device {}, dest_device_edm_type {}",
+                    "src_device {}, dest_device {}, src_device_edm_type {}, dest_device_edm_type {}",
                     src_device->id(),
                     dest_device->id(),
+                    src_device_edm_type,
                     dest_device_edm_type);
                 edm_builders_forward_direction[src_device->id()].push_back(
                     tt::tt_fabric::FabricEriscDatamoverBuilder::build(

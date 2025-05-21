@@ -354,12 +354,12 @@ bool did_something;
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
 
-template <uint8_t SENDER_NUM_BUFFERS, uint8_t RECEIVER_NUM_BUFFERS, uint8_t to_receiver_pkts_sent_id>
+template <uint8_t SENDER_NUM_BUFFERS, uint8_t REMOTE_RECEIVER_NUM_BUFFERS, uint8_t to_receiver_pkts_sent_id>
 FORCE_INLINE void send_next_data(
     tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& sender_buffer_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& sender_worker_interface,
-    OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& receiver_buffer_channel,
+    OutboundReceiverChannelPointers<REMOTE_RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
+    tt::tt_fabric::EthChannelBuffer<REMOTE_RECEIVER_NUM_BUFFERS>& receiver_buffer_channel,
     uint8_t sender_channel_index) {
     auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
@@ -390,7 +390,7 @@ FORCE_INLINE void send_next_data(
 
     // TODO: Put in fn
     remote_receiver_buffer_index =
-        BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
+        BufferIndex{wrap_increment<REMOTE_RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
     remote_receiver_num_free_slots--;
 
     // update the remote reg
@@ -769,15 +769,15 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
 template <
     bool enable_packet_header_recording,
     bool enable_fabric_counters,
-    uint8_t RECEIVER_NUM_BUFFERS,
+    uint8_t REMOTE_RECEIVER_NUM_BUFFERS,
     uint8_t SENDER_NUM_BUFFERS,
     uint8_t to_receiver_pkts_sent_id,
     bool SKIP_CONNECTION_LIVENESS_CHECK>
 void run_sender_channel_step(
     tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
-    OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& remote_receiver_channel,
+    OutboundReceiverChannelPointers<REMOTE_RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
+    tt::tt_fabric::EthChannelBuffer<REMOTE_RECEIVER_NUM_BUFFERS>& remote_receiver_channel,
     volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_counters,
     PacketHeaderRecorder& packet_header_recorder,
     bool& channel_connection_established,
@@ -803,7 +803,7 @@ void run_sender_channel_step(
             tt::tt_fabric::validate(*packet_header);
             packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
         }
-        send_next_data<SENDER_NUM_BUFFERS, RECEIVER_NUM_BUFFERS, to_receiver_pkts_sent_id>(
+        send_next_data<SENDER_NUM_BUFFERS, REMOTE_RECEIVER_NUM_BUFFERS, to_receiver_pkts_sent_id>(
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
@@ -1073,6 +1073,7 @@ template <
     bool enable_packet_header_recording,
     bool enable_fabric_counters,
     uint8_t RECEIVER_NUM_BUFFERS,
+    uint8_t REMOTE_RECEIVER_NUM_BUFFERS,
     uint8_t NUM_RECEIVER_CHANNELS,
     // uint8_t SENDER_NUM_BUFFERS,
     size_t NUM_SENDER_CHANNELS,
@@ -1097,7 +1098,8 @@ void run_fabric_edm_main_loop(
 
     std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
         downstream_edm_noc_interfaces,
-    std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& remote_receiver_channels,
+    std::array<tt::tt_fabric::EthChannelBuffer<REMOTE_RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>&
+        remote_receiver_channels,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
     std::array<volatile tt::tt_fabric::EdmFabricReceiverChannelCounters*, MAX_NUM_RECEIVER_CHANNELS>
         receiver_channel_counters_ptrs,
@@ -1117,7 +1119,7 @@ void run_fabric_edm_main_loop(
     //       (probably better) pack most of these into single words (e.g. we could hold a read, write, and ackptr in a
     //       single word) this way - especially if power of 2 wraps, we can handle both channels literally at once with
     //       math ops on single individual words (or half words)
-    std::array<OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>
+    std::array<OutboundReceiverChannelPointers<REMOTE_RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>
         outbound_to_receiver_channel_pointers;
     std::array<ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> receiver_channel_pointers;
     std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established =
@@ -1164,7 +1166,7 @@ void run_fabric_edm_main_loop(
             run_sender_channel_step<
                 enable_packet_header_recording,
                 enable_fabric_counters,
-                RECEIVER_NUM_BUFFERS,
+                REMOTE_RECEIVER_NUM_BUFFERS,
                 SENDER_NUM_BUFFERS_VC0_0,
                 to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                 sender_ch_live_check_skip[0]>(
@@ -1198,7 +1200,7 @@ void run_fabric_edm_main_loop(
                     0,
                     port_direction_table);
             }
-            if constexpr (enable_ring_support) {
+            if constexpr (enable_ring_support && !skip_receiver_channel_1_connection) {
                 run_receiver_channel_step<
                     enable_packet_header_recording,
                     enable_fabric_counters,
@@ -1220,7 +1222,7 @@ void run_fabric_edm_main_loop(
             run_sender_channel_step<
                 enable_packet_header_recording,
                 enable_fabric_counters,
-                RECEIVER_NUM_BUFFERS,
+                REMOTE_RECEIVER_NUM_BUFFERS,
                 SENDER_NUM_BUFFERS_VC0_1,
                 to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                 sender_ch_live_check_skip[1]>(
@@ -1240,7 +1242,7 @@ void run_fabric_edm_main_loop(
                 run_sender_channel_step<
                     enable_packet_header_recording,
                     enable_fabric_counters,
-                    RECEIVER_NUM_BUFFERS,
+                    REMOTE_RECEIVER_NUM_BUFFERS,
                     SENDER_NUM_BUFFERS_VC0_2,
                     to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                     sender_ch_live_check_skip[2]>(
@@ -1259,7 +1261,7 @@ void run_fabric_edm_main_loop(
                 run_sender_channel_step<
                     enable_packet_header_recording,
                     enable_fabric_counters,
-                    RECEIVER_NUM_BUFFERS,
+                    REMOTE_RECEIVER_NUM_BUFFERS,
                     SENDER_NUM_BUFFERS_VC0_3,
                     to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                     sender_ch_live_check_skip[3]>(
@@ -1280,7 +1282,7 @@ void run_fabric_edm_main_loop(
                 run_sender_channel_step<
                     enable_packet_header_recording,
                     enable_fabric_counters,
-                    RECEIVER_NUM_BUFFERS,
+                    REMOTE_RECEIVER_NUM_BUFFERS,
                     SENDER_NUM_BUFFERS_VC1_0,
                     to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL],
                     sender_ch_live_check_skip[NUM_SENDER_CHANNELS - 1]>(
@@ -1729,7 +1731,8 @@ void kernel_main() {
                 my_sem_for_teardown_from_edm_3,
                 my_sem_for_teardown_from_edm_4});
 
-    std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> remote_receiver_channels;
+    std::array<tt::tt_fabric::EthChannelBuffer<REMOTE_RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>
+        remote_receiver_channels;
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> local_receiver_channels;
     // unroll so each sender channel has its own number of buffer slots
     // std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> local_sender_channels;
@@ -1924,7 +1927,7 @@ void kernel_main() {
             sizeof(PACKET_HEADER_TYPE),
             eth_transaction_ack_word_addr,  // Unused, otherwise probably need to have unique ack word per channel
             receiver_channel_base_id + i);
-        new (&remote_receiver_channels[i]) tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>(
+        new (&remote_receiver_channels[i]) tt::tt_fabric::EthChannelBuffer<REMOTE_RECEIVER_NUM_BUFFERS>(
             remote_receiver_buffer_addresses[i],
             channel_buffer_size,
             sizeof(PACKET_HEADER_TYPE),
@@ -2065,6 +2068,7 @@ void kernel_main() {
         enable_packet_header_recording,
         enable_fabric_counters,
         RECEIVER_NUM_BUFFERS,
+        REMOTE_RECEIVER_NUM_BUFFERS,
         NUM_RECEIVER_CHANNELS,
         // SENDER_NUM_BUFFERS,
         NUM_SENDER_CHANNELS,
