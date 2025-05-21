@@ -534,7 +534,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
 
-    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile_shape[1] * datum_size(in0_data_format);
+    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile_shape[1];
 
     // TODO: Generalize
     TT_FATAL(!fuse_batch, "Only fuse_batch=false is supported for optimized bmm!");

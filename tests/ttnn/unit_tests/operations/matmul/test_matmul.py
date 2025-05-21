@@ -2227,3 +2227,43 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
     )
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+
+
+@pytest.mark.parametrize(
+    "input_a_shape,input_b_shape,input_a_value,input_b_value,input_a_reshape,input_b_reshape",
+    [
+        ((12,), (1, 12, 4, 4), 1.0, 2.0, (12, 1, 1), (12, 1, 16)),
+        ((16,), (1, 16, 2, 2), 1.0, 3.0, (16, 1, 1), (16, 1, 4)),
+        ((8,), (1, 8, 3, 3), 2.0, 1.0, (8, 1, 1), (8, 1, 9)),
+    ],
+)
+def test_matmul_with_reshaped_tensors(
+    device, input_a_shape, input_b_shape, input_a_value, input_b_value, input_a_reshape, input_b_reshape
+):
+    torch.manual_seed(0)
+
+    # Create input tensors with specified shapes and values
+    input_a = torch.full(input_a_shape, input_a_value, dtype=torch.float32)
+    input_b = torch.full(input_b_shape, input_b_value, dtype=torch.float32)
+
+    # Reshape tensors for matmul
+    input_a_reshaped = input_a.reshape(input_a_reshape)
+    input_b_reshaped = input_b.reshape(input_b_reshape)
+
+    # Compute golden output
+    golden_output = torch.matmul(input_a_reshaped, input_b_reshaped)
+
+    # Convert to ttnn tensors
+    input_a_ttnn = ttnn.from_torch(input_a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b_ttnn = ttnn.from_torch(input_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Reshape ttnn tensors
+    input_a_reshaped_ttnn = ttnn.reshape(input_a_ttnn, input_a_reshape, pad_value=0)
+    input_b_reshaped_ttnn = ttnn.reshape(input_b_ttnn, input_b_reshape, pad_value=0)
+
+    # Compute matmul
+    output_ttnn = ttnn.matmul(input_a_reshaped_ttnn, input_b_reshaped_ttnn)
+    output = ttnn.to_torch(output_ttnn)
+
+    # Verify values match with high precision
+    assert_with_pcc(golden_output, output, 0.999)
