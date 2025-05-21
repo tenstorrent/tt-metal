@@ -20,9 +20,6 @@ on:
 jobs:
   fetch-data:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        index: [0, 1, 2]
     outputs:
       cache-path: ${{ steps.fetch.outputs.cache-path }}
       workflow_configs: ${{ steps.set-configs.outputs.workflow_configs }}
@@ -80,7 +77,7 @@ jobs:
         uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
         with:
           path: ${{ github.workspace }}/workflow-data.json
-          key: metal-workflow-data-${{ github.ref }}-${{ matrix.index }}-${{ github.run_id }}
+          key: metal-workflow-data-${{ github.ref }}-${{ github.run_id }}
 
       - name: Upload workflow data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
