@@ -144,7 +144,7 @@ std::vector<T> convert_layout_tile_to_row_major(
 //     ** For the last shard, we only align to nearest page instead of full shard size for partial shards
 //   * After conversion, size of physical data will match 2D physical size indicated by tensor_spec.physical_shape()
 template <typename T>
-std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec, T pad_value = 0);
+std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec);
 
 // Converts physical data into logical data based on tensor spec (see encode_tensor_data for details)
 // - Physical data: Flat container of physical data corresponding to tensor spec
