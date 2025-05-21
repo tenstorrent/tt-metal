@@ -420,7 +420,7 @@ routing_plane_id_t ControlPlane::get_routing_plane_id(
         mesh_id);
 
     std::optional<std::vector<chan_id_t>> eth_chans_in_direction;
-    const auto chip_eth_chans_map = this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id];
+    const auto& chip_eth_chans_map = this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id];
     for (const auto& [_, eth_chans] : chip_eth_chans_map) {
         if (std::find(eth_chans.begin(), eth_chans.end(), eth_chan_id) != eth_chans.end()) {
             eth_chans_in_direction = eth_chans;
