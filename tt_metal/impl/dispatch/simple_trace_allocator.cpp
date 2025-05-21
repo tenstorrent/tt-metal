@@ -233,7 +233,8 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
         // doesn't use the ringbuffer).
         if (has_active_eth_kernel) {
             if (last_active_eth_sync_idx.has_value()) {
-                final_binary_sync_idx = std::max(final_binary_sync_idx, static_cast<int>(last_active_eth_sync_idx.value()));
+                final_binary_sync_idx =
+                    std::max(final_binary_sync_idx, static_cast<int>(last_active_eth_sync_idx.value()));
             }
             last_active_eth_sync_idx = i;
             node.dispatch_metadata.send_binary = true;
