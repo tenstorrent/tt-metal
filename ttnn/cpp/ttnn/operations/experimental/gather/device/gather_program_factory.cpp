@@ -88,7 +88,7 @@ GatherProgramFactory::cached_program_t GatherProgramFactory::create(
             if (core_grid_calculated_columns_number != 0) {
                 const CoreRange additional_range(
                     {0, core_grid_calculated_rows_number},
-                    {core_grid_calculated_columns_number - 1, core_grid_calculated_rows_number - 1});
+                    {core_grid_calculated_columns_number, core_grid_calculated_rows_number});
                 core_range = core_range.merge(CoreRangeSet(additional_range));
             }
         }

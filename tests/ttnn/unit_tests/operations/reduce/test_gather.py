@@ -9,7 +9,6 @@ from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_blackhole("Gather needs to be tested and is failing on BH. Issue #22147")
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim",
     [
@@ -54,7 +53,6 @@ def test_gather_general(input_shape, index_shape, dim, device):
     assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
-@skip_for_blackhole("Gather needs to be tested and is failing on BH. Issue #22147")
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim",
     [
@@ -86,7 +84,6 @@ def test_gather_preallocated_output(input_shape, index_shape, dim, device):
     assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_output))
 
 
-@skip_for_blackhole("Gather needs to be tested and is failing on BH. Issue #22147")
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim",
     [
@@ -115,7 +112,6 @@ def test_gather_multicore_cases(input_shape, index_shape, dim, device):
     assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
-@skip_for_blackhole("Gather needs to be tested and is failing on BH. Issue #22147")
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim, torch_input_datatype, ttnn_input_datatype, ttnn_index_datatype",
     [
