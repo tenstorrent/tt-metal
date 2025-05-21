@@ -978,10 +978,14 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     // Output of halo op is always ROW_MAJOR, so input for convs is eighter DataType::FLOAT32 or DataType::BFLOAT16
     const DataType input_dtype = conv_config.dtype == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
     uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(input_dtype));
-    uint32_t weights_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.weights_dtype));
+
+    TT_FATAL(
+        conv_config.weights_dtype.has_value(),
+        "calculate_L1_usage expects conv_config.weights_dtype to be already set");
+    uint32_t weights_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.weights_dtype.value()));
     uint32_t bias_tile_size = 0;
     if (enable_bias) {
-        bias_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.weights_dtype));
+        bias_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.weights_dtype.value()));
     }
     uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
 

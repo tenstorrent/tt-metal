@@ -28,6 +28,8 @@ def prepare_conv_weights_func(
     groups,
     is_owned,
     slice_config=None,
+    weights_dtype=None,
+    torch_weights_dtype=None,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
@@ -69,7 +71,7 @@ def prepare_conv_weights_func(
 
     conv_config = ttnn.Conv2dConfig(
         dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
+        weights_dtype=weights_dtype,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
@@ -237,6 +239,58 @@ def test_prepare_conv_weights(
         device,
         groups,
         is_owned,
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w,  config_override, groups",
+    (
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, {"act_block_h": 256}, 1),
+        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, None, 1),
+    ),
+)
+@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
+@pytest.mark.parametrize("weights_dtype", [None, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("torch_weights_dtype", [ttnn.float32])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
+def test_conv_weights_dtype(
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    config_override,
+    device,
+    groups,
+    on_device,
+    weights_dtype,
+    torch_weights_dtype,
+):
+    prepare_conv_weights_func(
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        config_override,
+        on_device,
+        device,
+        groups,
+        False,
+        weights_dtype=weights_dtype,
+        torch_weights_dtype=torch_weights_dtype,
     )
 
 
