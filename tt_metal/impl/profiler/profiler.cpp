@@ -42,6 +42,10 @@ namespace tt {
 
 namespace tt_metal {
 
+bool supports_dma_operations(const IDevice* device) {
+    return device->arch() == tt::ARCH::WORMHOLE_B0 && device->is_mmio_capable();
+}
+
 static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
@@ -73,7 +77,7 @@ std::vector<uint32_t> read_control_buffer_from_core_slow_dispatch(
     std::vector<uint32_t> control_buffer;
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 && device->is_mmio_capable()) {
+    if (supports_dma_operations(device)) {
         control_buffer = tt::llrt::dma_read_hex_vec_from_core(
             device->id(),
             core,
@@ -132,7 +136,7 @@ void write_control_buffer_to_core_slow_dispatch(
     const std::vector<uint32_t>& control_buffer) {
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 && device->is_mmio_capable()) {
+    if (supports_dma_operations(device)) {
         tt::llrt::dma_write_hex_vec_to_core(
             device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
     } else {
@@ -924,8 +928,7 @@ void DeviceProfiler::dumpResults(
         if (USE_FAST_DISPATCH) {
             if (state == ProfilerDumpState::FORCE_UMD_READ ||
                 (state == ProfilerDumpState::LAST_CLOSE_DEVICE && rtoptions.get_profiler_do_dispatch_cores())) {
-                if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 &&
-                    device->is_mmio_capable()) {
+                if (supports_dma_operations(output_dram_buffer_ptr->device())) {
                     tt_metal::detail::ReadFromBufferUsingDMA(*output_dram_buffer_ptr, profile_buffer);
                 } else {
                     tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
@@ -935,8 +938,7 @@ void DeviceProfiler::dumpResults(
             }
         } else {
             if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 &&
-                    device->is_mmio_capable()) {
+                if (supports_dma_operations(output_dram_buffer_ptr->device())) {
                     tt_metal::detail::ReadFromBufferUsingDMA(*output_dram_buffer_ptr, profile_buffer);
                 } else {
                     tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
