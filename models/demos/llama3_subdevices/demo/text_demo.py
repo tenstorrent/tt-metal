@@ -762,8 +762,6 @@ def test_demo_text(
     target_prefill_tok_s = {
         "TG_Llama3.1-70B": 1050,  # TODO Update target
         "TG_Llama3.3-70B": 1050,
-        "TG_Llama-3.1-70B": 1050,  # HuggingFace name has an additional dash
-        "TG_Llama-3.3-70B": 1050,
         "TG_Deepseek-R1-Distill-70B": 1050,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
@@ -771,8 +769,6 @@ def test_demo_text(
     target_decode_tok_s_u = {
         "TG_Llama3.1-70B": 20,  # TODO Update target
         "TG_Llama3.3-70B": 20,
-        "TG_Llama-3.1-70B": 20,  # HuggingFace name has an additional dash
-        "TG_Llama-3.3-70B": 20,
         "TG_Deepseek-R1-Distill-70B": 20,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 

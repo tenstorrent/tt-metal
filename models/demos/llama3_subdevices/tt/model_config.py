@@ -1713,7 +1713,10 @@ class TtModelArgs:
 
     @property
     def base_model_name(self):
-        return self.model_name.split("B-")[0] + "B" if "B-" in self.model_name else self.model_name
+        # HuggingFace name contains a dash, but Meta name does not (e.g. Llama-3.1-70B vs Llama3.1-70B)
+        # Until we switch to HF weights-first, we need to force the dash out
+        model_name = self.model_name.replace("Llama-", "Llama")
+        return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
 
     @property
     def vision_chunk_ntok(self):
