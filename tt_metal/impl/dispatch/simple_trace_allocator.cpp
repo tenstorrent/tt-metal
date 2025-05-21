@@ -19,6 +19,10 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
         return {std::nullopt, 0};
     }
 
+    // Iterate over possible placements, including the very beginning of the ringbuffer and starting immediately after
+    // every region. One of these placements must be the best, since any other placement would be overlap the same or a
+    // smaller number of allocations by moving it forward to one of those positions.
+    // Then attempt to calculate the placement with the smallest total cost.
     // TODO: sweepline algorithm, so the best postion can be calculated in linear time relative to the number of
     // regions.
     while (true) {
@@ -43,8 +47,15 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
                 auto& next_use_idx = extra_data_[region.second.trace_idx].next_use_idx[region.second.data_type];
                 if (next_use_idx.has_value()) {
                     if (*next_use_idx == trace_idx) {
-                        cost += 10000000000;
+                        // Really try to avoid evicting a buffer that will be used by this program.
+                        const uint32_t current_node_eviction_penalty = 1000000000;
+                        cost += current_node_eviction_penalty;
                     } else {
+                        // Similar to Belady's algorithm, we want to evict the region that will be used the farthest in
+                        // the future, so cost is inversely proportional to distance to next use. Also take into account
+                        // the size, since that's roughly proportional to the cost of adding the region back in. We
+                        // could instead divide by the size, similar to the Belady-size algorithm, but has worked worse
+                        // in simulation.
                         cost += region.second.size * 1.0f / (*next_use_idx - trace_idx);
                     }
                 }
@@ -53,12 +64,15 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
         }
         if (!now_in_use) {
             if (region_sync_idx.has_value()) {
-                constexpr uint32_t kDesiredWriteAhead = 4;
-                constexpr uint32_t kStallBadness = 100000000;
+                // Avoid evicting something that was last used recently, as that can cause a stall that is very bad for
+                // performance. This is critical for avoiding gaps between ops, so it's given a very high cost (the
+                // highest cost for a program is normally around 10,000).
+                constexpr uint32_t desired_write_ahead = 4;
+                constexpr uint32_t stall_badness = 100000000;
                 int region_idx_diff = trace_idx - *region_sync_idx;
-                if (region_idx_diff < kDesiredWriteAhead) {
-                    // Stall badness is exponential
-                    cost += kStallBadness * (1 << (kDesiredWriteAhead - region_idx_diff));
+                if (region_idx_diff < desired_write_ahead) {
+                    // Stall badness is exponential.
+                    cost += stall_badness * (1 << (desired_write_ahead - region_idx_diff));
                 }
             }
             if (cost < best_cost) {
@@ -81,6 +95,7 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
         return {std::nullopt, best_addr};
     }
 
+    // Evict overlapped regions.
     auto it = regions_.begin();
     while (it != regions_.end()) {
         if (intersects(*best_addr, size, it->first, it->second.size)) {
@@ -135,6 +150,7 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
         std::optional<uint32_t> sync_idx;
         uint32_t programmable_core_count_ = hal.get_programmable_core_type_count();
+        node.dispatch_metadata = TraceDispatchMetadata{};
         node.dispatch_metadata.binary_kernel_config_addrs.resize(programmable_core_count_);
         node.dispatch_metadata.nonbinary_kernel_config_addrs.resize(programmable_core_count_);
 
@@ -200,7 +216,8 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
         // Subtract 1 because we don't want to overwrite watcher data for the last program to complete executing.
         constexpr uint32_t max_queued_programs = launch_msg_buffer_num_entries - 1;
 
-        // Do adjustments to the sync index to ensure we don't overflow the launch message buffer.
+        // Do adjustments to the sync index to ensure we don't overflow the worker launch message buffer. We could
+        // ignore programs that only use active ethernet, but that's a very rare case and not worth the complexity.
         int final_sync_idx = static_cast<int>(i) - max_queued_programs;
         if (sync_idx.has_value()) {
             final_sync_idx = std::max(final_sync_idx, static_cast<int>(sync_idx.value()));
