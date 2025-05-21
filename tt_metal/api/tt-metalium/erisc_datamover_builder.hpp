@@ -128,14 +128,17 @@ struct FabricEriscDatamoverConfig {
     std::size_t channel_buffer_size_bytes = 0;
 
     std::array<std::size_t, num_sender_channels> sender_channels_size_bytes;
+    std::array<std::size_t, num_sender_channels> remote_sender_channels_size_bytes;
     std::array<std::size_t, num_receiver_channels> receiver_channels_size_bytes;
     std::array<std::size_t, num_receiver_channels> remote_receiver_channels_size_bytes;
     std::array<std::size_t, num_sender_channels> sender_channels_num_buffers;
+    std::array<std::size_t, num_sender_channels> remote_sender_channels_num_buffers;
     std::array<std::size_t, num_downstream_sender_channels> downstream_sender_channels_num_buffers;
     std::array<std::size_t, num_receiver_channels> receiver_channels_num_buffers;
     std::array<std::size_t, num_receiver_channels> remote_receiver_channels_num_buffers;
 
     std::array<std::size_t, num_sender_channels> sender_channels_base_address;
+    std::array<std::size_t, num_sender_channels> remote_sender_channels_base_address;
     std::array<std::size_t, num_receiver_channels> receiver_channels_base_address;
     std::array<std::size_t, num_receiver_channels> remote_receiver_channels_base_address;
 
@@ -155,6 +158,7 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, num_sender_channels> sender_channel_ack_noc_ids;
     std::array<std::size_t, num_sender_channels> sender_channel_ack_cmd_buf_ids;
 
+    bool skip_sender_channel_1_connection = false;
     bool skip_receiver_channel_1_connection = false;
     std::size_t remote_receiver_channel_num_buffers = 0;
 

@@ -133,8 +133,9 @@ constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_ST
 constexpr size_t REMOTE_RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 15);
 
 constexpr bool skip_receiver_channel_1_connection = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 16);
+constexpr bool skip_sender_channel_1_connection = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 17);
 
-constexpr size_t LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX = MAIN_CT_ARGS_START_IDX + 17;
+constexpr size_t LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX = MAIN_CT_ARGS_START_IDX + 18;
 constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX);
 constexpr size_t local_sender_channel_0_connection_info_addr =
     get_compile_time_arg_val(LOCAL_SENDER_CHANNEL_ADDRESS_START_IDX + 1);

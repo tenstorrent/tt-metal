@@ -1201,6 +1201,7 @@ void run_fabric_edm_main_loop(
                     port_direction_table);
             }
             if constexpr (enable_ring_support && !skip_receiver_channel_1_connection) {
+                // if constexpr (enable_ring_support) {
                 run_receiver_channel_step<
                     enable_packet_header_recording,
                     enable_fabric_counters,
@@ -1219,25 +1220,27 @@ void run_fabric_edm_main_loop(
                     port_direction_table);
             }
 
-            run_sender_channel_step<
-                enable_packet_header_recording,
-                enable_fabric_counters,
-                REMOTE_RECEIVER_NUM_BUFFERS,
-                SENDER_NUM_BUFFERS_VC0_1,
-                to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                sender_ch_live_check_skip[1]>(
-                // local_sender_channels[1],
-                local_sender_channel_vc0_1,
+            if constexpr (!skip_sender_channel_1_connection) {
+                run_sender_channel_step<
+                    enable_packet_header_recording,
+                    enable_fabric_counters,
+                    REMOTE_RECEIVER_NUM_BUFFERS,
+                    SENDER_NUM_BUFFERS_VC0_1,
+                    to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
+                    sender_ch_live_check_skip[1]>(
+                    // local_sender_channels[1],
+                    local_sender_channel_vc0_1,
 
-                // local_sender_channel_worker_interfaces[1],
-                local_sender_channel_worker_interfaces_vc0_1,
+                    // local_sender_channel_worker_interfaces[1],
+                    local_sender_channel_worker_interfaces_vc0_1,
 
-                outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                remote_receiver_channels[VC0_RECEIVER_CHANNEL],
-                sender_channel_counters_ptrs[1],
-                sender_channel_packet_recorders[1],
-                channel_connection_established[1],
-                1);
+                    outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
+                    remote_receiver_channels[VC0_RECEIVER_CHANNEL],
+                    sender_channel_counters_ptrs[1],
+                    sender_channel_packet_recorders[1],
+                    channel_connection_established[1],
+                    1);
+            }
             if constexpr (is_2d_fabric) {
                 run_sender_channel_step<
                     enable_packet_header_recording,
