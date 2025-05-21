@@ -53,12 +53,9 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     return config;
 }
 
-std::vector<ttml::core::distributed::Rank> get_workers_and_aggregator_ranks(uint32_t workers) {
-    std::vector<ttml::core::distributed::Rank> ranks;
-    ranks.reserve(workers + 1U);
-    for (uint32_t i = 0; i <= workers; ++i) {
-        ranks.push_back(ttml::core::distributed::Rank{static_cast<int>(i)});
-    }
+std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
+    std::vector<int> ranks(workers + 1U);
+    std::iota(ranks.begin(), ranks.end(), 0);
     return ranks;
 }
 
