@@ -62,7 +62,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     Tensor input_5d = input;
     input_5d = ttnn::experimental::view(input_5d, input_5d_shape);
 
-    IndexInfo index_info[5] = {false};
+    IndexInfo index_info[5] = {{false}};
 
     for (uint32_t i = 0; i < index_tensors.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
@@ -250,7 +250,7 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = tensor_return_value.buffer();
     auto index_tensors = tensor_args.index_tensors;
-    IndexInfo index_info[5] = {false};
+    IndexInfo index_info[5] = {{false}};
 
     for (uint32_t i = 0; i < index_dims.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
