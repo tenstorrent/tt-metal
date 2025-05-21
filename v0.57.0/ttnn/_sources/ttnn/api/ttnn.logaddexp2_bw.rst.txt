@@ -1,0 +1,8 @@
+﻿ttnn.logaddexp2\_bw
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.logaddexp2_bw:
+
+.. autofastoperation:: ttnn.logaddexp2_bw

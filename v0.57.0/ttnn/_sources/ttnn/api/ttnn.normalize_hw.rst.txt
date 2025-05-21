@@ -1,0 +1,8 @@
+﻿ttnn.normalize\_hw
+==================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.normalize_hw:
+
+.. autofastoperation:: ttnn.normalize_hw

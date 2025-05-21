@@ -1,0 +1,8 @@
+﻿ttnn.tanhshrink
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.tanhshrink:
+
+.. autofastoperation:: ttnn.tanhshrink

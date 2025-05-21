@@ -1,0 +1,8 @@
+﻿ttnn.softplus\_bw
+=================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.softplus_bw:
+
+.. autofastoperation:: ttnn.softplus_bw

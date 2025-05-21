@@ -1,0 +1,8 @@
+﻿ttnn.max
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.max:
+
+.. autofastoperation:: ttnn.max

@@ -1,0 +1,8 @@
+﻿ttnn.matmul
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.matmul:
+
+.. autofastoperation:: ttnn.matmul

@@ -1,0 +1,8 @@
+﻿ttnn.polygamma
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.polygamma:
+
+.. autofastoperation:: ttnn.polygamma

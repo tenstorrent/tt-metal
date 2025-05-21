@@ -1,0 +1,8 @@
+﻿ttnn.isnan
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.isnan:
+
+.. autofastoperation:: ttnn.isnan

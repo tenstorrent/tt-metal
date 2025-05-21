@@ -1,0 +1,8 @@
+﻿ttnn.addcmul
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.addcmul:
+
+.. autofastoperation:: ttnn.addcmul

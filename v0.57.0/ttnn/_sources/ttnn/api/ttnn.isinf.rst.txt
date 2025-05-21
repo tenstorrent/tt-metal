@@ -1,0 +1,8 @@
+﻿ttnn.isinf
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.isinf:
+
+.. autofastoperation:: ttnn.isinf

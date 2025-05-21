@@ -1,0 +1,8 @@
+﻿ttnn.div\_no\_nan\_bw
+=====================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.div_no_nan_bw:
+
+.. autofastoperation:: ttnn.div_no_nan_bw

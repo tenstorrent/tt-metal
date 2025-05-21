@@ -1,0 +1,8 @@
+﻿ttnn.hardswish\_bw
+==================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.hardswish_bw:
+
+.. autofastoperation:: ttnn.hardswish_bw

@@ -1,0 +1,8 @@
+﻿ttnn.relu
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.relu:
+
+.. autofastoperation:: ttnn.relu

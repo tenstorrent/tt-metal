@@ -1,0 +1,8 @@
+﻿ttnn.isclose
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.isclose:
+
+.. autofastoperation:: ttnn.isclose

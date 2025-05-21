@@ -1,0 +1,8 @@
+﻿ttnn.floor
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.floor:
+
+.. autofastoperation:: ttnn.floor

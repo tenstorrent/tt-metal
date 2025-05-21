@@ -1,0 +1,8 @@
+﻿ttnn.div
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.div:
+
+.. autofastoperation:: ttnn.div

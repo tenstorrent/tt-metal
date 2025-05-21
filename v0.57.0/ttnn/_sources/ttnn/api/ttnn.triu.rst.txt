@@ -1,0 +1,8 @@
+﻿ttnn.triu
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.triu:
+
+.. autofastoperation:: ttnn.triu

@@ -1,0 +1,8 @@
+﻿ttnn.zeros\_like
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.zeros_like:
+
+.. autofastoperation:: ttnn.zeros_like

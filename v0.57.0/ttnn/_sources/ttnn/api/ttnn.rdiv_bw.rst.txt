@@ -1,0 +1,8 @@
+﻿ttnn.rdiv\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.rdiv_bw:
+
+.. autofastoperation:: ttnn.rdiv_bw

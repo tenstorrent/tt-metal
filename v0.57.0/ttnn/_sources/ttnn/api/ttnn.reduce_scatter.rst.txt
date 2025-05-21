@@ -1,0 +1,8 @@
+﻿ttnn.reduce\_scatter
+====================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.reduce_scatter:
+
+.. autofastoperation:: ttnn.reduce_scatter

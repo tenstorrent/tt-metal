@@ -1,0 +1,8 @@
+﻿ttnn.max\_pool2d
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.max_pool2d:
+
+.. autofastoperation:: ttnn.max_pool2d

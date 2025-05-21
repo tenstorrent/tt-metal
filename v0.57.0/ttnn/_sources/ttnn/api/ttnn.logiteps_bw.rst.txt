@@ -1,0 +1,8 @@
+﻿ttnn.logiteps\_bw
+=================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.logiteps_bw:
+
+.. autofastoperation:: ttnn.logiteps_bw

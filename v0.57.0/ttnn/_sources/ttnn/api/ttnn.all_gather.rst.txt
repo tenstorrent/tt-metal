@@ -1,0 +1,8 @@
+﻿ttnn.all\_gather
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.all_gather:
+
+.. autofastoperation:: ttnn.all_gather

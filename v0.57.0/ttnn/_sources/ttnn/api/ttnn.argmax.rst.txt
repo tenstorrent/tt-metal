@@ -1,0 +1,8 @@
+﻿ttnn.argmax
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.argmax:
+
+.. autofastoperation:: ttnn.argmax

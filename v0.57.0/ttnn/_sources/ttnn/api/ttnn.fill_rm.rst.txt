@@ -1,0 +1,8 @@
+﻿ttnn.fill\_rm
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.fill_rm:
+
+.. autofastoperation:: ttnn.fill_rm

@@ -1,0 +1,8 @@
+﻿ttnn.reciprocal
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.reciprocal:
+
+.. autofastoperation:: ttnn.reciprocal

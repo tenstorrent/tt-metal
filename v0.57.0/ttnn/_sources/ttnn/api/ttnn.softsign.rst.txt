@@ -1,0 +1,8 @@
+﻿ttnn.softsign
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.softsign:
+
+.. autofastoperation:: ttnn.softsign

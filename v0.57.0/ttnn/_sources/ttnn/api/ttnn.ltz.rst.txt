@@ -1,0 +1,8 @@
+﻿ttnn.ltz
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.ltz:
+
+.. autofastoperation:: ttnn.ltz

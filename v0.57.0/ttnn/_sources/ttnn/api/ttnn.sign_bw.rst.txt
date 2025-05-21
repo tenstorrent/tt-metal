@@ -1,0 +1,8 @@
+﻿ttnn.sign\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.sign_bw:
+
+.. autofastoperation:: ttnn.sign_bw

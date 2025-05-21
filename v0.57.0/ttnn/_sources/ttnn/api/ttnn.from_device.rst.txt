@@ -1,0 +1,8 @@
+﻿ttnn.from\_device
+=================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.from_device:
+
+.. autofastoperation:: ttnn.from_device

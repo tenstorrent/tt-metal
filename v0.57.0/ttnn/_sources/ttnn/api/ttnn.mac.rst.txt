@@ -1,0 +1,8 @@
+﻿ttnn.mac
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.mac:
+
+.. autofastoperation:: ttnn.mac

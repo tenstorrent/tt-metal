@@ -1,0 +1,8 @@
+﻿ttnn.prod
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.prod:
+
+.. autofastoperation:: ttnn.prod

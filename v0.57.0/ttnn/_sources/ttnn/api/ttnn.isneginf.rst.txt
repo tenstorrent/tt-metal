@@ -1,0 +1,8 @@
+﻿ttnn.isneginf
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.isneginf:
+
+.. autofastoperation:: ttnn.isneginf

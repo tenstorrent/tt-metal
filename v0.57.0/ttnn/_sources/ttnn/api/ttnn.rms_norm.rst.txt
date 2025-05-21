@@ -1,0 +1,8 @@
+﻿ttnn.rms\_norm
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.rms_norm:
+
+.. autofastoperation:: ttnn.rms_norm

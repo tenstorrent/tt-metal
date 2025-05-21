@@ -1,0 +1,8 @@
+﻿ttnn.topk
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.topk:
+
+.. autofastoperation:: ttnn.topk

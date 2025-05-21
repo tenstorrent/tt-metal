@@ -1,0 +1,8 @@
+﻿ttnn.atanh\_bw
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.atanh_bw:
+
+.. autofastoperation:: ttnn.atanh_bw

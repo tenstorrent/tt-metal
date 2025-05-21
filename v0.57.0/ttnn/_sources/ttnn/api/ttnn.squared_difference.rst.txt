@@ -1,0 +1,8 @@
+﻿ttnn.squared\_difference
+========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.squared_difference:
+
+.. autofastoperation:: ttnn.squared_difference

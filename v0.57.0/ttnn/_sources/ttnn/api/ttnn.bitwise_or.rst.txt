@@ -1,0 +1,8 @@
+﻿ttnn.bitwise\_or
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.bitwise_or:
+
+.. autofastoperation:: ttnn.bitwise_or

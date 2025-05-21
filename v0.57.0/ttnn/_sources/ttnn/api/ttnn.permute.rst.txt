@@ -1,0 +1,8 @@
+﻿ttnn.permute
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.permute:
+
+.. autofastoperation:: ttnn.permute

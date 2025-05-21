@@ -1,0 +1,8 @@
+﻿ttnn.outer
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.outer:
+
+.. autofastoperation:: ttnn.outer

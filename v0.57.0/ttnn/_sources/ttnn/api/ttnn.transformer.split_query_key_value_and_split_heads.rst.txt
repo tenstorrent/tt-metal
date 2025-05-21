@@ -1,0 +1,8 @@
+﻿ttnn.transformer.split\_query\_key\_value\_and\_split\_heads
+============================================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.split_query_key_value_and_split_heads:
+
+.. autofastoperation:: ttnn.transformer.split_query_key_value_and_split_heads

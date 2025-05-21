@@ -1,0 +1,8 @@
+﻿ttnn.arange
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.arange:
+
+.. autofastoperation:: ttnn.arange

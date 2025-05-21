@@ -1,0 +1,8 @@
+﻿ttnn.rad2deg\_bw
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.rad2deg_bw:
+
+.. autofastoperation:: ttnn.rad2deg_bw

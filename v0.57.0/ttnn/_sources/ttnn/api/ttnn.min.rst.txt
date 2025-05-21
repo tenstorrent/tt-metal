@@ -1,0 +1,8 @@
+﻿ttnn.min
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.min:
+
+.. autofastoperation:: ttnn.min

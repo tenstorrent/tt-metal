@@ -1,0 +1,8 @@
+﻿ttnn.std
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.std:
+
+.. autofastoperation:: ttnn.std

@@ -1,0 +1,8 @@
+﻿ttnn.square\_bw
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.square_bw:
+
+.. autofastoperation:: ttnn.square_bw

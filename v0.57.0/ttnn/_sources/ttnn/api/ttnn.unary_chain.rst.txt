@@ -1,0 +1,8 @@
+﻿ttnn.unary\_chain
+=================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.unary_chain:
+
+.. autofastoperation:: ttnn.unary_chain

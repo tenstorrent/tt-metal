@@ -1,0 +1,8 @@
+﻿ttnn.eq
+=======
+
+.. currentmodule:: ttnn
+
+.. _ttnn.eq:
+
+.. autofastoperation:: ttnn.eq

@@ -1,0 +1,8 @@
+﻿ttnn.sigmoid\_bw
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.sigmoid_bw:
+
+.. autofastoperation:: ttnn.sigmoid_bw

@@ -1,0 +1,8 @@
+﻿ttnn.mse\_loss
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.mse_loss:
+
+.. autofastoperation:: ttnn.mse_loss

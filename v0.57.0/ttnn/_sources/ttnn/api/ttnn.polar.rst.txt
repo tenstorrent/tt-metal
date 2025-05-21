@@ -1,0 +1,8 @@
+﻿ttnn.polar
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.polar:
+
+.. autofastoperation:: ttnn.polar

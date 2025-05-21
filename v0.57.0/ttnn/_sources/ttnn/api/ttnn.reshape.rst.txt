@@ -1,0 +1,8 @@
+﻿ttnn.reshape
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.reshape:
+
+.. autofastoperation:: ttnn.reshape

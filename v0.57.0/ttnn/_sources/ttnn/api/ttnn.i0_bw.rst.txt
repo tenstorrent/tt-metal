@@ -1,0 +1,8 @@
+﻿ttnn.i0\_bw
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.i0_bw:
+
+.. autofastoperation:: ttnn.i0_bw

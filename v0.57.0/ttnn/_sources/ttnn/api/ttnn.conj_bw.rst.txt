@@ -1,0 +1,8 @@
+﻿ttnn.conj\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.conj_bw:
+
+.. autofastoperation:: ttnn.conj_bw

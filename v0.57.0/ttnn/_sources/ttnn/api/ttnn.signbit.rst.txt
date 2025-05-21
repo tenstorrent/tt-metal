@@ -1,0 +1,8 @@
+﻿ttnn.signbit
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.signbit:
+
+.. autofastoperation:: ttnn.signbit

@@ -1,0 +1,8 @@
+﻿ttnn.pow
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.pow:
+
+.. autofastoperation:: ttnn.pow

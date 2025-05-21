@@ -1,0 +1,8 @@
+﻿ttnn.erfinv\_bw
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.erfinv_bw:
+
+.. autofastoperation:: ttnn.erfinv_bw

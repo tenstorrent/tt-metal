@@ -1,0 +1,8 @@
+﻿ttnn.angle
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.angle:
+
+.. autofastoperation:: ttnn.angle

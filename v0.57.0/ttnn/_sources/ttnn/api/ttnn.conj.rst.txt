@@ -1,0 +1,8 @@
+﻿ttnn.conj
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.conj:
+
+.. autofastoperation:: ttnn.conj

@@ -1,0 +1,8 @@
+﻿ttnn.digamma
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.digamma:
+
+.. autofastoperation:: ttnn.digamma

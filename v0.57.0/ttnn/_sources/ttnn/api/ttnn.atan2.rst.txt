@@ -1,0 +1,8 @@
+﻿ttnn.atan2
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.atan2:
+
+.. autofastoperation:: ttnn.atan2

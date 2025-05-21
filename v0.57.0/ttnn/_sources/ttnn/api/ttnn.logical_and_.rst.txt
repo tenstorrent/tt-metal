@@ -1,0 +1,8 @@
+﻿ttnn.logical\_and\_
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.logical_and_:
+
+.. autofastoperation:: ttnn.logical_and_

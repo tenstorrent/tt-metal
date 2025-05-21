@@ -1,0 +1,8 @@
+﻿ttnn.experimental.dropout
+=========================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.dropout:
+
+.. autofastoperation:: ttnn.experimental.dropout

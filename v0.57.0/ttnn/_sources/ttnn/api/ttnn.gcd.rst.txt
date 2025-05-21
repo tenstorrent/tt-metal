@@ -1,0 +1,8 @@
+﻿ttnn.gcd
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.gcd:
+
+.. autofastoperation:: ttnn.gcd

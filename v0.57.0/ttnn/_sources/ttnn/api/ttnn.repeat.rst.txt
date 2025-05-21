@@ -1,0 +1,8 @@
+﻿ttnn.repeat
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.repeat:
+
+.. autofastoperation:: ttnn.repeat

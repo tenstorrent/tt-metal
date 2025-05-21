@@ -1,0 +1,8 @@
+﻿ttnn.softshrink
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.softshrink:
+
+.. autofastoperation:: ttnn.softshrink

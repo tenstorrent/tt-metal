@@ -1,0 +1,8 @@
+﻿ttnn.to\_layout
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.to_layout:
+
+.. autofastoperation:: ttnn.to_layout

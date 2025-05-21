@@ -1,0 +1,8 @@
+﻿ttnn.hardtanh
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.hardtanh:
+
+.. autofastoperation:: ttnn.hardtanh

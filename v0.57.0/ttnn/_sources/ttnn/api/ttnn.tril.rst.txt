@@ -1,0 +1,8 @@
+﻿ttnn.tril
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.tril:
+
+.. autofastoperation:: ttnn.tril

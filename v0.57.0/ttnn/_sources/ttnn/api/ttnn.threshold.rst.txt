@@ -1,0 +1,8 @@
+﻿ttnn.threshold
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.threshold:
+
+.. autofastoperation:: ttnn.threshold

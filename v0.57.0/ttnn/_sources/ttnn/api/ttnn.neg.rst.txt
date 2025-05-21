@@ -1,0 +1,8 @@
+﻿ttnn.neg
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.neg:
+
+.. autofastoperation:: ttnn.neg

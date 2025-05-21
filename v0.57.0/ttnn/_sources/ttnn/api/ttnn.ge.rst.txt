@@ -1,0 +1,8 @@
+﻿ttnn.ge
+=======
+
+.. currentmodule:: ttnn
+
+.. _ttnn.ge:
+
+.. autofastoperation:: ttnn.ge

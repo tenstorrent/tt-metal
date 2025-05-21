@@ -1,0 +1,8 @@
+﻿ttnn.ldexp\_bw
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.ldexp_bw:
+
+.. autofastoperation:: ttnn.ldexp_bw

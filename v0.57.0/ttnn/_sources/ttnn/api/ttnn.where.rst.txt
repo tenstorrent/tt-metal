@@ -1,0 +1,8 @@
+﻿ttnn.where
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.where:
+
+.. autofastoperation:: ttnn.where

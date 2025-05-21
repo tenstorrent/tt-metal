@@ -1,0 +1,8 @@
+﻿ttnn.sinh
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.sinh:
+
+.. autofastoperation:: ttnn.sinh

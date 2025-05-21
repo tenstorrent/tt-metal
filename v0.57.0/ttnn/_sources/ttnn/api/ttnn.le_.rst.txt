@@ -1,0 +1,8 @@
+﻿ttnn.le\_
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.le_:
+
+.. autofastoperation:: ttnn.le_

@@ -1,0 +1,8 @@
+﻿ttnn.scatter
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.scatter:
+
+.. autofastoperation:: ttnn.scatter

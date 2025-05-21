@@ -1,0 +1,8 @@
+﻿ttnn.clamp\_bw
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.clamp_bw:
+
+.. autofastoperation:: ttnn.clamp_bw

@@ -1,0 +1,8 @@
+﻿ttnn.addalpha\_bw
+=================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.addalpha_bw:
+
+.. autofastoperation:: ttnn.addalpha_bw

@@ -1,0 +1,8 @@
+﻿ttnn.logical\_xor\_
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.logical_xor_:
+
+.. autofastoperation:: ttnn.logical_xor_
