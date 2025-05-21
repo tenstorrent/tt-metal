@@ -83,9 +83,11 @@ run_t3000_qwen25_tests() {
 
   echo "LOG_METAL: Running run_t3000_qwen25_tests"
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  qwen25_7b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-7B-Instruct
   qwen72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
 
   HF_MODEL=$qwen72b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py --timeout 3600; fail+=$?
+  MESH_DEVICE=N300 HF_MODEL=$qwen7b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py --timeout 3600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
