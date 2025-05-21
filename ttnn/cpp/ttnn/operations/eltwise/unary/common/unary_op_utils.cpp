@@ -38,6 +38,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::FLOOR_FLOAT32: return "SFPU_OP_FLOOR_INCLUDE";
         case UnaryOpType::CEIL:
         case UnaryOpType::CEIL_FLOAT32: return "SFPU_OP_CEIL_INCLUDE";
+        case UnaryOpType::TRUNC: return "SFPU_OP_TRUNC_INCLUDE";
         case UnaryOpType::RDIV:
         case UnaryOpType::RSUB: return "SFPU_OP_REVERSE_FAMILY_INCLUDE";
         case UnaryOpType::ISINF:
@@ -431,6 +432,15 @@ std::pair<string, string> get_op_init_and_func_default(
         case UnaryOpType::CEIL: op_init_and_name = {"ceil_tile_init();", fmt::format("ceil_tile({});", idst)}; break;
         case UnaryOpType::CEIL_FLOAT32:
             op_init_and_name = {"ceil_tile_init();", fmt::format("ceil_tile_float32({});", idst)};
+            break;
+        case UnaryOpType::TRUNC:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::FLOAT32) {
+                op_init_and_name = {"trunc_tile_init();", fmt::format("trunc_tile_float32({});", idst)};
+            } else {
+                op_init_and_name = {"trunc_tile_init();", fmt::format("trunc_tile({});", idst)};
+            }
             break;
         case UnaryOpType::RELU6:
             op_init_and_name = {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
