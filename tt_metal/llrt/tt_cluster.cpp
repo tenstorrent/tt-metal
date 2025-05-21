@@ -382,6 +382,16 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_all_chip_ethernet_coordi
     return this->cluster_desc_->get_chip_locations();
 }
 
+chip_id_t Cluster::get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const {
+    for (const auto& [physical_chip_id, coord] : this->get_all_chip_ethernet_coordinates()) {
+        if (coord == eth_coord) {
+            return physical_chip_id;
+        }
+    }
+    TT_FATAL(false, "Physical chip id not found for eth coord");
+    return 0;
+}
+
 size_t Cluster::number_of_user_devices() const {
     if (this->cluster_type_ == ClusterType::TG) {
         const auto& chips = this->driver_->get_target_device_ids();

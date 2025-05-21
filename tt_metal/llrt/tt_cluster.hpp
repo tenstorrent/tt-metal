@@ -116,6 +116,8 @@ public:
     }
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
 
+    chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
+
     ARCH arch() const { return this->arch_; }
 
     const metal_SocDescriptor& get_soc_desc(chip_id_t chip) const;
