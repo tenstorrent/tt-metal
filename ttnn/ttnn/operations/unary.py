@@ -318,10 +318,13 @@ def _golden_function_clip(input_tensor_a, min=None, max=None, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.clip, golden_function=_golden_function_clip)
 
 
-def _golden_function_round(input_tensor_a, decimals=0, *args, **kwargs):
+def _golden_function_round(input_tensor_a, decimals=None, *args, **kwargs):
     import torch
 
-    return torch.round(input=input_tensor_a, decimals=decimals)
+    if decimals is None:
+        return torch.round(input=input_tensor_a)
+    else:
+        return torch.round(input=input_tensor_a, decimals=decimals)
 
 
 ttnn.attach_golden_function(ttnn.round, golden_function=_golden_function_round)
