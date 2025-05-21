@@ -245,12 +245,12 @@ def test_softmax(device, batch_size, h, w, dim):
 
     print("hi before assert")
     for i in range(0, w):
-        print(i)
-        torch.set_printoptions(profile="full")
-        with open("tensor_output.txt", "w") as f:
-            print(output_tensor[:, :, i], file=f)
-        with open("torch_tensor_output.txt", "w") as f:
-            print(torch_output_tensor[:, :, i], file=f)
+        # print(i)
+        # torch.set_printoptions(profile="full")
+        # with open("tensor_output.txt", "w") as f:
+        #     print(output_tensor[:, :, i], file=f)
+        # with open("torch_tensor_output.txt", "w") as f:
+        #     print(torch_output_tensor[:, :, i], file=f)
         assert_with_pcc(torch_output_tensor[:, :, i], output_tensor[:, :, i], 0.997)
 
 
@@ -258,9 +258,9 @@ def test_softmax(device, batch_size, h, w, dim):
 @pytest.mark.parametrize(
     "batch_size, h, w, dim",
     [
-        # (1, 2048, 128000, -1),
-        # (1, 512, 128000, -1),
-        # (1, 128, 128000, -1),
+        (1, 2048, 128000, -1),
+        (1, 512, 128000, -1),
+        (1, 128, 128000, -1),
         (1, 32, 128000, -1),
         (1, 2048, 32000, -1),
         (1, 512, 32000, -1),
