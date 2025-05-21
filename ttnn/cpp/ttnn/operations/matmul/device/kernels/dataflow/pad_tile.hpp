@@ -25,8 +25,8 @@ void fill_pad_face(uint32_t num_elements_padded_w, uint32_t num_elements_padded_
     // Right padding (width padding)
     if (num_elements_padded_w > 0) {
         for (uint32_t row = 0; row < FACE_HEIGHT; ++row) {
-            auto row_ptr = tile_ptr + row * FACE_WIDTH + (FACE_WIDTH - num_elements_padded_w);
-            for (uint32_t col = 0; col < num_elements_padded_w; ++col) {
+            auto row_ptr = tile_ptr + row * FACE_WIDTH;
+            for (uint32_t col = FACE_WIDTH - num_elements_padded_w; col < FACE_WIDTH; ++col) {
                 row_ptr[col] = fill_value;
             }
         }
@@ -49,7 +49,39 @@ void fill_pad_face(uint32_t num_elements_padded_w, uint32_t num_elements_padded_
  * This function handles zero padding for a tile by breaking it down into faces and applying
  * padding to each face individually. It calculates the appropriate padding for each face
  * based on the unpadded dimensions and applies the padding using fill_pad_face.
- *
+
+    Case 1: All elements in face are padded (num_elements_unpadded_w <= face_w_offset)
+
+    num_elements_unpadded_w
+            v
+    +----------------+----------------+
+    | x x x          |                |
+    | x x x          |     Face       |
+    | x x x          |                |
+    +----------------+----------------+
+    ^                ^
+                face_w_offset
+
+    Case 2: All elements are unpadded (num_elements_unpadded_w >= face_w_offset + FACE_WIDTH)
+    +----------------+----------------+
+    | x x x x x x x x| x x            |
+    | x x Face  x x x| x x            |
+    | x x x x x x x x| x x            |
+    +----------------+----------------+
+    ^                ^
+    face_w_offset    face_w_offset + FACE_WIDTH
+
+    Case 3: Some elements are padded (face_w_offset < num_elements_unpadded_w < face_w_offset + FACE_WIDTH)
+            num_elements_unpadded_w
+                          v
+    +----------------+----------------+
+    | x x x x x x x x| x x            |
+    | x x x x x x x x| x x  Face      |
+    | x x x x x x x x| x x            |
+    +----------------+----------------+
+    ^                ^                ^
+                face_w_offset         face_w_offset + FACE_WIDTH
+
  * @tparam T The type of the elements in the tile
  * @tparam num_faces_w Number of faces in the width dimension (default: TILE_WIDTH / FACE_WIDTH)
  * @tparam num_faces_h Number of faces in the height dimension (default: TILE_HEIGHT / FACE_HEIGHT)
@@ -69,16 +101,37 @@ void fill_pad_tile(
             auto face_ptr = tile_ptr + face_offset;
             // Calculate padding for this specific face
             if (num_elements_unpadded_w > 0) {
-                uint32_t face_pad_w = num_elements_unpadded_w < (face_w * FACE_WIDTH)
-                                          ? FACE_WIDTH
-                                          : (FACE_WIDTH - num_elements_unpadded_w % FACE_WIDTH);
+                uint32_t face_w_offset = face_w * FACE_WIDTH;
+                uint32_t face_pad_w;
+
+                if (num_elements_unpadded_w <= face_w_offset) {
+                    // All elements in this face are padded ones
+                    face_pad_w = FACE_WIDTH;
+                } else if (num_elements_unpadded_w >= face_w_offset + FACE_WIDTH) {
+                    // All elements in this face are unpadded ones
+                    face_pad_w = 0;
+                } else {
+                    // Only some elements in this face are padded ones
+                    face_pad_w = face_w_offset + FACE_WIDTH - num_elements_unpadded_w;
+                }
+
                 fill_pad_face<T>(face_pad_w, 0, face_ptr, fill_value);
             }
 
             if (num_elements_unpadded_h > 0) {
-                uint32_t face_pad_h = num_elements_unpadded_h < (face_h * FACE_HEIGHT)
-                                          ? FACE_HEIGHT
-                                          : (FACE_HEIGHT - num_elements_unpadded_h % FACE_HEIGHT);
+                uint32_t face_h_offset = face_h * FACE_HEIGHT;
+                uint32_t face_pad_h;
+
+                if (num_elements_unpadded_h <= face_h_offset) {
+                    // All elements in this face are padded ones
+                    face_pad_h = FACE_HEIGHT;
+                } else if (num_elements_unpadded_h >= face_h_offset + FACE_HEIGHT) {
+                    // All elements in this face are unpadded ones
+                    face_pad_h = 0;
+                } else {
+                    // Only some elements in this face are padded ones
+                    face_pad_h = face_h_offset + FACE_HEIGHT - num_elements_unpadded_h;
+                }
                 fill_pad_face<T>(0, face_pad_h, face_ptr, fill_value);
             }
         }
