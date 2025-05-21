@@ -1,3 +1,26 @@
+#include "ttnn/operations/experimental/ccl/reduce_scatter_matmul/device/rs_matmul_op.hpp"
+
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.hpp"
+#include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+
+namespace ttnn::operations::experimental::ccl {
+
+void AllGatherRS::validate_on_program_cache_hit(
+    const LlamaReduceScatterDeviceOperation::operation_attributes_t& operation_attributes,
+    const LlamaReduceScatterDeviceOperation::tensor_args_t& tensor_args,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
+    auto& input_tensor = input_tensors[0];
+    auto& weight_tensor = input_tensors[1];
+    this->matmul_struct.validate({input_tensor, weight_tensor}, {std::nullopt}, {});
+    this->rs_struct.validate_on_program_cache_hit(operation_attributes, tensor_args);
+}
+
 std::vector<Tensor> rs_matmul(
     const ttnn::Tensor& input_tensor,                           // mm0 used
     const ttnn::Tensor& weight_tensor,                          // mm1 used
@@ -23,5 +46,6 @@ std::vector<Tensor> rs_matmul(
     const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 std::nullopt
     const std::optional<Tensor>& optional_output_tensor                                  // mm11 std::nullopt
 ) {
-    return <input_tensor>;
+    return {input_tensor};
 }
+}  // namespace ttnn::operations::experimental::ccl

@@ -5,8 +5,7 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_matmul/device/rs_matmul_op.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_matmul/rs_matmul.hpp"
 
-namespace ttnn {
-namespace operations::experimental::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> ExecuteReduceScatterMatmul::invoke(
     const ttnn::Tensor& input_tensor,                           // mm0 used
@@ -58,5 +57,4 @@ std::vector<ttnn::Tensor> ExecuteReduceScatterMatmul::invoke(
         optional_output_tensor);
 }
 
-}  // namespace operations::experimental::ccl
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::ccl

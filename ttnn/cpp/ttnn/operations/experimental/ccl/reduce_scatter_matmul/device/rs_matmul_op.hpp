@@ -25,11 +25,25 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace ttnn::operations::experimental::ccl {
 
+struct AllGatherRS {
+    const operations::matmul::Matmul matmul_struct;
+    const LlamaReduceScatterDeviceOperation rs_struct;
+
+    void validate_on_program_cache_miss(
+        const LlamaReduceScatterDeviceOperation::operation_attributes_t&,
+        const LlamaReduceScatterDeviceOperation::tensor_args_t&,
+        std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors);
+    void validate_on_program_cache_hit(
+        const LlamaReduceScatterDeviceOperation::operation_attributes_t&,
+        const LlamaReduceScatterDeviceOperation::tensor_args_t&,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors);
+};
 std::vector<Tensor> rs_matmul(
     const ttnn::Tensor& input_tensor,                           // mm0 used
     const ttnn::Tensor& weight_tensor,                          // mm1 used
@@ -56,8 +70,4 @@ std::vector<Tensor> rs_matmul(
     const std::optional<Tensor>& optional_output_tensor                                  // mm11 std::nullopt
 );
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::ccl
