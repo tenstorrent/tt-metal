@@ -10,6 +10,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -1267,21 +1268,20 @@ operation::ProgramWithCallbacks untilize_single_core(
                                 .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    // Writer compile-time args
-    const std::array writer_kernel_args = {
-        dst_buffer->address(),
-        num_sticks,
-        stick_size,
-        num_tiles_per_block,
-        block_width_size,
-        num_full_blocks_in_row,
-        num_leftover_tiles,
-        leftover_width_in_row,
-        std::uint32_t{0}};
+    bool input_is_sharded = a.memory_config().is_sharded();
+    bool output_is_sharded = output.memory_config().is_sharded();
 
+    // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};
 
+    std::map<string, string> reader_compute_defines;
+    if (input_is_sharded) {
+        shard_builder::extend_sharding_compile_time_args(a, reader_compile_time_args);
+        reader_compute_defines["SHARDED"] = "1";
+    }
+
+    // Writer compile-time args
     bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(stick_size) - 1) : 0;
@@ -1291,12 +1291,18 @@ operation::ProgramWithCallbacks untilize_single_core(
         (std::uint32_t)log2_stick_size,
     };
 
+    std::map<string, string> writer_compute_defines;
+    if (output_is_sharded) {
+        shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
+        writer_compute_defines["SHARDED"] = "1";
+    }
+
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_compute_defines));
 
     // Untilized writer
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -1304,7 +1310,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_interleaved.cpp",
         core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
 
     std::vector<uint32_t> compute_args = {
         uint32_t(num_tiles / num_tiles_per_block),  // per_core_block_cnt
@@ -1328,9 +1334,27 @@ operation::ProgramWithCallbacks untilize_single_core(
         core,
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
 
-    tt::tt_metal::SetRuntimeArgs(
-        program, unary_reader_kernel_id, core, {src0_buffer->address(), uint32_t(num_tiles), 0});
+    // Reader run-time args
+    const std::array reader_kernel_args = {src0_buffer->address(), uint32_t(num_tiles), 0};
+    if (input_is_sharded) {
+        shard_builder::extend_sharding_run_time_args(a, reader_kernel_args);
+    }
+    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
+    // Writer run-time args
+    const std::array writer_kernel_args = {
+        dst_buffer->address(),
+        num_sticks,
+        stick_size,
+        num_tiles_per_block,
+        block_width_size,
+        num_full_blocks_in_row,
+        num_leftover_tiles,
+        leftover_width_in_row,
+        std::uint32_t{0}};
+    if (output_is_sharded) {
+        shard_builder::extend_sharding_run_time_args(output, writer_kernel_args);
+    }
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
 
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
