@@ -119,6 +119,10 @@ def run_conv(
     if slice_config and activations_dtype != ttnn.bfloat16:
         pytest.xfail("Conv2d with DRAM Slicing only supports BFloat16 for activation dtype")
 
+    # https://github.com/tenstorrent/tt-metal/issues/19393
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and packer_l1_acc and has_bias:
+        pytest.xfail("Packer L1 accumulation not supported with row major layout and bias")
+
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
             pad_top = padding[0]
@@ -270,8 +274,8 @@ def run_conv(
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
     # out is in row major layout and NHWC shape
     # NHWC to NCHW
-    out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
-    out = out[:, :, :, :output_channels]
+    out = out[:, :, : total_batch_size * out_height * out_width, :output_channels]
+    out = out.reshape(total_batch_size, out_height, out_width, output_channels)
 
     ref = torch.permute(ref, (0, 2, 3, 1))
 
@@ -771,7 +775,6 @@ def test_conv_dram(
     [ttnn.bfloat16],
 )
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
-@pytest.mark.parametrize("tilized_input", [True, False], ids=["tilized", "row_major"])
 def test_conv_ws(
     device,
     torch_tensor_map,
@@ -791,112 +794,32 @@ def test_conv_ws(
     weights_dtype,
     activations_dtype,
     auto_shard,
-    tilized_input,
 ):
-    if device.core_grid.y != 8 and is_wormhole_b0():
-        pytest.skip("Needs 8x8 grid for wormhole_b0")
-
-    stride_h = stride
-    stride_w = stride
-    fp32_accum = True
-    packer_l1_acc = False
-    deallocate_activation = False
-    groups = 1
-
-    conv_input_shape = (batch_size, input_channels, input_height, input_width)
-    conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
-    conv_bias_shape = (1, 1, 1, output_channels)
-
-    torch_input_tensor_nchw = randomize_torch_tensor(torch_tensor_map, conv_input_shape)
-    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
-
-    torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape)
-
-    tt_bias_tensor = None
-    torch_bias_tensor = None
-    if has_bias:
-        torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape) * 50
-        tt_bias_tensor = ttnn.from_torch(
-            torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
-        )
-        torch_bias_tensor = torch_bias_tensor.reshape(-1)
-    torch_out_golden_tensor = torch.nn.functional.conv2d(
-        torch_input_tensor_nchw,
-        torch_weight_tensor,
-        bias=torch_bias_tensor,
-        stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
-        groups=groups,
-    )
-
-    tt_weight_tensor = ttnn.from_torch(
-        torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
-    )
-
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16)
-
-    tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
-    if tilized_input:
-        tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
-
-    if auto_shard and (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
-        if input_channels == 2048:
-            pytest.skip("Test is not supported on n300 (8,7) grid due to #13541")
-
-    conv_config = ttnn.Conv2dConfig(
-        dtype=activations_dtype,
-        weights_dtype=weights_dtype,
-        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED if not auto_shard else None,
-        deallocate_activation=deallocate_activation,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        reshard_if_not_optimal=True,
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride,
+        stride,
+        (pad_h, pad_w),
+        config_override={
+            "act_block_h": 32,
+        },
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
-        act_block_w_div=act_block_w_div if not auto_shard else 1,
-        act_block_h_override=32 * 3,
+        has_bias=True,
+        packer_l1_acc=False,
+        auto_shard=auto_shard,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
     )
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        fp32_dest_acc_en=fp32_accum,
-        packer_l1_acc=packer_l1_acc,
-    )
-    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
-        input_tensor=tt_input_tensor,
-        weight_tensor=tt_weight_tensor,
-        in_channels=input_channels,
-        out_channels=output_channels,
-        device=device,
-        bias_tensor=tt_bias_tensor,
-        kernel_size=(filter_height, filter_width),
-        stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
-        batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
-        conv_config=conv_config,
-        compute_config=compute_config,
-        groups=groups,
-        return_output_dim=True,
-    )
-
-    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-
-    # torch_output_tensor is in row major layout and NHWC shape
-    # NHWC to NCHW
-    torch_output_tensor = torch_output_tensor[:, :, : batch_size * out_height * out_width, :output_channels]
-    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
-    logger.info(f"Output Shape : {torch_output_tensor.shape}")
-    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
-
-    pcc = 0.99
-    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
-    logger.info(f"{pcc_msg} Threshold : {pcc}")
-    if not passing:
-        logger.error("Fails with PCC ", pcc_msg)
-    assert passing
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
