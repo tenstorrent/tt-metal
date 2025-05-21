@@ -188,7 +188,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-for-loop-analysis>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-mismatched-tags>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-missing-braces>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-local-typedef>"
