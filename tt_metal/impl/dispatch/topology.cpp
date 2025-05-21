@@ -188,12 +188,12 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
-    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
+    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, {NOC::NOC_1, NOC::NOC_1, NOC::NOC_1}},
 
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
+    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
 
     // Sender path PREFETCH_H -> PREFETCH_D
     {5, 0, x, 0, FABRIC_ROUTER_VC, {3, x, x, x}, {7, x, x, x}},
@@ -201,9 +201,9 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
     // Return path DISPATCH_D -> DISPATCH_H
     {6, 0, x, 0, FABRIC_ROUTER_VC, {8, x, x, x}, {4, x, x, x}},
 
-    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
+    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
+    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, {NOC::NOC_1, NOC::NOC_1, NOC::NOC_1}},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
