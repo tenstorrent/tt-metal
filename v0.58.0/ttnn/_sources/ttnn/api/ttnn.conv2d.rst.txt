@@ -1,0 +1,8 @@
+﻿ttnn.conv2d
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.conv2d:
+
+.. autodata:: ttnn.conv2d

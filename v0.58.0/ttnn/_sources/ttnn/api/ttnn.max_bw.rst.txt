@@ -1,0 +1,8 @@
+﻿ttnn.max\_bw
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.max_bw:
+
+.. autodata:: ttnn.max_bw

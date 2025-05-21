@@ -1,0 +1,8 @@
+﻿ttnn.pow\_bw
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.pow_bw:
+
+.. autodata:: ttnn.pow_bw

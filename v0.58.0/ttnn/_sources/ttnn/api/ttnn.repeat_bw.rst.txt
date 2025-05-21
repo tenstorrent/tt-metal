@@ -1,0 +1,8 @@
+﻿ttnn.repeat\_bw
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.repeat_bw:
+
+.. autodata:: ttnn.repeat_bw

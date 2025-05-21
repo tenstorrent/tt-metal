@@ -1,0 +1,8 @@
+﻿ttnn.logaddexp2\_bw
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.logaddexp2_bw:
+
+.. autodata:: ttnn.logaddexp2_bw

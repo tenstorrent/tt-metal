@@ -1,0 +1,8 @@
+﻿ttnn.eqz
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.eqz:
+
+.. autodata:: ttnn.eqz

@@ -1,0 +1,8 @@
+﻿ttnn.real
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.real:
+
+.. autodata:: ttnn.real
