@@ -1,3 +1,9 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
@@ -19,9 +25,9 @@ void fill_pad_face(uint32_t num_elements_padded_w, uint32_t num_elements_padded_
     // Right padding (width padding)
     if (num_elements_padded_w > 0) {
         for (uint32_t row = 0; row < FACE_HEIGHT; ++row) {
-            auto row_start = tile_ptr + row * FACE_WIDTH + (FACE_WIDTH - num_elements_padded_w);
+            auto row_ptr = tile_ptr + row * FACE_WIDTH + (FACE_WIDTH - num_elements_padded_w);
             for (uint32_t col = 0; col < num_elements_padded_w; ++col) {
-                row_start[col] = fill_value;
+                row_ptr[col] = fill_value;
             }
         }
     }
@@ -29,11 +35,9 @@ void fill_pad_face(uint32_t num_elements_padded_w, uint32_t num_elements_padded_
     // Bottom padding (height padding)
     if (num_elements_padded_h > 0) {
         for (uint32_t row = FACE_HEIGHT - num_elements_padded_h; row < FACE_HEIGHT; ++row) {
-            auto row_start = tile_ptr + row * FACE_WIDTH;
-            // TODO: Use NOC for faster zero padding - can be done in a single write from MEM_ZERO_ADDR
-            // noc_async_read(zeros_noc_addr, row_start, num_elements_padded_h * sizeof(T));
+            auto row_ptr = tile_ptr + row * FACE_WIDTH;
             for (uint32_t col = 0; col < FACE_WIDTH; ++col) {
-                row_start[col] = fill_value;
+                row_ptr[col] = fill_value;
             }
         }
     }
@@ -78,5 +82,26 @@ void fill_pad_tile(
                 fill_pad_face<T>(0, face_pad_h, face_ptr, fill_value);
             }
         }
+    }
+}
+
+/**
+ * @brief Pads the last K tile in a matrix multiplication operation.
+ *
+ * This function handles padding for the last K tile in a matrix multiplication operation.
+ * It applies zero padding based on the specified data format (Float32 or Float16_b) and
+ * the unpadded width of the last K tile.
+ *
+ * @tparam in0_data_format The data format of the input tensor (Float32 or Float16_b)
+ * @param in0_last_ktile_w The unpadded width of the last K tile
+ * @param l1_write_addr_in0 The L1 memory address where the zeros should be written
+ */
+
+template <DataFormat in0_data_format>
+void pad_last_ktile(uint32_t in0_last_ktile_w, uint32_t l1_write_addr_in0) {
+    if constexpr (in0_data_format == DataFormat::Float32) {
+        fill_pad_tile<uint32_t>(in0_last_ktile_w, /*num_elements_unpadded_h=*/0, l1_write_addr_in0, /*pad_value=*/0);
+    } else if constexpr (in0_data_format == DataFormat::Float16_b) {
+        fill_pad_tile<uint16_t>(in0_last_ktile_w, /*num_elements_unpadded_h=*/0, l1_write_addr_in0, /*pad_value=*/0);
     }
 }
