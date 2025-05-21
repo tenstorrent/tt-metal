@@ -21,7 +21,7 @@ def randomize_tensor(tensor_map, tensor_shape):
     if tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
     return torch_tensor
 
 
@@ -72,13 +72,6 @@ def run_avg_pool2d(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         applied_shard_scheme=shard_scheme,
     )
-
-    # for b in range(ttnn_output.shape[0]):
-    #     for c in range(ttnn_output.shape[1]):
-    #         for h in range(ttnn_output.shape[2]):
-    #             for w in range(ttnn_output.shape[3]):
-    #                 value = ttnn_output[b, c, h, w]
-    #                 print(f"tensor[{b}][{c}][{h}][{w}] = {value}")
 
     ## Test teardown for Actual.
     ttnn_output = ttnn_output.reshape(
@@ -146,10 +139,11 @@ def run_avg_pool2d(
     "divisor_override",
     [
         None,
+        5,
         10,
-        20,
         11,
         15,
+        20,
     ],
 )
 @pytest.mark.parametrize(
@@ -171,9 +165,14 @@ def test_run_avg_pool2d(
     divisor_override,
     shard_scheme,
 ):
-    if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED and input_shape == (2, 512, 112, 32):
+    if (
+        shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        and tuple(input_shape) == (2, 512, 112, 32)
+        and divisor_override == None
+        and ceil_mode == True
+    ):
         pytest.skip(
-            "Known issue with this combination of parameters - RuntimeError: pad should be at most half of kernel size."
+            "Known issue #22391 with this combination of parameters - Maximum number of runtime arguments sent to core 256 is exceeded."
         )
     if any(p > k // 2 for p, k in zip(padding, kernel_size)):
         pytest.skip(

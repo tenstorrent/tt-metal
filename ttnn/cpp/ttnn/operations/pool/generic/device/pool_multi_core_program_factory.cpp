@@ -309,7 +309,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         clear_value_cb_id,
         is_blackhole,
         (uint32_t)pool_type,
-        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || divisor_override.has_value()};
+        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || (ceil_pad_h == 0 && ceil_pad_w == 0) ||
+            divisor_override.has_value()};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -358,7 +359,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         max_pool_partials_cb_id,
         in_one_cb_id,
         is_blackhole,
-        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || divisor_override.has_value()};
+        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || (ceil_pad_h == 0 && ceil_pad_w == 0) ||
+            divisor_override.has_value()};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
