@@ -51,6 +51,9 @@ def convert_hf_to_meta(state_dict, head_dim):
     state_dict = split_hf_keys(state_dict)
     state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys(state_dict)
+    for i in range(32):
+       key_ffn_norm = f"layers.{i}.ffn_norm.weight"
+       state_dict[key_ffn_norm] = torch.ones((1, 1, 2560 // 32, 32), dtype=torch.float32)
     return state_dict
 
 
