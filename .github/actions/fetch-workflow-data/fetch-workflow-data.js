@@ -89,9 +89,20 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, oldestCach
           break;
         }
 
-        // Add all runs since they're all newer than our sinceDate
-        allRuns.push(...runs.workflow_runs);
-        core.info(`Fetched ${runs.workflow_runs.length} runs on page ${page}`);
+        // Filter out skipped runs - a run is skipped if either:
+        // 1. conclusion is 'skipped'
+        // 2. status is 'skipped'
+        const validRuns = runs.workflow_runs.filter(run =>
+          run.conclusion !== 'skipped' && run.status !== 'skipped'
+        );
+        const skippedCount = runs.workflow_runs.length - validRuns.length;
+        if (skippedCount > 0) {
+          core.info(`Filtered out ${skippedCount} skipped runs on page ${page}`);
+        }
+
+        // Add all valid runs since they're all newer than our sinceDate
+        allRuns.push(...validRuns);
+        core.info(`Fetched ${validRuns.length} runs on page ${page}`);
 
         // If we got fewer runs than requested, we've reached the end
         if (runs.workflow_runs.length < RUNS_PER_PAGE) {
@@ -124,6 +135,11 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, oldestCach
 
       for (const run of runs.workflow_runs) {
         const runDate = new Date(run.created_at);
+
+        // Skip runs that were skipped - check both conclusion and status
+        if (run.conclusion === 'skipped' || run.status === 'skipped') {
+          continue;
+        }
 
         // If we don't need historical data and we hit a run older than our oldest cached date, we can stop
         if (!needHistoricalData && runDate <= oldestCachedDate) {
