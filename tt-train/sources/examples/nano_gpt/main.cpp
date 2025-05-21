@@ -826,16 +826,23 @@ int main(int argc, char **argv) {
 
         return loss_float / static_cast<float>(loss_xtensors.size());
     };
+    auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
 
     std::optional<ttnn::MeshTraceId> trace_id;
     ttml::autograd::TensorPtr output = nullptr;
     // precompile the model and allocate output
     for (auto [features, target, masks] : train_dataloader) {
         fmt::println("compiling model!");
-        run_model(model, features, masks);
+        auto precomp_output = run_model(model, features, masks);
         fmt::println("compiled model!");
+
+        auto loss = ttml::ops::nll_loss(precomp_output, target);
+        loss = gradient_accumulator_helper.scale(loss);
+
+        fmt::println("running precomile backward");
+        loss->backward(/*retain_graph=*/true);
         // FIXME: need?
-        ttml::autograd::ctx().reset_graph();
+        // ttml::autograd::ctx().reset_graph();
         break;
     }
 
@@ -853,7 +860,7 @@ int main(int argc, char **argv) {
     std::unordered_set<void *> all_named_param_addrs = get_all_named_param_addrs();
 
     const uint32_t num_epochs = config.num_epochs;
-    auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
+
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
             auto start_timer = std::chrono::high_resolution_clock::now();
@@ -880,16 +887,15 @@ int main(int argc, char **argv) {
                     fmt::println("done tracing");
                     trace::end_trace_capture(device, *trace_id, ttnn::DefaultQueueId);
                 }
-                auto output_value_pre = output->get_value();
+                auto output_value = output->get_value();
+                auto output_value_pre = ttml::core::to_xtensor(output_value.cpu());
                 fmt::println("executing trace");
                 trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
                 fmt::println("executed trace");
-                auto output_value_post = output->get_value();
-                if (xt::allclose(
-                        ttml::core::to_xtensor(output_value_pre.cpu()),
-                        ttml::core::to_xtensor(output_value_post.cpu()))) {
-                    fmt::println("pre address {}", output_value_pre.buffer()->address());
-                    fmt::println("post address {}", output_value_post.buffer()->address());
+                auto output_value_post = ttml::core::to_xtensor(output_value.cpu());
+                if (xt::allclose(output_value_pre, output_value_post)) {
+                    fmt::println("pre address {}", output_value.buffer()->address());
+                    fmt::println("post address {}", output_value.buffer()->address());
                     fmt::println("output value didn't update!");
                 } else {
                     fmt::println("output updated!");
