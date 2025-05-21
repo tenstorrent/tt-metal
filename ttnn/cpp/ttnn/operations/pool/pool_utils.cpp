@@ -78,20 +78,16 @@ uint32_t get_bf16_pool_scalar(
                     int effective_w = valid_wend - valid_wstart;
 
                     int pool_area;
-                    if (true) {
-                        // Count how many *actual* kernel elements fall within the padded input bounds
-                        pool_area = (hend - hstart) * (wend - wstart);  // Total kernel size
-                        pool_area -= ((hend > in_h.value_or(0)) ? (hend - in_h.value_or(0)) : 0) * kernel_w;
-                        pool_area -= ((wend > in_w.value_or(0)) ? (wend - in_w.value_or(0)) : 0) * kernel_h;
-                        // Remove doubly subtracted corner if both overflows happened
-                        if (hend > in_h.value_or(0) && wend > in_w.value_or(0)) {
-                            pool_area += (hend - in_h.value_or(0)) * (wend - in_w.value_or(0));
-                        }
-                        pool_area = std::max(1, pool_area);  // Avoid division by zero
-                    } else {
-                        // Only include valid overlapping region
-                        pool_area = (effective_h > 0 && effective_w > 0) ? effective_h * effective_w : 0;
+
+                    // Count how many *actual* kernel elements fall within the padded input bounds
+                    pool_area = (hend - hstart) * (wend - wstart);
+                    pool_area -= ((hend > in_h.value_or(0)) ? (hend - in_h.value_or(0)) : 0) * kernel_w;
+                    pool_area -= ((wend > in_w.value_or(0)) ? (wend - in_w.value_or(0)) : 0) * kernel_h;
+                    // Remove doubly subtracted corner if both overflows happened
+                    if (hend > in_h.value_or(0) && wend > in_w.value_or(0)) {
+                        pool_area += (hend - in_h.value_or(0)) * (wend - in_w.value_or(0));
                     }
+                    pool_area = std::max(1, pool_area);  // Avoid division by zero
 
                     float value = pool_area > 0 ? 1.f / (float)pool_area : 0.f;
                     uint32_t area_signature = pool_area;
