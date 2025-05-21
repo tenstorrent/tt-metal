@@ -147,4 +147,5 @@ void kernel_main() {
         test_results[TT_FABRIC_MISC_INDEX + 14] = expected_val;
     }
     test_results[TX_TEST_IDX_NPKT] = num_packets_processed;
+    DPRINT << "RECEIVER OUT" << ENDL();
 }

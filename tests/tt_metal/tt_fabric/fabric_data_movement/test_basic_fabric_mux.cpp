@@ -20,9 +20,11 @@
 #include <tt-metalium/allocator.hpp>
 #include "fabric_fixture.hpp"
 #include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "hal.hpp"
 #include "tt_metal/fabric/fabric_mux_config.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
+#include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -59,6 +61,15 @@ struct TestConfig {
     bool uniform_sender_receiver_split = true;
     uint32_t num_open_close_iters = 0;
     uint32_t num_full_size_channel_iters = 0;
+    bool use_eth = false;
+
+    CoreType get_core_type() const {
+        if (use_eth) {
+            return CoreType::ETH;
+        } else {
+            return CoreType::WORKER;
+        }
+    }
 };
 
 struct WorkerMemoryMap {
@@ -234,21 +245,35 @@ void create_kernel(
     const CoreCoord& logical_core,
     const std::vector<uint32_t>& ct_args,
     const std::vector<uint32_t>& rt_args,
-    const std::vector<std::pair<size_t, size_t>>& addresses_to_clear) {
-    auto kernel_handle = tt::tt_metal::CreateKernel(
-        program_handle,
-        kernel_src,
-        {logical_core},
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = ct_args,
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    const std::vector<std::pair<size_t, size_t>>& addresses_to_clear,
+    CoreType core_type) {
+    tt_metal::KernelHandle kernel_handle = 0;
+    if (core_type == CoreType::WORKER) {
+        kernel_handle = tt::tt_metal::CreateKernel(
+            program_handle,
+            kernel_src,
+            {logical_core},
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = ct_args,
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    } else {
+        kernel_handle = tt::tt_metal::CreateKernel(
+            program_handle,
+            kernel_src,
+            {logical_core},
+            tt::tt_metal::EthernetConfig{
+                .eth_mode = tt_metal::Eth::IDLE,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = ct_args,
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    }
     tt::tt_metal::SetRuntimeArgs(program_handle, kernel_handle, logical_core, rt_args);
 
     for (const auto& [start_address, num_bytes] : addresses_to_clear) {
         std::vector<uint32_t> zero_vec((num_bytes / sizeof(uint32_t)), 0);
-        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, start_address, zero_vec);
+        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, start_address, zero_vec, core_type);
     }
 }
 
@@ -257,7 +282,8 @@ void create_mux_kernel(
     const CoreCoord& mux_logical_core,
     tt::tt_metal::IDevice* device,
     tt::tt_metal::IDevice* dest_device,
-    tt::tt_metal::Program& program_handle) {
+    tt::tt_metal::Program& program_handle,
+    CoreType core_type) {
     std::vector<uint32_t> mux_ct_args = mux_kernel_config.get_fabric_mux_compile_time_args();
     std::vector<uint32_t> mux_rt_args = {};
     append_fabric_connection_rt_args(
@@ -271,7 +297,14 @@ void create_mux_kernel(
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {
         std::make_pair(mux_kernel_config.get_start_address_to_clear(), mux_kernel_config.get_num_bytes_to_clear())};
     create_kernel(
-        device, program_handle, mux_kernel_src, mux_logical_core, mux_ct_args, mux_rt_args, addresses_to_clear);
+        device,
+        program_handle,
+        mux_kernel_src,
+        mux_logical_core,
+        mux_ct_args,
+        mux_rt_args,
+        addresses_to_clear,
+        core_type);
 }
 
 void create_worker_kernel(
@@ -300,7 +333,8 @@ void create_worker_kernel(
 
     // virtual coordinates will be the same for the receiver device
     // hence, we can use the noc encoding derived using current device
-    CoreCoord worker_virtual_core = device->worker_core_from_logical_core(worker_logical_core);
+    CoreCoord worker_virtual_core =
+        device->virtual_core_from_logical_core(worker_logical_core, test_config.get_core_type());
     uint32_t receiver_noc_xy_encoding =
         tt_metal::MetalContext::instance().hal().noc_xy_encoding(worker_virtual_core.x, worker_virtual_core.y);
 
@@ -336,7 +370,8 @@ void create_worker_kernel(
         worker_logical_core,
         worker_ct_args,
         worker_rt_args,
-        addresses_to_clear);
+        addresses_to_clear,
+        test_config.get_core_type());
 }
 
 void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
@@ -386,19 +421,30 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
         offset = 1;
     }
 
-    std::vector<CoreCoord> worker_logical_cores;
-    auto grid_size = devices[0]->compute_with_storage_grid_size();
-    for (auto i = 0; i < grid_size.x; i++) {
-        for (auto j = 0; j < grid_size.y; j++) {
-            worker_logical_cores.push_back(CoreCoord({i, j}));
+    // Indexed by device id because idle ethernet cores is device dependent
+    std::unordered_map<chip_id_t, std::vector<CoreCoord>> worker_logical_cores;
+    for (int device_idx = 0; device_idx < devices.size(); ++device_idx) {
+        if (test_config.get_core_type() == CoreType::WORKER) {
+            auto grid_size = devices[device_idx]->compute_with_storage_grid_size();
+            for (auto i = 0; i < grid_size.x; i++) {
+                for (auto j = 0; j < grid_size.y; j++) {
+                    worker_logical_cores[devices[device_idx]->id()].push_back(CoreCoord({i, j}));
+                }
+            }
+        } else {
+            for (const auto& idle_eth_core :
+                 tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(
+                     devices[device_idx]->id())) {
+                worker_logical_cores[devices[device_idx]->id()].push_back(idle_eth_core);
+            }
         }
     }
 
     auto assign_worker_cores =
         [&](tt::tt_metal::IDevice* device, uint8_t num_workers, uint8_t num_hops, bool is_sender) {
             for (uint8_t i = 0; i < num_workers; i++) {
-                auto core_and_hops = std::make_pair(worker_logical_cores.back(), num_hops);
-                worker_logical_cores.pop_back();
+                auto core_and_hops = std::make_pair(worker_logical_cores[device->id()].back(), num_hops);
+                worker_logical_cores[device->id()].pop_back();
                 if (is_sender) {
                     device_senders_map[device].push_back(core_and_hops);
                     device_receivers_map[devices.front()].push_back(core_and_hops);
@@ -429,7 +475,9 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
     assign_worker_cores(devices.back(), num_receivers - num_assigned_receivers, num_devices - 1, false /* is_sender */);
 
     const uint32_t l1_unreserved_base_address =
-        devices[0]->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        test_config.get_core_type() == CoreType::WORKER
+            ? devices[0]->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1)
+            : tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     auto worker_memory_map = create_worker_memory_map(l1_unreserved_base_address);
@@ -444,8 +492,9 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
     for (auto i = 0; i < devices.size(); i++) {
         program_handles[i] = tt_metal::CreateProgram();
         // use logical core (0,0) for the mux kernel
-        CoreCoord mux_logical_core = worker_logical_cores[0];
-        CoreCoord mux_virtual_core = devices[i]->worker_core_from_logical_core(mux_logical_core);
+        CoreCoord mux_logical_core = worker_logical_cores[devices[i]->id()][0];
+        CoreCoord mux_virtual_core =
+            devices[i]->virtual_core_from_logical_core(mux_logical_core, test_config.get_core_type());
 
         auto num_full_size_channels = device_senders_map[devices[i]].size();
         auto num_header_only_channels = device_receivers_map[devices[i]].size();
@@ -464,7 +513,12 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
         mux_termination_signal_addresses.push_back(mux_kernel_config.get_termination_signal_address());
 
         create_mux_kernel(
-            mux_kernel_config, mux_logical_core, devices[i], dest_devices[devices[i]], program_handles[i]);
+            mux_kernel_config,
+            mux_logical_core,
+            devices[i],
+            dest_devices[devices[i]],
+            program_handles[i],
+            test_config.get_core_type());
 
         uint32_t sender_id = 0;
         for (const auto& [sender_logical_core, num_hops] : device_senders_map[devices[i]]) {
@@ -507,7 +561,8 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
     auto wait_for_worker_completion = [&](tt::tt_metal::IDevice* device, const CoreCoord& core) {
         std::vector<uint32_t> worker_status(1, 0);
         while ((worker_status[0] & 0xFFFF) == 0) {
-            tt_metal::detail::ReadFromDeviceL1(device, core, worker_memory_map.test_results_address, 4, worker_status);
+            tt_metal::detail::ReadFromDeviceL1(
+                device, core, worker_memory_map.test_results_address, 4, worker_status, test_config.get_core_type());
         }
     };
 
@@ -528,8 +583,17 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
     log_info(LogTest, "Receivers done, terminating mux kernel");
     std::vector<uint32_t> mux_termination_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     for (auto i = 0; i < devices.size(); i++) {
+        log_info(
+            LogTest,
+            "Terminate mux kernel at {} {:#x}",
+            worker_logical_cores[devices[i]->id()][0].str(),
+            mux_termination_signal_addresses[i]);
         tt::tt_metal::detail::WriteToDeviceL1(
-            devices[i], worker_logical_cores[0], mux_termination_signal_addresses[i], mux_termination_signal);
+            devices[i],
+            worker_logical_cores[devices[i]->id()][0],
+            mux_termination_signal_addresses[i],
+            mux_termination_signal,
+            test_config.get_core_type());
     }
 
     log_info(LogTest, "Waiting for programs");
@@ -540,7 +604,12 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
     auto validate_worker_results = [&](tt::tt_metal::IDevice* device, const CoreCoord& core) {
         std::vector<uint32_t> worker_status;
         tt_metal::detail::ReadFromDeviceL1(
-            device, core, worker_memory_map.test_results_address, test_results_size_bytes, worker_status);
+            device,
+            core,
+            worker_memory_map.test_results_address,
+            test_results_size_bytes,
+            worker_status,
+            test_config.get_core_type());
         EXPECT_EQ(worker_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
     };
 
@@ -570,6 +639,29 @@ TEST_F(FabricMuxFixture, TestFabricMuxTwoChipVariant1) {
         .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
+    };
+    run_mux_test_variant(this, test_config);
+}
+
+TEST_F(FabricMuxFixture, TestFabricMuxEthWorkerTwoChipVariant1) {
+    if (!this->slow_dispatch_) {
+        GTEST_SKIP();
+        return;
+    }
+    TestConfig test_config = {
+        .num_devices = 2,
+        .num_sender_clients = 1,
+        .num_packets = 1000,
+        .num_credits = 1,
+        .num_return_credits_per_packet = 1,
+        .packet_payload_size_bytes = 4096,
+        .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+        .num_buffers_full_size_channel = 1,
+        .num_buffers_header_only_channel = 1,
+        .uniform_sender_receiver_split = true,
+        .num_open_close_iters = 1,
+        .num_full_size_channel_iters = 1,
+        .use_eth = true,
     };
     run_mux_test_variant(this, test_config);
 }
