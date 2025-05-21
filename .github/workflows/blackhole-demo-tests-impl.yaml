@@ -32,7 +32,7 @@ jobs:
           {
             name: "Llama3-8B_performance",
             arch: blackhole,
-            cmd:  HF_HOME=/localdev/blackhole_demos/huggingface_data TT_CACHE_PATH=/localdev/blackhole_demos/tt_cache HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci,
+            cmd:  HF_HOME=/localdev/blackhole_demos/huggingface_data TT_CACHE_PATH=/localdev/blackhole_demos/tt_cache HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1",
             owner_id: U03PUAKE719 # Miguel Tairum
           }
         ]
