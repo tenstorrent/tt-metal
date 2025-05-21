@@ -81,10 +81,10 @@ uint32_t get_bf16_pool_scalar(
 
                     // Count how many *actual* kernel elements fall within the padded input bounds
                     pool_area = (hend - hstart) * (wend - wstart);
-                    pool_area -= ((hend > in_h.value_or(0)) ? (hend - in_h.value_or(0)) : 0) * kernel_w;
-                    pool_area -= ((wend > in_w.value_or(0)) ? (wend - in_w.value_or(0)) : 0) * kernel_h;
+                    pool_area -= ((hend > (int)in_h.value_or(0)) ? (hend - in_h.value_or(0)) : 0) * kernel_w;
+                    pool_area -= ((wend > (int)in_w.value_or(0)) ? (wend - in_w.value_or(0)) : 0) * kernel_h;
                     // Remove doubly subtracted corner if both overflows happened
-                    if (hend > in_h.value_or(0) && wend > in_w.value_or(0)) {
+                    if (hend > (int)in_h.value_or(0) && wend > (int)in_w.value_or(0)) {
                         pool_area += (hend - in_h.value_or(0)) * (wend - in_w.value_or(0));
                     }
                     pool_area = std::max(1, pool_area);  // Avoid division by zero
