@@ -7,19 +7,16 @@
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 
+#include <string_view>
+
 // Helper function to open a file as an fstream, and check that it was opened properly.
 inline bool OpenFile(string &file_name, std::fstream &file_stream, std::ios_base::openmode mode) {
     file_stream.open(file_name, mode);
     if (file_stream.is_open()) {
         return true;
-    } else {
-        tt::log_info(
-            tt::LogTest,
-            "Test Error: Couldn't open file {}.",
-            file_name
-        );
-        return false;
     }
+    tt::log_info(tt::LogTest, "Test Error: Couldn't open file {}.", file_name);
+    return false;
 }
 
 // Helper function to dump a file
@@ -32,40 +29,50 @@ inline void DumpFile(string file_name) {
 
     tt::log_info(tt::LogTest, "File \'{}\' contains:", file_name);
     string line;
-    while (getline(log_file, line))
+    while (getline(log_file, line)) {
         tt::log_info(tt::LogTest, "{}", line);
+    }
 }
 
-// Compare two strings with a (single-character) wildcard
-inline bool StringCompareWithWildcard(const string& s1, const string& s2, char wildcard) {
-    if (s1.size() != s2.size())
+// Wildcard is '?', just like a glob.
+inline bool StringCompareWithWildcard(const std::string_view str, const std::string_view pattern) {
+    size_t pattern_size = pattern.size();
+    if (pattern_size != str.size())
         return false;
-
-    for (int idx = 0; idx < s1.size(); idx++) {
-        if (s1[idx] != s2[idx] && s1[idx] != wildcard && s2[idx] != wildcard)
+    for (int idx = 0; idx < pattern_size; idx++) {
+        if (str[idx] != pattern[idx] && pattern[idx] != '?') {
             return false;
+        }
     }
-
     return true;
 }
 
-// Check if s1 is in s2, with wildcard character support
-inline bool StringContainsWithWildcard(const string& s1, const string& s2, char wildcard) {
-    int substr_len = s1.size();
-    int superstr_len = s2.size();
-    if (substr_len > superstr_len)
+// Check if haystack contains needle, return true. needle may contain
+// '?' to match any character (just like glob).
+inline bool StringContainsWithWildcard(std::string_view haystack, std::string_view needle) {
+    size_t needle_size = needle.size();
+    if (needle_size == 0 || needle.front() == '?') {
+        // The needle is empty, or begins with '?', fail in order to
+        // force test to be fixed.
         return false;
+    }
+    if (needle_size > haystack.size()) {
+        return false;
+    }
+    char first = needle.front();
 
-    for (int idx = 0; idx <= superstr_len - substr_len; idx++) {
-        string substr = s2.substr(idx, substr_len);
-        if (StringCompareWithWildcard(s1, substr, wildcard))
+    for (size_t idx = 0, limit = haystack.size() - needle_size;
+         (idx = haystack.find(first, idx)) <= limit; idx++) {
+        std::string_view substr(&haystack[idx], needle_size);
+        if (StringCompareWithWildcard(substr, needle)) {
             return true;
+        }
     }
 
     return false;
 }
 
-// Check whether the given file contains a list of strings. Doesn't check for
+// Check whether the given file contains a list of strings in any order. Doesn't check for
 // strings between lines in the file.
 inline bool FileContainsAllStrings(string file_name, const std::vector<string> &must_contain) {
     std::fstream log_file;
@@ -73,33 +80,40 @@ inline bool FileContainsAllStrings(string file_name, const std::vector<string> &
         return false;
 
     // Construct a set of required strings, we'll remove each one when it's found.
-    std::set<string> must_contain_set(must_contain.begin(), must_contain.end());
-
-    if (log_file.is_open()) {
-        string line;
-        while (getline(log_file, line)) {
-            // Check for all target strings in the current line
-            std::vector<string> found_on_current_line;
-            for (const string &s : must_contain_set) {
-                if (StringContainsWithWildcard(s, line, '*'))
-                    found_on_current_line.push_back(s);
-            }
-
-            // Remove all strings found on this line from the set to continue searching for
-            for (const string &s : found_on_current_line)
-                must_contain_set.erase(s);
-
-            // If all strings have been found, return true
-            if (must_contain_set.empty())
-                return true;
-        }
+    std::set<std::string_view> must_contain_set;
+    for (auto const &str : must_contain) {
+        must_contain_set.insert(str);
     }
-    log_file.close();
 
-    // If the log file doesn't exist, is empty, or doesn't contain all strings, return false.
+    for (;;) {
+        if (must_contain_set.empty()) {
+            // Found them all.
+            return true;
+        }
+
+        string line;
+        if (!getline(log_file, line)) {
+            break;
+        }
+
+        // Check for all target strings in the current line
+        std::vector<std::string_view> found_on_current_line;
+        for (const auto &s : must_contain_set) {
+            if (StringContainsWithWildcard(line, s)) {
+                found_on_current_line.push_back(s);
+            }
+        }
+
+        // Remove all strings found on this line from the set to continue searching for
+        for (const auto &s : found_on_current_line)
+            must_contain_set.erase(s);
+    }
+
+    // Reached EOF with strings yet to find.
     string missing_strings = "";
-    for (const string &s : must_contain_set)
-        missing_strings += s + ",";
+    for (const auto &s : must_contain_set) {
+        missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
+    }
     tt::log_info(
         tt::LogTest,
         "Test Error: Expected file {} to contain the following strings: {}",
@@ -116,31 +130,36 @@ inline bool FileContainsAllStringsInOrder(string file_name, const std::vector<st
     if (!OpenFile(file_name, log_file, std::fstream::in))
         return false;
 
-    // Construct a queue of required strings, we'll remove each one when it's found.
-    std::deque<string> must_contain_queue(must_contain.begin(), must_contain.end());
+    // Construct a deque of required strings, we'll remove each one when it's found.
+    std::deque<std::string_view> must_contain_queue;
+    for (auto const &str : must_contain) {
+        must_contain_queue.push_back(str);
+    }
 
-    if (log_file.is_open()) {
+    for (;;) {
+        if (must_contain_queue.empty()) {
+            // Found them all
+            return true;
+        }
+
         string line;
-        while (getline(log_file, line)) {
-            // Check for all target strings in the current line
-            while (
-                !must_contain_queue.empty() &&
-                StringContainsWithWildcard(must_contain_queue.front(), line, '*')
-            ) {
-                must_contain_queue.pop_front();
-            }
+        if (!getline(log_file, line)) {
+            break;
+        }
 
-            // If all strings have been found, return true
-            if (must_contain_queue.empty())
-                return true;
+        // Check for all target strings in the current line
+        for (; !must_contain_queue.empty(); must_contain_queue.pop_front()) {
+            if (!StringContainsWithWildcard(line, must_contain_queue.front())) {
+                break;
+            }
         }
     }
-    log_file.close();
 
-    // If the log file doesn't exist, is empty, or doesn't contain all strings, return false.
+    // Reached EOF with strings yet to find.
     string missing_strings = "";
-    for (const string &s : must_contain_queue)
-        missing_strings += s + ",";
+    for (const auto &s : must_contain_queue) {
+        missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
+    }
     tt::log_info(
         tt::LogTest,
         "Test Error: Expected file {} to contain the following strings: {}",
@@ -171,7 +190,7 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
     int line_num = 0;
     while (getline(file, line_a) && getline(expect_stream, line_b)) {
         line_num++;
-        if (!StringCompareWithWildcard(line_a, line_b, '*')) {
+        if (!StringCompareWithWildcard(line_a, line_b)) {
             tt::log_info(
                 tt::LogTest,
                 "Test Error: Line {} of {} did not match expected:\n\t{}\n\t{}",
