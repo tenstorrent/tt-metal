@@ -8,7 +8,7 @@ import ttnn
 
 from loguru import logger
 
-from models.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from models.utility_functions import comp_allclose_and_pcc
 from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
@@ -95,7 +95,6 @@ def test_moreh_cumsum_dim(input_shape, dim, device):
     assert passing
 
 
-@skip_for_blackhole("Does not work on BH P150. Issue #22273")
 @pytest.mark.parametrize(
     "input_shape",
     (
