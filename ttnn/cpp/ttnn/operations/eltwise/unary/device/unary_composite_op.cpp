@@ -316,15 +316,6 @@ Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_
     return result;
 }
 
-Tensor _sinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor e_pos_x = ttnn::exp(input_a, false, output_mem_config);
-    Tensor e_neg_x = ttnn::exp(ttnn::neg(input_a, output_mem_config), false, output_mem_config);
-    Tensor nr_term = ttnn::subtract(e_pos_x, e_neg_x, std::nullopt, output_mem_config);
-    e_pos_x.deallocate();
-    e_neg_x.deallocate();
-    return ttnn::multiply(nr_term, 0.5f, std::nullopt, output_mem_config);
-}
-
 // Function: softsign
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
 Tensor _softsign(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {

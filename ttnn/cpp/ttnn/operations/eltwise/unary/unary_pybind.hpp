@@ -1776,6 +1776,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::signbit, R"doc(\mathrm{{output\_tensor}}_i = \verb|signbit|(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::silu, R"doc(\mathrm{{output\_tensor}}_i = \verb|silu|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::sin, R"doc(\mathrm{{output\_tensor}}_i = \verb|sin|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(module, ttnn::sinh, R"doc(\mathrm{{output\_tensor}}_i = \verb|sinh|(\mathrm{{input\_tensor}}_i))doc", "[supported range -9 to 9].", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::sqrt, R"doc(\mathrm{{output\_tensor}}_i = \verb|sqrt|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::square, R"doc(\mathrm{{output\_tensor}}_i = \verb|square|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::tan, R"doc(\mathrm{{output\_tensor}}_i = \verb|tan|(\mathrm{{input\_tensor}}_i))doc", "Supported input range is (-1.45, 1.45)", R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1891,7 +1892,6 @@ void py_module(py::module& module) {
     detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0].", R"doc(BFLOAT16)doc");
     detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf].", R"doc(BFLOAT16)doc",
         R"doc(TILE)doc", R"doc(2, 3, 4)doc", "", R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
-    detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -9 to 9].", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_composite(module, ttnn::softsign, R"doc(Performs softsign function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::swish, R"doc(Performs swish function on :attr:`input_tensor`.)doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_composite(module, ttnn::var_hw, R"doc(Performs var_hw function on :attr:`input_tensor`.)doc");

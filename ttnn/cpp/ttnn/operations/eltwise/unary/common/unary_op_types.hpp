@@ -23,6 +23,7 @@ enum class UnaryOpType {
     LOG2,
     LOG10,
     SIN,
+    SINH,
     COS,
     ABS,
     ABS_INT32,
