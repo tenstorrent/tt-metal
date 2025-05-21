@@ -2,19 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .format_arg_mapping import (
+    ApproximationMode,
+    DestAccumulation,
+    MathFidelity,
+    MathOperation,
+    ReduceDimension,
     TileCount,
+    math_dict,
+    pack_dst_dict,
+    pack_src_dict,
     unpack_A_dst_dict,
     unpack_A_src_dict,
     unpack_B_dst_dict,
     unpack_B_src_dict,
-    pack_src_dict,
-    pack_dst_dict,
-    math_dict,
-    MathFidelity,
-    DestAccumulation,
-    ApproximationMode,
-    MathOperation,
-    ReduceDimension,
 )
 from .format_config import InputOutputFormat
 

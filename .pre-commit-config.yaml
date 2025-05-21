@@ -19,6 +19,11 @@ repos:
   hooks:
     - id: pylint
       args: [--disable=all, --enable=wildcard-import]
+- repo: https://github.com/PyCQA/isort
+  rev: 6.0.1
+  hooks:
+    - id: isort
+      language: python
 - repo: https://github.com/adrienverge/yamllint
   rev: v1.35.1
   hooks:
