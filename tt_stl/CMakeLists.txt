@@ -36,13 +36,4 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
 )
 
-target_precompile_headers(
-    metal_common_pch # TT::CommonPCH
-    PUBLIC
-        <reflect>
-        tt_stl/reflection.hpp
-)
-
-target_link_libraries(metal_common_pch PRIVATE tt_stl)
-
 install(TARGETS tt_stl EXPORT Metalium FILE_SET api COMPONENT metalium-dev)

@@ -52,7 +52,16 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
 )
 
-target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
+target_precompile_headers(
+    fabric
+    PRIVATE
+        <functional>
+        <map>
+        <memory>
+        <unordered_map>
+        <variant>
+        <vector>
+)
 
 target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
 

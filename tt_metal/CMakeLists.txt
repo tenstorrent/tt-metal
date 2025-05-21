@@ -329,7 +329,17 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
 )
 
-target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
+target_precompile_headers(
+    tt_metal
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy/public/tracy/Tracy.hpp
+        <functional>
+        <map>
+        <memory>
+        <unordered_map>
+        <variant>
+        <vector>
+)
 
 target_include_directories(
     tt_metal

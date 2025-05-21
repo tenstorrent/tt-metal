@@ -859,7 +859,19 @@ set(TTNN_PUBLIC_LINK_LIBRARIES
     TT::NN::Core
 )
 
-set(PRECOMPILED_HEADER_TARGET "TT::CommonPCH")
+set(TTNN_PRECOMPILED_HEADERS
+    ${PROJECT_SOURCE_DIR}/tt_stl/tt_stl/reflection.hpp
+    api/ttnn/operation.hpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
+    <functional>
+    <map>
+    <memory>
+    <unordered_map>
+    <variant>
+    <vector>
+)
+
+set(PRECOMPILED_HEADER_TARGET "")
 
 ##################################################
 # Collect all the files and folders that TTNN will use

@@ -62,9 +62,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
-# CMake 3.19: "smartly dropping dependencies of static and object libraries"
-set(CMAKE_OPTIMIZE_DEPENDENCIES TRUE)
-
 if(NOT ENABLE_LIBCXX)
     # required when linking with libstdc++ with clang and gcc
     add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-fsized-deallocation>)
@@ -194,8 +191,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-local-typedef>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-private-field>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unknown-pragmas>"
-    "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
-    "$<$<CXX_COMPILER_ID:GNU>:-fpch-preprocess>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-array-bounds>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-int-in-bool-context>"
@@ -230,37 +225,6 @@ if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
 include(tracy)
-
-add_library(metal_common_pch STATIC)
-add_library(TT::CommonPCH ALIAS metal_common_pch)
-file(GENERATE OUTPUT metal_common_pch.cpp CONTENT "/*dummy pch file*/\n")
-target_sources(metal_common_pch PRIVATE metal_common_pch.cpp)
-
-target_precompile_headers(
-    metal_common_pch
-    PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
-        <fmt/core.h>
-        <fmt/format.h>
-        <nlohmann/json.hpp>
-        <algorithm>
-        <cstddef>
-        <cstdint>
-        <functional>
-        <map>
-        <memory>
-        <tuple>
-        <unordered_map>
-        <variant>
-        <vector>
-)
-
-target_link_libraries(
-    metal_common_pch
-    PRIVATE
-        nlohmann_json::nlohmann_json
-        fmt::fmt-header-only
-)
 
 ############################################################################################################################
 # Build subdirectories

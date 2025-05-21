@@ -11,17 +11,16 @@ function(useCcache)
         return()
     endif()
 
+    # FIXME: Not (yet) coexisting Precompiled headers and ccache
+    #        Extra ccache args (sloppiness) are required for PCH, and we should only be sloppy
+    #        on the files that _use_ PCH.  For now treat the two features as mutually exclusive.
     if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS)
-        message(STATUS "Overriding CCACHE_SLOPPINESS to work with PCH.")
-        set(CCACHE_ENV "CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime")
+        # Be noisy to not mislead people, and also to draw attention to where to come fix it.
+        message(FATAL_ERROR "Ccache is not configured to handle precompiled headers. Don't enable ccache, or disable PCH with CMAKE_DISABLE_PRECOMPILE_HEADERS. Or update the build to handle both together.")
     endif()
 
     if(CMAKE_GENERATOR MATCHES "Ninja")
-        set(CMAKE_CXX_COMPILER_LAUNCHER
-            ${CCACHE_ENV}
-            ${CCACHE_EXECUTABLE}
-            PARENT_SCOPE
-        )
+        set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_EXECUTABLE} PARENT_SCOPE)
         message(STATUS "ccache enabled")
     endif()
 endfunction()
