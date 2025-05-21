@@ -10,7 +10,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 
 #define APPROX false
-#include "compute_kernel_api/add_int32_sfpu.h"
+#include "compute_kernel_api/add_int_sfpu.h"
 #include "compute_kernel_api/common.h"
 #include "debug/dprint_tensix.h"
 
@@ -78,7 +78,7 @@ void MAIN {
             add_tiles_init(cb_in, cb_intermed);
             add_tiles(cb_in, cb_intermed, 0, 0, TILE_DEST);
 #else
-            add_int32_tile_init();
+            add_int_tile_init();
             add_int32_tile(TILE_DEST, TILE_ACC);
 #endif  // CUMSUM_USE_INT32
 

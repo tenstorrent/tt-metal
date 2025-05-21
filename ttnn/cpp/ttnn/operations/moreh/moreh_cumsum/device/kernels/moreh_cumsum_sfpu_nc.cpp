@@ -10,7 +10,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 
 #define APPROX false
-#include "compute_kernel_api/add_int32_sfpu.h"
+#include "compute_kernel_api/add_int_sfpu.h"
 #include "compute_kernel_api/common.h"
 
 namespace NAMESPACE {
@@ -59,7 +59,7 @@ void MAIN {
             cb_pop_front(cb_in0, 1);
 
             // Add tiles in dst0 and dst1. Store result to dst0
-            add_int32_tile_init();
+            add_int_tile_init();
             add_int32_tile(dst0, dst1);
             tile_regs_commit();
 
