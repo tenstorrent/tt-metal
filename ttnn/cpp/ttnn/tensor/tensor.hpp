@@ -91,8 +91,7 @@ public:
         tt::stl::Span<const T> buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
-        T pad_value = 0);
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
@@ -120,9 +119,8 @@ public:
         const std::vector<T>& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
-        T pad_value = 0) {
-        return from_span(tt::stl::Span<const T>(buffer), spec, device, cq_id, pad_value);
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
+        return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
 
     // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major,
@@ -132,8 +130,7 @@ public:
         std::vector<T>&& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
-        T pad_value = 0);
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Converts a `Tensor` to a `std::vector<T>`.
     // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
