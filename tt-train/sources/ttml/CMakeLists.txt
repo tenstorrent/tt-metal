@@ -138,10 +138,6 @@ foreach(lib ${BoostPackages})
     target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()
 
-find_package(MPI REQUIRED)
-include_directories(${MPI_INCLUDE_PATH})
-target_link_libraries(ttml PUBLIC ${MPI_CXX_LIBRARIES})
-
 target_link_libraries(
     ttml
     PUBLIC
