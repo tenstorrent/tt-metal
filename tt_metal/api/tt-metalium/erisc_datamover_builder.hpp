@@ -135,21 +135,21 @@ struct FabricEriscDatamoverConfig {
         bool is_dateline = false,
         tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 
-    std::array<std::size_t, num_riscv_cores> channel_buffer_size_bytes = {0};
+    std::size_t channel_buffer_size_bytes = 0;
 
-    std::array<std::array<std::size_t, num_sender_channels>, num_riscv_cores> sender_channels_size_bytes;
-    std::array<std::array<std::size_t, num_receiver_channels>, num_riscv_cores> receiver_channels_size_bytes;
-    std::array<std::array<std::size_t, num_sender_channels>, num_riscv_cores> sender_channels_num_buffers;
-    std::array<std::array<std::size_t, num_receiver_channels>, num_riscv_cores> receiver_channels_num_buffers;
+    std::array<std::size_t, num_sender_channels> sender_channels_size_bytes;
+    std::array<std::size_t, num_receiver_channels> receiver_channels_size_bytes;
+    std::array<std::size_t, num_sender_channels> sender_channels_num_buffers;
+    std::array<std::size_t, num_receiver_channels> receiver_channels_num_buffers;
 
     std::array<std::array<std::size_t, num_sender_channels>, num_riscv_cores> sender_channels_base_address;
     std::array<std::array<std::size_t, num_receiver_channels>, num_riscv_cores> receiver_channels_base_address;
 
-    std::array<std::size_t, num_riscv_cores> num_used_sender_channels = {0};
-    std::array<std::size_t, num_riscv_cores> num_used_receiver_channels = {0};
-    std::array<std::size_t, num_riscv_cores> num_fwd_paths = {0};
-    std::array<std::size_t, num_riscv_cores> sender_txq_id = {0};
-    std::array<std::size_t, num_riscv_cores> receiver_txq_id = {0};
+    std::size_t num_used_sender_channels = 0;
+    std::size_t num_used_receiver_channels = 0;
+    std::size_t num_fwd_paths = 0;
+    std::size_t sender_txq_id;
+    std::size_t receiver_txq_id;
     std::size_t num_used_riscv_cores = 0;
 
     Topology topology = Topology::Linear;
@@ -256,7 +256,7 @@ public:
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);
 
-    [[nodiscard]] std::vector<uint32_t> get_compile_time_args(const size_t riscv_id = 0) const;
+    [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 

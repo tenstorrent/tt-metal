@@ -133,34 +133,35 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     if (arch == tt::ARCH::BLACKHOLE) {
         this->num_used_riscv_cores += 1;
     }
+    this->sender_txq_id = 0;
+    this->receiver_txq_id = 0;
+    this->channel_buffer_size_bytes = channel_buffer_size_bytes;
+    this->num_used_sender_channels = get_sender_channel_count(topology);
+    this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
+
+    if (topology == Topology::Mesh) {
+        // For 2D there is no forwarding to self but we are still initialize the settings for it.
+        // Routers ignore the settings at self index.
+        this->num_fwd_paths = this->num_used_sender_channels;
+    } else {
+        this->num_fwd_paths = this->num_used_sender_channels - 1;
+    }
+
+    if (topology == Topology::Linear || topology == Topology::Mesh) {
+        this->num_used_sender_channels -= 1;
+        this->num_used_receiver_channels -= 1;
+        this->num_fwd_paths -= 1;
+    }
 
     for (uint32_t risc_id = 0; risc_id < this->num_used_riscv_cores; risc_id++) {
         // TODO: update appropriately for each RISC-V core
         this->enable_context_switch[risc_id] = true;
         this->enable_handshake[risc_id] = true;
         this->enable_interrupts[risc_id] = true;
-        this->sender_txq_id[risc_id] = risc_id;
-        this->receiver_txq_id[risc_id] = risc_id;
         this->iterations_between_ctx_switch_and_teardown_checks[risc_id] =
             FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks;
 
-        this->num_used_sender_channels[risc_id] = get_sender_channel_count(topology);
-        if (topology == Topology::Mesh) {
-            // For 2D there is no forwarding to self but we are still initialize the settings for it.
-            // Routers ignore the settings at self index.
-            this->num_fwd_paths[risc_id] = this->num_used_sender_channels[risc_id];
-        } else {
-            this->num_fwd_paths[risc_id] = this->num_used_sender_channels[risc_id] - 1;
-        }
-        this->num_used_receiver_channels[risc_id] = FabricEriscDatamoverConfig::num_receiver_channels;
-
-        if (topology == Topology::Linear || topology == Topology::Mesh) {
-            this->num_used_sender_channels[risc_id] -= 1;
-            this->num_used_receiver_channels[risc_id] -= 1;
-            this->num_fwd_paths[risc_id] -= 1;
-        }
-
-        for (uint32_t i = 0; i < this->num_used_receiver_channels[risc_id]; i++) {
+        for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
             TT_FATAL(
                 (receivers_completed_packet_header_cb_address[risc_id][i] % eth_word_l1_alignment == 0),
                 "receivers_completed_packet_header_cb_address[{}] {} must be aligned to {} bytes",
@@ -168,7 +169,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
                 receivers_completed_packet_header_cb_address[risc_id][i],
                 eth_word_l1_alignment);
         }
-        for (uint32_t i = 0; i < this->num_used_sender_channels[risc_id]; i++) {
+        for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
             TT_FATAL(
                 (senders_completed_packet_header_cb_address[risc_id][i] % eth_word_l1_alignment == 0),
                 "senders_completed_packet_header_cb_address[{}] {} must be aligned to {} bytes",
@@ -203,20 +204,17 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         TT_FATAL(
             std::unordered_set<size_t>(
                 sender_channels_buffer_index_address[risc_id].begin(),
-                sender_channels_buffer_index_address[risc_id].begin() + this->num_used_sender_channels[risc_id])
-                    .size() == this->num_used_sender_channels[risc_id],
+                sender_channels_buffer_index_address[risc_id].begin() + this->num_used_sender_channels)
+                    .size() == this->num_used_sender_channels,
             "FabricEriscDatamoverConfig was constructed with illegal buffer index address");
-
-        static const size_t min_buffer_size = sizeof(tt::tt_fabric::PacketHeader);
-        TT_FATAL(
-            channel_buffer_size_bytes >= min_buffer_size,
-            "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than "
-            "minimum "
-            "size of {}",
-            min_buffer_size);
-        // TODO: selectively set size for each RISC-V core
-        this->channel_buffer_size_bytes[risc_id] = channel_buffer_size_bytes;
     }
+    static const size_t min_buffer_size = sizeof(tt::tt_fabric::PacketHeader);
+    TT_FATAL(
+        channel_buffer_size_bytes >= min_buffer_size,
+        "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than "
+        "minimum "
+        "size of {}",
+        min_buffer_size);
 
     constexpr std::array<std::pair<size_t, size_t>, 1> linear_buffer_slot_options = {std::pair<size_t, size_t>{8, 16}};
     constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options = {
@@ -231,21 +229,14 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
                                      auto& buffer_slot_options,
                                      size_t num_sender_channels,
                                      size_t num_receiver_channels,
-                                     size_t channel_buffer_size_bytes,
-                                     size_t& available_channel_buffering_space_local,
                                      size_t& num_sender_buffer_slots,
                                      size_t& num_receiver_buffer_slots) {
         for (auto& option : buffer_slot_options) {
             num_sender_buffer_slots = option.first;
             num_receiver_buffer_slots = option.second;
-            if (num_sender_channels * num_sender_buffer_slots * channel_buffer_size_bytes +
-                    num_receiver_channels * num_receiver_buffer_slots * channel_buffer_size_bytes <=
-                available_channel_buffering_space_local) {
-                if (!this->shared_buffer_mode) {
-                    available_channel_buffering_space_local -=
-                        num_sender_channels * num_sender_buffer_slots * channel_buffer_size_bytes +
-                        num_receiver_channels * num_receiver_buffer_slots * channel_buffer_size_bytes;
-                }
+            if (num_sender_channels * num_sender_buffer_slots * this->channel_buffer_size_bytes +
+                    num_receiver_channels * num_receiver_buffer_slots * this->channel_buffer_size_bytes <=
+                this->available_channel_buffering_space) {
                 break;
             }
         }
@@ -256,8 +247,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
                                                   auto& ring_buffer_slot_options_dateline,
                                                   size_t num_used_sender_channels,
                                                   size_t num_used_receiver_channels,
-                                                  size_t channel_buffer_size_bytes,
-                                                  size_t& available_channel_buffering_space_local,
                                                   size_t num_alive_sender_channels,
                                                   size_t num_alive_receiver_channels,
                                                   size_t& num_sender_buffer_slots,
@@ -272,145 +261,126 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             ring_buffer_slot_options,
             num_used_sender_channels,
             num_used_receiver_channels,
-            channel_buffer_size_bytes,
-            available_channel_buffering_space_local,
             non_dateline_num_sender_buffer_slots,
             non_dateline_num_receiver_buffer_slots);
         get_optimal_num_slots(
             ring_buffer_slot_options_dateline,
             num_alive_sender_channels,
             num_alive_receiver_channels,
-            channel_buffer_size_bytes,
-            available_channel_buffering_space_local,
             dateline_num_sender_buffer_slots,
             dateline_num_receiver_buffer_slots);
         num_sender_buffer_slots = non_dateline_num_sender_buffer_slots;
         num_receiver_buffer_slots = dateline_num_receiver_buffer_slots;
     };
 
+    auto num_alive_sender_channels = is_dateline ? this->num_used_sender_channels - 1 : this->num_used_sender_channels;
+    auto num_alive_receiver_channels =
+        is_dateline ? this->num_used_receiver_channels - 1 : this->num_used_receiver_channels;
     auto non_dateline_sender_channel_idx = 2;
     auto non_dateline_receiver_channel_idx = 0;
-    auto available_channel_buffering_space_local = this->available_channel_buffering_space;
-    size_t total_slot_count = 0;
-    for (uint32_t risc_id = 0; risc_id < this->num_used_riscv_cores; risc_id++) {
-        auto num_alive_sender_channels =
-            is_dateline ? this->num_used_sender_channels[risc_id] - 1 : this->num_used_sender_channels[risc_id];
-        auto num_alive_receiver_channels =
-            is_dateline ? this->num_used_receiver_channels[risc_id] - 1 : this->num_used_receiver_channels[risc_id];
 
-        if (topology == Topology::Ring) {
-            if (is_dateline) {
-                get_optimal_num_slots_for_dateline(
-                    ring_buffer_slot_options,
-                    ring_buffer_slot_options_dateline,
-                    this->num_used_sender_channels[risc_id],
-                    this->num_used_receiver_channels[risc_id],
-                    this->channel_buffer_size_bytes[risc_id],
-                    available_channel_buffering_space_local,
-                    num_alive_sender_channels,
-                    num_alive_receiver_channels,
-                    num_sender_buffer_slots,
-                    num_receiver_buffer_slots);
+    if (topology == Topology::Ring) {
+        if (is_dateline) {
+            get_optimal_num_slots_for_dateline(
+                ring_buffer_slot_options,
+                ring_buffer_slot_options_dateline,
+                this->num_used_sender_channels,
+                this->num_used_receiver_channels,
+                num_alive_sender_channels,
+                num_alive_receiver_channels,
+                num_sender_buffer_slots,
+                num_receiver_buffer_slots);
 
-            } else {
-                get_optimal_num_slots(
-                    ring_buffer_slot_options,
-                    this->num_used_sender_channels[risc_id],
-                    this->num_used_receiver_channels[risc_id],
-                    this->channel_buffer_size_bytes[risc_id],
-                    available_channel_buffering_space_local,
-                    num_sender_buffer_slots,
-                    num_receiver_buffer_slots);
-            }
         } else {
             get_optimal_num_slots(
-                linear_buffer_slot_options,
-                this->num_used_sender_channels[risc_id],
-                this->num_used_receiver_channels[risc_id],
-                this->channel_buffer_size_bytes[risc_id],
-                available_channel_buffering_space_local,
+                ring_buffer_slot_options,
+                this->num_used_sender_channels,
+                this->num_used_receiver_channels,
                 num_sender_buffer_slots,
                 num_receiver_buffer_slots);
         }
-        total_slot_count += num_alive_sender_channels * num_sender_buffer_slots +
-                            num_alive_receiver_channels * num_receiver_buffer_slots;
-        TT_FATAL(
-            total_slot_count * channel_buffer_size_bytes <= available_channel_buffering_space,
-            "Total channel size of {} B exceeds available space of {} B",
-            total_slot_count * channel_buffer_size_bytes,
-            available_channel_buffering_space);
+    } else {
+        get_optimal_num_slots(
+            linear_buffer_slot_options,
+            this->num_used_sender_channels,
+            this->num_used_receiver_channels,
+            num_sender_buffer_slots,
+            num_receiver_buffer_slots);
     }
+    size_t total_slot_count =
+        num_alive_sender_channels * num_sender_buffer_slots + num_alive_receiver_channels * num_receiver_buffer_slots;
+    TT_FATAL(
+        total_slot_count * channel_buffer_size_bytes <= available_channel_buffering_space,
+        "Total channel size of {} B exceeds available space of {} B",
+        total_slot_count * channel_buffer_size_bytes,
+        available_channel_buffering_space);
 
     log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
-    uint32_t buffer_addr = buffer_region_start;
-    size_t total_sender_size = 0;
-    size_t total_receiver_size = 0;
-    for (uint32_t risc_id = 0; risc_id < this->num_used_riscv_cores; risc_id++) {
-        for (uint32_t i = 0; i < this->num_used_sender_channels[risc_id]; i++) {
-            // skip sender channel 2 for dateline edm and set the buffer size to 0
-            // Dateline connections have some channels that are unused because there
-            // is not legal data path to feed into them. Therefore we can "skip" them and receover
-            // the buffering space in L1 for other channels.
-            bool skip_current_channel = (i == non_dateline_sender_channel_idx && is_dateline);
-            this->sender_channels_num_buffers[risc_id][i] = skip_current_channel ? 0 : num_sender_buffer_slots;
-            this->sender_channels_size_bytes[risc_id][i] =
-                skip_current_channel ? 0 : channel_buffer_size_bytes * num_sender_buffer_slots;
-            this->is_sender_channel_serviced[risc_id][i] = true;
-        }
-        for (uint32_t i = 0; i < this->num_used_receiver_channels[risc_id]; i++) {
-            // skip receiver channel 0 for dateline edm and set the buffer size to 0
-            bool skip_current_channel = (i == non_dateline_receiver_channel_idx && is_dateline);
-            this->receiver_channels_num_buffers[risc_id][i] = skip_current_channel ? 0 : num_receiver_buffer_slots;
-            this->receiver_channels_size_bytes[risc_id][i] =
-                skip_current_channel ? 0 : channel_buffer_size_bytes * num_receiver_buffer_slots;
-            this->is_receiver_channel_serviced[risc_id][i] = true;
-        }
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+        // skip sender channel 2 for dateline edm and set the buffer size to 0
+        // Dateline connections have some channels that are unused because there
+        // is not legal data path to feed into them. Therefore we can "skip" them and receover
+        // the buffering space in L1 for other channels.
+        bool skip_current_channel = (i == non_dateline_sender_channel_idx && is_dateline);
+        this->sender_channels_num_buffers[i] = skip_current_channel ? 0 : num_sender_buffer_slots;
+        this->sender_channels_size_bytes[i] =
+            skip_current_channel ? 0 : channel_buffer_size_bytes * num_sender_buffer_slots;
+    }
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+        // skip receiver channel 0 for dateline edm and set the buffer size to 0
+        bool skip_current_channel = (i == non_dateline_receiver_channel_idx && is_dateline);
+        this->receiver_channels_num_buffers[i] = skip_current_channel ? 0 : num_receiver_buffer_slots;
+        this->receiver_channels_size_bytes[i] =
+            skip_current_channel ? 0 : channel_buffer_size_bytes * num_receiver_buffer_slots;
+    }
 
+    uint32_t buffer_addr = buffer_region_start;
+    for (uint32_t risc_id = 0; risc_id < this->num_used_riscv_cores; risc_id++) {
         if (shared_buffer_mode) {
             buffer_addr = buffer_region_start;
         }
-        for (uint32_t i = 0; i < this->num_used_sender_channels[risc_id]; i++) {
+        for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
             this->sender_channels_base_address[risc_id][i] = buffer_addr;
-            buffer_addr += this->sender_channels_size_bytes[risc_id][i];
+            buffer_addr += this->sender_channels_size_bytes[i];
             log_trace(tt::LogOp, "Sender {} channel_start: {}", i, this->sender_channels_base_address[risc_id][i]);
+            this->is_sender_channel_serviced[risc_id][i] = true;
         }
-        for (uint32_t i = 0; i < this->num_used_receiver_channels[risc_id]; i++) {
+        for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
             this->receiver_channels_base_address[risc_id][i] = buffer_addr;
-            buffer_addr += this->receiver_channels_size_bytes[risc_id][i];
+            buffer_addr += this->receiver_channels_size_bytes[i];
             log_trace(tt::LogOp, "Receiver {} channel_start: {}", i, this->receiver_channels_base_address[risc_id][i]);
+            this->is_receiver_channel_serviced[risc_id][i] = true;
         }
-
-        for (uint32_t i = 0; i < this->num_used_sender_channels[risc_id]; i++) {
-            bool skip_current_channel = (i == non_dateline_sender_channel_idx && is_dateline);
-            if (!skip_current_channel) {
-                TT_FATAL(
-                    this->sender_channels_size_bytes[risc_id][i] > 0,
-                    "Internal error when computing `sender_channels_size_bytes[{}]` which was computed to be size 0",
-                    i);
-            }
-        }
-        for (uint32_t i = 0; i < this->num_used_receiver_channels[risc_id]; i++) {
-            bool skip_current_channel = (i == non_dateline_receiver_channel_idx && is_dateline);
-            if (!skip_current_channel) {
-                TT_FATAL(
-                    this->receiver_channels_size_bytes[risc_id][i] > 0,
-                    "Internal error when computing `receiver_channels_size_bytes[{}]` which was computed to be size 0",
-                    i);
-            }
-        }
-
-        total_sender_size += std::accumulate(
-            this->sender_channels_size_bytes[risc_id].begin(),
-            this->sender_channels_size_bytes[risc_id].begin() + this->num_used_sender_channels[risc_id],
-            0ul);
-        total_receiver_size += std::accumulate(
-            this->receiver_channels_size_bytes[risc_id].begin(),
-            this->receiver_channels_size_bytes[risc_id].begin() + this->num_used_receiver_channels[risc_id],
-            0ul);
     }
 
+    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+        bool skip_current_channel = (i == non_dateline_sender_channel_idx && is_dateline);
+        if (!skip_current_channel) {
+            TT_FATAL(
+                this->sender_channels_size_bytes[i] > 0,
+                "Internal error when computing `sender_channels_size_bytes[{}]` which was computed to be size 0",
+                i);
+        }
+    }
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+        bool skip_current_channel = (i == non_dateline_receiver_channel_idx && is_dateline);
+        if (!skip_current_channel) {
+            TT_FATAL(
+                this->receiver_channels_size_bytes[i] > 0,
+                "Internal error when computing `receiver_channels_size_bytes[{}]` which was computed to be size 0",
+                i);
+        }
+    }
     TT_FATAL(
-        total_sender_size + total_receiver_size <= this->available_channel_buffering_space,
+        std::accumulate(
+            this->sender_channels_size_bytes.begin(),
+            this->sender_channels_size_bytes.begin() + this->num_used_sender_channels,
+            0ul) +
+                std::accumulate(
+                    this->receiver_channels_size_bytes.begin(),
+                    this->receiver_channels_size_bytes.begin() + this->num_used_receiver_channels,
+                    0ul) <=
+            this->available_channel_buffering_space,
         "Internal error when computing channel sizes. Total channel size exceeds available space");
     TT_FATAL(
         buffer_addr < this->max_l1_loading_size,
@@ -525,9 +495,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     peer_chip_id(peer_chip_id),
     handshake_address(tt::round_up(
         tt::tt_metal::hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
-    channel_buffer_size(config.channel_buffer_size_bytes[risc_id]),
-    sender_channels_num_buffers(config.sender_channels_num_buffers[risc_id]),
-    receiver_channels_num_buffers(config.receiver_channels_num_buffers[risc_id]),
+    channel_buffer_size(config.channel_buffer_size_bytes),
+    sender_channels_num_buffers(config.sender_channels_num_buffers),
+    receiver_channels_num_buffers(config.receiver_channels_num_buffers),
 
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
     receiver_channels_downstream_flow_control_semaphore_id(receiver_channels_downstream_flow_control_semaphore_id),
@@ -556,13 +526,12 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         false);
 }
 
-std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(const size_t risc_id) const {
+std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const {
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
     TT_ASSERT(this->my_chip_id != this->peer_chip_id);
     TT_ASSERT(
         std::unordered_set<size_t>(
-            sender_channels_num_buffers.begin(),
-            sender_channels_num_buffers.begin() + config.num_used_sender_channels[risc_id])
+            sender_channels_num_buffers.begin(), sender_channels_num_buffers.begin() + config.num_used_sender_channels)
                 .size() == 1,
         "Implementation expects sender_channels_num_buffers to all be the same for now");
 
@@ -575,9 +544,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(const s
         log_trace(tt::LogTest, "Receiver {} channel address: {}", i, this->local_receiver_channels_buffer_address[i]);
     }
 
-    size_t num_sender_channels = config.num_used_sender_channels[risc_id];
-    size_t num_receiver_channels = config.num_used_receiver_channels[risc_id];
-    size_t num_fwd_paths = config.num_fwd_paths[risc_id];
+    size_t num_sender_channels = config.num_used_sender_channels;
+    size_t num_receiver_channels = config.num_used_receiver_channels;
     auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->my_chip_id);
 
     size_t sender_channel_num_buffers = this->sender_channels_num_buffers[0];
@@ -590,7 +558,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(const s
     auto ct_args = std::vector<uint32_t>{
         num_sender_channels,
         num_receiver_channels,
-        config.num_fwd_paths[risc_id],
+        config.num_fwd_paths,
         this->wait_for_host_signal ? 1 : 0,
 
         this->firmware_context_switch_interval,
@@ -668,8 +636,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(const s
         config.enable_handshake[risc_id],
         config.enable_context_switch[risc_id],
         config.enable_interrupts[risc_id],
-        config.sender_txq_id[risc_id],
-        config.receiver_txq_id[risc_id],
+        config.sender_txq_id,
+        config.receiver_txq_id,
         config.iterations_between_ctx_switch_and_teardown_checks[risc_id],
         config.topology == Topology::Mesh,
         this->direction,
@@ -954,7 +922,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
         this->sender_channels_flow_control_semaphore_id[worker_chan],
         this->sender_channels_connection_semaphore_id[worker_chan],
         this->config.sender_channels_worker_conn_info_base_address[this->risc_id][worker_chan],
-        this->config.channel_buffer_size_bytes[this->risc_id],
+        this->config.channel_buffer_size_bytes,
         this->sender_channels_buffer_index_semaphore_id[worker_chan],
         this->enable_persistent_mode,
         this->direction};
@@ -975,7 +943,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         this->sender_channels_flow_control_semaphore_id[ds_edm],
         this->sender_channels_connection_semaphore_id[ds_edm],
         this->config.sender_channels_worker_conn_info_base_address[this->risc_id][ds_edm],
-        this->config.channel_buffer_size_bytes[this->risc_id],
+        this->config.channel_buffer_size_bytes,
         this->sender_channels_buffer_index_semaphore_id[ds_edm],
         false,
         eth_chan_directions::EAST};

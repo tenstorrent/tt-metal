@@ -104,13 +104,13 @@ void append_fabric_connection_rt_args(
         .edm_noc_x = fabric_router_virtual_core.x,
         .edm_noc_y = fabric_router_virtual_core.y,
         .edm_buffer_base_addr = edm_config.sender_channels_base_address[risc_id][sender_channel],
-        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[risc_id][sender_channel],
+        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
         .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[risc_id][sender_channel],
         .edm_connection_handshake_addr =
             edm_config.sender_channels_connection_semaphore_address[risc_id][sender_channel],
         .edm_worker_location_info_addr =
             edm_config.sender_channels_worker_conn_info_base_address[risc_id][sender_channel],
-        .buffer_size_bytes = edm_config.channel_buffer_size_bytes[risc_id],
+        .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
         .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[risc_id][sender_channel],
         .persistent_fabric = true,
         .edm_direction = router_direction};
