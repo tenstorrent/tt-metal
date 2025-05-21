@@ -188,18 +188,6 @@ grid_size = [8, 7]
             ),
         ),
         (
-            (1, 1, 5, 96),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
-                    [5, 64],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-        ),
-        (
             (2, 3, 64, 96),
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -230,7 +218,6 @@ grid_size = [8, 7]
         "interleaved",
         "height_sharded",
         "width_sharded",
-        "width_sharded_uneven",
         "block_sharded",
         "block_sharded_with_custom_physical_shard_shape",
     ],
@@ -240,19 +227,6 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
 
     if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("{} is only valid for ttnn.TILE_LAYOUT!".format(tt_dtype))
-
-    if (
-        memory_config.shard_spec is not None
-        and memory_config.shard_spec.mode == ttnn.ShardMode.PHYSICAL
-        and tile is not None
-    ):
-        shard_shape = memory_config.shard_spec.shape
-        if shard_shape[0] % tile.tile_shape[0] != 0 or shard_shape[1] % tile.tile_shape[1] != 0:
-            pytest.skip(
-                "Shard shape {} is not divisible by tile {} {}!".format(
-                    shard_shape, tile.tile_shape[0], tile.tile_shape[1]
-                )
-            )
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 

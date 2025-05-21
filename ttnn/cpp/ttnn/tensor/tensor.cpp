@@ -40,8 +40,8 @@ namespace {
 
 template <typename T>
 Tensor create_owned_tensor_from_row_major_data(
-    std::vector<T>&& data, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id, T pad_value) {
-    auto physical_data = tensor_impl::encode_tensor_data(std::move(data), spec, pad_value);
+    std::vector<T>&& data, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id) {
+    auto physical_data = tensor_impl::encode_tensor_data(std::move(data), spec);
 
     Tensor output(HostBuffer(std::move(physical_data)), spec);
 
@@ -176,25 +176,17 @@ const DistributedTensorConfig& Tensor::get_distributed_tensor_config() const {
 
 template <>
 Tensor Tensor::from_span<float>(
-    tt::stl::Span<const float> buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    float pad_value) {
+    tt::stl::Span<const float> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     switch (spec.data_type()) {
         case DataType::FLOAT32:
             return create_owned_tensor_from_row_major_data(
-                std::vector<float>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
+                std::vector<float>(buffer.begin(), buffer.end()), spec, device, cq_id);
         case DataType::BFLOAT16: {
             return create_owned_tensor_from_row_major_data(
-                std::vector<bfloat16>(buffer.begin(), buffer.end()),
-                spec,
-                device,
-                cq_id,
-                static_cast<bfloat16>(pad_value));
+                std::vector<bfloat16>(buffer.begin(), buffer.end()), spec, device, cq_id);
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
@@ -206,7 +198,7 @@ Tensor Tensor::from_span<float>(
             // support row-major input.
             const auto& tile = spec.tensor_layout().get_page_config().get_tile();
             auto physical_data =
-                tensor_impl::encode_tensor_data(std::vector<float>(buffer.begin(), buffer.end()), spec, pad_value);
+                tensor_impl::encode_tensor_data(std::vector<float>(buffer.begin(), buffer.end()), spec);
             std::vector<uint32_t> packed_block_floats =
                 spec.data_type() == DataType::BFLOAT8_B
                     ? pack_fp32_vec_as_bfp8_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile)
@@ -226,11 +218,7 @@ Tensor Tensor::from_span<float>(
 
 template <typename T>
 Tensor Tensor::from_span(
-    tt::stl::Span<const T> buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    T pad_value) {
+    tt::stl::Span<const T> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -239,8 +227,7 @@ Tensor Tensor::from_span(
         "Unsupported data type: got {}, expected: {}",
         spec.data_type(),
         convert_to_data_type<T>());
-    return create_owned_tensor_from_row_major_data(
-        std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
+    return create_owned_tensor_from_row_major_data(std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id);
 }
 
 template <typename T>
@@ -259,29 +246,21 @@ Tensor Tensor::from_borrowed_data(
 
 template <>
 Tensor Tensor::from_vector<float>(
-    std::vector<float>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    float pad_value) {
+    std::vector<float>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     if (spec.data_type() == DataType::FLOAT32) {
         // User `buffer` directly, when no type conversion is needed.
-        return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id, pad_value);
+        return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id);
     } else {
-        return from_span(tt::stl::Span<const float>(buffer.data(), buffer.size()), spec, device, cq_id, pad_value);
+        return from_span(tt::stl::Span<const float>(buffer.data(), buffer.size()), spec, device, cq_id);
     }
 }
 
 template <typename T>
 Tensor Tensor::from_vector(
-    std::vector<T>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    T pad_value) {
+    std::vector<T>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -290,7 +269,7 @@ Tensor Tensor::from_vector(
         "Unsupported data type: got {}, expected: {}",
         spec.data_type(),
         convert_to_data_type<T>());
-    return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id, pad_value);
+    return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id);
 }
 
 template <>
@@ -346,35 +325,15 @@ std::vector<T> Tensor::to_vector(ttnn::QueueId cq_id) const {
 
 // Instantiate explicitly for the supported types.
 template Tensor Tensor::from_span<bfloat16>(
-    tt::stl::Span<const bfloat16> buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    bfloat16 pad_value);
+    tt::stl::Span<const bfloat16> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<int32_t>(
-    tt::stl::Span<const int32_t> buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    int32_t pad_value);
+    tt::stl::Span<const int32_t> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<uint8_t>(
-    tt::stl::Span<const uint8_t> buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    uint8_t pad_value);
+    tt::stl::Span<const uint8_t> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<uint16_t>(
-    tt::stl::Span<const uint16_t> buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    uint16_t pad_value);
+    tt::stl::Span<const uint16_t> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<uint32_t>(
-    tt::stl::Span<const uint32_t> buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    uint32_t pad_value);
+    tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_borrowed_data<float>(
     tt::stl::Span<float> buffer,
     const ttnn::Shape& shape,
@@ -412,35 +371,15 @@ template Tensor Tensor::from_borrowed_data<uint32_t>(
     const std::function<void()>& on_destruction_callback,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_vector<bfloat16>(
-    std::vector<bfloat16>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    bfloat16 pad_value);
+    std::vector<bfloat16>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<int32_t>(
-    std::vector<int32_t>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    int32_t pad_value);
+    std::vector<int32_t>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<uint8_t>(
-    std::vector<uint8_t>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    uint8_t pad_value);
+    std::vector<uint8_t>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<uint16_t>(
-    std::vector<uint16_t>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    uint16_t pad_value);
+    std::vector<uint16_t>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<uint32_t>(
-    std::vector<uint32_t>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    uint32_t pad_value);
+    std::vector<uint32_t>&& buffer, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id);
 
 template std::vector<bfloat16> Tensor::to_vector<bfloat16>(ttnn::QueueId cq_id) const;
 template std::vector<int32_t> Tensor::to_vector<int32_t>(ttnn::QueueId cq_id) const;
