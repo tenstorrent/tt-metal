@@ -88,6 +88,12 @@ protected:
 };
 
 class MeshDeviceFixtureBase : public ::testing::Test {
+public:
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device() {
+        TT_FATAL(mesh_device_, "MeshDevice not initialized in {}", __FUNCTION__);
+        return mesh_device_;
+    }
+
 protected:
     using MeshDevice = ::tt::tt_metal::distributed::MeshDevice;
     using MeshDeviceConfig = ::tt::tt_metal::distributed::MeshDeviceConfig;
@@ -276,7 +282,9 @@ class T3000MeshDevice2DFabricFixture : public MeshDeviceFixtureBase {
 protected:
     T3000MeshDevice2DFabricFixture() :
         MeshDeviceFixtureBase(Config{
-            .mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 1, .fabric_config = FabricConfig::FABRIC_2D}) {}
+            .mesh_device_types = {MeshDeviceType::T3000},
+            .num_cqs = 1,
+            .fabric_config = FabricConfig::FABRIC_2D_DYNAMIC}) {}
 };
 
 }  // namespace tt::tt_metal
