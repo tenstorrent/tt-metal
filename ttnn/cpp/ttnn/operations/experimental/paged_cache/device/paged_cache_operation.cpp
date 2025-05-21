@@ -42,6 +42,10 @@ void PagedUpdateCacheDeviceOperation::validate(
             "Operands to update_cache need to be allocated in buffers on device!");
 
         // Layout and data type validation
+        if (op_type == PagedUpdateCacheOpType::UPDATE) {
+            TT_FATAL(
+                input_tensor.get_layout() == Layout::TILE, "Input tensor in non-fused update_cache must be tilized");
+        }
         TT_FATAL(cache_tensor.get_layout() == Layout::TILE, "Cache tensor in update_cache must be tilized");
         TT_FATAL(
             cache_tensor.get_dtype() == DataType::FLOAT32 || cache_tensor.get_dtype() == DataType::BFLOAT16 ||
