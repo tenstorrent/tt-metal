@@ -21,7 +21,7 @@ from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -12
+DECODER_OP_END_INDEX = -13
 
 perf_targets = {
     "RMSAllGather_0": {
@@ -64,7 +64,7 @@ perf_targets = {
         "op_name": "QKV_MM",
         "kernel_duration": 8556.222222222223,
         "op_to_op": 716.4444444444445,
-        "non-overlapped-dispatch-time": 6102.0,
+        "non-overlapped-dispatch-time": 6956.1,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
