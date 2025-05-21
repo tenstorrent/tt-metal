@@ -315,6 +315,46 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
     )
 
 
+@pytest.mark.parametrize("paged_update", [True])
+@pytest.mark.parametrize("block_size", [64], ids=["block64"])
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [8])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("cache_idx", [127])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("pcc", [0.9995])
+def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
+    device,
+    paged_update,
+    cache_idx,
+    block_size,
+    head_dim,
+    max_seq_len,
+    num_users,
+    num_heads,
+    input_dtype,
+    cache_dtype,
+    use_program_cache,
+    pcc,
+):
+    run_test_paged_fused_update_cache_decode(
+        paged_update,
+        cache_idx,
+        block_size,
+        head_dim,
+        max_seq_len,
+        num_users,
+        num_heads,
+        input_dtype,
+        cache_dtype,
+        device,
+        pcc,
+        row_major=True,
+    )
+
+
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize("batch, seq_len", ((8, 1),))
 @pytest.mark.parametrize(
