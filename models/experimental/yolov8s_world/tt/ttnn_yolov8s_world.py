@@ -64,6 +64,7 @@ class TtConv:
         self.reshape_tensor = reshape_tensor
 
         self.conv_config = self._initialize_conv_config()
+        self.conv_1x1_config = self.default_1x1_conv_config()
         self.compute_config = self._initialize_compute_config()
         if conv_alone:
             self.weights, self.bias = self.parameters["weight"], self.parameters["bias"]
@@ -119,6 +120,28 @@ class TtConv:
             packer_l1_acc=False,
         )
 
+    def default_1x1_conv_config(self):
+        return ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            # math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    def is_1x1_conv(self, kernel_size, stride, padding, dilation, conv_config):
+        return (
+            kernel_size == 1
+            and stride == 1
+            and padding == 0
+            and dilation == 1
+            and not (
+                conv_config.shard_layout is not None
+                and conv_config.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            )
+        )
+
     def __call__(self, x):
         if x.shape[1] != 1:
             input_height = x.shape[1]
@@ -142,7 +165,17 @@ class TtConv:
             input_height=input_height,
             input_width=input_width,
             conv_config=self.conv_config,
-            compute_config=self.compute_config,
+            compute_config=(
+                self.conv_1x1_config
+                if self.is_1x1_conv(
+                    kernel_size=self.input_params[0],
+                    stride=self.input_params[1],
+                    padding=self.input_params[2],
+                    dilation=self.dilation,
+                    conv_config=self.conv_config,
+                )
+                else self.compute_config
+            ),
             groups=self.groups,
             memory_config=ttnn.L1_MEMORY_CONFIG if self.change_shard == True else None,
             return_weights_and_bias=True,
@@ -317,9 +350,11 @@ class TtSPPF:
         y = [cv1]
         for i in range(3):
             output = ttnn.max_pool2d(
-                input_tensor=ttnn.to_layout(ttnn.sharded_to_interleaved(y[-1]), layout=ttnn.ROW_MAJOR_LAYOUT)
-                if y[-1].is_sharded()
-                else y[-1],
+                input_tensor=(
+                    ttnn.to_layout(ttnn.sharded_to_interleaved(y[-1]), layout=ttnn.ROW_MAJOR_LAYOUT)
+                    if y[-1].is_sharded()
+                    else y[-1]
+                ),
                 batch_size=self.batch_size,
                 input_h=out_h,
                 input_w=out_w,
@@ -855,10 +890,8 @@ class TtWorldDetect:
         self.strides = None
         self.self_shape = None
         self.cv4 = [
-            BNContrastiveHead(embed)
-            if with_bn
-            else TtContrastiveHead(
-                self.device, self.parameters["cv4"][i]
+            (
+                BNContrastiveHead(embed) if with_bn else TtContrastiveHead(self.device, self.parameters["cv4"][i])
             )  # BNContrastiveHead(embed) is not invoked So, Not defined.
             for i, _ in enumerate(ch)
         ]
