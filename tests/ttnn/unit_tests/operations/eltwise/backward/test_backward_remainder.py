@@ -26,8 +26,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
     ),
 )
 def test_bw_unary_remainder(input_shapes, scalar, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.remainder_bw(grad_tensor, input_tensor, scalar)
 
@@ -46,9 +46,14 @@ def test_bw_unary_remainder(input_shapes, scalar, device):
     ),
 )
 def test_bw_binary_remainder(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 30, device, True)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -50, 50, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 30, device, True, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=1)
+
+    high = 50
+    low = -50
+    other_data = torch.rand(input_shapes, requires_grad=True).bfloat16() * (high - low) + low
+    other_data[other_data == 0] = 1.0
+    other_tensor = ttnn.from_torch(other_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     tt_output_tensor_on_device = ttnn.remainder_bw(grad_tensor, input_tensor, other_tensor)
 
