@@ -249,58 +249,46 @@ async function run() {
           } else {
             previousRuns = [];
           }
-        } else if (typeof prev === 'object' && prev !== null) {
-          previousRuns = Object.values(prev).flat();
-        } else {
-          previousRuns = [];
         }
         latestCachedDate = getLatestCachedDate(previousRuns);
         oldestCachedDate = getOldestCachedDate(previousRuns);
-      } catch (e) {
-        core.warning('Could not parse previous cache, ignoring.');
+        core.info(`Loaded ${previousRuns.length} runs from cache`);
+      } catch (error) {
+        core.warning(`Error loading cache: ${error.message}`);
+        previousRuns = [];
       }
     }
-    core.info(`Restored previousRuns count: ${previousRuns.length}`);
-    core.info(`Latest cached run date: ${latestCachedDate}`);
-    core.info(`Oldest cached run date: ${oldestCachedDate}`);
 
-    // Fetch new runs from GitHub
+    // Fetch new runs
     const newRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, oldestCachedDate);
-    core.info(`Fetched newRuns count: ${newRuns.length}`);
+    core.info(`Fetched ${newRuns.length} new runs`);
 
-    // Merge and deduplicate by run id
-    const seen = new Map();
-    [...previousRuns, ...newRuns].forEach(run => seen.set(run.id, run));
-    let mergedRuns = Array.from(seen.values());
-
-    // Only keep runs on main branch, completed, and within the last N days
-    const cutoff = getCutoffDate(days);
-    mergedRuns = mergedRuns.filter(run =>
-      run.head_branch === branch &&
-      run.status === 'completed' &&
-      new Date(run.created_at) >= cutoff
-    );
-
-    // Filter runs based on workflow configs
-    mergedRuns = filterRunsByConfig(mergedRuns, workflowConfigs);
-    core.info(`Filtered runs count: ${mergedRuns.length}`);
-
-    // Group runs by workflow name
-    const grouped = groupRunsByName(mergedRuns);
-
-    // Ensure cache directory exists
-    const cacheDir = require('path').dirname(cachePath);
-    if (!fs.existsSync(cacheDir)) {
-      fs.mkdirSync(cacheDir, { recursive: true });
+    // Merge and deduplicate runs
+    const allRuns = [...previousRuns];
+    const seenIds = new Set(previousRuns.map(run => run.id));
+    for (const run of newRuns) {
+      if (!seenIds.has(run.id)) {
+        allRuns.push(run);
+        seenIds.add(run.id);
+      }
     }
 
-    // Save grouped runs to cache file
-    const sortedEntries = Array.from(grouped.entries());
-    fs.writeFileSync(cachePath, JSON.stringify(sortedEntries, null, 2));
+    // Filter runs based on workflow configs
+    const filteredRuns = filterRunsByConfig(allRuns, workflowConfigs);
+    core.info(`Filtered to ${filteredRuns.length} runs based on workflow configs`);
 
-    // Set output
-    core.setOutput('total-runs', mergedRuns.length);
-    core.setOutput('workflow-count', grouped.size);
+    // Group runs by name
+    const groupedRuns = groupRunsByName(filteredRuns);
+
+    // Save to cache
+    const cacheData = Array.from(groupedRuns.entries());
+    fs.writeFileSync(cachePath, JSON.stringify(cacheData, null, 2));
+    core.info(`Saved ${groupedRuns.size} workflows to cache`);
+
+    // Set outputs
+    core.setOutput('total-runs', filteredRuns.length);
+    core.setOutput('workflow-count', groupedRuns.size);
+    core.setOutput('cache-path', cachePath);
 
     // Log remaining GitHub API rate limit
     const rateLimit = await octokit.rest.rateLimit.get();
