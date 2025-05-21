@@ -92,16 +92,15 @@ void MAIN {
     uint32_t diff_index = 0;
     uint32_t time_for_change = 0;
     uint32_t runtime_args_before = 1;
-    if (!one_scalar_per_core) {
-        scalar_cnt = get_arg_val<uint32_t>(0);
-        time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
-    }
 
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
     pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
 
-    if (one_scalar_per_core) {
+    if (!one_scalar_per_core) {
+        scalar_cnt = get_arg_val<uint32_t>(0);
+        time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
+    } else {
         cb_wait_front(in_scalar_cb_id, 1);
     }
     for (uint32_t i = 0; i < nsticks_per_core; i++) {

@@ -145,21 +145,16 @@ void MAIN {
     if (!one_scalar_per_core) {
         scalar_cnt = get_arg_val<uint32_t>(0);
         time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
-        DPRINT << "time for change " << time_for_change << ENDL();
-    }
-    if (one_scalar_per_core) {
-        DPRINT << "waiting only one scalar value" << ENDL();
+    } else {
         cb_wait_front(in_scalar_cb_id, 1);
     }
+
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
-        DPRINT << "i " << i << ENDL();
         if (i == time_for_change && !one_scalar_per_core) {
-            DPRINT << "change " << ENDL();
             cb_wait_front(in_scalar_cb_id, 1);
             if (diff_index < scalar_cnt - 1) {
                 diff_index++;
                 time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
-                DPRINT << "next change coming on " << time_for_change << ENDL();
             }
         }
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; b_i++) {
@@ -209,15 +204,12 @@ void MAIN {
             interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
         // prepare for the next iteration if not last element
         if (!one_scalar_per_core && ((i + 1 == time_for_change) || (i + 1 == nsticks_per_core_by_nblocks))) {
-            DPRINT << "popped the old num " << ENDL();
             cb_pop_front(in_scalar_cb_id, 1);
         }
     }
     if (one_scalar_per_core) {
-        DPRINT << "releasing only one scalar value" << ENDL();
         cb_pop_front(in_scalar_cb_id, 1);
     }
-    DPRINT << "compute ends" << ENDL();
 }
 
 }  // namespace NAMESPACE

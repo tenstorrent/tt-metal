@@ -79,9 +79,7 @@ void kernel_main() {
     if (!one_scalar_per_core) {
         scalars_cnt = get_arg_val<uint32_t>(0);
         time_for_change = get_arg_val<uint32_t>(runtime_args_before);
-    }
-
-    if (reader_id == 0 && one_scalar_per_core) {
+    } else if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
         fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id, 1);
