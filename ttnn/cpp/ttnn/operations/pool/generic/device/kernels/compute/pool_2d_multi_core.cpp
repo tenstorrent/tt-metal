@@ -96,9 +96,6 @@ void MAIN {
     if (!one_scalar_per_core) {
         scalar_cnt = get_arg_val<uint32_t>(0);
         time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
-        for (uint32_t i = 0; i < scalar_cnt; i++) {
-            DPRINT << "time for change " << get_arg_val<uint32_t>(runtime_args_before + i) << ENDL();
-        }
     }
 
     // In case we have <=16 sticks we will use only upper two faces of the tile.
