@@ -529,13 +529,14 @@ void py_bind_conv2d(py::module& module) {
         Enables input and weight tensor folding when strides match kernel dimensions.
 
         When enabled, this optimization reshapes tensors as follows:
-        - Input tensor (NHWC format):
-          * From: (N, H, W, IC)
-          * To: (N, H/stride[0], W/stride[1], IC * kernel[0] * kernel[1])
 
-        - Weight tensor:
-          * From: (OC, IC, kernel[0], kernel[1])
-          * To: (1, 1, IC * kernel[0] * kernel[1], OC)
+        * Input tensor (NHWC format):
+          - From: (N, H, W, IC)
+          - To: (N, H/stride[0], W/stride[1], IC * kernel[0] * kernel[1])
+
+        * Weight tensor:
+          - From: (OC, IC, kernel[0], kernel[1])
+          - To: (1, 1, IC * kernel[0] * kernel[1], OC)
 
         Note: This optimization is currently only applied when all of the following conditions are met:
         1. The stride dimensions exactly match the kernel dimensions (stride[0] == kernel[0] and stride[1] == kernel[1])

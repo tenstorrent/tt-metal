@@ -138,7 +138,6 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     };
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
-    tt::tt_metal::KernelHandle compute_kernel_id, compute_kernel_id_cliff;
     std::string compute_kernel_name =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
     if (ntiles_per_row > MAX_PACK_UNTILIZE_WIDTH) {
@@ -148,7 +147,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     tt::log_debug("compute_kernel_name: {}", compute_kernel_name);
 
     // Create main compute kernel
-    compute_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_name,
         core_range,
@@ -159,7 +158,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 
     // Create cliff compute kernel if needed (for handling edge cases)
     if (core_range_cliff.ranges().size() > 0) {
-        compute_kernel_id_cliff = tt::tt_metal::CreateKernel(
+        tt::tt_metal::KernelHandle compute_kernel_id_cliff = tt::tt_metal::CreateKernel(
             program,
             compute_kernel_name,
             core_range_cliff,

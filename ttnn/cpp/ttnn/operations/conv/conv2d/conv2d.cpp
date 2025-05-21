@@ -506,38 +506,39 @@ Result conv2d_L1(
         if (!weight_is_on_device || conv_config.always_preprocess_weights) {
             // prepare weights in desired layout and move to device
 
-        // TODO: Implement heuristic to decide if weights should be preprocessed on device.
-        if (!conv_config.preprocess_weights_on_device) {
-            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
-                weight_tensor,
-                bias_tensor,
-                conv_config.input_channels_alignment,
-                conv_config.weights_dtype,
-                opt_conv_op_block_config.act_block_w_ntiles,
-                opt_conv_op_block_config.out_subblock_w_ntiles,
-                parallel_config,
-                output_parallel_config,
-                device,
-                groups,
-                opt_conv_op_block_config.act_block_h_ntiles,
-                input_width,
-                bias_tensor.has_value(),
-                true);
-        } else {
-            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
-                weight_tensor,
-                bias_tensor,
-                conv_config.input_channels_alignment,
-                conv_config.weights_dtype,
-                opt_conv_op_block_config.act_block_w_ntiles,
-                opt_conv_op_block_config.out_subblock_w_ntiles,
-                parallel_config,
-                output_parallel_config,
-                device,
-                groups,
-                opt_conv_op_block_config.act_block_h_ntiles,
-                input_width,
-                bias_tensor.has_value());
+            // TODO: Implement heuristic to decide if weights should be preprocessed on device.
+            if (!conv_config.preprocess_weights_on_device) {
+                tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
+                    weight_tensor,
+                    bias_tensor,
+                    input_channels_alignment,
+                    conv_config.weights_dtype,
+                    opt_conv_op_block_config.act_block_w_ntiles,
+                    opt_conv_op_block_config.out_subblock_w_ntiles,
+                    parallel_config,
+                    output_parallel_config,
+                    device,
+                    groups,
+                    opt_conv_op_block_config.act_block_h_ntiles,
+                    input_width,
+                    bias_tensor.has_value(),
+                    true);
+            } else {
+                tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
+                    weight_tensor,
+                    bias_tensor,
+                    input_channels_alignment,
+                    conv_config.weights_dtype,
+                    opt_conv_op_block_config.act_block_w_ntiles,
+                    opt_conv_op_block_config.out_subblock_w_ntiles,
+                    parallel_config,
+                    output_parallel_config,
+                    device,
+                    groups,
+                    opt_conv_op_block_config.act_block_h_ntiles,
+                    input_width,
+                    bias_tensor.has_value());
+            }
         }
     }
 
