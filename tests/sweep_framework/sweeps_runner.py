@@ -116,13 +116,15 @@ def run(test_module, input_queue, output_queue, suite_name=""):
             print("----------")
             print(log_file)
             # log_file = "/home/ubuntu/tt-metal/output_log.csv"
-            data = {
-                "input_a_dtype": test_vector["input_dtype"]["input_a_dtype"],
-                "input_b_dtype": test_vector["input_dtype"]["input_b_dtype"],
-                "a_mem": test_vector["input_mem_config"]["a_mem"],
-                "b_mem": test_vector["input_mem_config"]["b_mem"],
-                "status": status,
-            }
+            if not status:
+                data = {
+                    "input_a_dtype": test_vector["input_dtype"]["input_a_dtype"],
+                    "input_b_dtype": test_vector["input_dtype"]["input_b_dtype"],
+                    "a_mem": test_vector["input_mem_config"]["a_mem"],
+                    "b_mem": test_vector["input_mem_config"]["b_mem"],
+                    "status": status,
+                    "message": message,
+                }
             data_full = {
                 "input_a_dtype": test_vector["input_dtype"]["input_a_dtype"],
                 "input_b_dtype": test_vector["input_dtype"]["input_b_dtype"],
