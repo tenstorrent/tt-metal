@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "impl/context/metal_context.hpp"
 
@@ -23,6 +24,23 @@ std::unordered_map<MeshCoordinate, std::vector<SocketConnection>> group_socket_c
     return grouped_connections;
 }
 
+void validate_fabric_config_for_sockets(
+    FabricConfig fabric_config, chip_id_t sender_physical_device_id, chip_id_t recv_physical_device_id) {
+    if (sender_physical_device_id != recv_physical_device_id) {
+        TT_FATAL(fabric_config != FabricConfig::DISABLED, "Can only create multi-device sockets with fabric enabled.");
+    }
+
+    static const std::unordered_set<FabricConfig> supported_fabrics = {
+        FabricConfig::FABRIC_1D,
+        FabricConfig::FABRIC_1D_RING,
+        FabricConfig::FABRIC_2D_DYNAMIC,
+        FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same physical device
+    };
+
+    bool fabric_config_supported = supported_fabrics.count(fabric_config) > 0;
+    TT_FATAL(fabric_config_supported, "Unsupported Fabric Config for Sockets specified {}", fabric_config);
+}
+
 uint32_t get_sender_receiver_chip_fabric_encoding(
     MeshDevice* sender_device,
     MeshDevice* recv_device,
@@ -33,9 +51,9 @@ uint32_t get_sender_receiver_chip_fabric_encoding(
     const auto sender_physical_device_id = sender_device->get_device(sender_coord)->id();
     const auto recv_physical_device_id = recv_device->get_device(recv_coord)->id();
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
-    if (sender_coord != recv_coord) {
-        TT_FATAL(fabric_config != FabricConfig::DISABLED, "Can only create multi-device sockets with fabric enabled.");
-    }
+
+    validate_fabric_config_for_sockets(fabric_config, sender_physical_device_id, recv_physical_device_id);
+
     if (fabric_config == FabricConfig::FABRIC_1D or fabric_config == FabricConfig::FABRIC_1D_RING) {
         // 1D Fabric requires passing in the number of hops between the sender and receiver
         auto sender_global_coord = SystemMesh::instance().get_global_device_coordinate(sender_physical_device_id);
@@ -48,9 +66,15 @@ uint32_t get_sender_receiver_chip_fabric_encoding(
         }
         return std::abs(static_cast<int>(sender_global_coord[0]) - static_cast<int>(recv_global_coord[0])) +
                std::abs(static_cast<int>(sender_global_coord[1]) - static_cast<int>(recv_global_coord[1]));
+    } else {
+        // 2D/Mesh Fabric requires looking up "logical" encodings from the control plane
+        auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+        if (is_sender) {
+            return control_plane->get_mesh_chip_id_from_physical_chip_id(recv_physical_device_id).second;
+        } else {
+            return control_plane->get_mesh_chip_id_from_physical_chip_id(sender_physical_device_id).second;
+        }
     }
-    // 2D fabric requires the physical chip id
-    return is_sender ? recv_physical_device_id : sender_physical_device_id;
 }
 
 }  // namespace
