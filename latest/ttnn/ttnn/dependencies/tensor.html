@@ -269,7 +269,7 @@ The constructor takes following arguments:</p>
 <ol class="arabic">
 <li><p>__init__(self: ttnn._ttnn.tensor.Tensor, arg0: ttnn._ttnn.tensor.Tensor) -&gt; None</p></li>
 <li>
-<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, tile: Optional[ttnn._ttnn.tensor.Tile] = None, pad_value: float = 0.0) -&gt; None</p>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
 <blockquote>
 <div>
 <table class="docutils align-default">
@@ -295,14 +295,6 @@ The constructor takes following arguments:</p>
 <tr class="row-odd">
 <td><p>arg3</p></td>
 <td><p>layout</p></td>
-</tr>
-<tr class="row-even">
-<td><p>arg4</p></td>
-<td><p>tile (optional)</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>arg5</p></td>
-<td><p>pad_value (optional)</p></td>
 </tr>
 </tbody>
 </table>
@@ -321,7 +313,7 @@ The constructor takes following arguments:</p>
 </blockquote>
 </li>
 <li>
-<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, device: ttnn._ttnn.multi_device.MeshDevice = None, tile: Optional[ttnn._ttnn.tensor.Tile] = None, pad_value: float = 0.0) -&gt; None</p>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, device: ttnn._ttnn.multi_device.MeshDevice = None, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
 <blockquote>
 <div>
 <table class="docutils align-default">
@@ -349,16 +341,8 @@ The constructor takes following arguments:</p>
 <td><p>layout</p></td>
 </tr>
 <tr class="row-even">
-<td><p>arg4</p></td>
-<td><p>device (optional)</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>arg5</p></td>
-<td><p>tile (optional)</p></td>
-</tr>
-<tr class="row-even">
-<td><p>arg6</p></td>
-<td><p>pad_value (optional)</p></td>
+<td><p>arg3</p></td>
+<td><p>device</p></td>
 </tr>
 </tbody>
 </table>
@@ -382,7 +366,7 @@ The constructor takes following arguments:</p>
 </blockquote>
 </li>
 <li>
-<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, device: ttnn._ttnn.multi_device.MeshDevice = None, memory_config: ttnn._ttnn.tensor.MemoryConfig, tile: Optional[ttnn._ttnn.tensor.Tile] = None, pad_value: float = 0.0) -&gt; None</p>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, device: ttnn._ttnn.multi_device.MeshDevice = None, memory_config: ttnn._ttnn.tensor.MemoryConfig, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
 <blockquote>
 <div>
 <table class="docutils align-default">
@@ -416,14 +400,6 @@ The constructor takes following arguments:</p>
 <tr class="row-odd">
 <td><p>arg5</p></td>
 <td><p>mem_config</p></td>
-</tr>
-<tr class="row-even">
-<td><p>arg6</p></td>
-<td><p>tile (optional)</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>arg7</p></td>
-<td><p>pad_value (optional)</p></td>
 </tr>
 </tbody>
 </table>
@@ -449,7 +425,7 @@ The constructor takes following arguments:</p>
 </blockquote>
 </li>
 <li>
-<p>__init__(self: ttnn._ttnn.tensor.Tensor, tensor: object, data_type: Optional[ttnn._ttnn.tensor.DataType] = None, strategy: dict[str, str] = {}, tile: Optional[ttnn._ttnn.tensor.Tile] = None, layout: Optional[ttnn._ttnn.tensor.Layout] = None, mem_config: Optional[ttnn._ttnn.tensor.MemoryConfig] = None, pad_value: Optional[float] = None) -&gt; None</p>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, tensor: object, data_type: Optional[ttnn._ttnn.tensor.DataType] = None, strategy: dict[str, str] = {}, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
 <blockquote>
 <div>
 <table class="docutils align-default">
@@ -466,27 +442,11 @@ The constructor takes following arguments:</p>
 </tr>
 <tr class="row-odd">
 <td><p>data_type</p></td>
-<td><p>TT Tensor data type (optional)</p></td>
+<td><p>TT Tensor data type</p></td>
 </tr>
 <tr class="row-even">
-<td><p>strategy</p></td>
-<td><p>TT Strategy (optional)</p></td>
-</tr>
-<tr class="row-odd">
 <td><p>tile</p></td>
-<td><p>TT Tile Spec (optional)</p></td>
-</tr>
-<tr class="row-even">
-<td><p>layout</p></td>
-<td><p>TT Layout (optional)</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>mem_config</p></td>
-<td><p>TT Memory Config (optional)</p></td>
-</tr>
-<tr class="row-even">
-<td><p>pad_value</p></td>
-<td><p>Padding value (optional)</p></td>
+<td><p>TT Tile Spec</p></td>
 </tr>
 </tbody>
 </table>
@@ -500,7 +460,7 @@ The constructor takes following arguments:</p>
 </blockquote>
 </li>
 <li>
-<p>__init__(self: ttnn._ttnn.tensor.Tensor, tensor: object, data_type: Optional[ttnn._ttnn.tensor.DataType] = None, device: ttnn._ttnn.multi_device.MeshDevice = None, layout: ttnn._ttnn.tensor.Layout = &lt;Layout.ROW_MAJOR: 0&gt;, mem_config: Optional[ttnn._ttnn.tensor.MemoryConfig] = None, tile: Optional[ttnn._ttnn.tensor.Tile] = None, cq_id: ttnn._ttnn.types.QueueId = QueueId(0), pad_value: Optional[float] = None) -&gt; None</p>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, tensor: object, data_type: Optional[ttnn._ttnn.tensor.DataType] = None, device: ttnn._ttnn.multi_device.MeshDevice = None, layout: ttnn._ttnn.tensor.Layout = &lt;Layout.ROW_MAJOR: 0&gt;, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
 <blockquote>
 <div>
 <table class="docutils align-default">
@@ -517,31 +477,23 @@ The constructor takes following arguments:</p>
 </tr>
 <tr class="row-odd">
 <td><p>data_type</p></td>
-<td><p>TT Tensor data type (optional)</p></td>
+<td><p>TT Tensor data type</p></td>
 </tr>
 <tr class="row-even">
 <td><p>device</p></td>
-<td><p>TT device ptr (optional)</p></td>
+<td><p>TT device ptr</p></td>
 </tr>
 <tr class="row-odd">
 <td><p>layout</p></td>
-<td><p>TT layout (optional)</p></td>
+<td><p>TT layout</p></td>
 </tr>
 <tr class="row-even">
 <td><p>mem_config</p></td>
-<td><p>TT memory_config (optional)</p></td>
+<td><p>TT memory_config</p></td>
 </tr>
 <tr class="row-odd">
 <td><p>tile</p></td>
-<td><p>TT Tile Spec (optional)</p></td>
-</tr>
-<tr class="row-even">
-<td><p>cq_id</p></td>
-<td><p>TT Command Queue ID (optional)</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>pad_value</p></td>
-<td><p>Padding value (optional)</p></td>
+<td><p>TT Tile Spec</p></td>
 </tr>
 </tbody>
 </table>
