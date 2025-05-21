@@ -257,7 +257,6 @@ void DeviceProfiler::readRiscProfilerResults(
         riscCount = 1;
     }
 
-    int riscNum = 0;
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         if (data_source == ProfilerDataBufferSource::L1) {
@@ -271,8 +270,7 @@ void DeviceProfiler::readRiscProfilerResults(
             riscType = 5;
         }
         if (bufferEndIndex > 0) {
-            ZoneScopedN("HAS END");
-            uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
+            uint32_t bufferRiscShift = riscEndIndex * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
             if (data_source == ProfilerDataBufferSource::L1) {
                 // Shift by L1 buffer size only
                 bufferRiscShift = riscEndIndex * kernel_profiler::PROFILER_L1_VECTOR_SIZE;
@@ -303,7 +301,6 @@ void DeviceProfiler::readRiscProfilerResults(
             std::string opname;
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
-                ZoneScopedN("LOOP");
                 if (!newRunStart && data_buffer[index] == 0 && data_buffer[index + 1] == 0) {
                     newRunStart = true;
                     opTime_H = 0;
@@ -337,9 +334,9 @@ void DeviceProfiler::readRiscProfilerResults(
                                 }
 
                                 TT_ASSERT(
-                                    riscNumRead == riscNum,
+                                    riscNumRead == riscEndIndex,
                                     "Unexpected risc id, expected {}, read {}. In core {},{} at run {}",
-                                    riscNum,
+                                    riscEndIndex,
                                     riscNumRead,
                                     worker_core.x,
                                     worker_core.y,
@@ -427,7 +424,6 @@ void DeviceProfiler::readRiscProfilerResults(
                 }
             }
         }
-        riscNum++;
     }
 }
 
@@ -916,8 +912,7 @@ void DeviceProfiler::dumpResults(
 
     generateZoneSourceLocationsHashes();
 
-    bool do_L1_data_buffer =
-        ((data_source == ProfilerDataBufferSource::L1) || (state == ProfilerDumpState::LAST_CLOSE_DEVICE));
+    bool do_L1_data_buffer = data_source == ProfilerDataBufferSource::L1;
 
     if (!do_L1_data_buffer) {
         Buffer* output_dram_buffer_ptr = nullptr;
@@ -934,9 +929,17 @@ void DeviceProfiler::dumpResults(
             }
             const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
             if (USE_FAST_DISPATCH) {
-                issue_fd_read_from_profiler_buffer(output_dram_buffer, device, profile_buffer);
+                if (state == ProfilerDumpState::LAST_CLOSE_DEVICE || state == ProfilerDumpState::FORCE_UMD_READ) {
+                    if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
+                        tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
+                    }
+                } else {
+                    issue_fd_read_from_profiler_buffer(output_dram_buffer, device, profile_buffer);
+                }
             } else {
-                tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
+                if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
+                    tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
+                }
             }
             for (const auto& worker_core : worker_cores) {
                 resetControlBuffers(device, worker_core, state);
