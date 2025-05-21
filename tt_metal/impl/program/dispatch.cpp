@@ -2042,7 +2042,6 @@ void update_traced_program_dispatch_commands(
 
     // Update launch messages
     for (auto& [is_multicast, original_launch_msg, launch_msg] : cached_program_command_sequence.launch_messages) {
-        *launch_msg = original_launch_msg;
         for (uint32_t i = 0; i < dispatch_md.nonbinary_kernel_config_addrs.size(); i++) {
             launch_msg->kernel_config.kernel_config_base[i] = dispatch_md.nonbinary_kernel_config_addrs[i].addr;
         }
