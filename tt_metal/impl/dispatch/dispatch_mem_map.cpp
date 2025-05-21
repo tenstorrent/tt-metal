@@ -35,6 +35,8 @@ uint32_t DispatchMemMap::scratch_db_base() const { return scratch_db_base_; }
 
 uint32_t DispatchMemMap::scratch_db_size() const { return settings.prefetch_scratch_db_size_; }
 
+uint32_t DispatchMemMap::ringbuffer_size() const { return settings.prefetch_ringbuffer_size_; }
+
 uint32_t DispatchMemMap::dispatch_buffer_block_size_pages() const { return dispatch_buffer_block_size_pages_; }
 
 uint32_t DispatchMemMap::dispatch_buffer_base() const { return dispatch_buffer_base_; }
@@ -168,6 +170,13 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     const uint32_t dispatch_cb_end = dispatch_buffer_base_ + settings.dispatch_size_;
 
     TT_ASSERT(scratch_db_base_ + settings.prefetch_scratch_db_size_ < l1_size);
+    TT_FATAL(
+        scratch_db_base_ + settings.prefetch_ringbuffer_size_ <= l1_size,
+        "Ringbuffer (start: {}, end: {}) extends past L1 end (size: {})",
+        scratch_db_base_,
+        scratch_db_base_ + settings.prefetch_scratch_db_size_,
+        l1_size);
+
     TT_ASSERT(dispatch_cb_end < l1_size);
 }
 
