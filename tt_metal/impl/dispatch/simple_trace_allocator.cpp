@@ -140,6 +140,8 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
     uint32_t expected_workers_completed = 0;
     std::optional<uint32_t> last_active_eth_sync_idx;
+    std::optional<int> last_stall_idx;
+
     for (size_t i = 0; i < trace_nodes.size(); i++) {
         auto& node = trace_nodes[i];
         auto& program = *node.program;
@@ -148,7 +150,8 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
         }
         auto sub_device_id = node.sub_device_id;
 
-        std::optional<uint32_t> sync_idx;
+        std::optional<uint32_t> nonbinary_sync_idx;
+        std::optional<uint32_t> binary_sync_idx;
         uint32_t programmable_core_count_ = hal.get_programmable_core_type_count();
         node.dispatch_metadata = TraceDispatchMetadata{};
         node.dispatch_metadata.binary_kernel_config_addrs.resize(programmable_core_count_);
@@ -166,7 +169,7 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
             auto [rta_sync_idx, rta_addr] = allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary);
 
-            sync_idx = merge_syncs(sync_idx, rta_sync_idx);
+            nonbinary_sync_idx = merge_syncs(nonbinary_sync_idx, rta_sync_idx);
 
             uint32_t binary_addr = 0;
 
@@ -188,9 +191,9 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
                         res = allocator.allocate_region(binary_size, i, ExtraData::kBinary);
                         TT_ASSERT(res.second.has_value(), "Failed to allocate binary region");
                         TT_ASSERT(i > 0, "Failed to allocate binary region on first program");
-                        sync_idx = merge_syncs(sync_idx, i - 1);
+                        binary_sync_idx = merge_syncs(binary_sync_idx, i - 1);
                     } else {
-                        sync_idx = merge_syncs(res.first, sync_idx);
+                        binary_sync_idx = merge_syncs(res.first, binary_sync_idx);
                     }
                     binary_addr = *res.second;
                     allocator.add_region(node.program->get_id(), binary_addr);
@@ -218,23 +221,36 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
         // Do adjustments to the sync index to ensure we don't overflow the worker launch message buffer. We could
         // ignore programs that only use active ethernet, but that's a very rare case and not worth the complexity.
-        int final_sync_idx = static_cast<int>(i) - max_queued_programs;
-        if (sync_idx.has_value()) {
-            final_sync_idx = std::max(final_sync_idx, static_cast<int>(sync_idx.value()));
+        int final_binary_sync_idx = static_cast<int>(i) - max_queued_programs;
+        if (binary_sync_idx.has_value()) {
+            final_binary_sync_idx = std::max(final_binary_sync_idx, static_cast<int>(binary_sync_idx.value()));
+        }
+        int final_nonbinary_sync_idx = -1;
+        if (nonbinary_sync_idx.has_value()) {
+            final_nonbinary_sync_idx = *nonbinary_sync_idx;
         }
         // Do adjustments to the sync index to ensure we don't overwrite the previous ethernet binary (since ethernet
         // doesn't use the ringbuffer).
         if (has_active_eth_kernel) {
             if (last_active_eth_sync_idx.has_value()) {
-                final_sync_idx = std::max(final_sync_idx, static_cast<int>(last_active_eth_sync_idx.value()));
+                final_binary_sync_idx = std::max(final_binary_sync_idx, static_cast<int>(last_active_eth_sync_idx.value()));
             }
             last_active_eth_sync_idx = i;
             node.dispatch_metadata.send_binary = true;
         }
 
-        if (final_sync_idx >= 0) {
-            node.dispatch_metadata.sync_count = extra_data_[final_sync_idx].finished_sync_count;
+        // Only one sync count can currently be specified, so pick the latest one.
+        int sync_count_to_use = std::max(final_nonbinary_sync_idx, final_binary_sync_idx);
+        if (final_nonbinary_sync_idx > last_stall_idx.value_or(-1)) {
+            TT_ASSERT(sync_count_to_use >= 0, "Sync count to use is negative");
+            node.dispatch_metadata.sync_count = extra_data_[sync_count_to_use].finished_sync_count;
             node.dispatch_metadata.stall_first = true;
+            last_stall_idx = sync_count_to_use;
+        } else if (final_binary_sync_idx > last_stall_idx.value_or(-1)) {
+            TT_ASSERT(sync_count_to_use >= 0, "Sync count to use is negative");
+            node.dispatch_metadata.sync_count = extra_data_[sync_count_to_use].finished_sync_count;
+            node.dispatch_metadata.stall_before_program = true;
+            last_stall_idx = sync_count_to_use;
         }
         expected_workers_completed += num_workers;
     }
