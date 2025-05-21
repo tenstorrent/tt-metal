@@ -20,9 +20,9 @@ from helpers.format_arg_mapping import (
 from helpers.format_config import DataFormat
 from helpers.param_config import (
     clean_params,
-    format_combination_sweep,
     generate_param_ids,
     generate_params,
+    input_output_formats,
 )
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import generate_make_command
@@ -91,9 +91,7 @@ supported_formats = [DataFormat.Float16, DataFormat.Float16_b]
 #   SPECIFIC INPUT-OUTPUT COMBINATION
 #   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
 
-test_formats = format_combination_sweep(
-    formats=supported_formats, all_same=True, same_src_reg_format=True
-)
+test_formats = input_output_formats(supported_formats, same=True)
 all_params = generate_params(
     ["tilize_calculate_untilize_L1"],
     test_formats,
