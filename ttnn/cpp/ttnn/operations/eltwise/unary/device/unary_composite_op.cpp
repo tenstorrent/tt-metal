@@ -142,16 +142,6 @@ Tensor _cbrt(const Tensor& input_tensor, const std::optional<MemoryConfig>& outp
     return t3;
 }
 
-// cosh[x] = (exp[x] + exp[-x])/2
-Tensor _cosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor e_pos_x = ttnn::exp(input_a, false, output_mem_config);
-    Tensor e_neg_x = ttnn::exp(ttnn::neg(input_a, output_mem_config), false, output_mem_config);
-    Tensor nr_term = ttnn::add(e_pos_x, e_neg_x, std::nullopt, output_mem_config);
-    e_pos_x.deallocate();
-    e_neg_x.deallocate();
-    return ttnn::multiply(nr_term, 0.5f, std::nullopt, output_mem_config);
-}
-
 // TODO: In future will uplift the op once the floor and tan has supported.
 // digamma support for the range of (1, inf)
 Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {

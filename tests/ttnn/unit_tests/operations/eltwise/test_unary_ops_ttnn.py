@@ -1050,3 +1050,23 @@ def test_unary_log1p_ttnn(input_shapes, device):
     torch_output_tensor = golden_function(torch_input_tensor)
 
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_cosh_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -9, 9, device)
+
+    output_tensor = ttnn.cosh(input_tensor1)
+
+    golden_function = ttnn.get_golden_function(ttnn.cosh)
+    golden_tensor = golden_function(in_data1)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass

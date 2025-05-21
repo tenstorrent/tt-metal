@@ -81,4 +81,16 @@ inline void llk_math_eltwise_unary_sfpu_atan(uint dst_index, int vector_mode = (
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_atan<APPROXIMATE>, dst_index, vector_mode);
 }
 
+// cosh
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_cosh_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::cosh, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_cosh_op(uint dst_index) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::_calculate_cosh_<APPROXIMATE, ITERATIONS>, dst_index, (int)VectorMode::RC);
+}
+
 }  // namespace ckernel

@@ -21,7 +21,6 @@ enum class UnaryCompositeOpType {
     ASINH,
     ATANH,
     CBRT,
-    COSH,
     DIGAMMA,
     LGAMMA,
     MULTIGAMMALN,
@@ -58,7 +57,6 @@ Tensor _acosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _asinh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _atanh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _cbrt(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _cosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _lgamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
@@ -148,11 +146,6 @@ struct OpHandler<UnaryCompositeOpType::ATANH> {
 template <>
 struct OpHandler<UnaryCompositeOpType::CBRT> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _cbrt(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::COSH> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _cosh(t1, mem_cfg); }
 };
 
 template <>
