@@ -110,10 +110,15 @@ class CIv2ModelDownloadUtils_:
     @staticmethod
     def download_from_ci_v2_cache(
         model_path,
+        timeout_in_s,
         download_dir_suffix="",
         endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
     ):
         assert model_path, f"model_path cannot be empty when downloading - what is wrong with you?: {model_path}"
+
+        assert isinstance(
+            timeout_in_s, int
+        ), f"{timeout_in_s} is not an integer, which it should be because it's a timeout duration"
 
         # RK: Will this be portable? LOL
         download_dir = Path("/tmp/ttnn_model_cache/") / download_dir_suffix
@@ -149,9 +154,15 @@ class CIv2ModelDownloadUtils_:
                 ],
                 check=True,
                 text=True,
+                timeout=timeout_in_s,
             )
+        except subprocess.TimeoutExpired as err:
+            logger.error(f"Timeout of {timeout_in_s} seconds occurred while downloading from {endpoint}.")
+            raise err
         except Exception as err:
-            logger.error(f"Error occurred while trying to download from {endpoint}. Check above logs from wget call.")
+            logger.error(
+                f"Unknown error occurred while trying to download from {endpoint}. Check above logs from wget call."
+            )
             logger.error(err)
             raise err
 
@@ -217,6 +228,8 @@ def model_location_generator(is_ci_v2_env):
     :type model_subdir: str
     :param download_if_ci_v2: Whether to download from CI v2 cache if in a CI v2 environment
     :type download_if_ci_v2: bool
+    :param ci_v2_timeout_in_s: Timeout for download from CI v2 cache in seconds
+    :type ci_v2_timeout_in_s: int
 
     :return: The path to the model files (internal MLPerf path, CI v2 cache
              path, or just model_version which uses HF_HOME)
@@ -227,7 +240,7 @@ def model_location_generator(is_ci_v2_env):
     directory structure
     """
 
-    def model_location_generator_(model_version, model_subdir="", download_if_ci_v2=False):
+    def model_location_generator_(model_version, model_subdir="", download_if_ci_v2=False, ci_v2_timeout_in_s=300):
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
@@ -242,7 +255,7 @@ def model_location_generator(is_ci_v2_env):
                 not model_subdir
             ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
             civ2_download_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
-                model_version, download_dir_suffix="model_weights"
+                model_version, download_dir_suffix="model_weights", timeout_in_s=ci_v2_timeout_in_s
             )
             logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
             return civ2_download_path
