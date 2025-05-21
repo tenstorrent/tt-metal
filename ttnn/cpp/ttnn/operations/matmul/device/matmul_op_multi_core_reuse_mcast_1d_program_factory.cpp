@@ -277,6 +277,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
+    uint32_t in0_last_ktile_w =
+        (a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1]) * datum_size(in0_data_format);
 
     std::vector<uint32_t> in0_sender_compile_time_args;
     if (in0_is_sharded) {
@@ -286,6 +288,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
 
             (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
+            (std::uint32_t)in0_last_ktile_w,
+
             // in0/in1 common args
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
@@ -320,9 +324,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)in0_block_w,          // in0_block_w
             (std::uint32_t)in0_block_h,          // in0_block_h
             (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
-            (std::uint32_t)false,                // extract_shard_sub_blocks (not used for interleaved)
-            (std::uint32_t)0,                    // shard_width_in_tiles (not used for interleaved)
-            (std::uint32_t)0,                    // shard_height_in_tiles (not used for interleaved)
+            (std::uint32_t)in0_last_ktile_w,
+            (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
+            (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
+            (std::uint32_t)0,      // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
@@ -735,8 +740,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t last_block_padded_block_tiles_w_skip =
         (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
 
-    uint32_t last_ktile_w = (a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1]) * datum_size(in0_data_format);
-
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
     if (in0_noc == tt::tt_metal::NOC::NOC_1) {
@@ -797,8 +800,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
                 (std::uint32_t)end_core_noc.y,    // in0_mcast_dest_noc_end_y
 
                 // padding args
-                (std::uint32_t)out_block_h,  // last_block_h
-                (std::uint32_t)last_ktile_w};
+                (std::uint32_t)out_block_h  // last_block_h
+            };
 
             if (fuse_op) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
@@ -1043,6 +1046,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
+    uint32_t in0_last_ktile_w =
+        (a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1]) * datum_size(in0_data_format);
+
     bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
@@ -1136,6 +1142,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)in0_block_w,                // in0_block_w
         (std::uint32_t)in0_block_h,                // in0_block_h
         (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
+        (std::uint32_t)in0_last_ktile_w,
+
         (std::uint32_t)extract_shard_sub_blocks,
         (std::uint32_t)in0_shard_width_in_tiles,
         (std::uint32_t)in0_shard_height_in_tiles,
@@ -1510,8 +1518,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
-    uint32_t last_ktile_w = (a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1]) * datum_size(in0_data_format);
-
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
     if (in1_noc == tt::tt_metal::NOC::NOC_0) {
@@ -1633,8 +1639,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
             (std::uint32_t)0,  // in0_mcast_dest_noc_end_y
 
             // padding args
-            (std::uint32_t)per_core_M,  // last_block_h
-            (std::uint32_t)last_ktile_w,
+            (std::uint32_t)per_core_M  // last_block_h
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_1_default
     }
