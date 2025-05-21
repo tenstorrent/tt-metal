@@ -29,7 +29,7 @@ enum class SfpuType
     clamp,
     gelu_derivative,
     dropout,
-    // abs,
+    abs,
     sign,
     max,
     sine,

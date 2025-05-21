@@ -36,9 +36,9 @@ def generate_golden(operation, operand1, operand2, data_format):
     )
 
     operations = {
-        "elwadd": tensor1_float + tensor2_float,
-        "elwsub": tensor1_float - tensor2_float,
-        "elwmul": tensor1_float * tensor2_float,
+        MathOperation.Elwadd: tensor1_float + tensor2_float,
+        MathOperation.Elwsub: tensor1_float - tensor2_float,
+        MathOperation.Elwmul: tensor1_float * tensor2_float,
     }
 
     if operation not in operations:

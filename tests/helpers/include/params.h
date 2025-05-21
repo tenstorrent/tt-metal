@@ -218,6 +218,18 @@ constexpr auto SFPU_OPERATION = SfpuType::log;
 #ifdef SFPU_OP_SQUARE
 constexpr auto SFPU_OPERATION = SfpuType::square;
 #endif
+#ifdef SFPU_OP_SINE
+constexpr auto SFPU_OPERATION = SfpuType::sine;
+#endif
+#ifdef SFPU_OP_COSINE
+constexpr auto SFPU_OPERATION = SfpuType::cosine;
+#endif
+#ifdef SFPU_OP_ABS
+constexpr auto SFPU_OPERATION = SfpuType::abs;
+#endif
+#ifdef SFPU_OP_RECIPROCAL
+constexpr auto SFPU_OPERATION = SfpuType::reciprocal;
+#endif
 
 inline void process_addresses(volatile uint32_t* buffer_Dest[], int n, int first, ...)
 {
