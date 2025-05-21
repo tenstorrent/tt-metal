@@ -23,10 +23,10 @@ The `simple_text_demo.py` script includes the following main modes of operation 
 # Examples of how to run the demo:
 
 # Batch-1
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
+pytest models/demos/wormhole/phi2/demo/simple_text_demo.py -k "performance and batch-1"
 
 # Batch-32
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
+pytest models/demos/wormhole/phi2/demo/simple_text_demo.py -k "performance and batch-32"
 
 ```
 
