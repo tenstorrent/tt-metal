@@ -27,6 +27,8 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 
 
+os.environ["HF_MODEL"] = "microsoft/phi-2"
+
 def load_and_cache_context(context_url, cache_dir, max_length=None):
     cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
 
