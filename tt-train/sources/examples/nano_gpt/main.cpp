@@ -832,12 +832,14 @@ int main(int argc, char **argv) {
     // precompile the model and allocate output
     for (auto [features, target, masks] : train_dataloader) {
         fmt::println("compiling model!");
-        output = run_model(model, features, masks);
+        run_model(model, features, masks);
         fmt::println("compiled model!");
         // FIXME: need?
-        // ttml::autograd::ctx().reset_graph();
+        ttml::autograd::ctx().reset_graph();
         break;
     }
+
+    // assert(output->get_value().buffer()->address() != 0);
 
     std::unordered_set<uint32_t> observed_output_addrs{};
 
@@ -869,34 +871,28 @@ int main(int argc, char **argv) {
 
             auto run_fwd = [&]() {
                 namespace trace = ttnn::operations::trace;
-                // if (optimizer->get_steps() == 0) {
-                //     fmt::println("compiling model prior to trace");
-                //     output = run_model(model, features, masks);
-                //     fmt::println("compiled model");
-                // }
                 if (!trace_id.has_value()) {
                     fmt::println("tracing");
                     trace_id = trace::begin_trace_capture(device, ttnn::DefaultQueueId);
-                    fmt::println("done tracing");
                     output = run_model(model, features, masks);
-                    // auto fwd_value = run_model(model, features, masks)->get_value();
+                    // NOTE: introduces a hang in execute_trace.
                     // ttnn::copy(fwd_value, output->get_value()); // explicitly copy into the autograd output tensor.
+                    fmt::println("done tracing");
                     trace::end_trace_capture(device, *trace_id, ttnn::DefaultQueueId);
+                }
+                auto output_value_pre = output->get_value();
+                fmt::println("executing trace");
+                trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
+                fmt::println("executed trace");
+                auto output_value_post = output->get_value();
+                if (xt::allclose(
+                        ttml::core::to_xtensor(output_value_pre.cpu()),
+                        ttml::core::to_xtensor(output_value_post.cpu()))) {
+                    fmt::println("pre address {}", output_value_pre.buffer()->address());
+                    fmt::println("post address {}", output_value_post.buffer()->address());
+                    fmt::println("output value didn't update!");
                 } else {
-                    auto output_value_pre = output->get_value();
-                    fmt::println("executing trace");
-                    trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
-                    fmt::println("executed trace");
-                    auto output_value_post = output->get_value();
-                    if (xt::allclose(
-                            ttml::core::to_xtensor(output_value_pre.cpu()),
-                            ttml::core::to_xtensor(output_value_post.cpu()))) {
-                        fmt::println("pre address {}", output_value_pre.buffer()->address());
-                        fmt::println("post address {}", output_value_post.buffer()->address());
-                        fmt::println("output value didn't update!");
-                    } else {
-                        fmt::println("output updated!");
-                    }
+                    fmt::println("output updated!");
                 }
             };
 
@@ -907,9 +903,11 @@ int main(int argc, char **argv) {
                 }
                 fmt::println("");
             };
+
             if (output)
                 observed_output_addrs.insert(output->get_value().buffer()->address());
             run_fwd();
+            assert(output);
             if (output)
                 observed_output_addrs.insert(output->get_value().buffer()->address());
 
