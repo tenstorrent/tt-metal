@@ -277,8 +277,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-    uint32_t in0_last_ktile_w =
-        (a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1]) * datum_size(in0_data_format);
+    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1];
 
     std::vector<uint32_t> in0_sender_compile_time_args;
     if (in0_is_sharded) {
@@ -1046,8 +1045,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
-    uint32_t in0_last_ktile_w =
-        (a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1]) * datum_size(in0_data_format);
+    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1];
 
     bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;

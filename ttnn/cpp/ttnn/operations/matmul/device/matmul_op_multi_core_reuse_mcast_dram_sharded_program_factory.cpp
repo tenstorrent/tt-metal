@@ -966,7 +966,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
     uint32_t Mt = get_batch_size(ashape) * ashape[-2] / in0_tile_shape[0];
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
-    uint32_t in0_last_ktile_w = (a.get_logical_shape()[-1] % in0_tile_shape[1]) * datum_size(in0_data_format);
+    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile_shape[1];
 
     TT_FATAL(Kt % in0_block_w == 0, "Error");
 
