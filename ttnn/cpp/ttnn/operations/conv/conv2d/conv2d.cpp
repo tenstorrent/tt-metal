@@ -364,7 +364,7 @@ Result conv2d_DRAM(
             std::array<uint32_t, 4>{1, 1, 1, 1});
         ttnn::deallocate(sliced_input_tensor);
         ttnn::deallocate(sliced_output_tensor);
-        first_run = true;
+        first_run = false;
         output_slice_dim_start += output_slice_size;
         slice_index++;
     }
