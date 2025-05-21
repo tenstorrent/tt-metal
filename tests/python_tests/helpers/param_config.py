@@ -288,7 +288,9 @@ def generate_param_ids(included_params, all_params: List[tuple]) -> List[str]:
     return [format_combination(comb) for comb in all_params if comb[0] is not None]
 
 
-def input_output_formats(formats: List[DataFormat]) -> List[InputOutputFormat]:
+def input_output_formats(
+    formats: List[DataFormat], same: bool = False
+) -> List[InputOutputFormat]:
     """
     Generates a list of InputOutputFormat instances based on the given formats.
     This function is used to create input-output format combinations for testing.
@@ -297,6 +299,8 @@ def input_output_formats(formats: List[DataFormat]) -> List[InputOutputFormat]:
     Returns:
     List[InputOutputFormat]: A list of InputOutputFormat instances representing the generated format combinations.
     """
+    if same:
+        return [InputOutputFormat(input, input) for input in formats]
     return [InputOutputFormat(input, output) for input in formats for output in formats]
 
 
