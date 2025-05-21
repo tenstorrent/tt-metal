@@ -99,7 +99,7 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
     auto it = regions_.begin();
     while (it != regions_.end()) {
         if (intersects(*best_addr, size, it->first, it->second.size)) {
-            program_ids_memory_map_.erase((*trace_nodes_)[it->second.trace_idx].program->get_id());
+            program_ids_memory_map_[it->second.data_type].erase((*trace_nodes_)[it->second.trace_idx].program->get_id());
             it = regions_.erase(it);
         } else {
             ++it;
@@ -176,7 +176,7 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             // Only tensix binaries are stored in the kernel config buffer. Active ethernet binaries have a fixed
             // address.
             if (core_type == HalProgrammableCoreType::TENSIX) {
-                if (auto mem_addr = allocator.get_region(node.program->get_id())) {
+                if (auto mem_addr = allocator.get_region(ExtraData::kBinary, node.program->get_id())) {
                     binary_addr = *mem_addr;
                     node.dispatch_metadata.send_binary = false;
                     allocator.update_region_trace_idx(*mem_addr, i);
@@ -196,7 +196,7 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
                         binary_sync_idx = merge_syncs(res.first, binary_sync_idx);
                     }
                     binary_addr = *res.second;
-                    allocator.add_region(node.program->get_id(), binary_addr);
+                    allocator.add_region(ExtraData::kBinary, node.program->get_id(), binary_addr);
                 }
             }
             TT_ASSERT(rta_addr.has_value(), "Failed to allocate non-binary region");

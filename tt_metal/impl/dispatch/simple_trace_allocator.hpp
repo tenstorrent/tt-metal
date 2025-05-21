@@ -28,7 +28,7 @@ public:
 
 private:
     struct ExtraData {
-        enum { kNonBinary, kBinary };
+        enum { kNonBinary, kBinary , kNumTypes };
         // The index of the trace node When each type of data from this trace node is next used.
         std::array<std::optional<uint32_t>, 2> next_use_idx;
         // The sync value reached when this trace node finishes executing.
@@ -65,7 +65,7 @@ private:
         std::pair<std::optional<uint32_t>, std::optional<uint32_t>> allocate_region(
             uint32_t size, uint32_t trace_idx, uint32_t data_type);
 
-        void add_region(uint64_t program_id, uint32_t addr) { program_ids_memory_map_[program_id] = addr; }
+        void add_region(uint32_t data_type, uint64_t program_id, uint32_t addr) { program_ids_memory_map_[data_type][program_id] = addr; }
 
         void update_region_trace_idx(uint64_t region_addr, uint32_t trace_idx) {
             auto it = regions_.find(region_addr);
@@ -74,22 +74,24 @@ private:
             }
         }
 
-        std::optional<uint32_t> get_region(uint64_t program_id) {
-            auto it = program_ids_memory_map_.find(program_id);
-            if (it != program_ids_memory_map_.end()) {
+        std::optional<uint32_t> get_region(uint32_t data_type, uint64_t program_id) {
+            auto it = program_ids_memory_map_[data_type].find(program_id);
+            if (it != program_ids_memory_map_[data_type].end()) {
                 return it->second;
             }
             return std::nullopt;
         }
 
         void reset_allocator() {
-            program_ids_memory_map_.clear();
+            for (auto& map : program_ids_memory_map_) {
+                map.clear();
+            }
             regions_.clear();
         }
 
     private:
         uint32_t ringbuffer_size_;
-        std::map<uint64_t, uint32_t> program_ids_memory_map_;
+        std::map<uint64_t, uint32_t> program_ids_memory_map_[ExtraData::kNumTypes];
         std::map<uint32_t, MemoryUsage> regions_;
         std::vector<ExtraData>& extra_data_;
         std::vector<TraceNode>* trace_nodes_ = nullptr;
