@@ -56,8 +56,7 @@ int main(int argc, char **argv) {
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt_3tier.yaml";
 
-    std::vector<ttml::core::distributed::Rank> aggregator_and_optimizer_ranks = {
-        ttml::core::distributed::Rank(*distributed_ctx.rank() - 1), distributed_ctx.rank()};
+    std::vector<int> aggregator_and_optimizer_ranks = {*distributed_ctx.rank() - 1, *distributed_ctx.rank()};
 
     auto aggregator_and_optimizer_ctx = distributed_ctx.create_sub_context(aggregator_and_optimizer_ranks);
 

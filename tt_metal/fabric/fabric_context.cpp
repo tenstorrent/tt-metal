@@ -58,7 +58,9 @@ tt::tt_fabric::Topology FabricContext::get_topology() const {
 
 size_t FabricContext::get_packet_header_size_bytes() const {
     if (this->topology_ == Topology::Mesh) {
-        return sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
+        return (this->fabric_config_ == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC)
+                   ? sizeof(tt::tt_fabric::MeshPacketHeader)
+                   : sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
     } else {
         return sizeof(tt::tt_fabric::PacketHeader);
     }
@@ -89,6 +91,8 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     if (is_tt_fabric_config(this->fabric_config_)) {
         this->router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
             this->channel_buffer_size_bytes_, this->topology_);
+        this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
+            this->channel_buffer_size_bytes_, this->topology_, true);
         set_routing_mode(this->topology_, this->fabric_config_);
     } else {
         this->router_config_ = nullptr;
@@ -109,9 +113,14 @@ size_t FabricContext::get_fabric_max_payload_size_bytes() const { return this->m
 
 size_t FabricContext::get_fabric_channel_buffer_size_bytes() const { return this->channel_buffer_size_bytes_; }
 
-tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_config() const {
-    TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
-    return *this->router_config_.get();
+tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_config(bool is_dateline) const {
+    if (is_dateline) {
+        TT_FATAL(this->dateline_router_config_ != nullptr, "Error, fabric dateline router config is uninitialized");
+        return *this->dateline_router_config_.get();
+    } else {
+        TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
+        return *this->router_config_.get();
+    }
 };
 
 void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers) {
