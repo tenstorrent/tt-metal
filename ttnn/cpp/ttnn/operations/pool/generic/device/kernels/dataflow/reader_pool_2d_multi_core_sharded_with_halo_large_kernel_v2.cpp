@@ -76,9 +76,6 @@ void kernel_main() {
         time_for_change = get_arg_val<uint32_t>(runtime_args_before);
     }
 
-    DPRINT << "reader_nindices" << reader_nindices << ENDL();
-    DPRINT << "scalars_cnt" << scalars_cnt << ENDL();
-
     if (reader_id == 0) {
         constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
         // fill interm buffer with init_value
@@ -109,6 +106,14 @@ void kernel_main() {
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
     while (counter < reader_nindices || (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core)) {
+        if (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core && counter >= time_for_change) {
+            uint32_t scalar_val = get_arg_val<uint32_t>(2 * scalar_index + runtime_args_before + 1);
+            cb_reserve_back(in_scalar_cb_id, 1);
+            fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
+            scalar_index++;
+            time_for_change = get_arg_val<uint32_t>(runtime_args_before + 2 * scalar_index);
+            cb_push_back(in_scalar_cb_id, 1);
+        }
         if (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core && counter >= time_for_change) {
             uint32_t scalar_val = get_arg_val<uint32_t>(2 * scalar_index + runtime_args_before + 1);
             cb_reserve_back(in_scalar_cb_id, 1);
@@ -154,5 +159,4 @@ void kernel_main() {
             }
         }
     }
-    DPRINT << "reader ends" << ENDL();
 }  // kernel_main()

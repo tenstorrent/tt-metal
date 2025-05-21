@@ -103,7 +103,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // CBs
     uint32_t multi_buffering_factor = 2;
 
-    uint32_t split_reader = 0;
+    uint32_t split_reader = 1;
 
     // scalar CB as coefficient of reduce
     using tt::tt_metal::CBHandle;
@@ -113,7 +113,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t next_cb_index = tt::CBIndex::c_0;
     uint32_t in_scalar_cb_id = next_cb_index++;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
-    uint32_t in_scalar_cb_npages = 4;
+    uint32_t in_scalar_cb_npages = 2;
     tt::tt_metal::create_cb(in_scalar_cb_id, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
