@@ -11,8 +11,8 @@ void fabric_write_any_len(
     uint32_t src_addr,
     uint64_t dst_addr,
     uint32_t xfer_size,
-    uint32_t downstream_encoding) {
-    data_packet_header_addr->to_chip_unicast(static_cast<uint8_t>(downstream_encoding));
+    SocketSenderInterface& sender_socket) {
+    fabric_set_unicast_route(data_packet_header_addr, sender_socket);
     while (xfer_size > FABRIC_MAX_PACKET_SIZE) {
         data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, FABRIC_MAX_PACKET_SIZE);
         fabric_connection.wait_for_empty_write_slot();
@@ -71,7 +71,7 @@ void kernel_main() {
             data_addr,
             receiver_noc_coord_addr | sender_socket.write_ptr,
             page_size,
-            sender_socket.downstream_chip_id);
+            sender_socket);
         data_addr += page_size;
         outstanding_data_size -= page_size;
         socket_push_pages(sender_socket, 1);

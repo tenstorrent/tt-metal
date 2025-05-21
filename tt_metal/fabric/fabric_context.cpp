@@ -58,7 +58,9 @@ tt::tt_fabric::Topology FabricContext::get_topology() const {
 
 size_t FabricContext::get_packet_header_size_bytes() const {
     if (this->topology_ == Topology::Mesh) {
-        return sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
+        return (this->fabric_config_ == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC)
+                   ? sizeof(tt::tt_fabric::MeshPacketHeader)
+                   : sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
     } else {
         return sizeof(tt::tt_fabric::PacketHeader);
     }
