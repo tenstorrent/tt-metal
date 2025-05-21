@@ -26,9 +26,9 @@ UPBLOCK_RESNET_NORM_NUM_BLOCKS = [
         (4, 16),  # upblock 2, resnet 2
     ],
     [
-        (16, 16),  # upblock 3, resnet 0
-        (16, 16),  # upblock 3, resnet 1
-        (16, 16),  # upblock 3, resnet 2
+        (32, 32),  # upblock 3, resnet 0
+        (32, 32),  # upblock 3, resnet 1
+        (32, 32),  # upblock 3, resnet 2
     ],
 ]
 
@@ -73,6 +73,7 @@ UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS = [
 
 GROUPNORM_EPSILON = 1e-6
 GROUPNORM_GROUPS = 32
+GROUPNORM_DECODER_NUM_BLOCKS = 32
 
 
 def get_default_conv_config():

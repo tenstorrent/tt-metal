@@ -2040,7 +2040,7 @@ void py_module(py::module& module) {
         module,
         ttnn::gcd,
         R"doc(Computes Greatest common divisor of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
-        [supported range -1024 to 1024].)doc",
+        [supported range [-2147483647, 2147483648]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|gcd|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
         R"doc(INT32)doc",
@@ -2052,7 +2052,7 @@ void py_module(py::module& module) {
         module,
         ttnn::lcm,
         R"doc(Computes Least common multiple of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
-        [supported range -1024 to 1024].)doc",
+        [supported range [-32767, 32768]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|lcm|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
         R"doc(INT32)doc",
@@ -2146,16 +2146,14 @@ void py_module(py::module& module) {
         ttnn::fmod,
         R"doc(Performs an eltwise-fmod operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16, FLOAT32)doc",
-        R"doc(Support provided only for WH_B0.)doc");
+        R"doc(BFLOAT16, FLOAT32)doc");
 
     detail::bind_binary_overload_operation(
         module,
         ttnn::remainder,
         R"doc(Performs an eltwise-modulus operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(Support provided only for WH_B0.)doc");
+        R"doc(BFLOAT16)doc");
 
     detail::bind_inplace_operation(
         module,

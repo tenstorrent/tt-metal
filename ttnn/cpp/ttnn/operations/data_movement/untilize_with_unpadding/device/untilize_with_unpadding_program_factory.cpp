@@ -143,8 +143,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         (std::uint32_t)out_is_dram,
         (std::uint32_t)stick_size_is_power_of_two,
         (std::uint32_t)log2_stick_size,
-        (std::uint32_t)(
-            (input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32))};
+        (std::uint32_t)((
+            input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
+            input_cb_data_format == tt::DataFormat::Int32))};
 
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -758,8 +759,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
             {out_is_dram,
              stick_size_is_power_of_two,
              log2_stick_size,
-             (std::uint32_t)(
-                 input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32)}));
+             (std::uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or
+                             input_cb_data_format == tt::DataFormat::UInt32 or
+                             input_cb_data_format == tt::DataFormat::Int32)}));
 
     /** compute
      */
@@ -997,7 +999,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         std::vector<uint32_t> writer_ct_args = {
             (uint32_t)out_is_dram,
             (uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or
-                       input_cb_data_format == tt::DataFormat::UInt32)};
+                       input_cb_data_format == tt::DataFormat::UInt32 or
+                       input_cb_data_format == tt::DataFormat::Int32)};
         unary_writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",

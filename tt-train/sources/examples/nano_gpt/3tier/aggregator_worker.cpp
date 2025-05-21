@@ -114,8 +114,7 @@ int main(int argc, char **argv) {
     auto workers_and_aggregator_ctx =
         ttml::autograd::ctx().get_distributed_context().create_sub_context(workers_and_aggregator_ranks);
 
-    auto aggregator_and_optimizer_ranks = std::vector<ttml::core::distributed::Rank>{
-        distributed_ctx.rank(), ttml::core::distributed::Rank{*distributed_ctx.rank() + 1}};
+    auto aggregator_and_optimizer_ranks = std::vector<int>{*distributed_ctx.rank(), *distributed_ctx.rank() + 1};
     auto aggregator_and_optimizer_ctx =
         ttml::autograd::ctx().get_distributed_context().create_sub_context(aggregator_and_optimizer_ranks);
 
