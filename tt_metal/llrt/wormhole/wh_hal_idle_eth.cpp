@@ -4,7 +4,7 @@
 
 #define COMPILE_FOR_IDLE_ERISC
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>

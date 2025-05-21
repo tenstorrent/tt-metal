@@ -33,7 +33,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -43,6 +43,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -177,7 +178,7 @@ int main(int argc, char** argv) {
             uint32_t programmable_core_index =
                 tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
                     tt_metal::HalProgrammableCoreType::TENSIX);
-            const tt_metal::KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
+            const tt_metal::KernelGroup* kernel_group = program.impl().kernels_on_core(core, programmable_core_index);
             TT_FATAL(
                 kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
                     kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
@@ -240,7 +241,7 @@ int main(int argc, char** argv) {
                             tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
                                 tt_metal::HalProgrammableCoreType::TENSIX);
                         const tt_metal::KernelGroup* kernel_group =
-                            program.kernels_on_core(core, programmable_core_index);
+                            program.impl().kernels_on_core(core, programmable_core_index);
                         auto compute_kernel = tt_metal::detail::GetKernel(
                             program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
                         auto riscv0_kernel = tt_metal::detail::GetKernel(

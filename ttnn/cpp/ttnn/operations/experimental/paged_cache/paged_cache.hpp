@@ -41,7 +41,8 @@ struct PagedFillCacheOperation {
         const Tensor& cache_tensor,
         const Tensor& input_tensor,
         const Tensor& page_table,
-        const uint32_t batch_idx,
+        const std::optional<const Tensor>& batch_idx_tensor,
+        const uint32_t batch_idx_fallback,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
 

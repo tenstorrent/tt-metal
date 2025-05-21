@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tensor_layout.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 namespace tt::tt_metal {
 

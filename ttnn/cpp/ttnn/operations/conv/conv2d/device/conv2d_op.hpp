@@ -19,7 +19,10 @@ namespace conv2d {
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 struct Conv2dConfig {
     tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16;
-    tt::tt_metal::DataType weights_dtype = tt::tt_metal::DataType::BFLOAT16;
+
+    // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
+    // prepare_conv_bias needs this to always be set to the same dtype as the weights.
+    std::optional<tt::tt_metal::DataType> weights_dtype = std::nullopt;
 
     // Either "relu" or ""
     string activation = "";
@@ -75,7 +78,7 @@ struct Conv2dConfig {
     bool enable_weights_double_buffer = false;
 
     // Only for height sharding.
-    // Increases perf. Act_block_h should be a multiple of 64, if true
+    // Increases perf if op is reader bound. Act_block_h should be >= 64, if true
     bool enable_split_reader = false;
 
     bool enable_subblock_padding = false;

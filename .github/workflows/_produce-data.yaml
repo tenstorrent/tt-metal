@@ -46,6 +46,7 @@ on:
       - "PR Gate"
       - "Nightly tt-metal L2 tests"
       - "Package and release"
+      - "Build test and publish upstream tests"
     types:
       - completed
 

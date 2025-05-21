@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <functional>
 
@@ -20,7 +20,7 @@
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "worker_config_buffer.hpp"
+#include "dispatch/worker_config_buffer.hpp"
 
 namespace tt::tt_metal::trace_dispatch {
 
@@ -95,7 +95,7 @@ void issue_trace_commands(
             index_bitmask |= 1 << *id;
         }
         command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
-        dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
+        dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
     }
 
     go_msg_t reset_launch_message_read_ptr_go_signal;

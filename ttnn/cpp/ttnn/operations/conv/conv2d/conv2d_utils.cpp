@@ -418,8 +418,8 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t act_block_w_ntiles = act_block_w / 32;
     uint32_t out_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntile;
     uint32_t weight_block_w_ntiles = conv_op_parallel_config.per_core_out_matrix_width_ntile;
-    auto [out_subblock_h_ntiles, out_subblock_w_ntiles] =
-        determine_largest_subblock_size(act_block_h_ntiles, weight_block_w_ntiles, fp32_accum, split_reader_enabled);
+    auto [out_subblock_h_ntiles, out_subblock_w_ntiles] = determine_largest_subblock_size(
+        act_block_h_ntiles, weight_block_w_ntiles, fp32_accum, act_block_h_ntiles > 1 && split_reader_enabled);
     return {
         .act_block_h_ntiles = act_block_h_ntiles,
         .act_block_w_ntiles = act_block_w_ntiles,
@@ -767,7 +767,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t input_height,
     uint32_t input_width,
     const CoreCoord& compute_grid_size,
-    Layout input_tensor_layout,
+    Layout input_layout,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
     const uint32_t groups,
@@ -808,7 +808,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         }
 
         const uint32_t input_channels_alignment =
-            get_input_channels_alignment(shard_layout, input_tensor_layout, is_mm_conv, std::nullopt);
+            get_input_channels_alignment(shard_layout, input_layout, is_mm_conv, std::nullopt);
         const uint32_t in_channels_aligned = round_up(in_channels, input_channels_alignment);
         const uint32_t output_channels_padded = round_up(out_channels, constants::TILE_WIDTH);
         // Note: These are not exact shapes for weights as prepare_conv_weights will pad the weights depending on the
@@ -978,10 +978,14 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     // Output of halo op is always ROW_MAJOR, so input for convs is eighter DataType::FLOAT32 or DataType::BFLOAT16
     const DataType input_dtype = conv_config.dtype == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
     uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(input_dtype));
-    uint32_t weights_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.weights_dtype));
+
+    TT_FATAL(
+        conv_config.weights_dtype.has_value(),
+        "calculate_L1_usage expects conv_config.weights_dtype to be already set");
+    uint32_t weights_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.weights_dtype.value()));
     uint32_t bias_tile_size = 0;
     if (enable_bias) {
-        bias_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.weights_dtype));
+        bias_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.weights_dtype.value()));
     }
     uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
 

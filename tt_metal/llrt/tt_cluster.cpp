@@ -5,7 +5,7 @@
 #include "tt_cluster.hpp"
 
 #include <core_coord.hpp>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <algorithm>
@@ -55,36 +55,30 @@ namespace {
 inline std::string get_soc_description_file(
     const tt::ARCH& arch, tt::TargetDevice target_device, [[maybe_unused]] const std::string& output_dir = "") {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    std::string tt_metal_home;
-    if (getenv("TT_METAL_HOME")) {
-        tt_metal_home = getenv("TT_METAL_HOME");
+    std::string path;
+    if (auto *home = getenv("TT_METAL_HOME")) {
+        path = home;
     } else {
-        tt_metal_home = "./";
+        path = "./";
     }
-    if (tt_metal_home.back() != '/') {
-        tt_metal_home += "/";
+    if (path.back() != '/') {
+        path.push_back('/');
     }
-    if (target_device == tt::TargetDevice::Simulator) {
-        switch (arch) {
-            case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported");
-            case tt::ARCH::GRAYSKULL: throw std::runtime_error("GRAYSKULL arch not supported");
-            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_versim.yaml";
-            case tt::ARCH::BLACKHOLE:
-                return tt_metal_home + "tt_metal/soc_descriptors/blackhole_simulation_1x2_arch.yaml";
-            default: throw std::runtime_error("Unsupported device arch");
-        };
-    } else {
-        switch (arch) {
-            case tt::ARCH::Invalid:
-                throw std::runtime_error(
-                    "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
-            case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/soc_descriptors/grayskull_120_arch.yaml";
-            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml";
-            case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/soc_descriptors/blackhole_140_arch.yaml";
-            default: throw std::runtime_error("Unsupported device arch");
-        };
+    path += "tt_metal/soc_descriptors/";
+    bool is_sim = target_device == tt::TargetDevice::Simulator;
+    char const *file = nullptr;
+    switch (arch) {
+    case tt::ARCH::WORMHOLE_B0:
+        file = is_sim ? "wormhole_b0_versim.yaml" : "wormhole_b0_80_arch.yaml";
+        break;
+    case tt::ARCH::BLACKHOLE:
+        file = is_sim ? "blackhole_simulation_1x2_arch.yaml" : "blackhole_140_arch.yaml";
+        break;
+    default:
+        throw std::runtime_error("Unsupported device arch");
     }
-    return "";
+    path += file;
+    return path;
 }
 }  // namespace
 namespace tt {
@@ -163,10 +157,8 @@ Cluster::Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal
 
     this->detect_arch_and_target();
 
-    if (arch_ != ARCH::GRAYSKULL) {
-        routing_info_addr_ = hal_.get_dev_addr(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
-    }
+    routing_info_addr_ = hal_.get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
 
     this->initialize_device_drivers();
 
@@ -364,10 +356,8 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
     barrier_params.dram_barrier_base = hal_.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
 
-    if (hal_.get_arch() != tt::ARCH::GRAYSKULL) {
-        barrier_params.eth_l1_barrier_base =
-            hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
-    }
+    barrier_params.eth_l1_barrier_base =
+        hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
     device_driver->set_barrier_address_params(barrier_params);
 
     this->driver_ = std::move(device_driver);
@@ -1127,8 +1117,12 @@ void Cluster::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
     if (fabric_config != tt_metal::FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
+        if (tt::tt_fabric::is_tt_fabric_config(fabric_config) || tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+            this->get_control_plane()->initialize_fabric_context(fabric_config);
+        }
     } else {
         this->release_ethernet_cores_for_fabric_routers();
+        this->get_control_plane()->clear_fabric_context();
     }
     this->get_control_plane()->configure_routing_tables_for_fabric_ethernet_channels();
 }
