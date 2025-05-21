@@ -321,7 +321,6 @@ Result conv2d_DRAM(
             }  // Step,
         );
         auto conv_config_l1 = conv_config;
-        conv_config_l1.output_layout = Layout::ROW_MAJOR;
         ttnn::Tensor sliced_output_tensor;
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(
