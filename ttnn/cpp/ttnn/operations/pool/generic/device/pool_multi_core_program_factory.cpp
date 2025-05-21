@@ -385,7 +385,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
     uint32_t channel = 0;
     uint32_t batch = 0;
-    uint32_t index = 0;
     if (pool_type == Pool2DType::AVG_POOL2D) {
         for (uint32_t i = 0; i < all_cores.ranges().size(); ++i) {
             for (auto iterator = all_cores.ranges()[i].begin(); iterator != all_cores.ranges()[i].end(); ++iterator) {
@@ -453,7 +452,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                         }
                     }
                 }
-                index++;
             }
         }
     }
