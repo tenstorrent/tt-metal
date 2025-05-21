@@ -99,7 +99,8 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
     auto it = regions_.begin();
     while (it != regions_.end()) {
         if (intersects(*best_addr, size, it->first, it->second.size)) {
-            program_ids_memory_map_[it->second.data_type].erase((*trace_nodes_)[it->second.trace_idx].program->get_id());
+            program_ids_memory_map_[it->second.data_type].erase(
+                (*trace_nodes_)[it->second.trace_idx].program->get_id());
             it = regions_.erase(it);
         } else {
             ++it;

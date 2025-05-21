@@ -28,7 +28,7 @@ public:
 
 private:
     struct ExtraData {
-        enum { kNonBinary, kBinary , kNumTypes };
+        enum { kNonBinary, kBinary, kNumTypes };
         // The index of the trace node When each type of data from this trace node is next used.
         std::array<std::optional<uint32_t>, 2> next_use_idx;
         // The sync value reached when this trace node finishes executing.
@@ -65,7 +65,9 @@ private:
         std::pair<std::optional<uint32_t>, std::optional<uint32_t>> allocate_region(
             uint32_t size, uint32_t trace_idx, uint32_t data_type);
 
-        void add_region(uint32_t data_type, uint64_t program_id, uint32_t addr) { program_ids_memory_map_[data_type][program_id] = addr; }
+        void add_region(uint32_t data_type, uint64_t program_id, uint32_t addr) {
+            program_ids_memory_map_[data_type][program_id] = addr;
+        }
 
         void update_region_trace_idx(uint64_t region_addr, uint32_t trace_idx) {
             auto it = regions_.find(region_addr);
