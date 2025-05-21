@@ -59,7 +59,7 @@ jobs:
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
         with:
           path: ${{ github.workspace }}/workflow-data.json
-          key: metal-workflow-data-${{ github.ref }}-${{ matrix.index }}-${{ github.run_id }}
+          key: metal-workflow-data-${{ github.ref }}-${{ github.run_id }}
           restore-keys: |
             metal-workflow-data-${{ github.ref }}-
             metal-workflow-data-
