@@ -11,7 +11,7 @@
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_device.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 #include "debug/dprint.h"
-#include "cpp/ttnn/tensor/enum_types.hpp"
+#include "api/ttnn/tensor/enum_types.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
