@@ -13,6 +13,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/unary/tanh_accurate/tanh_accurate.hpp"
+#include <typeinfo>
 
 namespace ttnn::operations::unary {
 
@@ -173,6 +174,30 @@ Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
         optional_output_tensor);
 }
 
+template <UnaryOpType unary_op_type, typename T>
+Tensor ExecuteUnaryWithVariantFloatIntParameter<unary_op_type, T>::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    T parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    std::cout << "In unary.cpp --> param0 : " << std::fixed << std::setprecision(15) << static_cast<T>(parameter)
+              << std::endl;
+    std::cout << "In unary.cpp --> param0 : " << std::fixed << std::setprecision(15)
+              << std::bit_cast<uint32_t>(parameter) << std::endl;
+    std::cout << "In unary.cpp --> param0 : " << std::fixed << std::setprecision(15) << std::bit_cast<float>(parameter)
+              << std::endl;
+    std::cout << "In unary.cpp --> param0 : " << std::fixed << std::setprecision(15) << static_cast<double>(parameter)
+              << std::endl;
+
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{unary_op_type, static_cast<T>(parameter)}},
+        memory_config,
+        optional_output_tensor);
+}
+
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::ELU>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RSUB>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::HEAVISIDE>;
@@ -186,8 +211,9 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::MAXIMUM>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::MINIMUM>;
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM, int32_t>;
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM, float>;
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM, float>;
 
 Tensor Sigmoid_accurate::invoke(
     QueueId queue_id,

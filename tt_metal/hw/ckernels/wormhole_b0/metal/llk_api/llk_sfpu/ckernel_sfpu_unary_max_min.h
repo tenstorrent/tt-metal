@@ -40,5 +40,34 @@ inline void calculate_unary_max_min(uint value) {
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_unary_max_int32(uint value) {
+    int inp = value;
+    if (inp < 0) {  // To convert from 2's complement to sign+magnitude
+        inp = -inp;
+        int res = 0x80000000 | (inp & 0x7FFFFFFF);
+        inp = res;
+    }
+
+    // Load value param to lreg2
+    _sfpu_load_imm32_(p_sfpu::LREG2, inp);
+
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        // Load input tensor to lreg0
+        TTI_SFPLOAD(p_sfpu::LREG0, 12, ADDR_MOD_3, 0);
+
+        // Copy value param to lreg2 to lreg1
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+
+        // Swap and store maximum in lreg1 (sign + magnitude format)
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
+
+        // Store the result
+        TTI_SFPSTORE(p_sfpu::LREG1, 12, ADDR_MOD_3, 0);
+        dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
