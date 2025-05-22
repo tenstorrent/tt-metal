@@ -145,6 +145,8 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     first_iter = time.time() - first_iter
     print(f"First iteration took {first_iter} seconds")
 
+    ttnn.DumpDeviceProfiler(device)
+
     second_iter = time.time()
     ttnn_output = model(
         input,
