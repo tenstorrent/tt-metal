@@ -264,8 +264,8 @@ def sd_joint_attention(
     prompt = ttnn.unsqueeze(prompt, 1)
 
     if parallel_config.tensor_parallel.factor > 1:
-        spatial = all_gather(spatial, dim=-1)
-        prompt = all_gather(prompt, dim=-1)
+        spatial = all_gather(spatial, dim=-1, topology=parallel_config.topology)
+        prompt = all_gather(prompt, dim=-1, topology=parallel_config.topology)
 
     spatial = sd_attention_out_proj(spatial, parameters.spatial)
     prompt = sd_attention_out_proj(prompt, parameters.prompt)

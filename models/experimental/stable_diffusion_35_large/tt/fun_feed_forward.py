@@ -64,7 +64,7 @@ def sd_feed_forward(
             math_op=ttnn.ReduceType.Sum,
             num_links=1,
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            topology=ttnn.Topology.Ring,
+            topology=parallel_config.topology,
             # TODO: set cluster axis based on parallel config
         )
 

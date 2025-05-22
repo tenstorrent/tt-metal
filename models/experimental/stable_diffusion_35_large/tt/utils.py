@@ -206,11 +206,11 @@ def assert_quality(
 def all_gather(
     x: ttnn.Tensor,
     dim: int,
+    topology: ttnn.Topology,
     *,
     cluster_axis: int | None = None,
     mesh_device: ttnn.MeshDevice | None = None,
     num_links: int = 1,
-    topology: ttnn.Topology = ttnn.Topology.Ring,
     memory_config: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
     assert cluster_axis is None or mesh_device is not None, "cluster_axis requires mesh_device to be set"

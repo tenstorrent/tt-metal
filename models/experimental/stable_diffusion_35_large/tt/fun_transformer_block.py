@@ -158,8 +158,8 @@ def sd_dual_attn_block(
     spatial_scaled = spatial * (1 + spatial_scale) + spatial_shift
     prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
     if parallel_config.tensor_parallel.factor > 1:
-        spatial_scaled = utils.all_gather(spatial_scaled, dim=-1)
-        prompt_scaled = utils.all_gather(prompt_scaled, dim=-1)
+        spatial_scaled = utils.all_gather(spatial_scaled, dim=-1, topology=parallel_config.topology)
+        prompt_scaled = utils.all_gather(prompt_scaled, dim=-1, topology=parallel_config.topology)
     spatial_attn, prompt_attn = sd_joint_attention(
         spatial=spatial_scaled,
         prompt=prompt_scaled,
@@ -188,7 +188,7 @@ def sd_gated_ff_block(
 ) -> ttnn.Tensor:
     scaled = inp * (1 + scale) + shift
     if parallel_config.tensor_parallel.factor > 1:
-        scaled = utils.all_gather(scaled, dim=-1)
+        scaled = utils.all_gather(scaled, dim=-1, topology=parallel_config.topology)
     result = gate * sd_feed_forward(scaled, parameters, parallel_config=parallel_config)
     ttnn.deallocate(scaled)
     return result

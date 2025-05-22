@@ -132,7 +132,7 @@ def sd_transformer(
     spatial_time = sd_linear(ttnn.silu(time_embed), parameters.time_embed_out)
     [scale, shift] = chunk_time(spatial_time, 2)
     if parallel_config.tensor_parallel.factor > 1:
-        spatial = utils.all_gather(spatial, dim=-1)
+        spatial = utils.all_gather(spatial, dim=-1, topology=parallel_config.topology)
     spatial = sd_layer_norm(spatial, parameters.norm_out) * (1 + scale) + shift
     return sd_linear(spatial, parameters.proj_out)
 

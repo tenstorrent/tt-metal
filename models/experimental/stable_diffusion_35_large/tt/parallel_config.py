@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import NamedTuple
+import ttnn
 
 
 class ParallelConfig(NamedTuple):
@@ -19,12 +20,14 @@ class DiTParallelConfig(NamedTuple):
     # sequence_parallel: ParallelConfig
     # ring_parallel: ParallelConfig
     # ulysses_parallel: ParallelConfig
+    topology: ttnn.Topology
 
 
 def create_dit_parallel_config(
     mesh_shape: tuple[int, int],
     cfg_parallel: ParallelConfig,
     tensor_parallel: ParallelConfig,
+    topology: ttnn.Topology,
     # sequence_parallel: ParallelConfig,
     # ring_parallel: ParallelConfig,
     # ulysses_parallel: ParallelConfig
@@ -53,5 +56,6 @@ def create_dit_parallel_config(
         tensor_parallel=tensor_parallel,
         # sequence_parallel=sequence_parallel,
         # ring_parallel=ring_parallel,
-        # ulysses_parallel=ulysses_parallel
+        # ulysses_parallel=ulysses_parallel,
+        topology=topology,
     )

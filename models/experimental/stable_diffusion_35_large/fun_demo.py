@@ -25,34 +25,45 @@ from .tt.parallel_config import create_dit_parallel_config, ParallelConfig
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "model_name, image_w, image_h, guidance_scale, num_inference_steps",  # "prompt_sequence_length", "spatial_sequence_length",
+    "model_name, image_w, image_h, guidance_scale, num_inference_steps, cfg_factor",  # "prompt_sequence_length", "spatial_sequence_length",
     [
         #        ("medium", 512, 512, 4.5, 40, 333, 1024),
         #        ("medium", 1024, 1024, 4.5, 40, 333, 4096),
         #        ("large", 512, 512, 3.5, 28, 333, 1024),
-        ("large", 1024, 1024, 3.5, 28),  # , 333, 4096),
+        ("large", 1024, 1024, 3.5, 28, 2),  # , 333, 4096),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192, "trace_region_size": 15210496}], indirect=True)
 def test_sd3(
-    *, mesh_device: ttnn.MeshDevice, model_name, image_w, image_h, guidance_scale, num_inference_steps
+    *, mesh_device: ttnn.MeshDevice, model_name, image_w, image_h, guidance_scale, num_inference_steps, cfg_factor
 ) -> None:  # , prompt_sequence_length, spatial_sequence_length,) -> None:
     mesh_shape = tuple(mesh_device.shape)
-    cfg_parallel = ParallelConfig(mesh_shape=mesh_shape, factor=1, mesh_axis=0)
-    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1], mesh_axis=1)
+    cfg_parallel = ParallelConfig(
+        mesh_shape=(mesh_shape[0], mesh_shape[1] // cfg_factor), factor=cfg_factor, mesh_axis=1
+    )
+    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1] // cfg_factor, mesh_axis=1)
     dit_parallel_config = create_dit_parallel_config(
-        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel
+        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel, topology=ttnn.Topology.Linear
     )
 
-    if guidance_scale > 1:
+    # create submeshes and update mesh_shape before passing to parallel_configs
+    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
+    submesh_devices = (
+        mesh_device.create_submeshes(ttnn.MeshShape(mesh_shape[0], mesh_shape[1] // cfg_factor))
+        if isinstance(mesh_device, ttnn.MeshDevice) and cfg_factor > 1
+        else [mesh_device]
+    )
+
+    if guidance_scale > 1 and cfg_factor == 1:
         guidance_cond = 2
     else:
         guidance_cond = 1
 
     pipeline = TtStableDiffusion3Pipeline(
         checkpoint=f"stabilityai/stable-diffusion-3.5-{model_name}",
-        device=mesh_device,
-        enable_t5_text_encoder=mesh_device.get_num_devices() >= 4,
+        mesh_device=mesh_device,
+        submesh_devices=submesh_devices,
+        enable_t5_text_encoder=False,  # submesh_devices[0].get_num_devices() >= 4,
         guidance_cond=guidance_cond,
         parallel_config=dit_parallel_config,
     )
