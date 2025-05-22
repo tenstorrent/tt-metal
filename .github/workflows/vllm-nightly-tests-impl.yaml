@@ -74,8 +74,7 @@ jobs:
 
       - name: 📀 Install vLLM
         run: |
-          pip3 install -r vllm/requirements-tt.txt
-          pip3 install -e vllm/
+          pip3 install vllm/
 
       - name: 📂 Create output directory
         run: |
@@ -90,12 +89,6 @@ jobs:
             export TT_LLAMA_TEXT_VER="tt_transformers"
           fi
 
-          if [[ "${{ matrix.test-group.runner-label }}" == "config-tg" ]]; then
-            export MESH_DEVICE="TG"
-            export TT_LLAMA_TEXT_VER="llama3_subdevices"
-            OVERRIDE_TT_CONFIG=(--override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D"}')
-          fi
-
           # Set TT Cache path
           MODEL_ID="${{ matrix.test-group.model }}"
           MODEL_NAME="${MODEL_ID/\//--}"
@@ -104,9 +97,6 @@ jobs:
           case "$MODEL_ID" in
             "meta-llama/Llama-3.1-8B-Instruct")
               MODEL_SNAPSHOT="hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659/"
-              ;;
-            "meta-llama/Llama-3.1-70B-Instruct")
-              MODEL_SNAPSHOT="hub/models--meta-llama--Llama-3.1-70B-Instruct/snapshots/1605565b47bb9346c5515c34102e054115b4f98b/"
               ;;
             *)
               echo "❌ Unknown model: ${{ matrix.test-group.model }}"
