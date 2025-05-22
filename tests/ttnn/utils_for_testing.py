@@ -63,6 +63,7 @@ def assert_equal(expected_pytorch_result, actual_pytorch_result):
         actual_pytorch_result.shape
     ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
     equal_passed, equal_message = comp_equal(expected_pytorch_result, actual_pytorch_result)
+    assert equal_passed, equal_message
     return equal_passed, equal_message
 
 
