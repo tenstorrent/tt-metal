@@ -471,9 +471,9 @@ def test_fabric_4chip_multi_link_mcast_full_ring_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [8])
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", [1, 2, 3, 4])
 @pytest.mark.parametrize("packet_size", [4096])
-def test_fabric_8chip_one_link_edm_mcast_half_ring_bw(
+def test_fabric_8chip_multi_link_edm_mcast_half_ring_bw(
     num_messages,
     num_links,
     num_op_invocations,

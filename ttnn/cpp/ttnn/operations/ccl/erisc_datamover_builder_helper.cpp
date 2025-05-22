@@ -137,6 +137,11 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
             }
 
+            auto num_devices_threshold = 4;
+            auto edm_dir = device_sequence.size() > num_devices_threshold
+                               ? tt::tt_fabric::FabricEriscDatamoverDirection::NorthSouth
+                               : tt::tt_fabric::FabricEriscDatamoverDirection::EastWest;
+
             edm_builders_forward_direction[src_device->id()].reserve(local_link_cores.size());
             edm_builders_backward_direction[dest_device->id()].reserve(local_link_cores.size());
             for (size_t l = 0; l < this->num_links; l++) {
@@ -144,9 +149,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 //     tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dateline,
                 //     is_dateline_neighbor);
                 const auto src_curr_edm_config =
-                    tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_device_edm_type);
+                    tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_device_edm_type, edm_dir);
                 const auto dest_curr_edm_config =
-                    tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dest_device_edm_type);
+                    tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dest_device_edm_type, edm_dir);
                 log_trace(
                     tt::LogOp,
                     "Building forward direction EDM on chip {} on link {}",

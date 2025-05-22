@@ -31,6 +31,11 @@ enum class FabricEriscDatamoverType {
     Invalid = 4,
 };
 
+enum class FabricEriscDatamoverDirection {
+    NorthSouth = 0,
+    EastWest = 1,
+};
+
 struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
     static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
@@ -123,7 +128,8 @@ struct FabricEriscDatamoverConfig {
     FabricEriscDatamoverConfig(
         std::size_t channel_buffer_size_bytes,
         Topology topology = Topology::Linear,
-        FabricEriscDatamoverType edm_type = FabricEriscDatamoverType::Default);
+        FabricEriscDatamoverType edm_type = FabricEriscDatamoverType::Default,
+        FabricEriscDatamoverDirection edm_dir = FabricEriscDatamoverDirection::NorthSouth);
 
     std::size_t channel_buffer_size_bytes = 0;
 

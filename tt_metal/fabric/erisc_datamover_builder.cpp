@@ -122,7 +122,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
-    std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverType edm_type) :
+    std::size_t channel_buffer_size_bytes,
+    Topology topology,
+    FabricEriscDatamoverType edm_type,
+    FabricEriscDatamoverDirection edm_dir) :
     FabricEriscDatamoverConfig(topology) {
     this->num_used_sender_channels = get_sender_channel_count(topology);
     if (topology == Topology::Mesh) {
@@ -287,7 +290,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->remote_receiver_channel_num_buffers = default_num_receiver_buffer_slots;
 
         size_t dateline_upstream_num_receiver_buffer_slots = dateline_num_receiver_buffer_slots;
-        size_t dateline_upstream_num_sender_buffer_slots = dateline_num_sender_buffer_slots;
+        size_t dateline_upstream_num_sender_buffer_slots = edm_dir == FabricEriscDatamoverDirection::NorthSouth
+                                                               ? dateline_num_sender_buffer_slots
+                                                               : default_num_sender_buffer_slots;
         // size_t dateline_upstream_num_sender_buffer_slots = default_num_sender_buffer_slots;
 
         switch (edm_type) {
