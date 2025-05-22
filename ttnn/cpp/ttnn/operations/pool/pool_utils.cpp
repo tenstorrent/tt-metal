@@ -35,7 +35,7 @@ uint32_t get_bf16_pool_scalar(
     float value;
     bool first_scalar = true;
     uint32_t packed_first_value;
-    uint32_t last_area_signature = 0;
+    uint32_t last_pool_area = 0;
     uint32_t out_x_stick = out_x.value_or(0);
     uint32_t out_y_stick = out_y.value_or(0);
 
@@ -68,15 +68,6 @@ uint32_t get_bf16_pool_scalar(
                     int hend = hstart + kernel_h;
                     int wend = wstart + kernel_w;
 
-                    // Clip kernel window to input bounds
-                    int valid_hstart = std::max(hstart, 0);
-                    int valid_wstart = std::max(wstart, 0);
-                    int valid_hend = std::min(hend, static_cast<int>(in_h.value_or(0)));
-                    int valid_wend = std::min(wend, static_cast<int>(in_w.value_or(0)));
-
-                    int effective_h = valid_hend - valid_hstart;
-                    int effective_w = valid_wend - valid_wstart;
-
                     int pool_area;
 
                     // Count how many *actual* kernel elements fall within the padded input bounds
@@ -90,10 +81,9 @@ uint32_t get_bf16_pool_scalar(
                     pool_area = std::max(1, pool_area);  // Avoid division by zero
 
                     float value = pool_area > 0 ? 1.f / (float)pool_area : 0.f;
-                    uint32_t area_signature = pool_area;
 
                     // Add new scalar if padding config changes
-                    if (first_scalar || area_signature != last_area_signature) {
+                    if (first_scalar || (uint32_t)pool_area != last_pool_area) {
                         if (first_scalar) {
                             packed_first_value = bfloat16(value).to_packed();
                         }
@@ -105,7 +95,7 @@ uint32_t get_bf16_pool_scalar(
                         }
                         first_scalar = false;
                     }
-                    last_area_signature = area_signature;
+                    last_pool_area = (uint32_t)pool_area;
 
                     out_y_stick = (out_y_stick + 1) % out_w.value_or(0);
                     if (out_y_stick == 0) {

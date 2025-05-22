@@ -142,7 +142,7 @@ void MAIN {
     uint32_t diff_index = 0;
     uint32_t time_for_change = 0;
     uint32_t runtime_args_before = 1;
-    if (!one_scalar_per_core) {
+    if constexpr (!one_scalar_per_core) {
         scalar_cnt = get_arg_val<uint32_t>(0);
         time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
     } else {
@@ -150,11 +150,13 @@ void MAIN {
     }
 
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
-        if (i == time_for_change && !one_scalar_per_core) {
-            cb_wait_front(in_scalar_cb_id, 1);
-            if (diff_index < scalar_cnt - 1) {
-                diff_index++;
-                time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
+        if constexpr (!one_scalar_per_core) {
+            if (i == time_for_change) {
+                cb_wait_front(in_scalar_cb_id, 1);
+                if (diff_index < scalar_cnt - 1) {
+                    diff_index++;
+                    time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
+                }
             }
         }
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; b_i++) {
@@ -182,7 +184,8 @@ void MAIN {
                 interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
         }
 
-        // perform the intermediate reduction over chunk N (across the whole chunk even if the last chunk is partial)
+        // perform the intermediate reduction over chunk N (across the whole chunk even if the last chunk is
+        // partial)
         pack_untilize_uninit(interm_cb_id);
         pack_untilize_dst_init_short<max_tiles_per_iter>(interm_cb_id, num_out_rows, num_faces_in_output_tile);
         cb_reserve_back(interm_cb_id, 1);
@@ -203,11 +206,13 @@ void MAIN {
         reduce_h_fused<partial_iter_output_tiles, is_partial_tile, max_rows_for_reduction>(
             interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
         // prepare for the next iteration if not last element
-        if (!one_scalar_per_core && ((i + 1 == time_for_change) || (i + 1 == nsticks_per_core_by_nblocks))) {
-            cb_pop_front(in_scalar_cb_id, 1);
+        if constexpr (!one_scalar_per_core) {
+            if ((i + 1 == time_for_change) || (i + 1 == nsticks_per_core_by_nblocks)) {
+                cb_pop_front(in_scalar_cb_id, 1);
+            }
         }
     }
-    if (one_scalar_per_core) {
+    if constexpr (one_scalar_per_core) {
         cb_pop_front(in_scalar_cb_id, 1);
     }
 }

@@ -76,23 +76,25 @@ void kernel_main() {
     uint32_t scalars_cnt = 1;
     uint32_t runtime_args_before = 1;
     uint32_t time_for_change = 0;
-    if (!one_scalar_per_core) {
+    if constexpr (!one_scalar_per_core) {
         scalars_cnt = get_arg_val<uint32_t>(0);
         time_for_change = get_arg_val<uint32_t>(runtime_args_before);
-    } else if (reader_id == 0) {
+    } else if constexpr (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
         fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id, 1);
     }
 
-    while (counter < reader_nindices || (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core)) {
-        while (reader_id == 0 && scalar_index < scalars_cnt && !one_scalar_per_core && counter >= time_for_change) {
-            uint32_t scalar_val = get_arg_val<uint32_t>(2 * scalar_index + runtime_args_before + 1);
-            cb_reserve_back(in_scalar_cb_id, 1);
-            fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
-            scalar_index++;
-            time_for_change = get_arg_val<uint32_t>(runtime_args_before + 2 * scalar_index);
-            cb_push_back(in_scalar_cb_id, 1);
+    while (counter < reader_nindices || (reader_id == 0 && !one_scalar_per_core && scalar_index < scalars_cnt)) {
+        if constexpr (!one_scalar_per_core && reader_id == 0) {
+            while (scalar_index < scalars_cnt && counter >= time_for_change) {
+                uint32_t scalar_val = get_arg_val<uint32_t>(2 * scalar_index + runtime_args_before + 1);
+                cb_reserve_back(in_scalar_cb_id, 1);
+                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
+                scalar_index++;
+                time_for_change = get_arg_val<uint32_t>(runtime_args_before + 2 * scalar_index);
+                cb_push_back(in_scalar_cb_id, 1);
+            }
         }
         if (counter < reader_nindices || one_scalar_per_core) {
             const uint16_t top_left_local_index = reader_indices_ptr[counter++];
@@ -113,7 +115,7 @@ void kernel_main() {
 
                 cb_push_back(in_cb_id, npages_to_reserve);
             }
-            if (split_reader) {
+            if constexpr (split_reader) {
                 counter++;  // interleave the indices
             }
 
