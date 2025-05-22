@@ -11,6 +11,83 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize(
     "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        # (torch.Size([1, 2, 64, 120])),
+        # (torch.Size([1, 3, 320, 320])),
+    ),
+)
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (-5, 5),
+        # (-100, 100),
+        # (-21474, 21474),
+        # (-2147483647, 2147483647),
+    ],
+)
+@pytest.mark.parametrize("scalar", [0, 1, -1, 100, 10, 2147483647, -2147483647])
+def test_unary_max_int32(input_shapes, low, high, scalar, device):
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+    torch_input = torch.linspace(high, low, num_elements, dtype=torch.int32)
+    torch_input = torch_input[:num_elements].reshape(input_shapes)
+    print(torch_input, scalar)
+
+    golden_function = ttnn.get_golden_function(ttnn.maximum)
+    golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
+
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_result = ttnn.maximum(tt_in, scalar)
+    print("tt: ", tt_result)
+    print("golden: ", golden)
+    comp_pass = compare_equal([tt_result], [golden])
+    assert comp_pass
+
+
+# @pytest.mark.parametrize(
+#     "input_shapes",
+#     ((torch.Size([1, 1, 32, 32])),),
+# )
+# @pytest.mark.parametrize(
+#     "input_val, scalar",
+#     [
+#         (-1, 1),
+#         (1, 0),
+#         (0, 0),
+#         (2147483647, -2147483647),
+#         (11, 53),
+#     ],
+# )
+# def test_unary_max_fill_val_int32(input_shapes, input_val, scalar, device):
+#     torch_input = torch.ones(input_shapes, dtype=torch.int32) * input_val
+
+#     golden_function = ttnn.get_golden_function(ttnn.maximum)
+#     golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
+
+#     tt_in = ttnn.from_torch(
+#         torch_input,
+#         dtype=ttnn.int32,
+#         device=device,
+#         layout=ttnn.TILE_LAYOUT,
+#         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+#     )
+
+#     tt_result = ttnn.maximum(tt_in, scalar)
+#     result = ttnn.to_torch(tt_result)
+
+#     comp_pass = compare_equal([tt_result], [golden])
+#     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
     ((torch.Size([1, 1, 32, 32])),),
 )
 @pytest.mark.parametrize(
