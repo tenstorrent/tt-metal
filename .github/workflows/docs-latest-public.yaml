@@ -100,7 +100,7 @@ jobs:
           name: gh_pages_${{ inputs.version }}
           path: gh_pages/${{ inputs.version }}
       - name: Deploy to GitHub Pages
-        if: ${{ github.ref == 'refs/heads/main' }}
+        if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/releases/v') }}
         uses: JamesIves/github-pages-deploy-action@v4
         id: deployment
         with:
