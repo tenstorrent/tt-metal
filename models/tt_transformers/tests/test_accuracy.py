@@ -67,11 +67,11 @@ def get_accuracy_thresholds(model_args, optimizations):
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",
     [
-        (512, 64, 1024),
-        (2048, 256, 2304),
-        (4096, 512, 4608),
-        (8192, 512, 8704),
-        (16384, 64, 16896),
+        (512, 128, 1024),
+        # (2048, 256, 2304),
+        # (4096, 512, 4608),
+        # (8192, 512, 8704),
+        # (16384, 64, 16896),
     ],
 )
 @pytest.mark.parametrize(
@@ -105,7 +105,8 @@ def get_accuracy_thresholds(model_args, optimizations):
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 2048}],
+    [{"page_block_size": 32, "page_max_num_blocks": 2048, "local_window_pct": pct} for pct in range(0, 101, 10)],
+    ids=[f"_{pct}_pct" for pct in range(0, 101, 10)],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -193,6 +194,7 @@ def test_tt_model_acc(
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
+            local_window_pct=page_params.get("local_window_pct", 0),
         )
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)

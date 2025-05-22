@@ -37,6 +37,15 @@ dtype_mf_settings = [
     "precision_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp4, kv_cache: bfp8}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: hifi2, li_o_decode: lofi, li_qkv_prefill: hifi2, sdpa_prefill: hifi4, li_o_prefill: lofi}",
 ]
 
+local_window_sizes = list(range(0, 101, 10))
+local_window_commands = {
+    f"window-{pct}": (
+        f"pytest models/tt_transformers/tests/test_accuracy.py "
+        f"-k '_{pct}_pct and 512-128-1024 and paged_attention and accuracy and reference_file'"
+    )
+    for pct in local_window_sizes
+}
+
 pareto_commands = {
     k: v
     for cmd in [
@@ -554,6 +563,9 @@ def main(stdscr):
                         if command_input == "test_cache":
                             command_input = ",".join(test_cache_commands.keys())
 
+                        if command_input == "window":
+                            command_input = ",".join(local_window_commands.keys())
+
                         # Parse models, devices, and commands
                         models = parse_list(model_input)
                         devices = parse_list(device_input)
@@ -955,6 +967,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         **pareto_commands,
         **pareto_commands_from_json,
         **test_cache_commands,
+        **local_window_commands,
         # Vision tests (require 11B weights)
         "vision-mlp": "pytest models/tt_transformers/tests/multimodal/test_image_mlp.py",
         "vision-attn": "pytest models/tt_transformers/tests/multimodal/test_image_attention.py",
@@ -1528,6 +1541,40 @@ def export_results_to_markdown(output_entries, stdscr):
     # Wait for a key press and flush input buffer
     stdscr.getch()
     curses.flushinp()
+
+    # 3) plot local-window accuracy if present
+    window_entries = sorted(
+        [(int(e.command_name.split("-")[1]), e) for e in output_entries if e.command_name.startswith("window-")],
+        key=lambda x: x[0],
+    )
+    if window_entries:
+        pcts, top1s, top5s = [], [], []
+        for pct, e in window_entries:
+            pcts.append(pct)
+            if e.pcc and "|" in e.pcc:
+                t1, t5 = e.pcc.split("|")
+                top1s.append(float(t1))
+                top5s.append(float(t5))
+            else:
+                top1s.append(np.nan)
+                top5s.append(np.nan)
+
+        plt.figure()
+        plt.plot(pcts, top1s, marker="o", label="Top‑1")
+        plt.plot(pcts, top5s, marker="o", label="Top‑5")
+        plt.xlabel("Local window (%)")
+        plt.ylabel("Accuracy (%)")
+        plt.title(f"Local‐window vs Accuracy on {output_entries[0].model}/{output_entries[0].device}")
+        plt.legend()
+        plt.grid(True)
+
+        os.makedirs("data_plots", exist_ok=True)
+        fname = f"data_plots/window_accuracy_{output_entries[0].model}_{output_entries[0].device}.png"
+        plt.savefig(fname)
+        plt.close()
+
+        # inform the user
+        stdscr.addstr(4, 0, f"Window‐size plot saved to {fname}")
 
     # Restore non-blocking mode
     stdscr.nodelay(True)

@@ -19,9 +19,10 @@ class HostEmbedding(torch.nn.Module):
 
 # Default configuration for Paged Attention
 class PagedAttentionConfig:
-    def __init__(self, block_size=32, max_num_blocks=1024):
+    def __init__(self, block_size=32, max_num_blocks=1024, local_window_pct: float = 0):
         self.block_size = block_size
         self.max_num_blocks = max_num_blocks
+        self.local_window_pct = local_window_pct
 
 
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):

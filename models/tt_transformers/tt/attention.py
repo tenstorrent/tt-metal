@@ -451,72 +451,86 @@ class Attention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
         if page_table:
-
-            def safe_ttnn_concat(tensors, dim=0, max_chunk_size=64):
-                if len(tensors) <= max_chunk_size:
-                    return ttnn.concat(tensors, dim=dim)
-
-                result_chunks = []
-                for i in range(0, len(tensors), max_chunk_size):
-                    chunk = tensors[i : i + max_chunk_size]
-                    result_chunks.append(ttnn.concat(chunk, dim=dim))
-
-                return safe_ttnn_concat(result_chunks, dim=dim, max_chunk_size=max_chunk_size)
-
             block_size = self.paged_attention_config.block_size
+            pct = self.paged_attention_config.local_window_pct
+            current_pos_t = ttnn.get_device_tensors(current_pos)[0]
+            cur = ttnn.to_torch(current_pos_t)[0].item()
+            cur_page = cur // block_size
+            total_blocks = cur_page + 1
+            N = (total_blocks * pct) // 100
+
             keys_shards = ttnn.get_device_tensors(keys)
-            page_table_val = ttnn.to_torch(ttnn.get_device_tensors(page_table)[0])[0]
-            current_pos_val = ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0]
+            values_shards = ttnn.get_device_tensors(values)
+            page_table_t = ttnn.get_device_tensors(page_table)[0]
+
+            start_v = max(0, cur_page - N + 1)
+            end_v = cur_page + 1
+
+            slice_pt = ttnn.slice(
+                page_table_t,
+                slice_start=[0, start_v],
+                slice_end=[1, end_v],
+            )
+            local_phys_ids = ttnn.to_torch(slice_pt)[0].tolist()
+            high_set = set(local_phys_ids)
 
             new_keys_shards = []
+            for shard in keys_shards:
+                B, C, H, W = shard.shape
 
-            cur_page = int(current_pos_val.item() // block_size)
+                runs = []
+                prev = 0
+                for pid in sorted(high_set):
+                    if pid > prev:
+                        runs.append((prev, pid, False))
+                    runs.append((pid, pid + 1, True))
+                    prev = pid + 1
+                if prev < B:
+                    runs.append((prev, B, False))
 
-            N = 18
-            start_vpage = max(0, cur_page - N + 1)
-            end_vpage = cur_page + 1
-            virtual_pages = list(range(start_vpage, end_vpage))
-            physical_local_block_ids = page_table_val[start_vpage:end_vpage].tolist()
-
-            # Set of physical block IDs to keep in high precision
-            high_precision_block_ids = set(physical_local_block_ids)
-
-            for shard_index, shard in enumerate(keys_shards):
-                processed_blocks = []
-
-                for block_id in range(shard.shape[0]):
-                    block = ttnn.slice(
+                chunks = []
+                for s, e, is_high in runs:
+                    chunk = ttnn.slice(
                         shard,
-                        slice_start=[block_id, 0, 0, 0],
-                        slice_end=[block_id + 1, shard.shape[1], shard.shape[2], shard.shape[3]],
+                        slice_start=[s, 0, 0, 0],
+                        slice_end=[e, C, H, W],
                     )
-
-                    global_block_index = block_id
-
-                    if global_block_index in high_precision_block_ids:
-                        block_bfp8 = ttnn.typecast(block, dtype=ttnn.bfloat8_b)
+                    if is_high:
+                        chunks.append(ttnn.typecast(chunk, dtype=ttnn.bfloat8_b))
                     else:
-                        block_bfp4 = ttnn.typecast(block, dtype=ttnn.bfloat4_b)
-                        block_bfp8 = ttnn.typecast(block_bfp4, dtype=ttnn.bfloat8_b)
+                        low4 = ttnn.typecast(chunk, dtype=ttnn.bfloat4_b)
+                        chunks.append(ttnn.typecast(low4, dtype=ttnn.bfloat8_b))
 
-                    processed_blocks.append(block_bfp8)
+                new_keys_shards.append(ttnn.concat(chunks, dim=0))
 
-                quantized_shard = safe_ttnn_concat(processed_blocks, dim=0, max_chunk_size=32)
-                new_keys_shards.append(quantized_shard)
-
-            keys = ttnn.aggregate_as_tensor(new_keys_shards)
+            keys_q = ttnn.aggregate_as_tensor(new_keys_shards)
+            vals_q = ttnn.aggregate_as_tensor(values_shards)
 
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
-                keys,
-                values,
-                cur_pos_tensor=current_pos,
+                keys_q,
+                vals_q,
                 page_table_tensor=page_table,
+                cur_pos_tensor=current_pos,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+
+            # keys = ttnn.typecast(keys, dtype=ttnn.bfloat4_b)
+
+            # attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            #     q_heads_1BQD,
+            #     keys,
+            #     values,
+            #     cur_pos_tensor=current_pos,
+            #     page_table_tensor=page_table,
+            #     scale=self.scale,
+            #     program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+            #     compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
+            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # )
         else:
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
                 q_heads_1BQD,
