@@ -29,6 +29,7 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/blackhole-nightly-tests-impl.yaml
     strategy:
+      fail-fast: false
       matrix:
         card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
     secrets: inherit
@@ -42,6 +43,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     strategy:
+      fail-fast: false
       matrix:
         card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
     with:
@@ -55,6 +57,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
     strategy:
+      fail-fast: false
       matrix:
         card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
     with:
