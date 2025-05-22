@@ -40,7 +40,7 @@ public:
 
     std::vector<size_t> get_fabric_router_addresses_to_clear() const;
 
-    std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status(chip_id_t chip_id) const;
+    std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status() const;
 
     std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> get_fabric_router_ready_address_and_signal() const;
 
