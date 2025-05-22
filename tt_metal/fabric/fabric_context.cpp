@@ -46,8 +46,8 @@ tt::tt_fabric::Topology FabricContext::get_topology() const {
     switch (this->fabric_config_) {
         case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
-        case tt::tt_metal::FabricConfig::FABRIC_2D_PUSH: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_metal::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
+        case tt::tt_metal::FabricConfig::FABRIC_2D_TORUS: return tt::tt_fabric::Topology::Torus;
         case tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_metal::FabricConfig::DISABLED:
         case tt::tt_metal::FabricConfig::CUSTOM:
@@ -88,15 +88,11 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
     this->channel_buffer_size_bytes_ = this->packet_header_size_bytes_ + this->max_payload_size_bytes_;
 
-    if (is_tt_fabric_config(this->fabric_config_)) {
-        this->router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
-            this->channel_buffer_size_bytes_, this->topology_);
-        this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
-            this->channel_buffer_size_bytes_, this->topology_, true);
-        set_routing_mode(this->topology_, this->fabric_config_);
-    } else {
-        this->router_config_ = nullptr;
-    }
+    this->router_config_ =
+        std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(this->channel_buffer_size_bytes_, this->topology_);
+    this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
+        this->channel_buffer_size_bytes_, this->topology_, true);
+    set_routing_mode(this->topology_, this->fabric_config_);
 }
 
 bool FabricContext::is_wrap_around_mesh(mesh_id_t mesh_id) const {
@@ -152,39 +148,21 @@ chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const 
 }
 
 std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {
-    if (is_tt_fabric_config(this->fabric_config_)) {
-        return {this->router_config_->edm_local_sync_address};
-    } else {
-        return {tt::tt_metal::hal::get_erisc_l1_unreserved_base()};
-    }
+    return {this->router_config_->edm_local_sync_address};
 }
 
-std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_sync_address_and_status(chip_id_t chip_id) const {
-    if (is_tt_fabric_config(this->fabric_config_)) {
-        return std::make_pair(
-            this->router_config_->edm_status_address, tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE);
-    } else {
-        return std::make_pair(
-            tt::tt_metal::hal::get_erisc_l1_unreserved_base(), get_num_fabric_initialized_routers(chip_id));
-    }
+std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_sync_address_and_status() const {
+    return std::make_pair(this->router_config_->edm_status_address, tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE);
 }
 
 std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> FabricContext::get_fabric_router_ready_address_and_signal()
     const {
-    if (is_tt_fabric_config(this->fabric_config_)) {
-        return std::make_pair(this->router_config_->edm_status_address, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
-    } else {
-        return std::nullopt;
-    }
+    return std::make_pair(this->router_config_->edm_status_address, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 }
 
 std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_termination_address_and_signal() const {
-    if (is_tt_fabric_config(this->fabric_config_)) {
-        return std::make_pair(
-            this->router_config_->termination_signal_address, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-    } else {
-        return std::make_pair(tt::tt_metal::hal::get_erisc_l1_unreserved_base(), 0);
-    }
+    return std::make_pair(
+        this->router_config_->termination_signal_address, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
 }
 
 }  // namespace tt::tt_fabric

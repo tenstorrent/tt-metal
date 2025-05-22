@@ -338,6 +338,43 @@ def test_demo_text(
         input_prompts = load_inputs(input_prompts, batch_size, input_prompts)
     profiler.end("loading_inputs")
 
+    # Load expected outputs for comparison
+    expected_outputs_data = []
+    # Always use this specific path for the expected outputs.
+    expected_outputs_file_path_to_load = "models/demos/llama3_subdevices/demo/outputs_batch_1.json"
+
+    if os.path.exists(expected_outputs_file_path_to_load):
+        logger.info(f"Attempting to load expected outputs from: {expected_outputs_file_path_to_load}")
+        try:
+            with open(expected_outputs_file_path_to_load, "r") as f:
+                first_char = f.read(1)
+                if not first_char:
+                    logger.warning(
+                        f"Expected outputs file {expected_outputs_file_path_to_load} is empty. Disabling comparison."
+                    )
+                else:
+                    f.seek(0)
+                    loaded_json = json.load(f)
+                    if isinstance(loaded_json, list) and all(isinstance(item, str) for item in loaded_json):
+                        expected_outputs_data = loaded_json
+                        logger.info(
+                            f"Successfully loaded {len(expected_outputs_data)} expected string outputs from {expected_outputs_file_path_to_load}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Expected {expected_outputs_file_path_to_load} to contain a JSON list of strings. Got {type(loaded_json)}. Disabling comparison."
+                        )
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON from {expected_outputs_file_path_to_load}: {e}. Disabling comparison.")
+        except Exception as e:
+            logger.error(
+                f"Unexpected error loading or parsing {expected_outputs_file_path_to_load}: {str(e)}. Disabling comparison."
+            )
+    else:
+        logger.warning(
+            f"Expected outputs file not found: {expected_outputs_file_path_to_load}. Output comparison will be skipped."
+        )
+
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
@@ -583,6 +620,57 @@ def test_demo_text(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
+            if not users_decoding and batch_size == 1:
+                # Compare to text in outputs_batch_1.json for the first user of the first batch
+                if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
+                    if i == 0:  # Only for the first user of the batch (i.e., user 0)
+                        if len(expected_outputs_data) > 0:
+                            expected_text = expected_outputs_data[0]  # Compare with the first entry in the JSON list
+                            actual_text_clean = text_after_prompt.strip()
+                            expected_text_clean = expected_text.strip()
+
+                            if actual_text_clean != expected_text_clean:
+                                logger.warning(
+                                    f"Output for user {i} in batch {batch_idx} DOES NOT MATCH expected output from {expected_outputs_file_path_to_load}."
+                                )
+                                logger.info(f"Expected: {repr(expected_text_clean)}")
+                                logger.info(f"Actual  : {repr(actual_text_clean)}")
+                                mismatches_found = 0
+                                # Iterate based on the longer of the two strings to catch all differences
+                                for char_idx in range(min(len(actual_text_clean), len(expected_text_clean))):
+                                    actual_char = (
+                                        actual_text_clean[char_idx]
+                                        if char_idx < len(actual_text_clean)
+                                        else "<END_OF_ACTUAL>"
+                                    )
+                                    expected_char = (
+                                        expected_text_clean[char_idx]
+                                        if char_idx < len(expected_text_clean)
+                                        else "<END_OF_EXPECTED>"
+                                    )
+                                    if actual_char != expected_char:
+                                        logger.info(
+                                            f"Mismatch at position {char_idx}: Actual: '{repr(actual_char)}', Expected: '{repr(expected_char)}'"
+                                        )
+                                        mismatches_found += 1
+                                    if mismatches_found >= 20:  # Limit number of logged mismatches
+                                        logger.info(
+                                            "More mismatches exist but will not be logged for this comparison (limit reached)."
+                                        )
+                                        assert (
+                                            False
+                                        ), "More mismatches exist but will not be logged for this comparison (limit reached)."
+                                        break
+                        else:
+                            logger.info(
+                                f"Output for user {i} in batch {batch_idx} matches expected output from {expected_outputs_file_path_to_load}."
+                            )
+                    else:  # expected_outputs_data is not empty list, but i==0 and len(expected_outputs_data) == 0 (should be caught by outer if)
+                        logger.warning(
+                            f"Expected outputs data was loaded from {expected_outputs_file_path_to_load} but is an empty list. Cannot compare for user {i}, batch {batch_idx}."
+                        )
+                elif batch_idx == 0 and not expected_outputs_data and i == 0:  # Only log once per batch if no data
+                    logger.warning("Expected outputs data is empty or not loaded, cannot compare.")
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
