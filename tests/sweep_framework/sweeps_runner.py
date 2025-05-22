@@ -22,8 +22,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Optional
 from framework.result_destination import ResultDestinationFactory
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+from tracy.process_ops_logs import get_device_data_generate_report
+from tracy.common import PROFILER_LOGS_DIR
 from sweep_utils.roofline_utils import get_updated_message
 from framework.device_fixtures import default_device
 from time import sleep

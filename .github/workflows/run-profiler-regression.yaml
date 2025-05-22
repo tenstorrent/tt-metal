@@ -78,7 +78,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        PROFILER_SCRIPTS_ROOT: /work/tt_metal/tools/profiler
+        PROFILER_SCRIPTS_ROOT: /work/tools/tracy
         PROFILER_TEST_SCRIPTS_ROOT: /work/tests/tt_metal/tools/profiler
         PROFILER_ARTIFACTS_DIR: /work/generated/profiler
         PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
