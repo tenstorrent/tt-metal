@@ -161,6 +161,7 @@ def run_demo_inference(
         pipeline.scheduler.config.rescale_betas_zero_snr,
         pipeline.scheduler.config.final_sigmas_type,
     )
+    pipeline.scheduler = tt_scheduler
 
     cpu_device = "cpu"
 
@@ -187,10 +188,7 @@ def run_demo_inference(
     )
 
     # Prepare timesteps
-    _, _ = retrieve_timesteps(
-        pipeline.scheduler, num_inference_steps, cpu_device, None, None
-    )  # Bad output if this is removed, implicit dependency exists
-    timesteps, num_inference_steps = retrieve_timesteps(tt_scheduler, num_inference_steps, cpu_device, None, None)
+    timesteps, num_inference_steps = retrieve_timesteps(pipeline.scheduler, num_inference_steps, cpu_device, None, None)
 
     # Convert timesteps to ttnn
     ttnn_timesteps = []
