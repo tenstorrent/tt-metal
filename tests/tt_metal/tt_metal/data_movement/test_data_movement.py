@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -471,10 +471,11 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
     for idx, (subfig, test_id) in enumerate(zip(subfigs, test_ids)):
         # Add a title for the current Test id
         test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
-        subfig.suptitle(test_name, fontsize=16, weight="bold")
+        subsubfig = subfig.subfigures(2, 1, height_ratios=[100, 1])
+        subsubfig[0].suptitle(test_name, fontsize=16, weight="bold")
 
         # Create subplots within the subfigure
-        axes = subfig.subplots(1, 2)
+        axes = subsubfig[0].subplots(1, 2)
 
         # Filter data for the current Test id
         riscv_1_filtered = [
@@ -574,14 +575,16 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
         ax.grid()
 
         # Add a comment section below the plots
-        subfig.text(
+        txtObj = subsubfig[1].text(
             0.5,
-            0.01,
-            f"\nComments: {test_id_to_comment.get(test_id, 'No comment available, test has not been analyzed')}",
+            0,
+            f"Comments: {test_id_to_comment.get(test_id, 'No comment available, test has not been analyzed')}",
             ha="center",
             fontsize=10,
             style="italic",
+            wrap=True,
         )
+        txtObj._get_wrap_line_width = lambda: 0.9 * subsubfig[1].bbox.width
 
     # Save the combined plot
     plt.savefig(output_file)
