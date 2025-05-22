@@ -131,7 +131,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
-    std::size_t channel_buffer_size_bytes, Topology topology, bool is_dateline, tt::ARCH arch) :
+    std::size_t channel_buffer_size_bytes, Topology topology, bool is_dateline) :
     FabricEriscDatamoverConfig(topology) {
     this->sender_txq_id = 0;
     this->receiver_txq_id = 0;
@@ -483,7 +483,6 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     bool enable_persistent_mode,
     bool build_in_worker_connection_mode,
     bool dateline_connection,
-    tt::ARCH arch,
     size_t risc_id) :
     my_eth_core_logical(my_eth_core_logical),
     my_noc_x(my_noc_x),
@@ -522,7 +521,6 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     enable_persistent_mode(enable_persistent_mode),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     dateline_connection(dateline_connection),
-    arch(arch),
     risc_id(risc_id) {
     std::fill(
         sender_channel_connection_liveness_check_disable_array.begin(),
@@ -867,7 +865,6 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             enable_persistent_mode,
             build_in_worker_connection_mode,
             dateline_connection,
-            device->arch(),
             risc_id);
 
     } else {
@@ -905,7 +902,6 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             enable_persistent_mode,
             build_in_worker_connection_mode,
             dateline_connection,
-            device->arch(),
             risc_id);
     }
 }

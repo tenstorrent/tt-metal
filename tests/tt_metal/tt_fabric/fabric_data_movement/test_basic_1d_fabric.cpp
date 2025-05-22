@@ -536,8 +536,6 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         dst_mesh_chip_id.first,
         num_hops};
 
-    static const size_t risc_id = 0;
-
     // append the EDM connection rt args
     const auto sender_channel = topology == Topology::Mesh ? edm_direction : 0;
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
