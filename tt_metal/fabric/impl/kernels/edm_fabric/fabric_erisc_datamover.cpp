@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -473,6 +473,7 @@ FORCE_INLINE bool can_forward_packet_completely(
 
         if (dest_mesh_id != routing_table->my_mesh_id) {
             uint32_t downstream_channel = routing_table->inter_mesh_table.dest_entry[dest_mesh_id];
+            ASSERT(downstream_channel != INVALID_DIRECTION);
             auto downstream_direction = port_direction_table[downstream_channel];
             return downstream_edm_interface[downstream_direction].edm_has_space_for_packet();
         } else {
@@ -493,6 +494,7 @@ FORCE_INLINE bool can_forward_packet_completely(
             } else {
                 // Unicast packet needs to be forwarded
                 auto downstream_channel = routing_table->intra_mesh_table.dest_entry[(uint8_t)dest_chip_id];
+                ASSERT(downstream_channel != INVALID_DIRECTION);
                 auto downstream_direction = port_direction_table[downstream_channel];
                 return downstream_edm_interface[downstream_direction].edm_has_space_for_packet();
             }
@@ -621,6 +623,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
 
     if (dest_mesh_id != routing_table->my_mesh_id) {
         uint32_t downstream_channel = routing_table->inter_mesh_table.dest_entry[dest_mesh_id];
+        ASSERT(downstream_channel != INVALID_DIRECTION);
         auto downstream_direction = port_direction_table[downstream_channel];
         forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
             packet_start,
@@ -648,6 +651,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         } else {
             // Unicast forward packet to downstream
             auto downstream_channel = routing_table->intra_mesh_table.dest_entry[dest_chip_id];
+            ASSERT(downstream_channel != INVALID_DIRECTION);
             auto downstream_direction = port_direction_table[downstream_channel];
             forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
                 packet_start,
@@ -1904,7 +1908,7 @@ void kernel_main() {
 
     for (uint32_t i = eth_chan_directions::EAST; i < eth_chan_directions::COUNT; i++) {
         auto forwarding_channel = routing_table->port_direction.directions[i];
-        if (forwarding_channel <= num_eth_ports - 1) {
+        if (forwarding_channel != INVALID_DIRECTION) {
             // A valid port/eth channel was found for this direction. Specify the port to direction lookup
             port_direction_table[forwarding_channel] = i;
         }

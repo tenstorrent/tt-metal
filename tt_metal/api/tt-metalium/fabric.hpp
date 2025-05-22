@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,15 +40,15 @@ size_t get_tt_fabric_channel_buffer_size_bytes();
 // core_type: core type which the worker will be running on
 //
 // Constraints:
-// 1. Currently the sender and reciever chip should be physically adjacent
+// 1. Currently the sender and reciever chip should be physically adjacent (for 1D)
 // 2. Currently the sender and reciever chip should be on the same mesh (for 1D)
 // 3. When connecting with 1D fabric routers, users are responsible for setting up the
 // connection appropriately. The API will not perform any checks to ensure that the
 // connection is indeed a 1D connection b/w all the workers.
 void append_fabric_connection_rt_args(
-    chip_id_t src_chip_id,
-    chip_id_t dst_chip_id,
-    uint32_t link_idx,
+    const chip_id_t src_chip_id,
+    const chip_id_t dst_chip_id,
+    const uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
