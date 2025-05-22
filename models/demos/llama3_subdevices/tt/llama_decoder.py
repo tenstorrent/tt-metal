@@ -139,7 +139,7 @@ class TtTransformerBlock(LightweightModule):
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         # attn_in_sharded=norm(x+h), h = x+h happens implicitly
-        if self.layer_num == 0:
+        if self.layer_num == 0 or mode == "prefill":
             # In the first layer we "make" the h tensor from the original x keeping it alive
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
             # since we want residual to be bfloat16
@@ -159,13 +159,17 @@ class TtTransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
+        if mode == "prefill":
+            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
+            ff_in_sharded, _ = self.ff_norm(h, None, mode)
+
         if mode == "decode":
+            ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
-        if self.layer_num == self.n_layers - 1:
+        if self.layer_num == self.n_layers - 1 or mode == "prefill":
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             if mode == "decode":
                 ff_out.deallocate(True)
