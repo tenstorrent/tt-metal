@@ -180,34 +180,20 @@ class TtLlamaRotarySetup(LightweightModule):
 
         batch = position_idxs.shape[0]
 
-        if on_host:  # If tensor is on host, don't pass a mesh mapper if single-device
-            rot_idxs = ttnn.as_tensor(
-                position_idxs,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
-                    mesh_shape=list(self.device.shape),
-                )
-                if self.is_mesh_device
-                else None,
+        rot_idxs = ttnn.as_tensor(
+            position_idxs,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None if on_host else self.device,
+            memory_config=None if on_host else ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ShardTensor2dMesh(
+                self.device,
+                dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
+                mesh_shape=list(self.device.shape),
             )
-        else:  # On device
-            rot_idxs = ttnn.as_tensor(
-                position_idxs,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
-                    mesh_shape=list(self.device.shape),
-                )
-                if self.is_mesh_device
-                else None,
-            )
+            if self.is_mesh_device
+            else None,
+        )
 
         return rot_idxs
 

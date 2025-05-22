@@ -39,7 +39,7 @@ void MAIN {
         Ht = k_Ht;
     }
 
-    constexpr uint32_t Wt = get_compile_time_arg_val(6);  // How many rows (tiles) in n_heads dimension
+    constexpr uint32_t Wt = get_compile_time_arg_val(6);  // How many tiles in wrapped RM inputs
 
     constexpr uint32_t cos_cb = get_compile_time_arg_val(7);
     constexpr uint32_t sin_cb = get_compile_time_arg_val(8);
@@ -51,22 +51,6 @@ void MAIN {
 
     mm_init(in_cb, trans_mat_cb, out_cb);
     binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
-
-    /* Unnecessary CB APIs (comment out for code size)
-    // Get the trans_mat
-    constexpr uint32_t onetile = 1;
-    cb_reserve_back(trans_mat_cb, onetile);
-    cb_push_back(trans_mat_cb, onetile);
-    cb_wait_front(trans_mat_cb, onetile);
-
-    // Get the sin/cos matrices
-    // TODO: To parallelize across multiple batch, this should be in a batch loop
-    cb_reserve_back(sin_cb, Wt);
-    cb_reserve_back(cos_cb, Wt);
-
-    cb_push_back(sin_cb, Wt);
-    cb_push_back(cos_cb, Wt);
-    */
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
         cb_reserve_back(rotated_in_interm_cb, Wt);
@@ -122,14 +106,5 @@ void MAIN {
         cb_pop_front(sin_interm_cb, Wt);
         cb_pop_front(cos_interm_cb, Wt);
     }
-
-    /* Unnecessary CB APIs (comment out for code size)
-    // Done with the sin/cos matrices, so remove from CB
-    cb_pop_front(sin_cb, Wt);
-    cb_pop_front(cos_cb, Wt);
-
-    // Done with the transformation matrix, so remove from CB
-    cb_pop_front(trans_mat_cb, onetile);
-    */
 }
 }  // namespace NAMESPACE
