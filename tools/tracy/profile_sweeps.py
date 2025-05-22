@@ -11,8 +11,8 @@ import click
 from glob import glob
 from loguru import logger
 
-from tt_metal.tools.profiler.profile_this import profile_command
-from tt_metal.tools.profiler.common import (
+from tracy.profile_this import profile_command
+from tracy.common import (
     PROFILER_OUTPUT_DIR,
     clear_profiler_runtime_artifacts,
 )

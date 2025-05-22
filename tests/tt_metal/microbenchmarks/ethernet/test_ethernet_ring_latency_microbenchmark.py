@@ -7,8 +7,8 @@ import sys
 
 from loguru import logger
 import pytest
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
 
 
 @pytest.mark.parametrize("sample_counts", [(1024,)])

@@ -11,7 +11,7 @@ import subprocess
 import click
 from loguru import logger
 
-from tt_metal.tools.profiler.common import (
+from tracy.common import (
     PROFILER_SCRIPTS_ROOT,
     TT_METAL_HOME,
     PROFILER_OUTPUT_DIR,
