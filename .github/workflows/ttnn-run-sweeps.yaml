@@ -84,10 +84,13 @@ on:
           - eltwise.unary.exp.exp_sharded
           - eltwise.unary.exp.exp_forge
           - eltwise.unary.exp.exp_pytorch2
+          - eltwise.unary.exp.exp_output
           - eltwise.unary.exp2.exp2
           - eltwise.unary.exp2.exp2_sharded
+          - eltwise.unary.exp2.exp2_output
           - eltwise.unary.expm1.expm1
           - eltwise.unary.expm1.expm1_sharded
+          - eltwise.unary.expm1.expm1_output
           - eltwise.unary.tanh.tanh
           - eltwise.unary.tanh.tanh_pytorch2
           - eltwise.unary.tanh.tanh_forge
@@ -101,6 +104,7 @@ on:
           - eltwise.unary.relu6.relu6
           - eltwise.unary.log.log
           - eltwise.unary.log.log_sharded
+          - eltwise.unary.log.log_output
           - eltwise.unary.log.log_pytorch2
           - eltwise.unary.log.log_forge
           - eltwise.unary.log1p.log1p
@@ -181,8 +185,10 @@ on:
           - normalization.generality.softmax_fused
           - eltwise.unary.identity.identity
           - eltwise.unary.identity.identity_sharded
+          - eltwise.unary.identity.identity_output
           - eltwise.unary.neg.neg
           - eltwise.unary.neg.neg_sharded
+          - eltwise.unary.neg.neg_output
           - eltwise.unary.sinh.sinh
           - eltwise.unary.sinh.sinh_sharded
           - eltwise.unary.asinh.asinh
