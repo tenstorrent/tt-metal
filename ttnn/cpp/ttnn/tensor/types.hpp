@@ -131,6 +131,8 @@ private:
     BufferType buffer_type_ = BufferType::DRAM;                           // Can be either DRAM or L1
     std::optional<ShardSpec> shard_spec_ = std::nullopt;
     std::optional<NdShardSpec> nd_shard_spec_ = std::nullopt;
+
+    friend class TensorSpec;
 };
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);

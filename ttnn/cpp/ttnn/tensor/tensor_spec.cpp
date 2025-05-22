@@ -131,6 +131,121 @@ TensorSpec::TensorSpec(ttnn::Shape logical_shape, TensorLayout tensor_layout) :
     cached_physical_shape_(tensor_layout_.compute_physical_shape(logical_shape_)) {
     CMAKE_UNIQUE_NAMESPACE::validate_shard_spec_with_tensor_shape(*this);
     CMAKE_UNIQUE_NAMESPACE::validate_dtype_and_layout(data_type(), layout());
+    populate_sharding_specs();
+}
+
+TensorSpec TensorSpec::with_memory_config(MemoryConfig memory_config) const {
+    TensorSpec result = *this;
+    result.tensor_layout_ = tensor_layout_.with_memory_config(std::move(memory_config));
+    result.populate_sharding_specs();
+    return result;
+}
+
+void TensorSpec::populate_sharding_specs() {
+    if (!memory_config().nd_shard_spec().has_value()) {
+        if (auto nd_shard_spec = nd_shard_spec_from_legacy()) {
+            auto mem_config = memory_config();
+            mem_config.nd_shard_spec_ = std::move(nd_shard_spec);
+            tensor_layout_ = tensor_layout_.with_memory_config(std::move(mem_config));
+        }
+    }
+    if (!memory_config().shard_spec().has_value() && memory_config().nd_shard_spec().has_value()) {
+        if (auto shard_spec = legacy_shard_spec_from_nd()) {
+            auto mem_config = memory_config();
+            mem_config.shard_spec_ = std::move(shard_spec);
+            tensor_layout_ = tensor_layout_.with_memory_config(std::move(mem_config));
+        }
+    }
+}
+
+std::optional<NdShardSpec> TensorSpec::nd_shard_spec_from_legacy() {
+    auto mem_layout = memory_config().memory_layout();
+
+    if (mem_layout == TensorMemoryLayout::INTERLEAVED) {
+        // Convertion from interleaved to ND sharding is not supported for now
+        return std::nullopt;
+    }
+
+    if (mem_layout == TensorMemoryLayout::SINGLE_BANK) {
+        // Convertion from single bank to ND sharding is not supported for now
+        return std::nullopt;
+    }
+
+    const auto& shard_spec = memory_config().shard_spec().value();
+    NdShardSpec nd_shard_spec{
+        .physical_shard_shape = ttnn::Shape().to_rank(logical_shape_.rank()),
+        .cores = shard_spec.grid,
+        .shard_orientation = shard_spec.orientation,
+    };
+
+    if (mem_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        // Can't convert logical sharding if physical shard shape is different from logical shard shape
+        if (shard_spec.mode == ShardMode::LOGICAL) {
+            if (shard_spec.physical_shard_shape.has_value() && *shard_spec.physical_shard_shape != shard_spec.shape) {
+                return std::nullopt;
+            }
+        }
+
+        if (logical_shape_.rank() >= 2) {
+            nd_shard_spec.physical_shard_shape[-2] = shard_spec.shape[0];
+        }
+        if (logical_shape_.rank() >= 1) {
+            nd_shard_spec.physical_shard_shape[-1] = shard_spec.shape[1];
+        }
+        return nd_shard_spec;
+    }
+
+    if (mem_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (logical_shape_.rank() >= 1) {
+            nd_shard_spec.physical_shard_shape[-1] = logical_shape_[-1];
+        }
+        return nd_shard_spec;
+    }
+
+    if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (logical_shape_.rank() >= 2) {
+            nd_shard_spec.physical_shard_shape[-2] = logical_shape_[-2];
+        }
+        return nd_shard_spec;
+    }
+
+    TT_FATAL(false, "Unsupported memory layout for ND sharding conversion: {}", mem_layout);
+}
+
+std::optional<ShardSpec> TensorSpec::legacy_shard_spec_from_nd() {
+    const auto& nd_shard_spec = memory_config().nd_shard_spec().value();
+    const auto& nd_shard_shape = nd_shard_spec.physical_shard_shape;
+
+    // Only block sharding is supported for now
+    if (memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED) {
+        return std::nullopt;
+    }
+
+    // More than 2 dimensional sharding can't be converted to legacy sharding
+    if (nd_shard_shape.volume() != nd_shard_shape[-1] * nd_shard_shape[-2]) {
+        return std::nullopt;
+    }
+
+    ShardSpec shard_spec(
+        nd_shard_spec.cores, {nd_shard_shape[-2], nd_shard_shape[-1]}, nd_shard_spec.shard_orientation);
+
+    // Block sharding requires a contiguous grid of cores
+    if (shard_spec.grid.ranges().size() != 1) {
+        return std::nullopt;
+    }
+
+    // Check that the number of shards along height and width fits onto the grid
+    uint32_t num_shards_along_height = div_up(physical_shape().height(), shard_spec.shape[0]);
+    uint32_t num_shards_along_width = div_up(physical_shape().width(), shard_spec.shape[1]);
+    if (shard_spec.orientation != ShardOrientation::ROW_MAJOR) {
+        std::swap(num_shards_along_height, num_shards_along_width);
+    }
+    CoreCoord shard_grid = shard_spec.grid.bounding_box().grid_size();
+    if (num_shards_along_height > shard_grid.x || num_shards_along_width > shard_grid.y) {
+        return std::nullopt;
+    }
+
+    return shard_spec;
 }
 
 }  // namespace tt::tt_metal
