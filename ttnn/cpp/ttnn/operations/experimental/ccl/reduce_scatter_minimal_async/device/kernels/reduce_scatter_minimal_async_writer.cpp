@@ -21,7 +21,7 @@ using ttnn::ccl::Topology;
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
-constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
+constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);  // 4
 constexpr BufferType intermediate_type = static_cast<BufferType>(get_compile_time_arg_val(3));
 constexpr BufferType output_type = static_cast<BufferType>(get_compile_time_arg_val(4));
 constexpr uint32_t cb_compute_output_id = get_compile_time_arg_val(5);
