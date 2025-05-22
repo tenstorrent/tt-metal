@@ -36,6 +36,58 @@ test_id_to_name = {
     16: "Loopback Packet Sizes",
 }
 
+# Comments for each test explaining why we get the perf that we do
+test_id_to_comment = {
+    0: "Dram read bandwidth saturates at about 37 B/cycle, according to HW experiments. \n\
+        DRAM write bandwidth should saturate at 64 B/cycle",
+    1: "This test appears to be broken. The graph is showing numbers that dont make sense.",
+    2: "This test appears to be broken. The graph is showing numbers that dont make sense.",
+    3: "This test shows the ideal read and write bandwidth when transfering multiple 8KB packets. \n\
+        The read bandwidth is what is expected, however write bandwidth is expected to be 64 \n\
+        B/cycle rather than 35 B/cycle.",
+    4: "Bandwidth in steady state, with > 2KB packet sizes, is close to theoretical max. \n\
+        Under 2KB, the bandwidth is limitted by either the RISC latency or by the NOC sending from L1 latency.",
+    5: "Bandwidth in steady state, with > 2KB packet sizes, is close to theoretical max. \n\
+        Under 2KB, the bandwidth is limitted by the RISC latency.",
+    6: "This test sends to a small grid. The bandwidth characteristics are similar to the \n\
+        one to one test. Note that it may appear that multicast has lower bandwidth, however \n\
+        multicast sends less data and has much lower latency, so it is prefered to use multicast.",
+    7: "This test sends to a medium grid. The bandwidth characteristics are similar to the one \n\
+        to one test. As the grid size increases, the number of transactions needed to saturate \n\
+        NOC decreases because the NOC needs to send num cores more packets. Note that it may \n\
+        appear that multicast has lower bandwidth, however multicast sends less data and \n\
+        has much lower latency, so it is prefered to use multicast.",
+    8: "This test sends to a large grid. The bandwidth characteristics are similar to the one to \n\
+        one test. As the grid size increases, the number of transactions needed to saturate NOC \n\
+        decreases because the NOC needs to send num cores more packets. Note that it may appear \n\
+        that multicast has lower bandwidth, however multicast sends less data and has much \n\
+        lower latency, so it is prefered to use multicast.",
+    9: "This test sends to a small grid using unlinked multicast. Bandwidth degrades due to path \n\
+        reserve being done after every transaction.",
+    10: "This test sends to a medium grid using unlinked multicast. Bandwidth degrades due to path \n\
+        reserve being done after every transaction. As the grid size increases, the number of write \n\
+        acks increases which degrades bandwidth.",
+    11: "This test sends to a large grid using unlinked multicast. Bandwidth degrades due to path \n\
+        reserve being done after every transaction. As the grid size increases, the number of write \n\
+        acks increases which degrades bandwidth.",
+    12: "This test sends to a small grid using linked multicast. Linked causes path reserve to be \n\
+        done only once for all transactions, as such performance approaches theoretical.",
+    13: "This test sends to a medium grid using linked multicast. Linked causes path reserve to be \n\
+        done only once for all transactions, as such performance approaches theoretical. As the grid \n\
+        size increases, the number of write acks increases which degrades bandwidth. Posted \n\
+        multicasts do not have this issue, however it is not safe to use posted multicast \n\
+        due to a hardware bug.",
+    14: "This test sends to a large grid using linked multicast. Linked causes path reserve to be \n\
+        done only once for all transactions, as such performance approaches theoretical. As the \n\
+        grid size increases, the number of write acks increases which degrades bandwidth. Posted \n\
+        multicasts do not have this issue, however it is not safe to use posted multicast \n\
+        due to a hardware bug.",
+    15: "At small packet sizes, the bandwidth is limited by the RISC latency. As the packet size \n\
+        increases, the bandwidth approaches 64 B/cycle. Similar to the one from one test.",
+    16: "Loopback will have similar characteristics to the one to one test, however it uses two \n\
+        ports to send and receive data, as such it is more likely to cause contention.",
+}
+
 # Correspondng test bounds for each arch, test id, riscv core
 # NOTE: These bounds are aggregated averages of large test sweeps and
 # are subject to change with new directed tests.
@@ -525,7 +577,7 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
         subfig.text(
             0.5,
             0.01,
-            f"Comments: Add observations or explanations here for {test_name}.",
+            f"\nComments: {test_id_to_comment.get(test_id, 'No comment available, test has not been analyzed')}",
             ha="center",
             fontsize=10,
             style="italic",
