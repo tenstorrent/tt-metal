@@ -31,10 +31,11 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-            { model: whisper, owner_id: U05RWH3QUPM },  #Salar Hosseini
+            { model: whisper, owner_id: U05RWH3QUPM , cmd: pytest tests/nightly/single_card/whisper },  #Salar Hosseini
+            { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: LLAMA_DIR=/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659/original pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
           ]
-    name: Nightly ${{ inputs.runner-label }} ${{ matrix.test-group.model }} #Salar Hosseini
-    runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}"]
+    name: Nightly ${{ inputs.runner-label }} ${{ matrix.test-group.model }}
+    runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"]
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -45,6 +46,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -59,8 +61,12 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
       - name: Run frequent reg tests scripts
-        timeout-minutes: 30
-        run: pytest tests/nightly/single_card/${{ matrix.test-group.model }}
+        timeout-minutes: 180
+        run: |
+          if [[ "${{ matrix.test-group.model }}" == *"llama"* ]]; then
+            pip install -r models/tt_transformers/requirements.txt
+          fi
+          ${{ matrix.test-group.cmd }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
