@@ -619,8 +619,8 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     const auto input1_shard_spec_opt = input_tensor1.shard_spec();
     const auto input2_shard_spec_opt = input_tensor2.shard_spec();
 
-    TT_ASSERT(input1_shard_spec_opt.has_value());
-    TT_ASSERT(input2_shard_spec_opt.has_value());
+    TT_FATAL(input1_shard_spec_opt.has_value(), "input1_shard_spec is not available");
+    TT_FATAL(input2_shard_spec_opt.has_value(), "input2_shard_spec is not available");
 
     const auto& input1_shard_spec = input1_shard_spec_opt.value();
     const auto& input2_shard_spec = input2_shard_spec_opt.value();
