@@ -26,7 +26,11 @@ on:
 jobs:
   ttnn:
     name: ttnn stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: ["in-service", "cloud-virtual-machine", "${{ inputs.runner-label }}"]
+    runs-on:
+      - "in-service"
+      - "${{ inputs.runner-label }}"
+      - "${{ (inputs.runner-label == 'config-tg' || inputs.runner-label == 'topology-6u') && 'bare-metal' || 'cloud-virtual-machine' }}"
+
 
     container:
       image: ${{ inputs.docker-image }}
