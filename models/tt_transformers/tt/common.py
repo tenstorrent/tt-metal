@@ -60,7 +60,13 @@ def preprocess_inputs_prefill(
     """
     # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
 
-    max_prefill_len -= max_generated_tokens
+    for m_args in model_args:
+        if max_prefill_len >= m_args.max_context_len:
+            max_prefill_len -= max_generated_tokens
+            # all model_args should have the same max_context_len as
+            # it's assumed that all models are the same. break out of the loop once we find the first one
+            # with the max_prefill_len >= max_context_len
+            break
 
     encoded_prompts = [
         model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
