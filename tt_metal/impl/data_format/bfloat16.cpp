@@ -345,3 +345,23 @@ bool packed_uint32_t_vector_comparison(
 
     return true;
 }
+
+static inline uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
+    if (std::isnan(val)) {
+        return UINT16_C(0x7FC0);
+    } else {
+        union {
+            uint32_t U32;
+            float F32;
+        };
+
+        F32 = val;
+        uint32_t rounding_bias = ((U32 >> 16) & 1) + UINT32_C(0x7FFF);
+        return static_cast<uint16_t>((U32 + rounding_bias) >> 16);
+    }
+}
+
+uint16_t fp32_to_bf16_bits(float val) {
+    static_assert(sizeof val == 4, "float must have size 4");
+    return fp32_to_bf16_bits_round_to_nearest_even(val);
+}
