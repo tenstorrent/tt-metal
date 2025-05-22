@@ -546,8 +546,50 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked11x10PacketSizes)
 }
 
 /* ========== Test case for one to all multicast data movement; ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
+TEST_F(DeviceFixture, TensixDataMovementOneToAllDirectedIdeal) {
+    uint32_t test_id = 52;  // Arbitrary test id
+
     // Parameters
+    /*
+        L1 Capacity: 1.5 MB
+        * Max transaction size
+            = 4 * 32 pages
+            = 128 pages * 32 (or 64) bytes/page
+            = 4096 bytes for WH; 8192 bytes for BH
+        - Max total transaction size
+            = 180 * 8192 bytes
+            = 1474560 bytes
+            < 1.5 MB = L1 capacity
+    */
+    uint32_t num_of_transactions = 180;
+    uint32_t transaction_size_pages = 4 * 32;
+    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    NOC noc_id = NOC::NOC_0;
+    bool is_linked = true;  // True or False?
+
+    unit_tests::dm::core_to_all::OneToAllConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .grid_size = grid_size,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+        .loopback = true,
+        .noc_id = noc_id,
+        .is_multicast = true,
+        .is_linked = is_linked,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
 }
+
+// ^^ WORK IN PROGRESS
 
 }  // namespace tt::tt_metal
