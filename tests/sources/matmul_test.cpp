@@ -46,11 +46,11 @@ void run_kernel()
 void run_kernel()
 {
     _llk_math_matmul_init_<MATH_FIDELITY, DstTileFaceLayout::RowMajor>();
-    _llk_math_pack_sync_init_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<false, false>(MATH_FORMAT, MATH_FORMAT);
-    _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
+    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     _llk_math_matmul_<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(0);
-    _llk_math_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif
@@ -70,16 +70,16 @@ void run_kernel()
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<false, is_fp32_dest_acc_en, false>(PACK_IN, PACK_OUT, 16 * 16 * 4);
     _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false, false>(PACK_OUT);
-    _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
 #else
     _llk_pack_hw_configure_<false, is_fp32_dest_acc_en>(PACK_IN, PACK_OUT, 16 * 16 * 4);
     _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false>(PACK_OUT);
-    _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, false, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, false, is_fp32_dest_acc_en>();
 #endif
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncFull, false, is_fp32_dest_acc_en>(0, L1_ADDRESS(buffer_Dest));
-    _llk_pack_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_pack_<DstSync::SyncHalf, false, is_fp32_dest_acc_en>(0, L1_ADDRESS(buffer_Dest));
+    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif

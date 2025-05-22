@@ -11,8 +11,9 @@
 #include "llk_defs.h"
 
 // Globals
-uint32_t unp_cfg_context        = 0;
-uint32_t pack_sync_tile_dst_ptr = 0;
+uint32_t unp_cfg_context          = 0;
+uint32_t pack_sync_tile_dst_ptr   = 0;
+uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -86,21 +87,21 @@ void run_kernel()
 #else
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, BroadcastType::NONE, is_fp32_dest_acc_en, false>(0, 0, 4, MATH_FORMAT);
 #endif
-    _llk_math_pack_sync_init_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<false, false>(MATH_FORMAT, MATH_FORMAT);
-    _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncFull, BroadcastType::NONE, is_fp32_dest_acc_en, unpack_to_dest>(
+    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, BroadcastType::NONE, is_fp32_dest_acc_en, unpack_to_dest>(
         0, MATH_FORMAT, MATH_FORMAT);
 
     // calculation of sfpu operation on dest
     _llk_math_eltwise_unary_sfpu_init_<SFPU_OPERATION>();
-    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncFull>(0);
+    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
     // calling sfpu function from ckernel
     // this part is where parametrization of operation takes part
     call_sfpu_operation(SFPU_OPERATION);
 
     _llk_math_eltwise_unary_sfpu_done_();
-    _llk_math_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif
@@ -134,14 +135,14 @@ void run_kernel()
     _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false>(PACK_OUT);
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
 #else
-    _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, false, false>();
+    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, false, false>();
 #endif
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncFull, false, is_fp32_dest_acc_en>(0, L1_ADDRESS(buffer_Dest));
-    _llk_pack_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_pack_<DstSync::SyncHalf, false, is_fp32_dest_acc_en>(0, L1_ADDRESS(buffer_Dest));
+    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif

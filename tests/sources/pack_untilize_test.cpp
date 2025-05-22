@@ -10,8 +10,9 @@
 #include "llk_defs.h"
 
 // Globals
-uint32_t unp_cfg_context        = 0;
-uint32_t pack_sync_tile_dst_ptr = 0;
+uint32_t unp_cfg_context          = 0;
+uint32_t pack_sync_tile_dst_ptr   = 0;
+uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -49,11 +50,11 @@ void run_kernel()
 #else
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, BroadcastType::NONE, is_fp32_dest_acc_en, is_int_fpu_en>(0, 0, 4, MATH_FORMAT);
 #endif
-    _llk_math_pack_sync_init_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<true, false>(MATH_FORMAT, MATH_FORMAT);
-    _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncFull, BroadcastType::NONE, is_fp32_dest_acc_en, false>(0, MATH_FORMAT, MATH_FORMAT);
-    _llk_math_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, BroadcastType::NONE, is_fp32_dest_acc_en, false>(0, MATH_FORMAT, MATH_FORMAT);
+    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif
@@ -75,19 +76,19 @@ void run_kernel()
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en, false>(PACK_IN, PACK_OUT, 16 * 16 * 4);
-    _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
     _llk_pack_untilize_init_<ct_dim>(PACK_IN, PACK_OUT, FACE_R_DIM, 4);
     // Seperated pack_untilize_init for archs because BH takes in 2 formats and WH takes in one.
     // Added second format argument (PACK_OUT). Was missing second format argument for BH, this is why tests were previously failing.
 #else
     _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en>(PACK_IN, PACK_OUT, 16 * 16 * 4);
-    _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, UNTILIZE, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, UNTILIZE, is_fp32_dest_acc_en>();
     _llk_pack_untilize_init_<ct_dim>(PACK_OUT, FACE_R_DIM, 4);
 #endif
 
     _llk_packer_wait_for_math_done_();
     _llk_pack_untilize_<ct_dim>(L1_ADDRESS(buffer_Dest), PACK_OUT, FACE_R_DIM, 4, 0);
-    _llk_pack_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif
