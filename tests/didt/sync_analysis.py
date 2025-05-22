@@ -10,7 +10,7 @@ import pandas as pd
 from pathlib import Path
 import seaborn as sns
 
-from tt_metal.tools.profiler.process_device_log import import_device_profile_log
+from tracy.process_device_log import import_device_profile_log
 
 parser = argparse.ArgumentParser(description="Timing analysis.")
 parser.add_argument("--input-file", type=str, help="Input file with profiler logs")

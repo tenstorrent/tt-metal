@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_metal.tools.profiler.merge_meta_class import MergeMetaclass
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+from tracy.merge_meta_class import MergeMetaclass
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 
 class default_setup(metaclass=MergeMetaclass):
