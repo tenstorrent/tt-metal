@@ -49,7 +49,6 @@ void append_fabric_connection_rt_args(
     uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
-    std::vector<uint32_t>& worker_args,
-    const size_t risc_id = 0);
+    std::vector<uint32_t>& worker_args);
 
 }  // namespace tt::tt_fabric

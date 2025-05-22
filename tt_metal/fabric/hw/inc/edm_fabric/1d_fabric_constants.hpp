@@ -175,7 +175,7 @@ constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced =
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced =
     fill_array_with_next_n_args<bool, MAIN_CT_ARGS_START_IDX + 61, MAX_NUM_RECEIVER_CHANNELS>();
 
-constexpr bool enable_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 63) != 0;
+constexpr bool enable_ethernet_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 63) != 0;
 constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 64) != 0;
 constexpr bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 65) != 0;
 constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 66);

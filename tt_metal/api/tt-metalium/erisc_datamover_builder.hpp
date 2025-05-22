@@ -63,8 +63,6 @@ struct FabricEriscDatamoverConfig {
     std::size_t termination_signal_address = 0;  // pad extra bytes to match old EDM so handshake logic will still work
     std::size_t edm_local_sync_address = 0;
     std::size_t edm_status_address = 0;
-    // shared buffer mode is for multi-riscv core to have their own buffer on single L1 region
-    bool shared_buffer_mode = true;
 
     // Debug and Counters
     static constexpr std::size_t receiver_channel_counters_size_bytes =
@@ -72,8 +70,8 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t sender_channel_counters_size_bytes =
         (((tt::tt_fabric::sender_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
 
-    std::vector<std::array<std::size_t, num_receiver_channels>> receiver_channels_counters_address;
-    std::vector<std::array<std::size_t, num_sender_channels>> sender_channels_counters_address;
+    std::array<std::size_t, num_receiver_channels> receiver_channels_counters_address;
+    std::array<std::size_t, num_sender_channels> sender_channels_counters_address;
 
     // Packet header history buffer(s)
     static constexpr std::size_t receiver_completed_packet_header_cb_size_headers = 32;
@@ -82,36 +80,35 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t sender_completed_packet_header_cb_size_headers = 32;
     static constexpr std::size_t sender_completed_packet_header_cb_size_bytes =
         sizeof(tt::tt_fabric::PacketHeader) * sender_completed_packet_header_cb_size_headers;
-    std::vector<std::array<std::size_t, num_receiver_channels>> receivers_completed_packet_header_cb_address;
-    std::vector<std::array<std::size_t, num_sender_channels>> senders_completed_packet_header_cb_address;
+    std::array<std::size_t, num_receiver_channels> receivers_completed_packet_header_cb_address;
+    std::array<std::size_t, num_sender_channels> senders_completed_packet_header_cb_address;
 
     // ----------- Sender Channels
     std::vector<std::array<bool, num_sender_channels>> is_sender_channel_serviced;
 
-    std::vector<std::array<std::size_t, num_sender_channels>> sender_channels_buffer_index_address;
+    std::array<std::size_t, num_sender_channels> sender_channels_buffer_index_address;
     // Connection info layout:
     // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
     // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's L1
     // 2: WorkerXY (as uint32_t)
     // 3: Hold's EDM's rdptr for the buffer index in the channel
-    std::vector<std::array<std::size_t, num_sender_channels>> sender_channels_worker_conn_info_base_address;
-    std::vector<std::array<std::size_t, num_sender_channels>> sender_channels_local_flow_control_semaphore_address;
-    std::vector<std::array<std::size_t, num_sender_channels>> sender_channels_producer_terminate_connection_address;
+    std::array<std::size_t, num_sender_channels> sender_channels_worker_conn_info_base_address;
+    std::array<std::size_t, num_sender_channels> sender_channels_local_flow_control_semaphore_address;
+    std::array<std::size_t, num_sender_channels> sender_channels_producer_terminate_connection_address;
     // persistent mode field
-    std::vector<std::array<std::size_t, num_sender_channels>> sender_channels_connection_semaphore_address;
+    std::array<std::size_t, num_sender_channels> sender_channels_connection_semaphore_address;
     // persistent mode field
-    std::vector<std::array<std::size_t, num_sender_channels>> sender_channels_buffer_index_semaphore_address;
+    std::array<std::size_t, num_sender_channels> sender_channels_buffer_index_semaphore_address;
 
     static_assert(sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
 
     // ----------- Receiver Channels
     std::vector<std::array<bool, num_receiver_channels>> is_receiver_channel_serviced;
 
-    std::vector<std::array<std::size_t, max_downstream_edms>> receiver_channels_local_buffer_index_address;
+    std::array<std::size_t, max_downstream_edms> receiver_channels_local_buffer_index_address;
     // persistent mode field
-    std::vector<std::array<std::size_t, max_downstream_edms>>
-        receiver_channels_downstream_flow_control_semaphore_address;
-    std::vector<std::array<std::size_t, max_downstream_edms>> receiver_channels_downstream_teardown_semaphore_address;
+    std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_flow_control_semaphore_address;
+    std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_teardown_semaphore_address;
 
     // Channel Allocations
     std::size_t max_l1_loading_size;
@@ -132,8 +129,8 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, num_sender_channels> sender_channels_num_buffers;
     std::array<std::size_t, num_receiver_channels> receiver_channels_num_buffers;
 
-    std::vector<std::array<std::size_t, num_sender_channels>> sender_channels_base_address;
-    std::vector<std::array<std::size_t, num_receiver_channels>> receiver_channels_base_address;
+    std::array<std::size_t, num_sender_channels> sender_channels_base_address;
+    std::array<std::size_t, num_receiver_channels> receiver_channels_base_address;
 
     std::size_t num_used_sender_channels = 0;
     std::size_t num_used_receiver_channels = 0;
@@ -289,6 +286,13 @@ public:
     std::array<size_t, FabricEriscDatamoverConfig::num_receiver_channels> local_receiver_channels_buffer_address;
 
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> local_sender_channels_connection_info_addr;
+
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced;
+    std::array<size_t, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced;
+    bool enable_handshake = false;
+    bool enable_context_switch = false;
+    bool enable_interrupts = false;
+    size_t iterations_between_ctx_switch_and_teardown_checks;
 
     size_t termination_signal_ptr = 0;
     size_t edm_local_sync_ptr = 0;

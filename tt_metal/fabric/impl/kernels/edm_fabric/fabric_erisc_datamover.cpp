@@ -1374,6 +1374,10 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
 
 void kernel_main() {
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+    if constexpr (receiver_txq_id != sender_txq_id) {
+        eth_txq_reg_write(
+            receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+    }
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
@@ -1398,7 +1402,7 @@ void kernel_main() {
         init_ptr_val<to_sender_packets_completed_streams[4]>(0);
     }
 
-    if constexpr (enable_handshake) {
+    if constexpr (enable_ethernet_handshake) {
         if constexpr (is_handshake_sender) {
             erisc::datamover::handshake::sender_side_start(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
@@ -1855,7 +1859,7 @@ void kernel_main() {
         }
     }
 
-    if constexpr (enable_handshake) {
+    if constexpr (enable_ethernet_handshake) {
         if constexpr (is_handshake_sender) {
             erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
@@ -1886,38 +1890,35 @@ void kernel_main() {
                     tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
             }
         }
+    }
 
-        if constexpr (is_2d_fabric) {
-            uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
-            uint32_t edm_index = 0;
-            while (has_downstream_edm) {
-                if (has_downstream_edm & 0x1) {
-                    // open connections with available downstream edms
-                    downstream_edm_noc_interfaces[edm_index].template open<true, tt::tt_fabric::worker_handshake_noc>();
-                    *downstream_edm_noc_interfaces[edm_index].from_remote_buffer_slot_rdptr_ptr = 0;
-                }
-                edm_index++;
-                has_downstream_edm >>= 1;
+    if constexpr (is_2d_fabric) {
+        uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
+        uint32_t edm_index = 0;
+        while (has_downstream_edm) {
+            if (has_downstream_edm & 0x1) {
+                // open connections with available downstream edms
+                downstream_edm_noc_interfaces[edm_index].template open<true, tt::tt_fabric::worker_handshake_noc>();
+                *downstream_edm_noc_interfaces[edm_index].from_remote_buffer_slot_rdptr_ptr = 0;
             }
-            if constexpr (enable_ring_support) {
-                bool connect_ring = false;
-                if constexpr (my_direction == eth_chan_directions::EAST) {
-                    connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::WEST)) != 0;
-                } else if constexpr (my_direction == eth_chan_directions::WEST) {
-                    connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::EAST)) != 0;
-                } else if constexpr (my_direction == eth_chan_directions::NORTH) {
-                    connect_ring =
-                        (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::SOUTH)) != 0;
-                } else if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                    connect_ring =
-                        (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::NORTH)) != 0;
-                }
-                if (connect_ring) {
-                    downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
-                        .template open<true, tt::tt_fabric::worker_handshake_noc>();
-                    *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_slot_rdptr_ptr =
-                        0;
-                }
+            edm_index++;
+            has_downstream_edm >>= 1;
+        }
+        if constexpr (enable_ring_support) {
+            bool connect_ring = false;
+            if constexpr (my_direction == eth_chan_directions::EAST) {
+                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::WEST)) != 0;
+            } else if constexpr (my_direction == eth_chan_directions::WEST) {
+                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::EAST)) != 0;
+            } else if constexpr (my_direction == eth_chan_directions::NORTH) {
+                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::SOUTH)) != 0;
+            } else if constexpr (my_direction == eth_chan_directions::SOUTH) {
+                connect_ring = (has_downstream_edm_vc0_buffer_connection & (0x1 << eth_chan_directions::NORTH)) != 0;
+            }
+            if (connect_ring) {
+                downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1]
+                    .template open<true, tt::tt_fabric::worker_handshake_noc>();
+                *downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1].from_remote_buffer_slot_rdptr_ptr = 0;
             }
         }
     }
