@@ -26,6 +26,10 @@ void ScaledDotProductAttentionDecode::validate(
             input_tensor.get_dtype());
     }
 
+    for (size_t i = 1; i < input_tensors.size(); i++) {
+        TT_FATAL(input_tensors.at(i).get_layout() == Layout::TILE, "Inputs to SDPA must be tilized except for Q");
+    }
+
     const auto q_shape = input_tensors.at(0).get_padded_shape();
     const auto q_shape_unpadded = input_tensors.at(0).get_logical_shape();
     const auto k_shape = input_tensors.at(1).get_padded_shape();
