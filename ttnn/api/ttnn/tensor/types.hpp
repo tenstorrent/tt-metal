@@ -16,7 +16,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
