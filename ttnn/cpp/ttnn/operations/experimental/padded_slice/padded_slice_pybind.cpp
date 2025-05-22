@@ -74,30 +74,6 @@ void bind_padded_slice(py::module& module) {
             py::arg("output_tensor") = std::nullopt,
             py::arg("pad_value") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
-        },
-
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::array<uint32_t, 4>& begins,
-               const std::array<uint32_t, 4>& ends,
-               const std::array<uint32_t, 4>& step,
-               const MemoryConfig& memory_config,
-               const std::optional<Tensor>& optional_output_tensor,
-               const std::optional<float>& pad_value,
-               QueueId queue_id) {
-                return self(
-                    queue_id, input_tensor, begins, ends, step, memory_config, optional_output_tensor, pad_value);
-            },
-            py::arg("input_tensor"),
-            py::arg("starts"),
-            py::arg("ends"),
-            py::arg("steps"),
-            py::kw_only(),
-            py::arg("memory_config"),
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("pad_value") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
         });
 }
 }  // namespace ttnn::operations::experimental::padded_slice

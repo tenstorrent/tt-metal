@@ -42,17 +42,6 @@ struct PaddedSliceOperation {
             optional_output_tensor,
             pad_value);
     }
-
-    template <typename T, std::size_t N>
-    static ttnn::Tensor invoke(
-        QueueId queue_id,
-        const ttnn::Tensor& input_tensor,
-        const std::array<T, N>& output_tensor_start,
-        const std::array<T, N>& output_tensor_end,
-        const std::array<T, N>& step,
-        const MemoryConfig& memory_config_arg,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<float>& pad_value = std::nullopt);
 };
 
 }  // namespace experimental
