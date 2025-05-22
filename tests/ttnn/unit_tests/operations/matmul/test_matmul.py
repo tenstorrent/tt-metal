@@ -1,6 +1,8 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
+import os
 
 from loguru import logger
 import pytest
@@ -10,6 +12,11 @@ import ttnn
 
 from models.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+# for setting up multi-device stress tests
+NUM_DEVICES_ENV_KEY = "USE_NUM_DEVICES"
+NUM_DEVICES = ttnn.distributed.get_num_pcie_devices() if os.environ.get(NUM_DEVICES_ENV_KEY, None) is not None else 1
 
 
 def find_max_subblock(out_block_h, out_block_w):
@@ -310,13 +317,14 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("transpose_tile", [True, False])
+@pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
 def test_matmul_in1_dram_sharded_tiny_tile(
-    device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
+    mesh_device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
 ):
     # PCC issue when height not equal to tile height
     m = tile_h
     if is_blackhole():
-        num_banks = device.dram_grid_size().x  # need to match harvesting of dram
+        num_banks = mesh_device.dram_grid_size().x  # need to match harvesting of dram
     else:
         num_banks = 12
     n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
@@ -351,10 +359,10 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         tile=ttnn.Tile((tile_h, 32)),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=mesh_device,
         memory_config=in0_memory_config,
     )
-    in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    in1_shard_grid = ttnn.CoreCoord(mesh_device.dram_grid_size().x - 1, mesh_device.dram_grid_size().y - 1)
     in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
     in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
@@ -363,7 +371,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         tile=ttnn.Tile((32, tile_w), transpose_tile=transpose_tile),
         dtype=in1_dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=mesh_device,
         memory_config=in1_memory_config,
     )
 
@@ -371,7 +379,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
-        bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+        bias_shard_grid = ttnn.CoreCoord(mesh_device.dram_grid_size().x - 1, mesh_device.dram_grid_size().y - 1)
         bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
         bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         bias_mem_config = ttnn.MemoryConfig(
@@ -382,7 +390,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
             tile=ttnn.Tile((tile_h, tile_w)),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=device,
+            device=mesh_device,
             memory_config=bias_mem_config,
         )
 
@@ -421,7 +429,6 @@ def test_matmul_in1_dram_sharded_tiny_tile(
             compute_kernel_config=compute_kernel_config,
             output_tile=ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w]),
         )
-    output_tensor = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
     if has_bias:
         pt_out += bias
@@ -429,7 +436,11 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         expected_pcc = 0.993
     else:
         expected_pcc = 0.999
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+
+    # required for multi-device stress tests
+    for o in ttnn.get_device_tensors(output_t):
+        output_tensor = ttnn.to_torch(o)
+        assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
 def run_matmul_2d_multiple_output_blocks_per_core(
@@ -551,12 +562,14 @@ def run_matmul_2d_multiple_output_blocks_per_core(
             dtype=ttnn.bfloat16,
             compute_kernel_config=compute_kernel_config,
         )
-    output_tensor = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
     if has_bias:
         pt_out += bias
 
-    assert_with_pcc(pt_out, output_tensor, 0.999)
+    # required for multi-device stress tests
+    for o in ttnn.get_device_tensors(output_t):
+        output_tensor = ttnn.to_torch(o)
+        assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
 @pytest.mark.parametrize("b", [1, 2])
@@ -570,8 +583,9 @@ def run_matmul_2d_multiple_output_blocks_per_core(
 @pytest.mark.parametrize("num_out_block_h", [1, 2])
 @pytest.mark.parametrize("num_out_block_w", [1, 2])
 @pytest.mark.parametrize("transpose_mcast", [True, False])
+@pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
 def test_matmul_2d_multiple_output_blocks_per_core(
-    device,
+    mesh_device,
     b,
     m,
     k,
@@ -585,7 +599,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
     transpose_mcast,
     use_program_cache,
 ):
-    compute_grid_size = device.compute_with_storage_grid_size()
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
     required_size = 8  # input tensor sizes are too small to be subdivided on larger grids
     grid_size = [min(required_size, compute_grid_size.x), min(required_size, compute_grid_size.y)]
     if grid_size[1] < required_size:
@@ -593,7 +607,7 @@ def test_matmul_2d_multiple_output_blocks_per_core(
 
     for _ in range(2):
         run_matmul_2d_multiple_output_blocks_per_core(
-            device,
+            mesh_device,
             b,
             m,
             k,
@@ -613,10 +627,10 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
             layout=ttnn.TILE_LAYOUT,
-            device=device,
+            device=mesh_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert mesh_device.num_program_cache_entries() == 1
 
 
 def run_matmul_2d_tiny_tile(
@@ -1234,7 +1248,8 @@ def test_padded_2d_matmul(device, side, tile_count):
     "has_program_config",
     [True, False],
 )
-def test_padded_1d_matmul(device, side, has_program_config):
+@pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
+def test_padded_1d_matmul(mesh_device, side, has_program_config):
     if side == "height":
         M = 10069
         K = 96
@@ -1284,11 +1299,11 @@ def test_padded_1d_matmul(device, side, has_program_config):
     dummy_out = torch.zeros([1, 1, M, N])
     dummy_upper = torch.full([1, 1, X, X], 4)
 
-    act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    lower_tt = ttnn.from_torch(dummy_lower, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    out_tt = ttnn.from_torch(dummy_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    upper_tt = ttnn.from_torch(dummy_upper, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16)
+    lower_tt = ttnn.from_torch(dummy_lower, layout=ttnn.TILE_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16)
+    out_tt = ttnn.from_torch(dummy_out, layout=ttnn.TILE_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16)
+    upper_tt = ttnn.from_torch(dummy_upper, layout=ttnn.TILE_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16)
     # Free up dummy output tensor so linear will allocate output there
     ttnn.deallocate(out_tt)
     output_tensor = ttnn.matmul(
@@ -1300,14 +1315,19 @@ def test_padded_1d_matmul(device, side, has_program_config):
             math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
         ),
     )
-    lower = ttnn.to_torch(lower_tt).float()
-    upper = ttnn.to_torch(upper_tt).float()
-    # Check that the tensors above and below the output are unchanged
+
+    # required for multi-device stress tests
     torch_output_tensor = torch.matmul(torch_act, torch_weight)
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-    assert torch.all(lower == 2)
-    assert torch.all(upper == 4)
+    for l, u, o in zip(
+        ttnn.get_device_tensors(lower_tt), ttnn.get_device_tensors(upper_tt), ttnn.get_device_tensors(output_tensor)
+    ):
+        lower = ttnn.to_torch(l).float()
+        upper = ttnn.to_torch(u).float()
+        # Check that the tensors above and below the output are unchanged
+        output_tensor_i = ttnn.to_torch(o)
+        assert_with_pcc(torch_output_tensor, output_tensor_i, pcc)
+        assert torch.all(lower == 2)
+        assert torch.all(upper == 4)
 
 
 # fmt: off
