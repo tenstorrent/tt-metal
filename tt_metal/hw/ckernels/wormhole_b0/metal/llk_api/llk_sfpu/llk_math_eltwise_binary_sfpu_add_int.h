@@ -6,7 +6,6 @@
 
 #include "llk_math_eltwise_binary_sfpu_init.h"
 #include "llk_math_eltwise_binary_sfpu_params.h"
-#include "ckernel_sfpu_add_int.h"
 
 namespace ckernel {
 
@@ -21,7 +20,7 @@ template <bool APPROXIMATE, bool SIGN_MAGNITUDE_FORMAT, InstrModLoadStore INSTRU
 inline void llk_math_eltwise_binary_sfpu_add_int(
     uint dst_index0, uint32_t dst_index1, int vector_mode = VectorMode::RC) {
     llk_math_eltwise_binary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_add_int<APPROXIMATE, SIGN_MAGNITUDE_FORMAT, INSTRUCTION_MODE>,
+        ckernel::sfpu::_add_int_<APPROXIMATE, SIGN_MAGNITUDE_FORMAT, INSTRUCTION_MODE>,
         dst_index0,
         dst_index1,
         vector_mode);
