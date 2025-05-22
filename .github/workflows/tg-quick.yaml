@@ -101,7 +101,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run quick tests
+      - name: Run health tests
         timeout-minutes: 20
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         run: |
@@ -114,6 +114,10 @@ jobs:
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+      - name: Run quick tests
+        timeout-minutes: 20
+        # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
+        run: |
           pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick";
           pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "quick";
           pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py;
