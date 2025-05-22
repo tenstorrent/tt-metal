@@ -92,9 +92,6 @@ const std::string rx_kernel_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_rx.cpp";
 std::string tx_kernel_src;
 
-static constexpr auto routing_directions = {
-    RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
-
 uint32_t get_noc_distance(uint32_t noc_idx, CoreCoord src, CoreCoord dest, uint32_t grid_size_x, uint32_t grid_size_y) {
     uint32_t x_dist = 0;
     uint32_t y_dist = 0;
