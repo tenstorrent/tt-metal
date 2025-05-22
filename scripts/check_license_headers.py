@@ -38,6 +38,7 @@ COMMENT_STYLES = {
 }
 
 
+# Slow but reliable fallback
 def get_git_year(path: Path) -> str:
     try:
         result = subprocess.run(
@@ -73,7 +74,7 @@ def get_expected_header(file_ext: str, normalize_year=True, git_year=None):
     # If we have a git year and not ignoring years, use that year
     if git_year and not normalize_year:
         header_lines = LICENSE_HEADER.strip().splitlines()
-        header_lines = [line.replace("<YEAR>", git_year) for line in header_lines]
+        header_lines = [line.replace("<YEAR>", str(git_year)) for line in header_lines]
         return [normalize_line(f"{prefix}{line}", False) for line in header_lines]
 
     # Otherwise use the template with <YEAR>
@@ -153,6 +154,51 @@ def check_git_requirements():
     return True
 
 
+def get_file_years() -> dict[Path, int | None]:
+    try:
+        result = subprocess.Popen(
+            ["git", "log", "--name-status", "--format=%cs", "--date=short"],
+            stdout=subprocess.PIPE,
+            universal_newlines=True,
+        )
+    except subprocess.CalledProcessError as ex:
+        print(ex)
+        sys.exit(1)
+
+    year: int = 0
+    files: dict[str, int | Path] = {}
+    for line in result.stdout:
+        if not (line) or len(line) < 2 or line[0] == " " or line[0] == "M" or line[0] == "D":
+            continue
+
+        elif line[0].isdigit():
+            year = int(line[0:4])
+
+        elif line[0] == "A":
+            files[Path(line.split()[1])] = year
+
+        # this doesn't gracefully handle spaces in paths, so we handle that elsewhere
+        elif line[0] == "R":
+            split_line = line.split()
+            # R<num> <original> <new>
+            files[Path(split_line[2])] = Path(split_line[1])
+        else:
+            continue
+
+    # resolve renames
+    for key in files.keys():
+        val = files[key]
+        while (val is not None) and (type(val) is not int):
+            new_val = files.get(val)  # returns None if key doesn't exist
+            files[key] = new_val
+            val = new_val
+
+    return files
+
+
+# now you have a master list of all the years for each file
+
+
 def main():
     parser = argparse.ArgumentParser(description="Check license headers in files.")
     parser.add_argument("--ignore-year", action="store_true", help="Ignore year differences.")
@@ -163,16 +209,28 @@ def main():
     if not check_git_requirements():
         sys.exit(1)
 
+    file_years = get_file_years()
+
     failed = False
     for file_arg in args.files:
         path = Path(file_arg)
         ext = path.suffix
         print(f"Checking {path} with ext {ext}", file=sys.stderr)
-        git_year = get_git_year(path)
+
+        git_year = file_years.get(path)
+
+        # the fast lookup table doesn't handle spaces in file names, so when
+        # we come across a file that was named incorrectly, use the slower
+        # method as a reliable fallback.
+        if git_year is None:
+            git_year = get_git_year(path)
+
         print(f"Git year: {git_year}", file=sys.stderr)
         expected = get_expected_header(ext, args.ignore_year, git_year)
+
         if expected is None:
             continue  # Skip unsupported files
+
         if not check_file(path, expected, args.ignore_year, git_year):
             failed = True
 

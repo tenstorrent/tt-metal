@@ -52,7 +52,7 @@ repos:
       pass_filenames: false
 - repo: local
   hooks:
-    - id: check-license-header
+    - id: check-license-headers
       name: Check License Headers
       entry: python3 scripts/check_license_headers.py
       language: system
