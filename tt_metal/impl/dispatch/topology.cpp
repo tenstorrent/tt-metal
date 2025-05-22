@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
-#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <map>
@@ -31,11 +30,7 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "fabric_edm_packet_header.hpp"
 #include "fabric_host_interface.h"
-#include "fabric_types.hpp"
-#include "hal.hpp"
-#include "hal_types.hpp"
 #include "kernel_config/demux.hpp"
 #include "kernel_config/eth_router.hpp"
 #include "kernel_config/eth_tunneler.hpp"
@@ -48,7 +43,6 @@
 #include "system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
@@ -513,6 +507,7 @@ std::unordered_map<chip_id_t, std::unique_ptr<Program>> command_queue_pgms;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> routing_cores;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> empty_cores;
+std::unordered_map<chip_id_t, std::vector<TerminationInfo>> termination_info;
 
 // Helper function to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
 std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
@@ -903,6 +898,18 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
         }
     }
 
+    // Register termination info
+    for (auto node_and_kernel : node_id_to_kernel) {
+        if (node_and_kernel->GetDeviceId() != device->id()) {
+            continue;
+        }
+
+        const auto& info = node_and_kernel->GetTerminationInfo();
+        if (info.has_value()) {
+            termination_info[device->id()].push_back(info.value());
+        }
+    }
+
     // Compile the program and return it so Device can register it
     detail::CompileProgram(device, *cq_program, /*force_slow_dispatch=*/true);
     // Write runtime args to device
@@ -1282,6 +1289,13 @@ const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_
         return empty_cores[dev_id];
     }
     return routing_cores[dev_id];
+}
+
+const std::vector<TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id) {
+    if (!termination_info.contains(dev_id)) {
+        termination_info[dev_id] = {};
+    }
+    return termination_info[dev_id];
 }
 
 }  // namespace tt::tt_metal
