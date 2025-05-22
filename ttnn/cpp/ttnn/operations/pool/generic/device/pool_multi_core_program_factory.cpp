@@ -274,6 +274,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
     uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override) << 16;
     uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
+    bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false ||
+                               (ceil_pad_h == 0 && ceil_pad_w == 0) || divisor_override.has_value();
 
     std::vector<uint32_t> reader0_ct_args = {
         out_nhw_per_core,
@@ -299,8 +301,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || (ceil_pad_h == 0 && ceil_pad_w == 0) ||
-            divisor_override.has_value()};
+        one_scalar_per_core};
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -326,8 +327,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || (ceil_pad_h == 0 && ceil_pad_w == 0) ||
-            divisor_override.has_value()};
+        one_scalar_per_core};
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
@@ -377,8 +377,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false || (ceil_pad_h == 0 && ceil_pad_w == 0) ||
-            divisor_override.has_value()};
+        one_scalar_per_core};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
@@ -396,16 +395,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
-    uint32_t x = 0;
-    uint32_t y = 0;
-    uint32_t num_of_ele = out_nhw_per_core;
-    std::vector<uint32_t> total_elems_per_c_shards;
-    for (int i = 0; i < num_shards_c; i++) {
-        total_elems_per_c_shards.push_back(out_h * out_w * in_n);
-    }
-    uint32_t channel = 0;
-    uint32_t batch = 0;
-    if (pool_type == Pool2DType::AVG_POOL2D) {
+
+    if (!one_scalar_per_core) {
+        uint32_t x = 0;
+        uint32_t y = 0;
+        uint32_t num_of_ele = out_nhw_per_core;
+        std::vector<uint32_t> total_elems_per_c_shards;
+        for (int i = 0; i < num_shards_c; i++) {
+            total_elems_per_c_shards.push_back(out_h * out_w * in_n);
+        }
+        uint32_t channel = 0;
+        uint32_t batch = 0;
         for (uint32_t i = 0; i < all_cores.ranges().size(); ++i) {
             for (auto iterator = all_cores.ranges()[i].begin(); iterator != all_cores.ranges()[i].end(); ++iterator) {
                 if (total_elems_per_c_shards[channel] > out_nhw_per_core) {
