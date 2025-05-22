@@ -13,8 +13,22 @@ struct NDShardingParams {
     Shape shard_shape;
     Layout layout = Layout::TILE;
 };
+struct LegacyToNdShardingParams {
+    Shape shape;
+    TensorMemoryLayout memory_layout = TensorMemoryLayout::BLOCK_SHARDED;
+    std::optional<Shape2D> shard_shape_2d;
+    Layout layout = Layout::TILE;
+
+    std::optional<Shape> shard_shape_nd;
+};
+struct NdToLegacyShardingParams {
+    Shape shape;
+    Shape shard_shape_nd;
+    Layout layout = Layout::TILE;
+
+    std::optional<Shape2D> shard_shape_2d;
+};
 }  // namespace
-// namespace
 
 class NDShardingTests : public ttnn::TTNNFixtureWithDevice, public ::testing::WithParamInterface<NDShardingParams> {};
 
@@ -40,6 +54,45 @@ TEST_P(NDShardingTests, ReadWriteTest) {
         for (size_t i = 0; i < volume; i++) {
             ASSERT_EQ(data[i], readback_data[i]);
         }
+    }
+}
+
+class LegacyToNdShardingTests : public ::testing::TestWithParam<LegacyToNdShardingParams> {};
+
+TEST_P(LegacyToNdShardingTests, LegacyToNdSharding) {
+    const auto& params = GetParam();
+
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+    std::optional<ShardSpec> shard_spec;
+    if (params.shard_shape_2d.has_value()) {
+        shard_spec = ShardSpec{cores, params.shard_shape_2d.value(), ShardOrientation::ROW_MAJOR};
+    }
+    MemoryConfig memory_config{params.memory_layout, BufferType::L1, shard_spec};
+    TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
+    TensorSpec tensor_spec(params.shape, tensor_layout);
+
+    auto nd_shard_spec = tensor_spec.memory_config().nd_shard_spec();
+    ASSERT_EQ(nd_shard_spec.has_value(), params.shard_shape_nd.has_value());
+    if (nd_shard_spec.has_value()) {
+        ASSERT_EQ(nd_shard_spec->physical_shard_shape, params.shard_shape_nd.value());
+    }
+}
+
+class NdToLegacyShardingTests : public ::testing::TestWithParam<NdToLegacyShardingParams> {};
+
+TEST_P(NdToLegacyShardingTests, NdToLegacySharding) {
+    const auto& params = GetParam();
+
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+    NdShardSpec nd_shard_spec{params.shard_shape_nd, cores, ShardOrientation::ROW_MAJOR};
+    MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
+    TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
+    TensorSpec tensor_spec(params.shape, tensor_layout);
+
+    auto shard_spec_2d = tensor_spec.memory_config().shard_spec();
+    ASSERT_EQ(shard_spec_2d.has_value(), params.shard_shape_2d.has_value());
+    if (shard_spec_2d.has_value()) {
+        ASSERT_EQ(shard_spec_2d->shape, params.shard_shape_2d.value());
     }
 }
 
@@ -131,4 +184,149 @@ INSTANTIATE_TEST_SUITE_P(
             .shape = Shape({30, 40, 50}),
             .shard_shape = Shape({10, 10, 10}),
             .layout = Layout::ROW_MAJOR,
+        }));
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    LegacyToNdShardingTests,
+    ::testing::Values(
+        LegacyToNdShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_shape_2d = Shape2D{32, 32},
+            .layout = Layout::TILE,
+            .shard_shape_nd = Shape({1, 32, 32}),
+        },
+        LegacyToNdShardingParams{
+            .shape = Shape({2, 4, 4}),
+            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_shape_2d = Shape2D{2, 2},
+            .layout = Layout::ROW_MAJOR,
+            .shard_shape_nd = Shape({1, 2, 2}),
+        },
+        LegacyToNdShardingParams{
+            .shape = Shape({2, 4}),
+            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_shape_2d = Shape2D{2, 2},
+            .layout = Layout::ROW_MAJOR,
+            .shard_shape_nd = Shape({2, 2}),
+        },
+        LegacyToNdShardingParams{
+            .shape = Shape({4}),
+            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_shape_2d = Shape2D{1, 2},
+            .layout = Layout::ROW_MAJOR,
+            .shard_shape_nd = Shape({2}),
+        },
+        LegacyToNdShardingParams{
+            .shape = Shape({}),
+            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_shape_2d = Shape2D{1, 1},
+            .layout = Layout::ROW_MAJOR,
+            .shard_shape_nd = Shape({}),
+        },
+        LegacyToNdShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .memory_layout = TensorMemoryLayout::INTERLEAVED,
+            .shard_shape_2d = std::nullopt,
+            .layout = Layout::TILE,
+            .shard_shape_nd = std::nullopt,
+        },
+        LegacyToNdShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .memory_layout = TensorMemoryLayout::SINGLE_BANK,
+            .shard_shape_2d = std::nullopt,
+            .layout = Layout::TILE,
+            .shard_shape_nd = std::nullopt,
+        },
+        LegacyToNdShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+            .shard_shape_2d = Shape2D{32, 32 * 2},
+            .layout = Layout::TILE,
+            .shard_shape_nd = std::nullopt,
+        },
+        LegacyToNdShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
+            .shard_shape_2d = Shape2D{32 * 2 * 2, 32},
+            .layout = Layout::TILE,
+            .shard_shape_nd = std::nullopt,
+        }));
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    NdToLegacyShardingTests,
+    ::testing::Values(
+        NdToLegacyShardingParams{
+            .shape = Shape({2, 32 * 2, 32 * 2}),
+            .shard_shape_nd = Shape({1, 32, 32}),
+            .layout = Layout::TILE,
+            .shard_shape_2d = Shape2D{32, 32},
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({2, 2, 4}),
+            .shard_shape_nd = Shape({1, 1, 2}),
+            .layout = Layout::ROW_MAJOR,
+            .shard_shape_2d = Shape2D{1, 2},
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({4 * 32, 4 * 32}),
+            .shard_shape_nd = Shape({2 * 32, 2 * 32}),
+            .layout = Layout::TILE,
+            .shard_shape_2d = Shape2D{2 * 32, 2 * 32},
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({4, 4}),
+            .shard_shape_nd = Shape({2, 2}),
+            .layout = Layout::ROW_MAJOR,
+            .shard_shape_2d = Shape2D{2, 2},
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({4 * 32}),
+            .shard_shape_nd = Shape({32, 2 * 32}),
+            .layout = Layout::TILE,
+            .shard_shape_2d = Shape2D{32, 2 * 32},
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({4}),
+            .shard_shape_nd = Shape({2}),
+            .layout = Layout::ROW_MAJOR,
+            .shard_shape_2d = Shape2D{1, 2},
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({}),
+            .shard_shape_nd = Shape({32, 2 * 32}),
+            .layout = Layout::TILE,
+            .shard_shape_2d = Shape2D{32, 2 * 32},
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({}),
+            .shard_shape_nd = Shape({2}),
+            .layout = Layout::ROW_MAJOR,
+            .shard_shape_2d = Shape2D{1, 2},
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({2 * 32, 2 * 32, 2 * 32}),
+            .shard_shape_nd = Shape({2 * 32, 32, 32}),  // sharding along the batch
+            .layout = Layout::TILE,
+            .shard_shape_2d = std::nullopt,
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape_nd = Shape({2, 1, 1}),  // sharding along the batch
+            .layout = Layout::ROW_MAJOR,
+            .shard_shape_2d = std::nullopt,
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({100 * 32, 100 * 32}),
+            .shard_shape_nd = Shape({10 * 32, 10 * 32}),
+            .layout = Layout::TILE,
+            .shard_shape_2d = std::nullopt,  // not enough cores
+        },
+        NdToLegacyShardingParams{
+            .shape = Shape({100, 100}),
+            .shard_shape_nd = Shape({10, 10}),
+            .layout = Layout::ROW_MAJOR,
+            .shard_shape_2d = std::nullopt,  // not enough cores
         }));

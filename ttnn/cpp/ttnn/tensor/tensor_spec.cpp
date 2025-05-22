@@ -161,17 +161,20 @@ void TensorSpec::populate_sharding_specs() {
 std::optional<NdShardSpec> TensorSpec::nd_shard_spec_from_legacy() {
     auto mem_layout = memory_config().memory_layout();
 
-    if (mem_layout == TensorMemoryLayout::INTERLEAVED) {
-        // Convertion from interleaved to ND sharding is not supported for now
-        return std::nullopt;
-    }
-
-    if (mem_layout == TensorMemoryLayout::SINGLE_BANK) {
-        // Convertion from single bank to ND sharding is not supported for now
+    // Only block sharding is supported for now
+    if (mem_layout != TensorMemoryLayout::BLOCK_SHARDED) {
         return std::nullopt;
     }
 
     const auto& shard_spec = memory_config().shard_spec().value();
+
+    // Can't convert logical sharding if physical shard shape is different from logical shard shape
+    if (shard_spec.mode == ShardMode::LOGICAL) {
+        if (shard_spec.physical_shard_shape.has_value() && *shard_spec.physical_shard_shape != shard_spec.shape) {
+            return std::nullopt;
+        }
+    }
+
     NdShardSpec nd_shard_spec{
         .physical_shard_shape = ttnn::Shape().to_rank(logical_shape_.rank()),
         .cores = shard_spec.grid,
@@ -179,32 +182,11 @@ std::optional<NdShardSpec> TensorSpec::nd_shard_spec_from_legacy() {
     };
 
     if (mem_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        // Can't convert logical sharding if physical shard shape is different from logical shard shape
-        if (shard_spec.mode == ShardMode::LOGICAL) {
-            if (shard_spec.physical_shard_shape.has_value() && *shard_spec.physical_shard_shape != shard_spec.shape) {
-                return std::nullopt;
-            }
-        }
-
         if (logical_shape_.rank() >= 2) {
             nd_shard_spec.physical_shard_shape[-2] = shard_spec.shape[0];
         }
         if (logical_shape_.rank() >= 1) {
             nd_shard_spec.physical_shard_shape[-1] = shard_spec.shape[1];
-        }
-        return nd_shard_spec;
-    }
-
-    if (mem_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        if (logical_shape_.rank() >= 1) {
-            nd_shard_spec.physical_shard_shape[-1] = logical_shape_[-1];
-        }
-        return nd_shard_spec;
-    }
-
-    if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        if (logical_shape_.rank() >= 2) {
-            nd_shard_spec.physical_shard_shape[-2] = logical_shape_[-2];
         }
         return nd_shard_spec;
     }
