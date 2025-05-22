@@ -121,14 +121,7 @@ class TtConv:
         )
 
     def default_1x1_conv_config(self):
-        return ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            # math_fidelity=ttnn.MathFidelity.LoFi,
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        return None
 
     def is_1x1_conv(self, kernel_size, stride, padding, dilation, conv_config):
         return (
@@ -176,6 +169,7 @@ class TtConv:
                 )
                 else self.compute_config
             ),
+            # compute_config=self.compute_config,
             groups=self.groups,
             memory_config=ttnn.L1_MEMORY_CONFIG if self.change_shard == True else None,
             return_weights_and_bias=True,
