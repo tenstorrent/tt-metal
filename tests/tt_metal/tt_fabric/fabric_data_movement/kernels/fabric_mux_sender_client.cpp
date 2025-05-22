@@ -112,4 +112,5 @@ void kernel_main() {
     }
 
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+    DPRINT << "SENDER OUT" << ENDL();
 }
