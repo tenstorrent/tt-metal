@@ -27,8 +27,10 @@
                 "name": "exp",
                 "output": "accuracy_results/plots/ulp/exp-bfloat16.png",
                 "files": [
+                    "accuracy_results/results/exp-bfloat16-[1].csv",
+                    "accuracy_results/results/exp_approx-bfloat16-[1].csv",
                     "accuracy_results/results/exp_alt-bfloat16-[1].csv",
-                    "accuracy_results/results/exp_hybrid-bfloat16-[1].csv"
+                    "accuracy_results/results/exp_approx_21f-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-100, 100],
@@ -159,7 +161,8 @@
                 ],
                 "plot_params": {
                     "xlim": [-10, 10],
-                    "yscale": "linear"
+                    "yscale": "linear",
+                    "ylim": [0, 10]
                 }
             },
             {
@@ -170,6 +173,9 @@
                     "accuracy_results/results/cos-bfloat16-[1].csv"
                 ],
                 "plot_params": {
+                    "yscale": "linear",
+                    "xlim": [-1e6, 1e6],
+                    "ylim": [0, 10]
                 }
             },
             {
@@ -180,6 +186,9 @@
                     "accuracy_results/results/sin-bfloat16-[1].csv"
                 ],
                 "plot_params": {
+                    "yscale": "linear",
+                    "xlim": [-1e6, 1e6],
+                    "ylim": [0, 10]
                 }
             },
             {
@@ -190,6 +199,7 @@
                     "accuracy_results/results/silu-bfloat16-[1].csv"
                 ],
                 "plot_params": {
+                    "xlim": [-1000, 1000]
                 }
             },
             {
@@ -224,7 +234,8 @@
                 ],
                 "plot_params": {
                     "xlim": [-10, 10],
-                    "yscale": "linear"
+                    "yscale": "linear",
+                    "ylim": [0, 10]
                 }
             },
             {
@@ -236,7 +247,9 @@
                     "accuracy_results/results/gelu_approx-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "xlim": [-10, 10]
+                    "xlim": [-10, 10],
+                    "yscale": "asinh",
+                    "ylim": [0, 1000]
                 }
             },
             {
@@ -247,8 +260,21 @@
                     "accuracy_results/results/logit-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "xlim": [0, 1],
-                    "xscale": "log"
+                    "xlim": [-0.01, 1.01],
+                    "xscale": "linear"
+                }
+            },
+            {
+                "id": "logit-bfloat16-ulp-zoom",
+                "name": "logit",
+                "output": "accuracy_results/plots/ulp/logit-bfloat16-zoom.png",
+                "files": [
+                    "accuracy_results/results/logit-bfloat16-[1].csv"
+                ],
+                "plot_params": {
+                    "xlim": [-0.01, 1.01],
+                    "xscale": "linear",
+                    "ylim": [0, 1000]
                 }
             },
             {
@@ -259,7 +285,8 @@
                     "accuracy_results/results/swish-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "xlim": [-10, 10]
+                    "xlim": [-200, 200],
+                    "yscale": "asinh"
                 }
             },
             {
@@ -270,7 +297,7 @@
                     "accuracy_results/results/mish-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "xlim": [-1e4, 1e4]
+                    "xlim": [-20, 20]
                 }
             },
             {
@@ -281,7 +308,9 @@
                     "accuracy_results/results/elu-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "xlim": [-10, 10]
+                    "xlim": [-100, 100],
+                    "ylim": [0, 50],
+                    "yscale": "linear"
                 }
             },
             {
@@ -293,7 +322,7 @@
                 ],
                 "plot_params": {
                     "xbase": 2,
-                    "xlim": [-1, 1000]
+                    "xlim": [-0.01, null]
                 }
             },
             {
@@ -305,6 +334,8 @@
                     "accuracy_results/results/rsqrt_approx-bfloat16-[1].csv"
                 ],
                 "plot_params": {
+                    "yscale": "asinh",
+                    "xlim": [-0.1, 1e12]
                 }
             },
             {
@@ -315,6 +346,7 @@
                     "accuracy_results/results/reciprocal-bfloat16-[1].csv"
                 ],
                 "plot_params": {
+                    "yscale": "log"
                 }
             },
             {
@@ -337,8 +369,8 @@
                     "accuracy_results/results/lgamma-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "xlim": [-1e3, 1e3],
-                    "ylim": [0, 1e40]
+                    "xlim": [-200, 200],
+                    "ylim": [0, null]
                 }
             },
             {
@@ -349,8 +381,8 @@
                     "accuracy_results/results/tanhshrink-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "xbase": 2,
-                    "xlim": [-1e4, 1e4]
+                    "xlim": [-1e4, 1e4],
+                    "ylim": [0, 5e4]
                 }
             }
           ]
@@ -641,11 +673,11 @@
                         "accuracy_results/results/logit-bfloat16-[32].csv"
                     ],
                     "plot_params": {
-                        "xlim": [0, 1],
-                        "ylim": [0, 10],
+                        "xlim": [-0.01, 1],
+                        "ylim": [0, 5],
                         "xscale": "linear",
                         "ybase": 10,
-                        "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1, 5]
+                        "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1, 2]
                     }
                 },
                 {
@@ -1043,10 +1075,11 @@
                         "accuracy_results/results/logit-bfloat16-[1].csv"
                     ],
                     "plot_params": {
-                        "xlim": [0, 1],
-                        "ylim": [0, 10],
+                        "xlim": [-0.01, 1],
+                        "ylim": [0, 5],
                         "ybase": 10,
-                        "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1, 5]
+                        "xscale": "linear",
+                        "yticks": [0, 0.01, 0.05, 0.1, 0.5, 1, 2]
                     }
                 },
                 {
