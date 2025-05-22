@@ -755,6 +755,8 @@ void DebugPrintServerContext::DetachDevice(chip_id_t device_id) {
     std::vector<chip_id_t> chip_ids = rtoptions.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
     if (!rtoptions.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (std::find(chip_ids.begin(), chip_ids.end(), device_id) == chip_ids.end()) {
+            // If a chip is present that is not enabled now, still need to remove it
+            device_to_core_range_.erase(device_id);
             return;
         }
     }

@@ -96,7 +96,7 @@ protected:
     }
 
     void TearDown() override {
-        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+        // tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
         // Close all opened devices
         for (unsigned int id = 0; id < devices_.size(); id++) {
             // The test may ahve closed the device already, so only close if active.
