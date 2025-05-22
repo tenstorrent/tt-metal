@@ -103,6 +103,7 @@ def run_tt_iteration(
 @torch.no_grad()
 def run_demo_inference(
     ttnn_device,
+    is_ci_env,
     prompt,
     num_inference_steps,
     classifier_free_guidance,
@@ -427,8 +428,11 @@ def run_demo_inference(
         image = pipeline.vae.decode(latents, return_dict=False)[0]
     image = pipeline.image_processor.postprocess(image, output_type="pil")[0]
 
-    image.save("output.png")
-    logger.info(f"Image saved to output.png")
+    if is_ci_env:
+        logger.info(f"Image generated successfully")
+    else:
+        image.save("output.png")
+        logger.info(f"Image saved to output.png")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 6 * 16384}], indirect=True)
@@ -459,6 +463,7 @@ def run_demo_inference(
 def test_demo(
     device,
     use_program_cache,
+    is_ci_env,
     prompt,
     num_inference_steps,
     classifier_free_guidance,
@@ -466,6 +471,7 @@ def test_demo(
 ):
     return run_demo_inference(
         device,
+        is_ci_env,
         prompt,
         num_inference_steps,
         classifier_free_guidance,
