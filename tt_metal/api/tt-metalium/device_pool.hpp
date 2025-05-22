@@ -62,6 +62,8 @@ public:
     bool is_dispatch_firmware_active() const;
     void init_profiler() const;
     void initialize_fabric_and_dispatch_fw() const;
+    // API needed due to Issue #19729
+    std::size_t get_max_num_eth_cores_across_all_devices() const;
 
 private:
     ~DevicePool();

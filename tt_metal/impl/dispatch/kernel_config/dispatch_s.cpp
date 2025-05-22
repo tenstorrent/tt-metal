@@ -26,6 +26,8 @@
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 
+#include "tt_metal/api/tt-metalium/device_pool.hpp"
+
 using namespace tt::tt_metal;
 
 void DispatchSKernel::GenerateStaticConfigs() {
@@ -86,13 +88,13 @@ void DispatchSKernel::GenerateDependentConfigs() {
 
 void DispatchSKernel::CreateKernel() {
     // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
-    // Num num_virtual_active_eth_cores is set if the user application requested virtualizing the
+    // num_virtual_active_eth_cores is set if the user application requested virtualizing the
     // number of ethernet cores across devices (to essentially fake uniformity). This value is the
-    // max number of ethernet cores acorss all chip in the cluster.
+    // max number of ethernet cores across all chips in the opened cluster.
     // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
     // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
     // ethernet cores in the chip.
-    uint32_t num_virtual_active_eth_cores = dynamic_cast<Device*>(device_)->get_ethernet_core_count_on_dispatcher();
+    uint32_t num_virtual_active_eth_cores = tt::DevicePool::instance().get_max_num_eth_cores_across_all_devices();
     uint32_t num_physical_active_eth_cores =
         MetalContext::instance()
             .get_cluster()
