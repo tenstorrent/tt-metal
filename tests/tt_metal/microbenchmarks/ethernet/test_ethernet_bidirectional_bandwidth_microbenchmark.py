@@ -7,8 +7,8 @@ import sys
 
 from loguru import logger
 import pytest
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tools.profiler.process_device_log import import_log_run_stats
+import tools.profiler.device_post_proc_config as device_post_proc_config
 
 
 def fits_in_l1(num_channels, sample_size):

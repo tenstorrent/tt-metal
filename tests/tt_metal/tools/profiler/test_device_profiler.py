@@ -13,7 +13,7 @@ from loguru import logger
 import pandas as pd
 import numpy as np
 
-from tt_metal.tools.profiler.common import (
+from tools.profiler.common import (
     TT_METAL_HOME,
     PROFILER_HOST_DEVICE_SYNC_INFO,
     PROFILER_SCRIPTS_ROOT,

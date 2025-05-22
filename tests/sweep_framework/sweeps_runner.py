@@ -10,8 +10,8 @@ import datetime
 import os
 import json
 import enlighten
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+from tools.profiler.process_ops_logs import get_device_data_generate_report
+from tools.profiler.common import PROFILER_LOGS_DIR
 from multiprocessing import Process
 from faster_fifo import Queue
 from queue import Empty

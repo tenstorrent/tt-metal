@@ -19,9 +19,9 @@ from collections import deque
 import click
 from loguru import logger
 
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
-from tt_metal.tools.profiler.common import (
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
+from tracy.common import (
     PROFILER_DEVICE_SIDE_LOG,
     PROFILER_HOST_SIDE_LOG,
     PROFILER_ARTIFACTS_DIR,

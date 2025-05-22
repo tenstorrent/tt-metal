@@ -9,13 +9,13 @@ from enum import Enum
 from loguru import logger
 import pytest
 import csv
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tools.profiler.process_device_log import import_log_run_stats
+import tools.profiler.device_post_proc_config as device_post_proc_config
 from tabulate import tabulate
 import pandas as pd
 from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
 
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+from tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
