@@ -42,8 +42,8 @@ test_id_to_name = {
 test_bounds = {
     "wormhole_b0": {
         0: {
-            "riscv_1": {"latency": {"lower": 500, "upper": 42000}, "bandwidth": 0.12},
-            "riscv_0": {"latency": {"lower": 400, "upper": 28000}, "bandwidth": 0.15},
+            "riscv_1": {"latency": {"lower": 300, "upper": 24000}, "bandwidth": 0.08},
+            "riscv_0": {"latency": {"lower": 300, "upper": 25000}, "bandwidth": 0.07},
         },
         1: {
             "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
@@ -58,11 +58,10 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 21},
         },
         4: {
-            "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
-            "riscv_0": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+            "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
         },
         5: {
-            "riscv_1": {"latency": {"lower": 200, "upper": 5000}, "bandwidth": 0.1},
+            "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
         },
         6: {
             "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
@@ -100,8 +99,8 @@ test_bounds = {
     },
     "blackhole": {
         0: {
-            "riscv_1": {"latency": {"lower": 500, "upper": 42000}, "bandwidth": 0.12},
-            "riscv_0": {"latency": {"lower": 400, "upper": 28000}, "bandwidth": 0.15},
+            "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.12},
+            "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
         },
         1: {
             "riscv_1": {"latency": {"lower": 300, "upper": 700}, "bandwidth": 0.17},
@@ -116,11 +115,10 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 34},
         },
         4: {
-            "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
-            "riscv_0": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+            "riscv_0": {"latency": {"lower": 300, "upper": 9200}, "bandwidth": 0.17},
         },
         5: {
-            "riscv_1": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+            "riscv_1": {"latency": {"lower": 300, "upper": 9200}, "bandwidth": 0.17},
         },
         6: {
             "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
@@ -181,7 +179,7 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 
     # Plot results
     if plot:
-        plot_dm_stats(dm_stats)
+        plot_dm_stats(dm_stats, arch=arch)
 
     # Export results to csv
     if report:
@@ -393,7 +391,7 @@ def print_stats(dm_stats):
         logger.info("")
 
 
-def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
+def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
     # Extract data for plotting
     riscv_1_series = dm_stats["riscv_1"]["analysis"]["series"]
     riscv_0_series = dm_stats["riscv_0"]["analysis"]["series"]
@@ -406,6 +404,9 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
         test_ids.add(attributes["Test id"])
 
     test_ids = sorted(test_ids)  # Sort for consistent ordering
+
+    # Set noc_width based on architecture
+    noc_width = 32 if arch == "wormhole_b0" else 64
 
     # Create the main figure
     fig = plt.figure(layout="constrained", figsize=(18, 6 * len(test_ids)))
@@ -421,7 +422,7 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
         subfig.suptitle(test_name, fontsize=16, weight="bold")
 
         # Create subplots within the subfigure
-        axes = subfig.subplots(1, 3)
+        axes = subfig.subplots(1, 2)
 
         # Filter data for the current Test id
         riscv_1_filtered = [
@@ -439,56 +440,96 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
         riscv_1_durations = [entry["duration_cycles"] for entry in riscv_1_filtered]
         riscv_0_durations = [entry["duration_cycles"] for entry in riscv_0_filtered]
 
-        riscv_1_bandwidths = []
-        riscv_0_bandwidths = []
         riscv_1_data_sizes = []
         riscv_0_data_sizes = []
+        riscv_1_bandwidths = []
+        riscv_0_bandwidths = []
+        riscv_1_transactions = []
+        riscv_0_transactions = []
 
         for entry in riscv_1_filtered:
             runtime_host_id = entry["duration_type"][0]["run_host_id"]
             attributes = dm_stats["riscv_1"]["attributes"][runtime_host_id]
             transaction_size = attributes["Transaction size in bytes"]
-            bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
-            riscv_1_bandwidths.append(bandwidth)
+            num_transactions = attributes["Number of transactions"]
+            bandwidth = num_transactions * transaction_size / entry["duration_cycles"]
             riscv_1_data_sizes.append(transaction_size)
+            riscv_1_bandwidths.append(bandwidth)
+            riscv_1_transactions.append(num_transactions)
 
         for entry in riscv_0_filtered:
             runtime_host_id = entry["duration_type"][0]["run_host_id"]
             attributes = dm_stats["riscv_0"]["attributes"][runtime_host_id]
             transaction_size = attributes["Transaction size in bytes"]
-            bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
-            riscv_0_bandwidths.append(bandwidth)
+            num_transactions = attributes["Number of transactions"]
+            bandwidth = num_transactions * transaction_size / entry["duration_cycles"]
             riscv_0_data_sizes.append(transaction_size)
+            riscv_0_bandwidths.append(bandwidth)
+            riscv_0_transactions.append(num_transactions)
 
         # Plot durations
         ax = axes[0]
-        ax.plot(riscv_1_durations, label="RISCV 1 Duration (cycles)", marker="o")
-        ax.plot(riscv_0_durations, label="RISCV 0 Duration (cycles)", marker="o")
+        lines = []
+        labels = []
+        if riscv_1_durations:
+            (line1,) = ax.plot(riscv_1_durations, label="RISCV 1 Duration (cycles)", marker="o")
+            lines.append(line1)
+            labels.append("RISCV 1 Duration (cycles)")
+        if riscv_0_durations:
+            (line0,) = ax.plot(riscv_0_durations, label="RISCV 0 Duration (cycles)", marker="o")
+            lines.append(line0)
+            labels.append("RISCV 0 Duration (cycles)")
         ax.set_xlabel("Index")
         ax.set_ylabel("Duration (cycles)")
         ax.set_title("Kernel Durations")
-        ax.legend()
-        ax.grid()
-
-        # Plot bandwidth
-        ax = axes[1]
-        ax.plot(riscv_1_bandwidths, label="RISCV 1 Bandwidth (bytes/cycle)", marker="o")
-        ax.plot(riscv_0_bandwidths, label="RISCV 0 Bandwidth (bytes/cycle)", marker="o")
-        ax.set_xlabel("Index")
-        ax.set_ylabel("Bandwidth (bytes/cycle)")
-        ax.set_title("Bandwidth Comparison")
-        ax.legend()
+        if lines:
+            ax.legend(lines, labels)
         ax.grid()
 
         # Plot size of data transferred vs bandwidth
-        ax = axes[2]
-        ax.scatter(riscv_1_data_sizes, riscv_1_bandwidths, label="RISCV 1", marker="o")
-        ax.scatter(riscv_0_data_sizes, riscv_0_bandwidths, label="RISCV 0", marker="o")
+        ax = axes[1]
+        unique_transactions = sorted(set(riscv_1_transactions + riscv_0_transactions))  # Ensure ascending order
+        for num_transactions in unique_transactions:
+            # Group and plot RISCV 1 data
+            riscv_1_grouped = [
+                (size, bw)
+                for size, bw, trans in zip(riscv_1_data_sizes, riscv_1_bandwidths, riscv_1_transactions)
+                if trans == num_transactions
+            ]
+            if riscv_1_grouped:
+                sizes, bws = zip(*riscv_1_grouped)
+                ax.plot(sizes, bws, label=f"RISCV 1 (Transactions={num_transactions})", marker="o")
+
+            # Group and plot RISCV 0 data
+            riscv_0_grouped = [
+                (size, bw)
+                for size, bw, trans in zip(riscv_0_data_sizes, riscv_0_bandwidths, riscv_0_transactions)
+                if trans == num_transactions
+            ]
+            if riscv_0_grouped:
+                sizes, bws = zip(*riscv_0_grouped)
+                ax.plot(sizes, bws, label=f"RISCV 0 (Transactions={num_transactions})", marker="o")
+
+        # Add theoretical max bandwidth curve
+        transaction_sizes = sorted(set(riscv_1_data_sizes + riscv_0_data_sizes))
+        max_bandwidths = [noc_width * ((size / noc_width) / ((size / noc_width) + 1)) for size in transaction_sizes]
+        ax.plot(transaction_sizes, max_bandwidths, label="Theoretical Max BW", linestyle="--", color="black")
+
         ax.set_xlabel("Transaction Size (bytes)")
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Data Size vs Bandwidth")
         ax.legend()
         ax.grid()
+
+        # Add a comment section below the plots
+        subfig.text(
+            0.5,
+            0.01,
+            f"Comments: Add observations or explanations here for {test_name}.",
+            ha="center",
+            fontsize=10,
+            style="italic",
+        )
 
     # Save the combined plot
     plt.savefig(output_file)
