@@ -15,7 +15,6 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-
 void py_module(pybind11::module& module) {
     ccl::bind_fused_rms_1_1_32_8192(module);
     ccl::py_bind_all_gather_matmul(module);
