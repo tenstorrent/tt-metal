@@ -229,7 +229,7 @@ void InitDeviceProfiler(IDevice* device);
  * | device        | The device holding the program being profiled.    | IDevice*        |                           |
  * True     |
  * */
-void AllocateDramProfilerBuffer(IDevice* device);
+void AllocateProfilerDramBuffer(IDevice* device);
 
 /**
  * Sync TT devices with host

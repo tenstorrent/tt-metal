@@ -224,7 +224,7 @@ void DevicePool::init_profiler() const {
         }
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-        detail::AllocateDramProfilerBuffer(dev);
+        detail::AllocateProfilerDramBuffer(dev);
         log_info(tt::LogMetal, "Profiler buffer allocated on device {}", mmio_device_id);
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
@@ -232,7 +232,7 @@ void DevicePool::init_profiler() const {
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto mmio_device = get_device(mmio_controlled_device_id);
-                    detail::AllocateDramProfilerBuffer(mmio_device);
+                    detail::AllocateProfilerDramBuffer(mmio_device);
                     log_info(tt::LogMetal, "Profiler buffer allocated on remote device {}", mmio_device->id());
                 }
             }

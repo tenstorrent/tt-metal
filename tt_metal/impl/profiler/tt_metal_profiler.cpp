@@ -672,7 +672,7 @@ void ClearProfilerControlBuffer(IDevice* device) {
 #endif
 }
 
-void AllocateDramProfilerBuffer(IDevice* device) {
+void AllocateProfilerDramBuffer(IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     auto device_id = device->id();
