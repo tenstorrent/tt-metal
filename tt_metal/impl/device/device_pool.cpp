@@ -237,7 +237,7 @@ void DevicePool::initialize(
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::MetalContext::instance().initialize(
-        dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()});
+        dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
@@ -283,8 +283,8 @@ void DevicePool::initialize(
     _inst->skip_remote_devices = skip;
     _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids);
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(
-        true, target_mmio_ids);
+    // tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(
+    //     true, target_mmio_ids);
     _inst->init_firmware_on_active_devices();
 }
 
@@ -312,11 +312,11 @@ void DevicePool::initialize_host(IDevice* dev) const {
 
     // TODO: as optimization, investigate removing all this call for already initialized devivces
     if (!tt_metal::MetalContext::instance().rtoptions().get_skip_reset_cores_on_init()) {
-        dev->reset_cores();
+        // dev->reset_cores();
     }
-    dev->initialize_and_launch_firmware();
+    // dev->initialize_and_launch_firmware();
 
-    watcher_attach(dev->id());
+    // watcher_attach(dev->id());
 }
 
 void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const {
@@ -791,7 +791,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
 
-    tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
+    // tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
 
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {

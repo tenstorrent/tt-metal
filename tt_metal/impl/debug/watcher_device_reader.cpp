@@ -231,11 +231,14 @@ WatcherDeviceReader::~WatcherDeviceReader() {
                     virtual_core,
                     num_events);
             }
-            fprintf(
-                f,
-                "%s\n",
-                fmt::format("\tDevice {} Ethernet Core {} retraining events: {}", device_id, virtual_core, num_events)
-                    .c_str());
+            if (f) {
+                fprintf(
+                    f,
+                    "%s\n",
+                    fmt::format(
+                        "\tDevice {} Ethernet Core {} retraining events: {}", device_id, virtual_core, num_events)
+                        .c_str());
+            }
         }
     }
 }
