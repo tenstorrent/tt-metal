@@ -44,6 +44,7 @@ std::ostream& operator<<(std::ostream& os, const std::variant<T, U>& variant) {
 std::ostream& operator<<(
     std::ostream& os,
     const std::variant<
+        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
@@ -195,6 +196,7 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<
         std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>>();
     GraphArgumentSerializer::register_type<std::variant<
+        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
