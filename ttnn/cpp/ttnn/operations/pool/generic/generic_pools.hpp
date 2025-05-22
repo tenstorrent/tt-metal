@@ -52,9 +52,7 @@ struct AvgPool2DOp {
 
 }  // namespace operations::pool
 
-constexpr auto max_pool2d =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::max_pool2d", operations::pool::MaxPool2DOp>();
-constexpr auto avg_pool2d =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::avg_pool2d", operations::pool::AvgPool2DOp>();
+constexpr auto max_pool2d = ttnn::register_operation<"ttnn::max_pool2d", operations::pool::MaxPool2DOp>();
+constexpr auto avg_pool2d = ttnn::register_operation<"ttnn::avg_pool2d", operations::pool::AvgPool2DOp>();
 
 }  // namespace ttnn
