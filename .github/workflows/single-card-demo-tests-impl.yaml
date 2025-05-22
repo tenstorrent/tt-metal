@@ -101,6 +101,19 @@ jobs:
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance }}
         run: sudo cpupower frequency-set -g performance
       - uses: ./.github/actions/ensure-active-weka-mount
+      - name: Check Model Weights are Cached
+        run: |
+          if [ ! -d "/mnt/MLPerf/tt-dnn_models/hf_cache/${{ matrix.test-group.name }}" ]; then
+            echo "Model is not in cache, downloading now to save it in cache..."
+            python3 -c "
+              from transformers import AutoModel;
+              model_name = '${{ matrix.test-group.name }}'; 
+              cache_dir = '/mnt/MLPerf/tt-dnn_models/hf_cache';
+              AutoModel.from_pretrained(model_name, cache_dir=cache_dir)"
+              echo "Model downloaded successfully." 
+          else
+            echo "Model found in cache"
+          fi
       - name: Run demo regression tests
         uses: ./.github/actions/docker-run
         timeout-minutes: 120
@@ -115,7 +128,7 @@ jobs:
             -e ARCH_NAME=${{ inputs.arch }}
             -e HF_CACHE=/mnt/hf_cache
             -v /mnt/MLPerf:/mnt/MLPerf:ro
-            -v /mnt/MLPerf/tt-dnn_models/hf_cache:/mnt/hf_cache:ro
+            -v /mnt/MLPerf/tt-dnn_models/hf_cache:/mnt/hf_cache:rw
             --cap-add=ALL
             --security-opt seccomp=unconfined
             --ulimit nproc=65536:65536
