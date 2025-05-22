@@ -53,6 +53,15 @@ FORCE_INLINE uint32_t calc_offset_inside_tile(
 
 FORCE_INLINE uint32_t get_tile_offset_in_row(const uint32_t& tile_id) { return tt::constants::TILE_HW * tile_id; }
 
+FORCE_INLINE uint32_t
+get_width_scalar_index(const uint32_t& tile_id, const uint32_t& face_x, const uint32_t& scalar_x) {
+    return tile_id * tt::constants::TILE_WIDTH + face_x * (tt::constants::TILE_WIDTH / 2) + scalar_x;
+}
+
+FORCE_INLINE uint32_t get_height_scalar_index(const uint32_t& h, const uint32_t& face_y, const uint32_t& scalar_y) {
+    return h * tt::constants::TILE_HEIGHT + face_y * (tt::constants::TILE_HEIGHT / 2) + scalar_y;
+}
+
 #define tile_guts_gen(unsigned_type)                                                                                  \
     template <>                                                                                                       \
     FORCE_INLINE volatile unsigned_type& tile_guts<unsigned_type>(                                                    \
@@ -95,6 +104,8 @@ struct ScatterCTAs {
     const uint32_t source_tensor_cb;
     const uint32_t output_tensor_cb;
     const uint32_t Wt_input;
+    const uint32_t logical_index_width;
+    const uint32_t logical_index_height;
     const uint32_t Wt_index;
     const uint32_t Ht;
     const uint32_t total_number_of_cores;
@@ -119,5 +130,7 @@ constexpr ScatterCTAs get_ctas() {
         get_compile_time_arg_val(13),
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16)};
+        get_compile_time_arg_val(16),
+        get_compile_time_arg_val(17),
+        get_compile_time_arg_val(18)};
 }

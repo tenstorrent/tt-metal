@@ -28,16 +28,16 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const auto& input_dtype{input_tensor.get_dtype()};
     const auto& index_dtype{index_tensor.get_dtype()};
     const auto& src_dtype{src_tensor.get_dtype()};
-    const auto& input_shape{input_tensor.get_padded_shape()};
-    const auto& index_shape{index_tensor.get_padded_shape()};
-    const auto& src_shape{src_tensor.get_padded_shape()};
+    const auto& input_shape{input_tensor.get_logical_shape()};
+    const auto& index_shape{index_tensor.get_logical_shape()};
+    const auto& src_shape{src_tensor.get_logical_shape()};
     const uint32_t input_rank{input_shape.rank()};
     const uint32_t index_rank{index_shape.rank()};
     const uint32_t src_rank{src_shape.rank()};
 
     if (tensor_args.opt_output.has_value()) {
         const auto& output_tensor{tensor_args.opt_output.value()};
-        const auto& output_shape{output_tensor.get_padded_shape()};
+        const auto& output_shape{output_tensor.get_logical_shape()};
         const auto& output_rank{output_shape.rank()};
         const auto& output_dtype{output_tensor.get_dtype()};
 
@@ -66,6 +66,7 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
 
         TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor's buffer is null.");
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor must be allocated on a device.");
+        TT_FATAL(!output_tensor.is_sharded(), "Sharded tensors are not supported - output_tensor is sharded.");
     }
 
     TT_FATAL(
@@ -104,16 +105,11 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    // TT_FATAL(
-    //     dim >= -input_rank,
-    //     "dim cannot be lower than input shape's negative rank (dim: {}, rank: {}).",
-    //     dim,
-    //     -input_rank);
     TT_FATAL(
         dim < static_cast<int32_t>(input_rank),
         "dim must be lower than input shape's positive rank (dim: {}, rank: {}).",
         dim,
-        input_rank);
+        static_cast<int32_t>(input_rank));
 
     TT_FATAL(!input_tensor.is_sharded(), "Sharded tensors are not supported - input_tensor is sharded.");
     TT_FATAL(!index_tensor.is_sharded(), "Sharded tensors are not supported - index_tensor is sharded.");
@@ -146,7 +142,7 @@ ScatterDeviceOperation::spec_return_value_t ScatterDeviceOperation::compute_outp
     }
 
     return TensorSpec{
-        tensor_args.index_tensor.get_logical_shape(),
+        tensor_args.input_tensor.get_logical_shape(),
         TensorLayout{tensor_args.input_tensor.get_dtype(), PageConfig{Layout::TILE}, args.output_memory_config}};
 }
 

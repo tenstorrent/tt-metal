@@ -81,9 +81,6 @@ Tensor ScatterOperation::invoke(
     const auto original_index_tensor_lshape = index_tensor.get_logical_shape();
     const auto index_tensor_rank = index_tensor.get_padded_shape().rank();
 
-    const auto original_src_tensor_lshape = source_tensor.get_logical_shape();
-    const auto src_tensor_rank = source_tensor.get_padded_shape().rank();
-
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;
     }
@@ -93,19 +90,19 @@ Tensor ScatterOperation::invoke(
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
 
     Tensor padded_index_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
-        index_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, true);
+        index_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, false);
 
     Tensor padded_source_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
-        source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, true);
+        source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, false);
 
     Tensor padded_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
-        input_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, true);
+        input_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, false);
 
     std::optional<Tensor> optional_output_tensor_value = std::nullopt;
     if (opt_output.has_value()) {
         auto& output_tensor = opt_output.value();
         output_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
-            output_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, true);
+            output_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, false);
         optional_output_tensor_value = output_tensor;
     }
 

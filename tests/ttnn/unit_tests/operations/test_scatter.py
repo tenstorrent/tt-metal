@@ -7,9 +7,6 @@ import torch
 import ttnn
 
 
-# memory_config testing!!!!!!!!!!
-
-
 def select_torch_dtype(ttnn_dtype):
     if ttnn_dtype is ttnn.bfloat16:
         return torch.bfloat16
