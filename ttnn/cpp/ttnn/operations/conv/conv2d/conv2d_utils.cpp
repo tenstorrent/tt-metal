@@ -299,10 +299,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     auto shard_orientation = parallel_config.shard_orientation;
 
     uint32_t nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2];
-    uint32_t nhw_padded = nhw_shape;
-    if (shard_scheme != TensorMemoryLayout::WIDTH_SHARDED) {
-        nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
-    }
+    uint32_t nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
     TT_FATAL(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
