@@ -47,8 +47,8 @@ public:
 
 private:
     void populate_sharding_specs();
-    std::optional<NdShardSpec> nd_shard_spec_from_legacy();
-    std::optional<ShardSpec> legacy_shard_spec_from_nd();
+    std::optional<MemoryConfig> populate_nd_shard_spec_from_legacy() const;
+    std::optional<MemoryConfig> populate_legacy_shard_spec_from_nd() const;
 
     ttnn::Shape logical_shape_;
     TensorLayout tensor_layout_;

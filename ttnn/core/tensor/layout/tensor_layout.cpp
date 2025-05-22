@@ -114,11 +114,11 @@ void validate_shard_spec(const TensorLayout& tensor_layout) {
                 physical_shard_shape,
                 tile_shape);
         } else {
-            const auto& physical_shard_shape = memory_config.nd_shard_spec().value().physical_shard_shape;
+            const auto& shard_shape = memory_config.nd_shard_spec().value().shard_shape;
             TT_FATAL(
-                (physical_shard_shape[-2] % tile_shape[0] == 0 && physical_shard_shape[-1] % tile_shape[1] == 0),
+                (shard_shape[-2] % tile_shape[0] == 0 && shard_shape[-1] % tile_shape[1] == 0),
                 "Physical shard shape {} must be tile {} sized!",
-                physical_shard_shape,
+                shard_shape,
                 tile_shape);
         }
     }
@@ -220,7 +220,7 @@ std::variant<std::monostate, ShardSpecBuffer, BufferDistributionSpec> TensorLayo
 
     auto& nd_shard_spec = memory_config_.nd_shard_spec().value();
     return BufferDistributionSpec::from_shard_spec(
-        shape, nd_shard_spec.physical_shard_shape, page_shape, nd_shard_spec.cores, nd_shard_spec.shard_orientation);
+        shape, nd_shard_spec.shard_shape, page_shape, *nd_shard_spec.cores, nd_shard_spec.shard_orientation);
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const {

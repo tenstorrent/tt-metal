@@ -195,7 +195,7 @@ Shape2D RowMajorPageConfig::get_page_shape(
 
     if (memory_config.nd_shard_spec().has_value()) {
         const auto& nd_shard_spec = *memory_config.nd_shard_spec();
-        return Shape2D(1, nd_shard_spec.physical_shard_shape[-1]);
+        return Shape2D(1, nd_shard_spec.shard_shape[-1]);
     }
 
     return Shape2D(1, physical_size.width());

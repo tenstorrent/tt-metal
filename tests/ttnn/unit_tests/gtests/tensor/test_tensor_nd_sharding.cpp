@@ -75,7 +75,7 @@ TEST_P(LegacyToNdShardingTests, LegacyToNdSharding) {
     auto nd_shard_spec = tensor_spec.memory_config().nd_shard_spec();
     ASSERT_EQ(nd_shard_spec.has_value(), params.shard_shape_nd.has_value());
     if (nd_shard_spec.has_value()) {
-        ASSERT_EQ(nd_shard_spec->physical_shard_shape, params.shard_shape_nd.value());
+        ASSERT_EQ(nd_shard_spec->shard_shape, params.shard_shape_nd.value());
     }
 }
 
