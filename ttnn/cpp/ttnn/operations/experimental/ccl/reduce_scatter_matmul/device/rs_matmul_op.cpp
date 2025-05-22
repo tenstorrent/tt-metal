@@ -21,6 +21,35 @@ void AllGatherRS::validate_on_program_cache_hit(
     this->rs_struct.validate_on_program_cache_hit(operation_attributes, tensor_args);
 }
 
+void AllGatherRS::validate_on_program_cache_miss(
+    const LlamaReduceScatterDeviceOperation::operation_attributes_t& operation_attributes,
+    const LlamaReduceScatterDeviceOperation::tensor_args_t& tensor_args,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
+    auto& input_tensor = input_tensors[0];
+    auto& weight_tensor = input_tensors[1];
+    this->matmul_struct.validate({input_tensor, weight_tensor}, {std::nullopt}, {});
+    this->rs_struct.validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
+
+std::vector<ttnn::TensorSpec> AllGatherRS::compute_output_specs(
+    const std::vector<Tensor>& input_tensors,
+    const LlamaReduceScatterDeviceOperation::operation_attributes_t& operation_attributes,
+    const LlamaReduceScatterDeviceOperation::tensor_args_t& tensor_args) {
+    // All Gather shape
+    ttnn::TensorSpec reduce_scatter_output_spec =
+        this->rs_struct.compute_output_specs(operation_attributes, tensor_args);
+    auto& input_tensor = input_tensors[0];
+    auto& weight_tensor = input_tensors[1];
+
+    // Matmul shape
+    ttnn::TensorSpec matmul_output_specs =
+        this->matmul_struct.compute_output_specs({input_tensor, weight_tensor}, {})[0];
+
+    return {matmul_output_specs, reduce_scatter_output_spec};
+}
+
 std::vector<Tensor> rs_matmul(
     const ttnn::Tensor& input_tensor,                           // mm0 used
     const ttnn::Tensor& weight_tensor,                          // mm1 used

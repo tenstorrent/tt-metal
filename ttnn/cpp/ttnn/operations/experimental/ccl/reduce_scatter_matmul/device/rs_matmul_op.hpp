@@ -34,7 +34,7 @@ struct AllGatherRS {
     void validate_on_program_cache_miss(
         const LlamaReduceScatterDeviceOperation::operation_attributes_t&,
         const LlamaReduceScatterDeviceOperation::tensor_args_t&,
-        std::vector<Tensor>& input_tensors,
+        const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
         const std::vector<std::optional<Tensor>>& optional_output_tensors);
     void validate_on_program_cache_hit(
@@ -43,6 +43,10 @@ struct AllGatherRS {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
         const std::vector<std::optional<Tensor>>& optional_output_tensors);
+    std::vector<ttnn::TensorSpec> compute_output_specs(
+        const std::vector<Tensor>& input_tensors,
+        const LlamaReduceScatterDeviceOperation::operation_attributes_t& operation_attributes,
+        const LlamaReduceScatterDeviceOperation::tensor_args_t& tensor_args);
 };
 std::vector<Tensor> rs_matmul(
     const ttnn::Tensor& input_tensor,                           // mm0 used
