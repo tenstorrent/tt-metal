@@ -71,10 +71,11 @@ def run_mobilenetv2_trace_inference(
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.run()
     test_infra.validate()
-    test_infra.dealloc_output()
 
     # Capture
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
+
+    test_infra.dealloc_output()
     trace_input_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
