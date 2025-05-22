@@ -4,6 +4,7 @@
 #include "gtest/gtest.h"
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 #include "ttnn_test_fixtures.hpp"
 
@@ -93,6 +94,38 @@ TEST_P(NdToLegacyShardingTests, NdToLegacySharding) {
     ASSERT_EQ(shard_spec_2d.has_value(), params.shard_shape_2d.has_value());
     if (shard_spec_2d.has_value()) {
         ASSERT_EQ(shard_spec_2d->shape, params.shard_shape_2d.value());
+    }
+}
+
+class NdShardingOpCompatTests : public ttnn::TTNNFixtureWithDevice,
+                                public ::testing::WithParamInterface<NDShardingParams> {};
+
+TEST_P(NdShardingOpCompatTests, TestAdd) {
+    const auto& params = GetParam();
+
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+    NdShardSpec nd_shard_spec{params.shard_shape, cores, ShardOrientation::ROW_MAJOR};
+    MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
+    TensorLayout tensor_layout(DataType::UINT32, PageConfig(params.layout), memory_config);
+    TensorSpec tensor_spec(params.shape, tensor_layout);
+
+    size_t volume = params.shape.volume();
+    std::vector<uint32_t> data(volume);
+    for (size_t i = 0; i < volume; i++) {
+        data[i] = static_cast<uint32_t>(i);
+    }
+
+    auto tensor_a = Tensor::from_vector(data, tensor_spec, device_);
+    for (auto& elem : data) {
+        elem *= 2;
+    }
+    auto tensor_b = Tensor::from_vector(data, tensor_spec, device_);
+
+    auto sum_tensor = ttnn::add(tensor_a, tensor_b);
+
+    auto sum_vector = sum_tensor.to_vector<uint32_t>();
+    for (size_t i = 0; i < volume; i++) {
+        ASSERT_EQ(sum_vector[i], i * 3);
     }
 }
 
@@ -329,4 +362,33 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_nd = Shape({10, 10}),
             .layout = Layout::ROW_MAJOR,
             .shard_shape_2d = std::nullopt,  // not enough cores
+        }));
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    NdShardingOpCompatTests,
+    ::testing::Values(
+        NDShardingParams{
+            .shape = Shape({32 * 5, 32 * 5}),
+            .shard_shape = Shape({32, 32}),
+        },
+        NDShardingParams{
+            .shape = Shape({32 * 5, 32 * 5}),
+            .shard_shape = Shape({32 * 2, 32 * 2}),
+        },
+        NDShardingParams{
+            .shape = Shape({1, 32 * 5, 32 * 5}),
+            .shard_shape = Shape({1, 32 * 2, 32 * 2}),
+        },
+        NDShardingParams{
+            .shape = Shape({1, 1, 32 * 5, 32 * 5}),
+            .shard_shape = Shape({1, 1, 32 * 2, 32 * 2}),
+        },
+        NDShardingParams{
+            .shape = Shape({2, 32 * 4, 32 * 5}),
+            .shard_shape = Shape({1, 32 * 2, 32 * 2}),
+        },
+        NDShardingParams{
+            .shape = Shape({1, 2, 32 * 4, 32 * 5}),
+            .shard_shape = Shape({1, 1, 32 * 2, 32 * 2}),
         }));
