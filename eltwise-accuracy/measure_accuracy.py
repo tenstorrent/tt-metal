@@ -7,6 +7,7 @@ import pandas as pd
 import sys
 import os
 import traceback
+import scipy
 
 import utils
 
@@ -153,6 +154,18 @@ operations_dict = {
         "exp",
     ),
     "exp_alt": (
+        torch.exp,
+        ttnn.exp,
+        None,
+        "exp",
+    ),
+    "exp_approx0": (
+        torch.exp,
+        ttnn.exp,
+        None,
+        "exp",
+    ),
+    "exp_approx_21f": (
         torch.exp,
         ttnn.exp,
         None,
@@ -572,6 +585,9 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
     np_rel_error = np_diff / np.maximum(np.abs(np_golden_f64), np_eps)
     np_ulp_error = np_diff / torch_ulp_value.flatten().numpy()
 
+    finite_mask = np.isfinite(np_golden_f64) & np.isfinite(np_ttnn_output_f64)  # Don't compute PCC on NaN and infinity
+    pcc = scipy.stats.pearsonr(np_golden_f64[finite_mask], np_ttnn_output_f64[finite_mask])
+
     # Flatten tensors and convert to ndarray for analysis
     np_flat_input = torch_input_f64.flatten().numpy()
     np_flat_output = torch_ttnn_output_f64.flatten().numpy()
@@ -642,11 +658,23 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
     accuracy_df["dtype"] = "bfloat16"
     accuracy_df["parent_op"] = parent_op
 
+    # Compute PCC on [-1e5; 1e5]
+    np_finite_mask = np.isfinite(np_flat_output) & np.isfinite(np_flat_golden)
+    df = pd.DataFrame(
+        {
+            "x": np_flat_input[np_finite_mask],
+            "y": np_flat_output[np_finite_mask],
+            "yref": np_flat_golden[np_finite_mask],
+        }
+    )
+    df = df[df["x"].between(-1e5, 1e5)]
+    pcc = scipy.stats.pearsonr(df["y"], df["yref"])
+
     accuracy_df.to_csv(f"{dest_dir}/{operation_name}-bfloat16-[{group_size}].csv", na_rep="NaN", index_label="index")
 
     end_time = time.time()
     elapsed_s = end_time - start_time
-    print(f"{operation_name} [bfloat16] Duration = {elapsed_s}s")
+    print(f"{operation_name} [bfloat16] PCC = {pcc[0]}, Duration = {elapsed_s:.4f}s")
 
 
 def main(args):
@@ -668,85 +696,91 @@ def main(args):
 
     # Unused: atan2, logaddexp, logaddexp2
     all_operations = [
-        "exp",
+        # "exp",
         # "exp_hybrid",
-        "exp_approx",
+        # "exp_alt",
+        # "exp_approx",
+        # "exp_approx0",
+        "exp_approx_21f",
         # "exp_accurate_python",
         # "exp_python_alt1",
-        "pow_2",
-        "pow_3",
-        "pow_5",
-        "pow_10",
-        "log",
-        "tanh",
-        "tanh_accurate",
-        "cosh",
-        "sinh",
-        "log10",
-        "log2",
-        "log1p",
-        "silu",
-        "gelu",
-        "gelu_approx",
-        "logit",
-        "swish",
-        "mish",
-        "elu",
-        "selu",
-        "softplus",
-        "softsign",
-        "tan",
-        "atan",
-        "sin",
-        "cos",
-        "sqrt",
-        "rsqrt",
-        "rsqrt_approx",
-        "reciprocal",
-        "digamma",
-        "lgamma",
-        "tanhshrink",
+        # "pow_2",
+        # "pow_3",
+        # "pow_5",
+        # "pow_10",
+        # "log",
+        # "tanh",
+        # "tanh_accurate",
+        # "cosh",
+        # "sinh",
+        # "log10",
+        # "log2",
+        # "log1p",
+        # "silu",
+        # "gelu",
+        # "gelu_approx",
+        # "logit",
+        # "swish",
+        # "mish",
+        # "elu",
+        # "selu",
+        # "softplus",
+        # "softsign",
+        # "tan",
+        # "atan",
+        # "sin",
+        # "cos",
+        # "sqrt",
+        # "rsqrt",
+        # "rsqrt_approx",
+        # "reciprocal",
+        # "digamma",
+        # "lgamma",
+        # "tanhshrink",
     ]
 
     highres_operations = [
         # "exp_hybrid",
-        "exp",
-        "exp_approx",
+        # "exp",
+        # "exp_alt",
+        "exp_approx_21f",
+        # "exp_approx",
+        # "exp_approx0",
         # "exp_accurate_python",
         # "exp_python_alt1",
-        "pow_2",
-        "pow_3",
-        "pow_5",
-        "pow_10",
-        "log",
-        "log10",
-        "log2",
-        "log1p",
-        "tanh",
-        "tanh_accurate",
-        "cosh",
-        "sinh",
-        "tan",
-        "atan",
-        "cos",
-        "sin",
-        "silu",
-        "gelu",
-        "gelu_approx",
-        "logit",
-        "swish",
-        "mish",
-        "elu",
-        "selu",
-        "softplus",
-        "softsign",
-        "sqrt",
-        "rsqrt",
-        "rsqrt_approx",
-        "reciprocal",
-        "digamma",
-        "lgamma",
-        "tanhshrink",
+        # "pow_2",
+        # "pow_3",
+        # "pow_5",
+        # "pow_10",
+        # "log",
+        # "log10",
+        # "log2",
+        # "log1p",
+        # "tanh",
+        # "tanh_accurate",
+        # "cosh",
+        # "sinh",
+        # "tan",
+        # "atan",
+        # "cos",
+        # "sin",
+        # "silu",
+        # "gelu",
+        # "gelu_approx",
+        # "logit",
+        # "swish",
+        # "mish",
+        # "elu",
+        # "selu",
+        # "softplus",
+        # "softsign",
+        # "sqrt",
+        # "rsqrt",
+        # "rsqrt_approx",
+        # "reciprocal",
+        # "digamma",
+        # "lgamma",
+        # "tanhshrink",
     ]
 
     # all_operations += powers
