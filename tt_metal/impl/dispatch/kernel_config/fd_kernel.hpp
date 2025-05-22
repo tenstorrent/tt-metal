@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <device_impl.hpp>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <map>
@@ -12,6 +11,7 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
+#include "device/device_impl.hpp"
 #include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
@@ -35,6 +35,13 @@ struct noc_selection_t {
     tt::tt_metal::NOC non_dispatch_noc;  // For communicating with workers/DRAM/host
     tt::tt_metal::NOC upstream_noc;      // For communicating with upstream dispatch modules
     tt::tt_metal::NOC downstream_noc;    // For communicating with downstream dispatch modules
+};
+
+enum class FDKernelType : uint32_t {
+    UNSET = 0,
+    VIRTUAL,   // Not a real kernel
+    DISPATCH,  // Dispatch kernels
+    ROUTING,   // Routing/Tunneling kernels
 };
 
 static std::vector<string> dispatch_kernel_file_names = {
@@ -113,6 +120,7 @@ public:
     virtual CoreType GetCoreType() {
         return tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     }
+    FDKernelType GetKernelType() { return kernel_type_; }
     tt_cxy_pair GetLogicalCore() { return logical_core_; }
     tt_cxy_pair GetVirtualCore() {
         return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
@@ -153,6 +161,7 @@ protected:
     tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
     tt::tt_metal::Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
+    FDKernelType kernel_type_;
     chip_id_t device_id_;
     chip_id_t servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
     int node_id_;

@@ -16,45 +16,44 @@ add_library(TT::NN::Core ALIAS ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 
-GENERATE_FBS_HEADER(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/tensor_types.fbs)
+GENERATE_FBS_HEADER(${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_types.fbs)
 target_sources(
     ttnn_core
     PRIVATE
         ${FBS_GENERATED_HEADER_FILE}
-        core/distributed/api.cpp
-        core/distributed/distributed_tensor_config.cpp
-        core/distributed/distributed_tensor.cpp
-        core/distributed/distributed_tensor_config.cpp
-        core/graph/graph_processor.cpp
-        core/graph/graph_argument_serializer.cpp
-        core/graph/graph_trace_utils.cpp
         core/async_runtime.cpp
         core/cluster.cpp
         core/config.cpp
         core/core.cpp
         core/device.cpp
+        core/distributed/api.cpp
+        core/distributed/distributed_tensor.cpp
+        core/distributed/distributed_tensor_config.cpp
+        core/distributed/distributed_tensor_config.cpp
         core/events.cpp
         core/global_circular_buffer.cpp
         core/global_semaphore.cpp
-        core/run_operation.cpp
+        core/graph/graph_argument_serializer.cpp
+        core/graph/graph_processor.cpp
+        core/graph/graph_trace_utils.cpp
         core/old_infra_device_operation.cpp
-        # FIXME(afuller): Move these files
-        cpp/ttnn/tensor/tensor_attributes.cpp
-        cpp/ttnn/tensor/tensor_impl.cpp
-        cpp/ttnn/tensor/tensor.cpp
-        cpp/ttnn/tensor/tensor_ops.cpp
-        cpp/ttnn/tensor/types.cpp
-        cpp/ttnn/tensor/storage.cpp
-        cpp/ttnn/tensor/tensor_spec.cpp
-        cpp/ttnn/tensor/tensor_utils.cpp
-        cpp/ttnn/tensor/host_buffer/functions.cpp
-        cpp/ttnn/tensor/serialization.cpp
-        cpp/ttnn/tensor/layout/alignment.cpp
-        cpp/ttnn/tensor/layout/page_config.cpp
-        cpp/ttnn/tensor/layout/tensor_layout.cpp
-        cpp/ttnn/tensor/xtensor/partition.cpp
-        cpp/ttnn/tensor/flatbuffer/tensor_types_to_flatbuffer.cpp
-        cpp/ttnn/tensor/flatbuffer/tensor_types_from_flatbuffer.cpp
+        core/run_operation.cpp
+        core/tensor/flatbuffer/tensor_types_from_flatbuffer.cpp
+        core/tensor/flatbuffer/tensor_types_to_flatbuffer.cpp
+        core/tensor/host_buffer/functions.cpp
+        core/tensor/layout/alignment.cpp
+        core/tensor/layout/page_config.cpp
+        core/tensor/layout/tensor_layout.cpp
+        core/tensor/serialization.cpp
+        core/tensor/storage.cpp
+        core/tensor/tensor.cpp
+        core/tensor/tensor_attributes.cpp
+        core/tensor/tensor_impl.cpp
+        core/tensor/tensor_ops.cpp
+        core/tensor/tensor_spec.cpp
+        core/tensor/tensor_utils.cpp
+        core/tensor/types.cpp
+        core/tensor/xtensor/partition.cpp
 )
 target_include_directories(
     ttnn_core
@@ -62,9 +61,10 @@ target_include_directories(
         api
     PRIVATE
         api/ttnn
+        core
+        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
         cpp # FIXME: Depend on the Ops needed (make the circular obvious)
         . # FIXME: Depend on the Ops needed (make the circular obvious)
-        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
 target_link_libraries(
     ttnn_core
@@ -524,6 +524,7 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/gather.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/device/gather_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/device/gather_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/tosa/gather_tosa.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full/device/full_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full/device/full_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full/full.cpp
@@ -782,6 +783,10 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/bcast_to/device/bcast_to_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/bcast_to/bcast_to.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/copy/typecast/typecast.cpp
 )
 
 set(TTNN_SRC)
@@ -857,19 +862,7 @@ set(TTNN_PUBLIC_LINK_LIBRARIES
     TT::NN::Core
 )
 
-set(TTNN_PRECOMPILED_HEADERS
-    ${PROJECT_SOURCE_DIR}/tt_stl/tt_stl/reflection.hpp
-    api/ttnn/operation.hpp
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
-    <functional>
-    <map>
-    <memory>
-    <unordered_map>
-    <variant>
-    <vector>
-)
-
-set(PRECOMPILED_HEADER_TARGET "")
+set(PRECOMPILED_HEADER_TARGET "TT::CommonPCH")
 
 ##################################################
 # Collect all the files and folders that TTNN will use
@@ -1027,6 +1020,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/sort/sort_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/gather_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/tosa/gather_tosa_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_${PY_BINDING}.cpp
 )

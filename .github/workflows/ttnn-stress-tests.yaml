@@ -19,6 +19,7 @@ on:
           - P150
           - config-tg
           - config-t3000
+          - topology-6u
       timeout:
         required: false
         type: number

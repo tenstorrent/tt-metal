@@ -279,6 +279,9 @@ Result conv2d_DRAM(
         const uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
 
         if (!conv_config.shard_layout.has_value()) {
+            if (!conv_config.weights_dtype.has_value()) {
+                conv_config.weights_dtype = weight_tensor.dtype();
+            }
             conv_config = determine_conv_config_for_auto_shard(
                 conv_config,
                 mm_conv,
@@ -351,8 +354,6 @@ Result conv2d_DRAM(
             sliced_output_tensor =
                 ttnn::to_layout(sliced_output_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
         }
-        sliced_output_tensor = ttnn::reshape(
-            sliced_output_tensor, ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}));
         ttnn::experimental::slice_write(
             queue_id,
             sliced_output_tensor,
@@ -360,7 +361,6 @@ Result conv2d_DRAM(
             std::array<uint32_t, 4>{0, output_slice_height_start, output_slice_width_start, 0},
             std::array<uint32_t, 4>{batch_size, output_slice_height_end, output_slice_width_end, out_channels},
             std::array<uint32_t, 4>{1, 1, 1, 1});
-
         first_run = false;
         output_slice_dim_start += output_slice_size;
         slice_index++;
@@ -406,6 +406,9 @@ Result conv2d_L1(
 
     bool auto_shard = false;
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
+        if (!conv_config.weights_dtype.has_value()) {
+            conv_config.weights_dtype = weight_tensor.dtype();
+        }
         // In this case we deduce the shard layout.
         conv_config = determine_conv_config_for_auto_shard(
             conv_config,

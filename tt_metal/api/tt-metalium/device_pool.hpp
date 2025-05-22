@@ -58,8 +58,12 @@ public:
     bool close_device(chip_id_t device_id);
     bool close_devices(const std::vector<tt_metal::IDevice*>& devices, bool skip_synchronize = false);
     bool is_device_active(chip_id_t id) const;
+    // True if dispatch firmware is active on this device pool
+    bool is_dispatch_firmware_active() const;
     void init_profiler() const;
     void initialize_fabric_and_dispatch_fw() const;
+    // API needed due to Issue #19729
+    std::size_t get_max_num_eth_cores_across_all_devices() const;
 
 private:
     ~DevicePool();
@@ -72,6 +76,10 @@ private:
     bool using_fast_dispatch;
     bool init_profiler_ = true;
     bool initialize_fabric_and_dispatch_fw_ = false;
+    // This variable tracks the state of dispatch firmware on device.
+    // It is set to true when dispatch firmware is launched, and reset
+    // after the terimnate command is sent.
+    bool dispatch_firmware_active_ = false;
 
     std::mutex lock;
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
@@ -96,6 +104,7 @@ private:
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
     void wait_for_fabric_router_sync() const;
     tt_metal::IDevice* get_device(chip_id_t id) const;
+    void teardown_fd(const std::unordered_set<chip_id_t>& devices_to_close);
 
     static DevicePool* _inst;
 };

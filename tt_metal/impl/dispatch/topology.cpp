@@ -6,6 +6,7 @@
 
 #include <device_pool.hpp>
 #include <host_api.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <map>
+#include <typeinfo>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -186,12 +188,12 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
-    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
+    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, {NOC::NOC_1, NOC::NOC_1, NOC::NOC_1}},
 
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
+    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
 
     // Sender path PREFETCH_H -> PREFETCH_D
     {5, 0, x, 0, FABRIC_ROUTER_VC, {3, x, x, x}, {7, x, x, x}},
@@ -199,9 +201,9 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
     // Return path DISPATCH_D -> DISPATCH_H
     {6, 0, x, 0, FABRIC_ROUTER_VC, {8, x, x, x}, {4, x, x, x}},
 
-    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
+    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
+    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, {NOC::NOC_1, NOC::NOC_1, NOC::NOC_1}},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
@@ -508,6 +510,9 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq = {
 
 std::vector<FDKernel*> node_id_to_kernel;
 std::unordered_map<chip_id_t, std::unique_ptr<Program>> command_queue_pgms;
+std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores;
+std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> routing_cores;
+std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> empty_cores;
 
 // Helper function to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
 std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
@@ -861,6 +866,7 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
         "Tried to create and compile CQ program on device {} without static args populated (need to run "
         "populate_cq_static_args())",
         device->id());
+    empty_cores.clear();
     std::unique_ptr<Program> cq_program = std::move(command_queue_pgms[device->id()]);
     // Third pass, populate dependent configs and create kernels for each node
     for (auto node_and_kernel : node_id_to_kernel) {
@@ -872,6 +878,28 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
     for (auto node_and_kernel : node_id_to_kernel) {
         if (node_and_kernel->GetDeviceId() == device->id()) {
             node_and_kernel->CreateKernel();
+        }
+    }
+
+    // Register core coordinates for this device
+    for (auto node_and_kernel : node_id_to_kernel) {
+        if (node_and_kernel->GetDeviceId() != device->id()) {
+            continue;
+        }
+
+        switch (node_and_kernel->GetKernelType()) {
+            case FDKernelType::DISPATCH: dispatch_cores[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
+            case FDKernelType::ROUTING: routing_cores[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
+            case FDKernelType::VIRTUAL:
+                // Not a real kernel
+                break;
+            case FDKernelType::UNSET:
+                TT_THROW(
+                    "Unknown kernel type {} {} on Device {}",
+                    magic_enum::enum_name(node_and_kernel->GetKernelType()),
+                    typeid(*node_and_kernel).name(),
+                    device->id());
+                break;
         }
     }
 
@@ -944,79 +972,6 @@ void configure_dispatch_cores(IDevice* device) {
             node_id_to_kernel[idx]->ConfigureCore();
         }
     }
-}
-
-std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, FabricConfig fabric_config) {
-    std::unique_ptr<Program> fabric_program_ptr;
-    std::uint32_t router_mask = 0;
-    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-    auto& fabric_context = control_plane->get_fabric_context();
-
-    auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
-    fabric_context.set_num_fabric_initialized_routers(device->id(), router_chans_and_direction.size());
-    if (router_chans_and_direction.empty()) {
-        return nullptr;
-    }
-
-    fabric_program_ptr = std::make_unique<Program>();
-
-    for (const auto& router_chan : router_chans_and_direction) {
-        router_mask += 0x1 << (uint32_t)router_chan.first;
-    }
-
-    auto master_router_chan = (uint32_t)(router_chans_and_direction.begin()->first);
-    fabric_context.set_fabric_master_router_chan(device->id(), master_router_chan);
-
-    // setup runtime args
-    std::vector<uint32_t> router_runtime_args = {
-        router_chans_and_direction.size(),  // 0: number of active fabric routers
-        router_mask,                        // 1: active fabric router mask
-        master_router_chan,                 // 2: master router channel
-    };
-
-    std::vector<uint32_t> router_compile_args = {
-        (tt::tt_fabric::DEFAULT_ROUTER_RX_QUEUE_SIZE_BYTES >> 4),  // 0: rx_queue_size_words
-        0,                                                         // 1: test_results_addr
-        0,                                                         // 2: test_results_size
-        0,  // 3: timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
-        0,  // 4: is_master_router
-        0,  // 5: router direction
-    };
-
-    std::map<string, string> router_defines = {};
-    if (fabric_config == FabricConfig::FABRIC_2D) {
-        router_defines["FVC_MODE_PULL"] = "";
-        tt::tt_fabric::set_routing_mode(ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PULL);
-    } else {
-        // TODO: delete or selectively set
-        //       https://github.com/tenstorrent/tt-metal/issues/20000
-        if (isFabricUnitTest()) {
-            tt::tt_fabric::set_routing_mode(ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH);
-            router_defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
-        } else {
-            tt::tt_fabric::set_routing_mode(
-                ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH | ROUTING_MODE_LOW_LATENCY);
-        }
-    }
-
-    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    for (const auto& [router_chan, direction] : router_chans_and_direction) {
-        router_compile_args[4] = (master_router_chan == router_chan);
-        router_compile_args[5] = direction;
-        auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
-        auto kernel = tt_metal::CreateKernel(
-            *fabric_program_ptr,
-            "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
-            router_logical_core,
-            tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = router_defines});
-
-        tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, router_logical_core, router_runtime_args);
-    }
-
-    detail::CompileProgram(device, *fabric_program_ptr, /*force_slow_dispatch=*/device->using_fast_dispatch());
-    return fabric_program_ptr;
 }
 
 bool check_dateline(
@@ -1150,6 +1105,8 @@ void build_tt_fabric_program(
             check_dateline(
                 *control_plane, topology, mesh_chip_id.first, mesh_chip_id.second, remote_chip_id, wrap_around_mesh);
 
+        const auto& curr_edm_config = fabric_context.get_fabric_router_config(is_dateline);
+
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
@@ -1158,7 +1115,7 @@ void build_tt_fabric_program(
                 eth_logical_core,
                 device->id(),
                 remote_physical_chip_id,
-                edm_config,
+                curr_edm_config,
                 true,  /* enable_persistent_mode */
                 false, /* build_in_worker_connection_mode */
                 is_dateline,
@@ -1294,8 +1251,6 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         return create_and_compile_tt_fabric_program(device);
-    } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
-        return create_and_compile_2d_fabric_program(device, fabric_config);
     }
     return nullptr;
 }
@@ -1313,6 +1268,20 @@ void configure_fabric_cores(IDevice* device) {
             tt::tt_metal::detail::WriteToDeviceL1(device, router_logical_core, address, router_zero_buf, CoreType::ETH);
         }
     }
+}
+
+const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(chip_id_t dev_id) {
+    if (!dispatch_cores.contains(dev_id)) {
+        return empty_cores[dev_id];
+    }
+    return dispatch_cores[dev_id];
+}
+
+const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_t dev_id) {
+    if (!routing_cores.contains(dev_id)) {
+        return empty_cores[dev_id];
+    }
+    return routing_cores[dev_id];
 }
 
 }  // namespace tt::tt_metal

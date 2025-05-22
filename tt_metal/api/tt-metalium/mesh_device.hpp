@@ -114,7 +114,8 @@ private:
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
     std::shared_ptr<ThreadPool> reader_thread_pool_;
-
+    // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
+    std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
@@ -185,7 +186,6 @@ public:
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;
     CommandQueue& command_queue(size_t cq_id = 0) override;
-    bool dispatch_firmware_active() const override;
 
     // Trace APIs
     void begin_trace(const uint8_t cq_id, const uint32_t tid) override;

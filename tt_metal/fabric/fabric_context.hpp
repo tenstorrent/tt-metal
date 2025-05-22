@@ -30,7 +30,7 @@ public:
     size_t get_fabric_max_payload_size_bytes() const;
     size_t get_fabric_channel_buffer_size_bytes() const;
 
-    tt::tt_fabric::FabricEriscDatamoverConfig& get_fabric_router_config() const;
+    tt::tt_fabric::FabricEriscDatamoverConfig& get_fabric_router_config(bool is_dateline = false) const;
 
     void set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers);
     uint32_t get_num_fabric_initialized_routers(chip_id_t chip_id) const;
@@ -40,7 +40,7 @@ public:
 
     std::vector<size_t> get_fabric_router_addresses_to_clear() const;
 
-    std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status(chip_id_t chip_id) const;
+    std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status() const;
 
     std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> get_fabric_router_ready_address_and_signal() const;
 
@@ -61,6 +61,7 @@ private:
     size_t max_payload_size_bytes_ = 0;
     size_t channel_buffer_size_bytes_ = 0;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> router_config_ = nullptr;
+    std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> dateline_router_config_ = nullptr;
     std::unordered_map<chip_id_t, chan_id_t> master_router_chans_{};
     std::unordered_map<chip_id_t, uint32_t> num_initialized_routers_{};
 };

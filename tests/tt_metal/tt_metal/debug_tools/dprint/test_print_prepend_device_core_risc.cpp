@@ -37,7 +37,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice* device, const string& risc) {
     // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
     // by machine
-    const string& device_core_risc = std::to_string(device->id()) + ":(x=*,y=*):" + risc + ": ";
+    const string& device_core_risc = std::to_string(device->id()) + ":(x=?,y=?):" + risc + ": ";
 
     const string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
     golden_output.push_back(output_line_all_riscs);
