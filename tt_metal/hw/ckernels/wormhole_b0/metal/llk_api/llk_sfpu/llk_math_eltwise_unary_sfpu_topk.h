@@ -7,62 +7,19 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_topk.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_topk_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::topk_local_sort, APPROXIMATE>(sfpu::topk_init<APPROXIMATE>);
-}
+SFPU_INIT_CUSTOM_NAME_WITH_FN(topk, topk_local_sort, topk_init)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_topk_local_sort(
-    uint dst_index,
-    int idir,
-    int i_end_phase,
-    int i_start_phase,
-    int i_end_step,
-    int i_start_step,
-    int vector_mode = (int)VectorMode::RC_custom) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitonic_topk_phases_steps<APPROXIMATE>,
-        dst_index,
-        vector_mode,
-        idir,
-        i_end_phase,
-        i_start_phase,
-        i_end_step,
-        i_start_step);
-}
+SFPU_CALCULATE_RC_CUSTOM(topk_local_sort, calculate_bitonic_topk_phases_steps, PARAM_LIST(), PARAM_LIST(PARAM(int, idir), PARAM(int, i_end_phase), PARAM(int, i_start_phase), PARAM(int, i_end_step), PARAM(int, i_start_step)))
 
-template <bool APPROXIMATE, bool idir = false>
-inline void llk_math_eltwise_unary_sfpu_topk_merge(
-    uint dst_index, int m_iter, int k, int vector_mode = (int)VectorMode::RC_custom) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitonic_topk_merge<APPROXIMATE, idir>, dst_index, vector_mode, m_iter, k);
-}
+SFPU_CALCULATE_RC_CUSTOM(topk_merge, calculate_bitonic_topk_merge, PARAM_LIST(DEFAULT_PARAM(bool, idir, false)), PARAM_LIST(PARAM(int, m_iter), PARAM(int, k)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_topk_rebuild(
-    uint dst_index,
-    bool idir,
-    int m_iter,
-    int k,
-    int logk,
-    int skip_second,
-    int vector_mode = (int)VectorMode::RC_custom) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitonic_topk_rebuild<APPROXIMATE>,
-        dst_index,
-        vector_mode,
-        idir,
-        m_iter,
-        k,
-        logk,
-        skip_second);
-}
+SFPU_CALCULATE_RC_CUSTOM(topk_rebuild, calculate_bitonic_topk_rebuild, PARAM_LIST(), PARAM_LIST(PARAM(bool, idir), PARAM(int, m_iter), PARAM(int, k), PARAM(int, logk), PARAM(int, skip_second)))
 
 }  // namespace ckernel

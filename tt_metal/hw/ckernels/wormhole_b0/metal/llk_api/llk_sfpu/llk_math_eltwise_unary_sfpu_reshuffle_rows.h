@@ -6,22 +6,15 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_reshuffle_rows.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_reshuffle_rows_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reshuffle_rows, APPROXIMATE>();
-}
+SFPU_INIT(reshuffle_rows)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_reshuffle_rows(
-    uint dst_index, uint32_t idx_addr, int vector_mode = (int)VectorMode::RC_custom) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_reshuffle_rows<APPROXIMATE>, dst_index, vector_mode, idx_addr);
-}
+SFPU_CALCULATE_RC_CUSTOM(reshuffle_rows, calculate_reshuffle_rows, PARAM_LIST(), PARAM_LIST(PARAM(uint32_t, idx_addr)))
 
 }  // namespace ckernel

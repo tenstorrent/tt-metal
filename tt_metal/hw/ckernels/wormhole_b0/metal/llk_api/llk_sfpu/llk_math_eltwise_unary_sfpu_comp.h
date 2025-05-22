@@ -6,6 +6,7 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_comp.h"
 
 namespace ckernel {
@@ -13,111 +14,45 @@ namespace ckernel {
 // New LLK SFPU APIs
 
 // EQZ
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_eqz(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp<APPROXIMATE, SfpuType::equal_zero>, dst_index, vector_mode, 8);
-}
+SFPU_CALCULATE_RC(eqz, calculate_comp, PARAM_LIST(ARG(SfpuType::equal_zero)), PARAM_LIST(ARG(8)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_eqz_int32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp_int<APPROXIMATE, SfpuType::equal_zero>, dst_index, vector_mode);
-}
+SFPU_CALCULATE_RC(eqz_int32, calculate_comp_int, PARAM_LIST(ARG(SfpuType::equal_zero)), PARAM_LIST())
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_eqz_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::equal_zero, APPROXIMATE>();
-}
+SFPU_INIT_CUSTOM_NAME(eqz, equal_zero)
 
 // NEZ
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_nez(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp<APPROXIMATE, SfpuType::not_equal_zero>, dst_index, vector_mode, 8);
-}
+SFPU_CALCULATE_RC(nez, calculate_comp, PARAM_LIST(ARG(SfpuType::not_equal_zero)), PARAM_LIST(ARG(8)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_nez_int32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp_int<APPROXIMATE, SfpuType::not_equal_zero>, dst_index, vector_mode);
-}
+SFPU_CALCULATE_RC(nez_int32, calculate_comp_int, PARAM_LIST(ARG(SfpuType::not_equal_zero)), PARAM_LIST())
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_nez_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::not_equal_zero, APPROXIMATE>();
-}
+SFPU_INIT_CUSTOM_NAME(nez, not_equal_zero)
 
 // LTZ
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_ltz(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp<APPROXIMATE, SfpuType::less_than_zero>, dst_index, vector_mode, 8);
-}
+SFPU_CALCULATE_RC(ltz, calculate_comp, PARAM_LIST(ARG(SfpuType::less_than_zero)), PARAM_LIST(ARG(8)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_ltz_int32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp_int<APPROXIMATE, SfpuType::less_than_zero>, dst_index, vector_mode);
-}
+SFPU_CALCULATE_RC(ltz_int32, calculate_comp_int, PARAM_LIST(ARG(SfpuType::less_than_zero)), PARAM_LIST())
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_ltz_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::less_than_zero, APPROXIMATE>();
-}
+SFPU_INIT_CUSTOM_NAME(ltz, less_than_zero)
 
 // GTZ
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gtz(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp<APPROXIMATE, SfpuType::greater_than_zero>, dst_index, vector_mode, 8);
-}
+SFPU_CALCULATE_RC(gtz, calculate_comp, PARAM_LIST(ARG(SfpuType::greater_than_zero)), PARAM_LIST(ARG(8)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gtz_int32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp_int<APPROXIMATE, SfpuType::greater_than_zero>, dst_index, vector_mode);
-}
+SFPU_CALCULATE_RC(gtz_int32, calculate_comp_int, PARAM_LIST(ARG(SfpuType::greater_than_zero)), PARAM_LIST())
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gtz_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::greater_than_zero, APPROXIMATE>();
-}
+SFPU_INIT_CUSTOM_NAME(gtz, greater_than_zero)
 
 // LEZ
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_lez(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp<APPROXIMATE, SfpuType::less_than_equal_zero>, dst_index, vector_mode, 8);
-}
+SFPU_CALCULATE_RC(lez, calculate_comp, PARAM_LIST(ARG(SfpuType::less_than_equal_zero)), PARAM_LIST(ARG(8)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_lez_int32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp_int<APPROXIMATE, SfpuType::less_than_equal_zero>, dst_index, vector_mode);
-}
+SFPU_CALCULATE_RC(lez_int32, calculate_comp_int, PARAM_LIST(ARG(SfpuType::less_than_equal_zero)), PARAM_LIST())
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_lez_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::less_than_equal_zero, APPROXIMATE>();
-}
+SFPU_INIT_CUSTOM_NAME(lez, less_than_equal_zero)
 
 // GEZ
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gez(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp<APPROXIMATE, SfpuType::greater_than_equal_zero>, dst_index, vector_mode, 8);
-}
+SFPU_CALCULATE_RC(gez, calculate_comp, PARAM_LIST(ARG(SfpuType::greater_than_equal_zero)), PARAM_LIST(ARG(8)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gez_int32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp_int<APPROXIMATE, SfpuType::greater_than_equal_zero>, dst_index, vector_mode);
-}
+SFPU_CALCULATE_RC(gez_int32, calculate_comp_int, PARAM_LIST(ARG(SfpuType::greater_than_equal_zero)), PARAM_LIST())
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_gez_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::greater_than_equal_zero, APPROXIMATE>();
-}
+SFPU_INIT_CUSTOM_NAME(gez, greater_than_equal_zero)
 
 }  // namespace ckernel

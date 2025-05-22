@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel_instr_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_rand.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
@@ -13,15 +14,8 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_rand_init(uint32_t seed = 0) {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>(sfpu::rand_init<APPROXIMATE>, seed);
-}
+SFPU_INIT_CUSTOM_NAME_WITH_FN(rand, unused, rand_init, DEFAULT_PARAM(uint32_t, seed, 0))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_rand(uint32_t dst_index, uint32_t from, uint32_t scale) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::rand<APPROXIMATE>, dst_index, VectorMode::RC, from, scale);
-}
+SFPU_CALCULATE_ALWAYS_RC(rand, rand, PARAM_LIST(), PARAM_LIST(PARAM(uint32_t, from), PARAM(uint32_t, scale)))
 
 }  // namespace ckernel

@@ -6,20 +6,15 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_max.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_max_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::max, APPROXIMATE>();
-}
+SFPU_INIT(max)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_max(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_max<APPROXIMATE>, dst_index, vector_mode);
-}
+SFPU_CALCULATE(max)
 
 }  // namespace ckernel

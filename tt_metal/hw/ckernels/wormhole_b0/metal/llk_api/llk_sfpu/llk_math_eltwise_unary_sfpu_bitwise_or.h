@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_bitwise_or.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
@@ -12,15 +13,8 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_bitwise_or_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::bitwise_or, APPROXIMATE>();
-}
+SFPU_INIT(bitwise_or)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_bitwise_or(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitwise_or<APPROXIMATE>, dst_index, vector_mode, param0);
-}
+SFPU_CALCULATE(bitwise_or, PARAM(uint, param0))
 
 }  // namespace ckernel

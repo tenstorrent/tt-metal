@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_remainder.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
@@ -12,17 +13,8 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_remainder_init(uint param0, uint param1) {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::remainder, APPROXIMATE>(
-        sfpu::init_remainder<APPROXIMATE>, param0, param1);
-}
+SFPU_INIT_CUSTOM_NAME_WITH_FN(remainder, remainder, init_remainder, PARAM(uint, param0), PARAM(uint, param1))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_remainder(
-    uint dst_index, uint param0, uint param1, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_remainder<APPROXIMATE>, dst_index, vector_mode, param0, param1);
-}
+SFPU_CALCULATE(remainder, PARAM(uint, param0), PARAM(uint, param1))
 
 }  // namespace ckernel

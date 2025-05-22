@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_binop_with_unary.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
@@ -12,16 +13,8 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE, int binop_mode>
-inline void llk_math_eltwise_unary_sfpu_binop_with_scalar(
-    uint dst_index, uint32_t param1, int vector_mode = VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_binop_with_scalar<APPROXIMATE, binop_mode, 8>, dst_index, vector_mode, param1);
-}
+SFPU_CALCULATE_RC(binop_with_scalar, calculate_binop_with_scalar, PARAM_LIST(PARAM(int, binop_mode), ARG(8)), PARAM_LIST(PARAM(uint32_t, param1)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_binop_with_scalar_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>();
-}
+SFPU_INIT_CUSTOM_NAME(binop_with_scalar, unused)
 
 }  // namespace ckernel
