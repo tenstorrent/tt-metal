@@ -829,17 +829,39 @@ int main(int argc, char **argv) {
 
     std::optional<ttnn::MeshTraceId> trace_id;
     ttml::autograd::TensorPtr output = nullptr;
+    ttml::autograd::TensorPtr loss = nullptr;
+
+    auto untraced_full_step = [&](const auto &features, const auto &masks, const auto &target) {
+        fmt::println("features padded shape {}", features->get_value().get_padded_shape());
+        fmt::println("target padded shape {}", target->get_value().get_padded_shape());
+        fmt::println("masks padded shape {}", masks->get_value().get_padded_shape());
+        output = run_model(model, features, masks);
+        loss = ttml::ops::nll_loss(output, target);
+        optimizer->zero_grad();
+        loss->backward();
+        optimizer->step();
+        ttml::autograd::ctx().reset_graph();
+    };
+
+    auto full_step = [&](const auto &features, const auto &masks, const auto &target) {
+        namespace trace = ttnn::operations::trace;
+        if (!trace_id.has_value()) {
+            trace_id = trace::begin_trace_capture(device, ttnn::DefaultQueueId);
+            fmt::println("tracing");
+            untraced_full_step(features, masks, target);
+            trace::end_trace_capture(device, *trace_id, ttnn::DefaultQueueId);
+            fmt::println("done tracing");
+        }
+        trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
+    };
+
     // precompile the model and allocate output
     for (auto [features, target, masks] : train_dataloader) {
         fmt::println("compiling model!");
-        run_model(model, features, masks);
+        untraced_full_step(features, masks, target);
         fmt::println("compiled model!");
-        // FIXME: need?
-        ttml::autograd::ctx().reset_graph();
         break;
     }
-
-    // assert(output->get_value().buffer()->address() != 0);
 
     std::unordered_set<uint32_t> observed_output_addrs{};
 
@@ -854,120 +876,40 @@ int main(int argc, char **argv) {
 
     const uint32_t num_epochs = config.num_epochs;
     auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
+    int steps = 0;
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
             auto start_timer = std::chrono::high_resolution_clock::now();
-            fmt::println("beginning step {}", optimizer->get_steps());
-            if (gradient_accumulator_helper.should_zero_grad()) {
-                optimizer->zero_grad();
-            }
-            // I hypothesize that all of the autograd ptrs will be created and
-            // linked in the first pass; we save a reference to the loss tensor
-            // with run_fwd on the first pass as well, so we should have the
-            // same graph in memory. Now successive executions of run_fwd should
-            // touch the same ttnn::Tensors over which we computed in the first
-            // pass. I think that everything should line up, but it remains to
-            // be seen.
-
-            auto run_fwd = [&]() {
-                namespace trace = ttnn::operations::trace;
-                if (!trace_id.has_value()) {
-                    fmt::println("tracing");
-                    trace_id = trace::begin_trace_capture(device, ttnn::DefaultQueueId);
-                    output = run_model(model, features, masks);
-                    // NOTE: introduces a hang in execute_trace.
-                    // ttnn::copy(fwd_value, output->get_value()); // explicitly copy into the autograd output tensor.
-                    fmt::println("done tracing");
-                    trace::end_trace_capture(device, *trace_id, ttnn::DefaultQueueId);
-                }
-                auto output_value_pre = output->get_value();
-                fmt::println("executing trace");
-                trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
-                fmt::println("executed trace");
-                auto output_value_post = output->get_value();
-                if (xt::allclose(
-                        ttml::core::to_xtensor(output_value_pre.cpu()),
-                        ttml::core::to_xtensor(output_value_post.cpu()))) {
-                    fmt::println("pre address {}", output_value_pre.buffer()->address());
-                    fmt::println("post address {}", output_value_post.buffer()->address());
-                    fmt::println("output value didn't update!");
-                } else {
-                    fmt::println("output updated!");
-                }
-            };
-
-            auto dump_observed_addrs = [&](std::string_view pfx, const auto &addrs) {
-                fmt::print("{} addrs so far: ", pfx);
-                for (const auto &addr : addrs) {
-                    fmt::print("{}, ", addr);
-                }
-                fmt::println("");
-            };
-
-            if (output)
-                observed_output_addrs.insert(output->get_value().buffer()->address());
-            run_fwd();
-            assert(output);
-            if (output)
-                observed_output_addrs.insert(output->get_value().buffer()->address());
-
-            dump_observed_addrs("output", observed_output_addrs);
-
-            if (all_named_param_addrs != get_all_named_param_addrs()) {
-                fmt::println("param addrs changed!!!");
-            }
+            fmt::println("beginning step {}", ++steps);
+            full_step(features, masks, target);
 
             auto output_value = output->get_value();
             fmt::println("output mean value {}", ttml::core::to_xtensor(ttnn::mean(output_value).cpu())[0]);
 
-            auto features_value = features->get_value();
-            auto loss = ttml::ops::nll_loss(output, target);
-            loss = gradient_accumulator_helper.scale(loss);
-
             float loss_float = get_loss_value(loss);
-            loss->backward(/*retain_graph=*/true);
-            // ttml::autograd::ctx().reset_graph();
+            scheduler->step();
 
-            auto samples = features->get_value().get_logical_shape()[0];
-            gradient_accumulator_helper.update(loss_float, samples);
+            auto global_step = steps;
+            fmt::print("Step: {}, Loss: {}\n", global_step, loss_float);
+            loss_meter.update(loss_float);
 
-            if (gradient_accumulator_helper.should_step()) {
-                // synchronize gradients for multi-device case, no-op if single device
-                auto parameters = get_model_parameters(model);
-                if (!enable_tp) {
-                    ttml::core::distributed::synchronize_parameters(parameters);
-                }
-
-                if (config.use_clip_grad_norm) {
-                    if (enable_tp) {
-                        throw std::logic_error("Clip grad norm is not supported with TP");
-                    }
-                    ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
-                }
-                optimizer->step();
-                scheduler->step();
-                auto global_step = optimizer->get_steps();
-                fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
-                loss_meter.update(gradient_accumulator_helper.average_loss());
-
-                if (enable_wandb && global_step % 10 == 0) {
-                    wandbcpp::log(
-                        {{"Step", (int)global_step},
-                         {"Samples", (int)get_samples_count(global_step)},
-                         {"Loss", loss_meter.average()},
-                         {"Learning rate", optimizer->get_lr()}});
-                    loss_meter.reset();
-                }
-                if (!config.model_path.empty() && global_step % config.model_save_interval == 0) {
-                    save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
-                }
-
-                if (global_step >= config.max_steps) {
-                    break;
-                }
-
-                gradient_accumulator_helper.reset();
+            if (enable_wandb && global_step % 10 == 0) {
+                wandbcpp::log(
+                    {{"Step", (int)global_step},
+                     {"Samples", (int)get_samples_count(global_step)},
+                     {"Loss", loss_meter.average()},
+                     {"Learning rate", optimizer->get_lr()}});
+                loss_meter.reset();
             }
+
+            if (!config.model_path.empty() && global_step % config.model_save_interval == 0) {
+                save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
+            }
+
+            if (global_step >= config.max_steps) {
+                break;
+            }
+
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print(

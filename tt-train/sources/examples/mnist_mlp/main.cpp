@@ -279,7 +279,7 @@ int main(int argc, char **argv) {
 
     auto untraced_full_step = [&](const auto &data, const auto &target) {
         fmt::println("data padded shape {}", data->get_value().get_padded_shape());
-        fmt::println("target padded shape {}", data->get_value().get_padded_shape());
+        fmt::println("target padded shape {}", target->get_value().get_padded_shape());
         output = run_model(model, data);
         loss = ttml::ops::cross_entropy_loss(output, target);
         optimizer.zero_grad();
