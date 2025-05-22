@@ -10,8 +10,9 @@
 #include "params.h"
 
 // Globals
-uint32_t unp_cfg_context        = 0;
-uint32_t pack_sync_tile_dst_ptr = 0;
+uint32_t unp_cfg_context          = 0;
+uint32_t pack_sync_tile_dst_ptr   = 0;
+uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -45,18 +46,18 @@ using namespace ckernel;
 
 void run_kernel()
 {
-    _llk_math_pack_sync_init_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<false, false>(MATH_FORMAT, MATH_FORMAT);
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(4, 0, 0);
 
     for (auto index = 0; index < 16; ++index)
     {
         // index is passed ass index of tile in dest
-        _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
-        _llk_math_eltwise_binary_<EltwiseBinaryType::ELWADD, BroadcastType::NONE, DstSync::SyncFull, 0, EltwiseBinaryReuseDestType::NONE, is_fp32_dest_acc_en>(
+        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+        _llk_math_eltwise_binary_<EltwiseBinaryType::ELWADD, BroadcastType::NONE, DstSync::SyncHalf, 0, EltwiseBinaryReuseDestType::NONE, is_fp32_dest_acc_en>(
             4, index, true);
     }
-    _llk_math_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif
@@ -80,17 +81,17 @@ void run_kernel()
     _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false>(PACK_OUT);
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
 #else
-    _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, false, false>();
+    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, false, false>();
 #endif
 
     for (uint index = 0; index < 16; index++)
     {
         _llk_packer_wait_for_math_done_();
-        _llk_pack_<DstSync::SyncFull, false, is_fp32_dest_acc_en>(0, ((std::uint32_t)buffer_Dest + 0x1000 * index) / 16 - 1);
+        _llk_pack_<DstSync::SyncHalf, false, is_fp32_dest_acc_en>(0, ((std::uint32_t)buffer_Dest + 0x1000 * index) / 16 - 1);
     }
-    _llk_pack_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
+    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
 #endif
