@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "wormhole/core_config.h"
 
 #include <cstddef>
 #include <array>
@@ -109,8 +110,8 @@ void kernel_main() {
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
     size_t rt_args_idx = 0;
-    auto fabric_connection =
-        tt::tt_fabric::FabricMuxToEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    constexpr ProgrammableCoreType programmable_core_type = static_cast<ProgrammableCoreType>(MY_CORE_TYPE);
+    auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<programmable_core_type>(rt_args_idx);
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
         full_size_channels;
@@ -170,6 +171,9 @@ void kernel_main() {
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t heartbeat = 0;
+#endif
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
@@ -205,6 +209,9 @@ void kernel_main() {
                     header_only_channel_connection_established[channel_id]);
             }
         }
+#if defined(COMPILE_FOR_IDLE_ERISC)
+        RISC_POST_HEARTBEAT(heartbeat);
+#endif
     }
 
     fabric_connection.close();

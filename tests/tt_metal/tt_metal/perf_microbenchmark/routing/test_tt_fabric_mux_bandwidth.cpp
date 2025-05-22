@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -110,6 +110,9 @@ void create_kernel(
     const std::vector<uint32_t>& ct_args,
     const std::vector<uint32_t>& rt_args,
     const std::vector<std::pair<size_t, size_t>>& addresses_to_clear) {
+    // Default to TENSIX for now
+    const auto programmable_core_type = tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX);
     auto kernel_handle = tt::tt_metal::CreateKernel(
         program_handle,
         kernel_src,
@@ -118,6 +121,7 @@ void create_kernel(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = ct_args,
+            .defines = {{"MY_CORE_TYPE", std::to_string(programmable_core_type)}},
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
     tt::tt_metal::SetRuntimeArgs(program_handle, kernel_handle, logical_core, rt_args);
 
