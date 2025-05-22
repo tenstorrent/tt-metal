@@ -690,7 +690,11 @@ inline void enable_gathering()
 template <uint start, uint len, bool exec_while_loading = false, typename F>
 inline void load_replay_buf(F fn)
 {
-    // disable_gathering();
+    // ENABLE_GATHERING is controlled by JIT build.
+    // Not enabled by default due to tt-metal#16439.
+#if defined(ENABLE_GATHERING)
+    disable_gathering();
+#endif
 
     // Issue instruction to load replay buffer
     TTI_REPLAY(start, len, exec_while_loading, 1);
@@ -698,9 +702,9 @@ inline void load_replay_buf(F fn)
     // Send in the user's desired instructions
     fn();
 
-    // Workaround for tt-metal#16439, making sure gathering is disabled
-    // WE DON'T UNDERSTAND WHY ENABLING GATHERING DOESN'T WORK
-    // enable_gathering();
+#if defined(ENABLE_GATHERING)
+    enable_gathering();
+#endif
 }
 
 // Same as above, but used if start/len/exec_while_loading are not known
@@ -708,7 +712,11 @@ inline void load_replay_buf(F fn)
 template <typename F>
 inline void load_replay_buf(uint start, uint len, bool exec_while_loading, F fn)
 {
-    // disable_gathering();
+    // ENABLE_GATHERING is controlled by JIT build.
+    // Not enabled by default due to tt-metal#16439.
+#if defined(ENABLE_GATHERING)
+    disable_gathering();
+#endif
 
     // Issue instruction to load replay buffer
     TT_REPLAY(start, len, exec_while_loading, 1);
@@ -716,9 +724,9 @@ inline void load_replay_buf(uint start, uint len, bool exec_while_loading, F fn)
     // Send in the user's desired instructions
     fn();
 
-    // Workaround for tt-metal#16439, making sure gathering is disabled
-    // WE DON'T UNDERSTAND WHY ENABLING GATHERING DOESN'T WORK
-    // enable_gathering();
+#if defined(ENABLE_GATHERING)
+    enable_gathering();
+#endif
 }
 
 enum class CSR : uint16_t
