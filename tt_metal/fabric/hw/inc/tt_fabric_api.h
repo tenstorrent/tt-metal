@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,9 +42,11 @@ inline uint32_t get_next_hop_router_noc_xy(
     fabric_router_l1_config_t* routing_table = (fabric_router_l1_config_t*)client_interface->routing_tables_l1_offset;
     if (dst_mesh_id != routing_table[routing_plane].my_mesh_id) {
         uint32_t next_port = routing_table[routing_plane].inter_mesh_table.dest_entry[dst_mesh_id];
+        ASSERT(next_port != INVALID_DIRECTION);
         return eth_chan_to_noc_xy[noc_index][next_port];
     } else {
         uint32_t next_port = routing_table[routing_plane].intra_mesh_table.dest_entry[dst_dev_id];
+        ASSERT(next_port != INVALID_DIRECTION);
         return eth_chan_to_noc_xy[noc_index][next_port];
     }
 }
@@ -60,8 +62,10 @@ inline uint32_t get_next_hop_router_direction(
     uint32_t direction = 0;
     if (dst_mesh_id != routing_table[routing_plane].my_mesh_id) {
         next_port = routing_table[routing_plane].inter_mesh_table.dest_entry[dst_mesh_id];
+        ASSERT(next_port != INVALID_DIRECTION);
     } else {
         next_port = routing_table[routing_plane].intra_mesh_table.dest_entry[dst_dev_id];
+        ASSERT(next_port != INVALID_DIRECTION);
     }
 
     if (routing_table[routing_plane].port_direction.directions[eth_chan_directions::EAST] == next_port) {

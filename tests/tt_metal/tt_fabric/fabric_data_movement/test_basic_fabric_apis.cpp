@@ -162,8 +162,8 @@ void RunAsyncWriteTest(
     std::string test_type = is_raw_write ? "Raw Async Write" : "Async Write";
     tt::log_info(tt::LogTest, "{} from {} to {}", test_type, start_mesh_chip_id.second, end_mesh_chip_id.second);
 
-    // Get the optimal routers (no internal hops) on the start chip that will forward in the direction of the end chip
-    auto routers = control_plane->get_routers_to_chip(
+    // Get the optimal channels (no internal hops) on the start chip that will forward in the direction of the end chip
+    auto router_chans = control_plane->get_forwarding_eth_chans_to_chip(
         start_mesh_chip_id.first, start_mesh_chip_id.second, end_mesh_chip_id.first, end_mesh_chip_id.second);
 
     auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
@@ -212,6 +212,8 @@ void RunAsyncWriteTest(
         (uint32_t)mode, (uint32_t)test_mode::TEST_ASYNC_WRITE, (uint32_t)is_raw_write};
     auto outbound_eth_channels =
         control_plane->get_active_fabric_eth_channels(start_mesh_chip_id.first, start_mesh_chip_id.second);
+    auto router_virtual_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+        physical_start_device_id, *router_chans.begin());
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -219,7 +221,7 @@ void RunAsyncWriteTest(
         data_size,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        tt_metal::MetalContext::instance().hal().noc_xy_encoding(routers[0].second.x, routers[0].second.y),
+        tt_metal::MetalContext::instance().hal().noc_xy_encoding(router_virtual_core.x, router_virtual_core.y),
         outbound_eth_channels.begin()->first};
     std::map<string, string> defines = {};
     if (mode == fabric_mode::PULL) {
@@ -276,8 +278,8 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
-    // Get the optimal routers (no internal hops) on the start chip that will forward in the direction of the end chip
-    auto routers = control_plane->get_routers_to_chip(
+    // Get the optimal channels (no internal hops) on the start chip that will forward in the direction of the end chip
+    auto router_chans = control_plane->get_forwarding_eth_chans_to_chip(
         start_mesh_chip_id.first, start_mesh_chip_id.second, end_mesh_chip_id.first, end_mesh_chip_id.second);
 
     auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
@@ -320,6 +322,8 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     std::vector<uint32_t> sender_compile_time_args = {(uint32_t)mode, (uint32_t)TEST_ATOMIC_INC, 0};
     auto outbound_eth_channels =
         control_plane->get_active_fabric_eth_channels(start_mesh_chip_id.first, start_mesh_chip_id.second);
+    auto router_virtual_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+        physical_start_device_id, *router_chans.begin());
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -328,7 +332,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
         wrap_boundary,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        tt_metal::MetalContext::instance().hal().noc_xy_encoding(routers[0].second.x, routers[0].second.y),
+        tt_metal::MetalContext::instance().hal().noc_xy_encoding(router_virtual_core.x, router_virtual_core.y),
         outbound_eth_channels.begin()->first};
 
     CreateSenderKernel(
@@ -376,8 +380,8 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
-    // Get the optimal routers (no internal hops) on the start chip that will forward in the direction of the end chip
-    auto routers = control_plane->get_routers_to_chip(
+    // Get the optimal channels (no internal hops) on the start chip that will forward in the direction of the end chip
+    auto router_chans = control_plane->get_forwarding_eth_chans_to_chip(
         start_mesh_chip_id.first, start_mesh_chip_id.second, end_mesh_chip_id.first, end_mesh_chip_id.second);
 
     auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
@@ -439,6 +443,8 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
         (uint32_t)mode, (uint32_t)TEST_ASYNC_WRITE_ATOMIC_INC, (uint32_t)is_raw_write};
     auto outbound_eth_channels =
         control_plane->get_active_fabric_eth_channels(start_mesh_chip_id.first, start_mesh_chip_id.second);
+    auto router_virtual_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+        physical_start_device_id, *router_chans.begin());
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -448,7 +454,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
         atomic_inc,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        tt_metal::MetalContext::instance().hal().noc_xy_encoding(routers[0].second.x, routers[0].second.y),
+        tt_metal::MetalContext::instance().hal().noc_xy_encoding(router_virtual_core.x, router_virtual_core.y),
         outbound_eth_channels.begin()->first};
 
     CreateSenderKernel(
@@ -603,12 +609,14 @@ void RunAsyncWriteMulticastTest(
     // Get router encodings for each direction
     std::unordered_map<RoutingDirection, uint32_t> sender_router_noc_xys;
     for (auto& [routing_direction, end_mesh_chip_ids] : end_mesh_chip_ids_by_dir) {
-        auto routers = control_plane->get_routers_to_chip(
+        auto router_chans = control_plane->get_forwarding_eth_chans_to_chip(
             start_mesh_chip_id.first,
             start_mesh_chip_id.second,
             end_mesh_chip_ids[0].first,
             end_mesh_chip_ids[0].second);
-        auto& sender_virtual_router_coord = routers[0].second;
+        const auto& sender_virtual_router_coord =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+                physical_start_device_id, *router_chans.begin());
         sender_router_noc_xys.try_emplace(
             routing_direction,
             tt_metal::MetalContext::instance().hal().noc_xy_encoding(
@@ -701,6 +709,12 @@ TEST_F(Fabric2DFixture, TestUnicastRaw) {
 }
 
 TEST_F(Fabric2DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
+
+TEST_F(Fabric2DFixture, TestUnicastConnAPIRandom) {
+    for (uint32_t i = 0; i < 10; i++) {
+        RunTestUnicastConnAPIRandom(this);
+    }
+}
 
 TEST_F(Fabric2DFixture, TestMCastConnAPI_1W1E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 1, RoutingDirection::E, 1);
