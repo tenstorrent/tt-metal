@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import torch
 import ttnn
-from models.experimental.stable_diffusion3.tt.linear import TtLinear, TtLinearParameters
+from models.experimental.stable_diffusion_35_large.tt.linear import TtLinear, TtLinearParameters
 
 from . import utils
 from .normalization import TtLayerNorm, TtLayerNormParameters

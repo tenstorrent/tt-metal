@@ -24,7 +24,7 @@ The model consists of two different text encoders together with their tokenizers
 The tests are run using the following command:
 
 ```sh
-pytest models/experimental/stable_diffusion3/tests
+pytest models/experimental/stable_diffusion_35_large/tests
 ```
 
 ## Running the Demo
@@ -32,5 +32,5 @@ pytest models/experimental/stable_diffusion3/tests
 The demo is run using the following command:
 
 ```sh
-pytest models/experimental/stable_diffusion3/demo.py
+pytest models/experimental/stable_diffusion_35_large/demo.py
 ```

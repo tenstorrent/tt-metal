@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import torch
 import ttnn
-from models.experimental.stable_diffusion3.tt.fun_linear import sd_linear, TtLinearParameters
+from models.experimental.stable_diffusion_35_large.tt.fun_linear import sd_linear, TtLinearParameters
 
 from .substate import substate
 
