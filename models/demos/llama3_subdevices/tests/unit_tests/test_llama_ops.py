@@ -361,6 +361,7 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
     datatype,
     pcc,
     mesh_device,
+    use_program_cache,
 ):
     run_test_row_major_rotary_embedding_llama(
         mesh_device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True

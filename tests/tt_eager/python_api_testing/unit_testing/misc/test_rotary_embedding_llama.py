@@ -335,14 +335,10 @@ def run_test_row_major_rotary_embedding_llama(
     )
     transformation_mat = rope_setup_decode.transformation_mat
     cos, sin = rope_setup_decode.get_rm_rot_mats(position_ids)
-    cos_sin_core_grid = rope_setup_decode.core_grid
+    sub_core_grids = rope_setup_decode.sub_core_grids
 
-    q_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        ttnn.CoreCoord(1, 0), 8, cos_sin_core_grid, row_wise=True
-    )
-    k_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        ttnn.CoreCoord(3, 2), 8, cos_sin_core_grid, row_wise=True
-    )
+    q_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 8, sub_core_grids, row_wise=True)
+    k_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(3, 2), 8, sub_core_grids, row_wise=True)
 
     q_input_mem_config = ttnn.create_sharded_memory_config(
         shape=(n_heads, head_dim),
