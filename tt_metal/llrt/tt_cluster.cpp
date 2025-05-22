@@ -1085,7 +1085,7 @@ void Cluster::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
     if (fabric_config != tt_metal::FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
-        if (tt::tt_fabric::is_tt_fabric_config(fabric_config) || tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+        if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
             this->get_control_plane()->initialize_fabric_context(fabric_config);
         }
     } else {

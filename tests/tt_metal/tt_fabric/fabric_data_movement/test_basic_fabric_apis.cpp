@@ -692,86 +692,60 @@ void RunAsyncWriteMulticastTest(
     }
 }
 
-TEST_F(Fabric2DPullFixture, TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PULL, false); }
+TEST_F(Fabric2DFixture, DISABLED_TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PUSH, false); }
 
-TEST_F(Fabric2DPushFixture, DISABLED_TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PUSH, false); }
-
-TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) { RunAsyncWriteTest(this, fabric_mode::PULL, true); }
-
-TEST_F(Fabric2DPushFixture, TestUnicastRaw) {
+TEST_F(Fabric2DFixture, TestUnicastRaw) {
     for (uint32_t i = 0; i < 10; i++) {
         RunTestUnicastRaw(this);
     }
 }
 
-TEST_F(Fabric2DPushFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
+TEST_F(Fabric2DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 
-TEST_F(Fabric2DPushFixture, TestMCastConnAPI_1W1E) {
+TEST_F(Fabric2DFixture, TestMCastConnAPI_1W1E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 1, RoutingDirection::E, 1);
 }
 
-TEST_F(Fabric2DPushFixture, TestMCastConnAPI_1W2E) {
+TEST_F(Fabric2DFixture, TestMCastConnAPI_1W2E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 1, RoutingDirection::E, 2);
 }
 
-TEST_F(Fabric2DPushFixture, TestMCastConnAPI_2W1E) {
+TEST_F(Fabric2DFixture, TestMCastConnAPI_2W1E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 2, RoutingDirection::E, 1);
 }
 
-TEST_F(Fabric2DPushFixture, TestMCastConnAPI_2W2E) {
+TEST_F(Fabric2DFixture, TestMCastConnAPI_2W2E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 2, RoutingDirection::E, 2);
 }
 
-TEST_F(Fabric2DPushFixture, TestMCastConnAPI_3W3E) {
+TEST_F(Fabric2DFixture, TestMCastConnAPI_3W3E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 3, RoutingDirection::E, 3);
 }
 
-TEST_F(Fabric2DPushFixture, TestMCastConnAPI_4W3E) {
+TEST_F(Fabric2DFixture, TestMCastConnAPI_4W3E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 4, RoutingDirection::E, 3);
 }
 
-TEST_F(Fabric2DPushFixture, TestMCastConnAPI_3W4E) {
+TEST_F(Fabric2DFixture, TestMCastConnAPI_3W4E) {
     RunTestMCastConnAPI(this, RoutingDirection::W, 3, RoutingDirection::E, 4);
 }
 
-TEST_F(Fabric2DPushFixture, TestMCastConnAPI_1N2S) {
+TEST_F(Fabric2DFixture, TestMCastConnAPI_1N2S) {
     RunTestMCastConnAPI(this, RoutingDirection::N, 1, RoutingDirection::S, 2);
 }
 
-TEST_F(Fabric2DPushFixture, TestMCastConnAPI_2N1S) {
+TEST_F(Fabric2DFixture, TestMCastConnAPI_2N1S) {
     RunTestMCastConnAPI(this, RoutingDirection::N, 2, RoutingDirection::S, 1);
 }
 
-TEST_F(Fabric2DPullFixture, TestAtomicInc) { RunAtomicIncTest(this, fabric_mode::PULL); }
+TEST_F(Fabric2DFixture, DISABLED_TestAtomicInc) { RunAtomicIncTest(this, fabric_mode::PUSH); }
 
-TEST_F(Fabric2DPushFixture, DISABLED_TestAtomicInc) { RunAtomicIncTest(this, fabric_mode::PUSH); }
-
-TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) { RunAsyncWriteAtomicIncTest(this, fabric_mode::PULL, false); }
-
-TEST_F(Fabric2DPushFixture, DISABLED_TestAsyncWriteAtomicInc) {
+TEST_F(Fabric2DFixture, DISABLED_TestAsyncWriteAtomicInc) {
     RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, false);
 }
 
-TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) { RunAsyncWriteAtomicIncTest(this, fabric_mode::PULL, true); }
-
-TEST_F(Fabric2DPushFixture, DISABLED_TestAsyncRawWriteAtomicInc) {
+TEST_F(Fabric2DFixture, DISABLED_TestAsyncRawWriteAtomicInc) {
     RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, true);
-}
-
-TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
-    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, false, false);
-}
-
-TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
-    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, true, false);
-}
-
-TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
-    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, false, true);
-}
-
-TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
-    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, true, true);
 }
 
 // 2D Dynamic Routing Unicast Tests

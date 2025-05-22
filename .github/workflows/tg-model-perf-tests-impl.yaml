@@ -60,9 +60,18 @@ jobs:
             owner_id: U053W15B6JF # Djordje Ivanovic
           },
           {
-            name: "Galaxy Llama 70B prefill perf tests",
+            name: "Galaxy Llama 70B prefill perf tests [128]",
             arch: wormhole_b0,
-            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py",
+            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[128]",
+            timeout: 100,
+            tracy: true,
+            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            owner_id: U03PUAKE719 # Miguel Tairum
+          },
+          {
+            name: "Galaxy Llama 70B prefill perf tests [4096]",
+            arch: wormhole_b0,
+            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[4096]",
             timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
