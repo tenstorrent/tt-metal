@@ -21,15 +21,6 @@ constexpr uint32_t TILE_FACE_HW = TILE_FACE_WIDTH * TILE_FACE_HEIGHT;
 template <bool is_dram>
 using IAGF = InterleavedAddrGenFast<is_dram>;
 
-template <typename T>
-FORCE_INLINE volatile T& tile_guts(
-    volatile tt_l1_ptr T* l1_ptr,
-    const std::size_t& face_x,
-    const std::size_t& face_y,
-    const std::size_t& scalar_x,
-    const std::size_t& scalar_y,
-    const uint32_t& tile_id = 0);
-
 // TODO(jbbieniekTT): return immediately calculated result using face bit mask
 // (this will speed up the scatter kernel altogether - this method is called
 // a multitude of times)
@@ -53,6 +44,17 @@ FORCE_INLINE uint32_t calc_offset_inside_tile(
 
 FORCE_INLINE uint32_t get_tile_offset_in_row(const uint32_t& tile_id) { return tt::constants::TILE_HW * tile_id; }
 
+template <typename T>
+FORCE_INLINE volatile T& tile_guts(
+    volatile tt_l1_ptr T* l1_ptr,
+    const std::size_t& face_x,
+    const std::size_t& face_y,
+    const std::size_t& scalar_x,
+    const std::size_t& scalar_y,
+    const uint32_t& tile_id = 0) {
+    return l1_ptr[get_tile_offset_in_row(tile_id) + calc_offset_inside_tile(face_x, face_y, scalar_x, scalar_y)];
+}
+
 FORCE_INLINE uint32_t
 get_width_scalar_index(const uint32_t& tile_id, const uint32_t& face_x, const uint32_t& scalar_x) {
     return tile_id * tt::constants::TILE_WIDTH + face_x * (tt::constants::TILE_WIDTH / 2) + scalar_x;
@@ -62,22 +64,8 @@ FORCE_INLINE uint32_t get_height_scalar_index(const uint32_t& h, const uint32_t&
     return h * tt::constants::TILE_HEIGHT + face_y * (tt::constants::TILE_HEIGHT / 2) + scalar_y;
 }
 
-#define tile_guts_gen(unsigned_type)                                                                                  \
-    template <>                                                                                                       \
-    FORCE_INLINE volatile unsigned_type& tile_guts<unsigned_type>(                                                    \
-        volatile tt_l1_ptr unsigned_type * l1_ptr,                                                                    \
-        const std::size_t& face_x,                                                                                    \
-        const std::size_t& face_y,                                                                                    \
-        const std::size_t& scalar_x,                                                                                  \
-        const std::size_t& scalar_y,                                                                                  \
-        const uint32_t& tile_id) {                                                                                    \
-        return l1_ptr[get_tile_offset_in_row(tile_id) + calc_offset_inside_tile(face_x, face_y, scalar_x, scalar_y)]; \
-    }
-
-tile_guts_gen(uint8_t) tile_guts_gen(uint16_t) tile_guts_gen(uint32_t) tile_guts_gen(float) tile_guts_gen(int32_t)
-
-    template <bool is_dram>
-    FORCE_INLINE IAGF<is_dram> make_addr_gtor(const uint32_t& cb, const uint32_t& base_addr) {
+template <bool is_dram>
+FORCE_INLINE IAGF<is_dram> make_addr_gtor(const uint32_t& cb, const uint32_t& base_addr) {
     return {
         .bank_base_address = base_addr,
         .page_size = static_cast<uint32_t>(get_tile_size(cb)),

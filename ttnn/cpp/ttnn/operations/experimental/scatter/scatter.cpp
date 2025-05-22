@@ -54,11 +54,11 @@ Tensor post_scatter_transform_tensor(
         output_tensor = ttnn::transpose(output_tensor, dim, -1, output_tensor.memory_config());
     }
 
-    // TT_FATAL(
-    //     output_tensor.get_logical_shape() == original_lshape,
-    //     "Output tensor transformation did not create correct output shape! Got: {}, expected: {}",
-    //     output_tensor.get_logical_shape(),
-    //     original_lshape);
+    TT_FATAL(
+        output_tensor.get_logical_shape() == original_lshape,
+        "Output tensor transformation did not create correct output shape! Got: {}, expected: {}",
+        output_tensor.get_logical_shape(),
+        original_lshape);
 
     return output_tensor;
 }
