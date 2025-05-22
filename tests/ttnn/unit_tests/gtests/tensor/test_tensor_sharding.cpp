@@ -1373,7 +1373,42 @@ INSTANTIATE_TEST_SUITE_P(
             .layout = Layout::TILE,
         },
         NDShardingParams{
-            .shape = Shape({20, 20, 20}),
+            .shape = Shape({30, 40, 50}),
+            .shard_shape = Shape({30, 40, 50}),
+            .layout = Layout::ROW_MAJOR,
+        },
+        NDShardingParams{
+            .shape = Shape({30, 40, 50}),
+            .shard_shape = Shape({10, 40, 50}),
+            .layout = Layout::ROW_MAJOR,
+        },
+        NDShardingParams{
+            .shape = Shape({30, 40, 50}),
+            .shard_shape = Shape({30, 10, 50}),
+            .layout = Layout::ROW_MAJOR,
+        },
+        NDShardingParams{
+            .shape = Shape({30, 40, 50}),
+            .shard_shape = Shape({30, 40, 10}),
+            .layout = Layout::ROW_MAJOR,
+        },
+        NDShardingParams{
+            .shape = Shape({30, 40, 50}),
+            .shard_shape = Shape({10, 10, 50}),
+            .layout = Layout::ROW_MAJOR,
+        },
+        NDShardingParams{
+            .shape = Shape({30, 40, 50}),
+            .shard_shape = Shape({10, 40, 10}),
+            .layout = Layout::ROW_MAJOR,
+        },
+        NDShardingParams{
+            .shape = Shape({30, 40, 50}),
+            .shard_shape = Shape({30, 10, 10}),
+            .layout = Layout::ROW_MAJOR,
+        },
+        NDShardingParams{
+            .shape = Shape({30, 40, 50}),
             .shard_shape = Shape({10, 10, 10}),
             .layout = Layout::ROW_MAJOR,
         }));

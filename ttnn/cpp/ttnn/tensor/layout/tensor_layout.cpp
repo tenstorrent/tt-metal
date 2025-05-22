@@ -51,10 +51,6 @@ Alignment legacyShapeToAlignment(
 
     // ND SHARDED
     if (memory_config.nd_shard_spec().has_value()) {
-        if (page_config.get_layout() == Layout::ROW_MAJOR) {
-            const auto& shard_spec = memory_config.nd_shard_spec().value();
-            return Alignment{shard_spec.physical_shard_shape.view()};
-        }
         return Alignment{};
     }
 
@@ -107,15 +103,24 @@ void validate_alignment(const TensorLayout& tensor_layout) {
 void validate_shard_spec(const TensorLayout& tensor_layout) {
     const auto& memory_config = tensor_layout.get_memory_config();
     const auto& layout = tensor_layout.get_layout();
-    if (memory_config.is_sharded() and memory_config.shard_spec().has_value() and layout == Layout::TILE) {
-        const auto& physical_shard_shape = tensor_layout.get_physical_shard_shape();
+    if (memory_config.is_sharded() && layout == Layout::TILE) {
         const auto& tile_shape = tensor_layout.get_tile().get_tile_shape();
-        // TODO (issue #17060): Flip to TT_FATAL
-        TT_FATAL(
-            (physical_shard_shape.height() % tile_shape[0] == 0 && physical_shard_shape.width() % tile_shape[1] == 0),
-            "Physical shard shape {} must be tile {} sized!",
-            physical_shard_shape,
-            tile_shape);
+        if (memory_config.shard_spec().has_value()) {
+            const auto& physical_shard_shape = tensor_layout.get_physical_shard_shape();
+            TT_FATAL(
+                (physical_shard_shape.height() % tile_shape[0] == 0 &&
+                 physical_shard_shape.width() % tile_shape[1] == 0),
+                "Physical shard shape {} must be tile {} sized!",
+                physical_shard_shape,
+                tile_shape);
+        } else {
+            const auto& physical_shard_shape = memory_config.nd_shard_spec().value().physical_shard_shape;
+            TT_FATAL(
+                (physical_shard_shape[-2] % tile_shape[0] == 0 && physical_shard_shape[-1] % tile_shape[1] == 0),
+                "Physical shard shape {} must be tile {} sized!",
+                physical_shard_shape,
+                tile_shape);
+        }
     }
 }
 
@@ -259,10 +264,6 @@ Shape2D TensorLayout::get_logical_shard_shape() const {
 }
 
 Shape2D TensorLayout::get_physical_shard_shape() const {
-    if (auto& nd_shard_spec = memory_config_.nd_shard_spec()) {
-        return Shape2D{nd_shard_spec->physical_shard_shape[-2], nd_shard_spec->physical_shard_shape[-1]};
-    }
-
     TT_FATAL(
         memory_config_.shard_spec().has_value(),
         "Shard spec must have value for TensorLayout::get_physical_shard_shape!");
