@@ -137,8 +137,6 @@ void MAIN {
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
     uint32_t num_od_ele = get_arg_val<uint32_t>(0);
     uint32_t scalar_cnt = get_arg_val<uint32_t>(1);
-    DPRINT << "scalar cnt " << scalar_cnt << ENDL();
-    DPRINT << "num_od_ele " << num_od_ele << ENDL();
     uint32_t diff_index = 0;
     uint32_t time_for_change = 0;
     uint32_t runtime_args_before = 1;
@@ -190,7 +188,6 @@ void MAIN {
         pack_untilize_dst_init_short<max_tiles_per_iter>(interm_cb_id, num_out_rows, num_faces_in_output_tile);
         cb_reserve_back(interm_cb_id, 1);
         for (uint32_t h = 0; h < interm_reduction_chunks; h++) {
-            // DPRINT << "interm h: " << h << ENDL();
             reduce_h_fused_interm<
                 max_tiles_per_iter,
                 is_partial_tile,

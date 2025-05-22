@@ -16,6 +16,12 @@ enum class Pool2DType {
     AVG_POOL2D = 1,
 };
 
+struct ScalarInfo {
+    uint32_t start;
+    uint32_t value;
+    uint32_t end;
+};
+
 uint32_t get_bf16_pool_scalar(
     Pool2DType pool_type,
     uint32_t kernel_h,
@@ -35,8 +41,7 @@ uint32_t get_bf16_pool_scalar(
     std::optional<uint32_t> pad_h = std::nullopt,
     std::optional<uint32_t> pad_w = std::nullopt,
     std::optional<uint32_t> out_nhw_per_core = std::nullopt,
-    std::vector<uint32_t>* sinchronization_indexes = nullptr,
-    std::vector<uint32_t>* scalars = nullptr);
+    std::vector<ScalarInfo>* scalars = nullptr);
 uint32_t get_bf16_pool_init_value(Pool2DType pool_type);
 std::map<std::string, std::string> get_defines(Pool2DType pool_type);
 
