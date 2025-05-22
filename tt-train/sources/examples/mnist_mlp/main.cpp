@@ -21,6 +21,7 @@
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
 #include "serialization/serializable.hpp"
+#include "ttnn/operations/trace.hpp"
 #include "utils.hpp"
 
 using ttml::autograd::TensorPtr;
@@ -169,9 +170,18 @@ int main(int argc, char **argv) {
         dataset.test_images, dataset.test_labels);
 
     auto *device = &ttml::autograd::ctx().get_device();
+
+    struct TraceInputs {
+        ttml::autograd::TensorPtr data = nullptr;
+        ttml::autograd::TensorPtr targets = nullptr;
+    };
+
+    std::optional<TraceInputs> trace_inputs = std::nullopt;
+
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [num_features, num_targets, device](std::vector<DatasetSample> &&samples) {
+        [num_features, num_targets, device, &trace_inputs](std::vector<DatasetSample> &&samples) {
             const uint32_t batch_size = samples.size();
+            fmt::println("in collate_fn batch_size: {}", batch_size);
             std::vector<float> data;
             std::vector<float> targets;
             data.reserve(batch_size * num_features);
@@ -186,11 +196,37 @@ int main(int argc, char **argv) {
 
             std::transform(data.begin(), data.end(), data.begin(), [](float pixel) { return pixel / 255.0F - 0.5F; });
 
-            auto data_tensor = ttml::autograd::create_tensor(
-                ttml::core::from_vector(data, ttml::core::create_shape({batch_size, 1, 1, num_features}), device));
-            auto targets_tensor = ttml::autograd::create_tensor(
-                ttml::core::from_vector(targets, ttml::core::create_shape({batch_size, 1, 1, num_targets}), device));
-            return std::make_pair(data_tensor, targets_tensor);
+            auto data_shape =
+                std::vector<size_t>{static_cast<size_t>(batch_size), 1, 1, static_cast<size_t>(num_features)};
+            xt::xarray<float> data_xt = xt::adapt(data, data_shape);
+            auto target_shape = std::vector<size_t>{static_cast<size_t>(batch_size), 1, 1, static_cast<size_t>(10)};
+            xt::xarray<float> targets_xt = xt::adapt(targets, target_shape);
+
+            if (!trace_inputs.has_value()) {
+                auto device_data = ttml::core::from_xtensor(data_xt, device);
+                auto device_targets = ttml::core::from_xtensor(targets_xt, device);
+
+                trace_inputs = TraceInputs{
+                    .data = ttml::autograd::create_tensor(device_data),
+                    .targets = ttml::autograd::create_tensor(device_targets)};
+            } else {
+                auto host_data =
+                    ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data_xt, ttnn::Layout::ROW_MAJOR);
+                auto host_targets =
+                    ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(targets_xt, ttnn::Layout::ROW_MAJOR);
+
+                // NOTE: workaround for busted volume check in write_tensor
+                host_data = host_data.pad_to_tile(0.0F);
+                host_targets = host_targets.pad_to_tile(0.0F);
+                host_data = host_data.to_layout(ttnn::Layout::TILE);
+                host_targets = host_targets.to_layout(ttnn::Layout::TILE);
+
+                auto dev_data = trace_inputs->data->get_value();
+                tt::tt_metal::write_tensor(host_data, dev_data);
+                auto dev_targets = trace_inputs->targets->get_value();
+                tt::tt_metal::write_tensor(host_targets, dev_targets);
+            }
+            return std::make_pair(trace_inputs->data, trace_inputs->targets);
         };
 
     auto train_dataloader = DataLoader(training_dataset, config.batch_size, /* shuffle */ true, collate_fn);
@@ -228,14 +264,46 @@ int main(int argc, char **argv) {
 
     // evaluate model before training (sanity check to get reasonable accuracy
     // 1/num_targets)
-    float accuracy_before_training = evaluate(test_dataloader, model, num_targets);
-    fmt::print("Accuracy of the current model training: {}%\n", accuracy_before_training * 100.F);
-    if (is_eval) {
-        return 0;
-    }
+    // float accuracy_before_training = evaluate(test_dataloader, model, num_targets);
+    // fmt::print("Accuracy of the current model training: {}%\n", accuracy_before_training * 100.F);
+    // if (is_eval) {
+    //     return 0;
+    // }
 
     LossAverageMeter loss_meter;
     int training_step = 0;
+
+    std::optional<ttnn::MeshTraceId> trace_id;
+    ttml::autograd::TensorPtr output = nullptr;
+    ttml::autograd::TensorPtr loss = nullptr;
+
+    auto untraced_full_step = [&](const auto &data, const auto &target) {
+        fmt::println("data padded shape {}", data->get_value().get_padded_shape());
+        fmt::println("target padded shape {}", data->get_value().get_padded_shape());
+        output = run_model(model, data);
+        loss = ttml::ops::cross_entropy_loss(output, target);
+        optimizer.zero_grad();
+        loss->backward(/*retain_graph=*/true);
+        optimizer.step();
+    };
+
+    auto full_step = [&](const auto &data, const auto &target) {
+        namespace trace = ttnn::operations::trace;
+        if (!trace_id.has_value()) {
+            trace_id = trace::begin_trace_capture(device, ttnn::DefaultQueueId);
+            fmt::println("tracing");
+            untraced_full_step(data, target);
+            trace::end_trace_capture(device, *trace_id, ttnn::DefaultQueueId);
+            fmt::println("done tracing");
+        }
+        trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
+    };
+
+    // precompile the model and allocate output/loss
+    for (const auto &[data, target] : train_dataloader) {
+        untraced_full_step(data, target);
+        break;
+    }
 
     auto get_loss_value = [device](const TensorPtr &loss) {
         ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
@@ -251,9 +319,8 @@ int main(int argc, char **argv) {
 
     for (size_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         for (const auto &[data, target] : train_dataloader) {
-            optimizer.zero_grad();
-            auto output = run_model(model, data);
-            auto loss = ttml::ops::cross_entropy_loss(output, target);
+            fmt::println("beginning step {}", training_step);
+            full_step(data, target);
             auto loss_float = get_loss_value(loss);
             loss_meter.update(loss_float, config.batch_size);
             if (training_step % config.logging_interval == 0) {
@@ -263,10 +330,6 @@ int main(int argc, char **argv) {
                 fmt::print("Saving model to {}\n", config.model_path);
                 save_model(model, config, optimizer, model_name, optimizer_name);
             }
-
-            loss->backward();
-            optimizer.step();
-            ttml::autograd::ctx().reset_graph();
             training_step++;
         }
 
@@ -277,6 +340,10 @@ int main(int argc, char **argv) {
             loss_meter.average(),
             test_accuracy * 100.F);
         loss_meter.reset();
+    }
+
+    if (trace_id.has_value()) {
+        ttnn::operations::trace::release_trace(device, *trace_id);
     }
 
     if (!config.model_path.empty()) {
