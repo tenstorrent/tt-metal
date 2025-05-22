@@ -84,7 +84,8 @@ Determine how many copies of a model can be run by dividing the model size by th
   - Each Wormhole n150 can run a copy of the llama3.1 8B model using BFP8 weights (~8GB of model weights).
   - A TT-LoudBox (TW-02001) has four Wormhole n300s. Using data parallel scaling, eight independent instances of the llama3.1 8B model can be run.
   - Large models like Falcon 40B do not fit on a single device. At least two Wormhole n300s (24GB each) are required to run in tensor parallel scaling where single operations are distributed across devices.
-  - TT-QuietBox and TT-LoudBox Systems have four Wormhole n300s; each system can run two copies of Falcon 40B with each copy running on two Wormhole n300 cards.
+  - TT-LoudBox and the TT-QuietBox (Wormhole) Systems have four Wormhole n300s; each system can run two copies of Falcon 40B with each copy running on two Wormhole n300 cards.
+  - The TT-QuietBox (Blackhole) System has four p150cs; this system can run two copies of Falcon 40B with each copy running on two Blackhole p150c cards.
   - How to Run a Model Data Parallel:
     - Weights must be replicated on different devices.
     - Different inputs must be sent to different devices.
