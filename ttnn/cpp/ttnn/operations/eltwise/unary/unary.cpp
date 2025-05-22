@@ -359,10 +359,26 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER, uint32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT, int32_t>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::ROUND, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_OR, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_XOR, int32_t>;
+
+template <UnaryOpType unary_op_type, typename T>
+Tensor ExecuteUnaryWithOptionalIntegerParameter<unary_op_type, T>::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<T>& parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{unary_op_type, static_cast<float>(parameter.value_or(0))}},
+        memory_config,
+        optional_output_tensor);
+}
+
+template struct ExecuteUnaryWithOptionalIntegerParameter<UnaryOpType::ROUND, int32_t>;
 
 template <UnaryOpType unary_op_type, typename T>
 Tensor SymmetricBinop<unary_op_type, T>::invoke(
