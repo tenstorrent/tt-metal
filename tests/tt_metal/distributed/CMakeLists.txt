@@ -1,93 +1,66 @@
-set(UNIT_TESTS_DISTRIBUTED_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_end_to_end_eltwise.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_distributed_host_buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_coord.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_device_reshape.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_device_view.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_workload.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_socket.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_sub_device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_allocator.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_events.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_trace.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_thread_pool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp # Common utilities
+add_executable(distributed_unit_tests)
+target_sources(
+    distributed_unit_tests
+    PRIVATE
+        test_end_to_end_eltwise.cpp
+        test_distributed_host_buffer.cpp
+        test_mesh_buffer.cpp
+        test_mesh_coord.cpp
+        test_mesh_device.cpp
+        test_mesh_device_reshape.cpp
+        test_mesh_device_view.cpp
+        test_mesh_workload.cpp
+        test_mesh_socket.cpp
+        test_mesh_sub_device.cpp
+        test_mesh_allocator.cpp
+        test_mesh_events.cpp
+        test_mesh_trace.cpp
+        test_thread_pool.cpp
+        utils.cpp
 )
 
-set(THREAD_POOL_BENCHMARK_SRC ${CMAKE_CURRENT_SOURCE_DIR}/benchmark_thread_pool.cpp)
-
-# Function to create the main distributed unit test binary
-function(create_unit_test_executable arch_name)
-    set(exec_name distributed_unit_tests_${arch_name})
-    string(REPLACE "wormhole" "wormhole_b0" exec_name "${exec_name}")
-
-    add_executable(${exec_name} ${UNIT_TESTS_DISTRIBUTED_SRC})
-
-    target_link_libraries(
-        ${exec_name}
-        PRIVATE
-            tt_metal
-            test_common_libs
-    )
-
-    target_include_directories(
-        ${exec_name}
-        PRIVATE
-            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${arch_name}
-            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-            ${PROJECT_SOURCE_DIR}/tests
-    )
-
-    set_target_properties(
-        ${exec_name}
-        PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY
-                ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
-    )
-endfunction()
-
-# Function to create a separate binary for thread_pool benchmarking
-function(create_thread_pool_benchmark_executable)
-    set(exec_name thread_pool_benchmark)
-    string(REPLACE "wormhole" "wormhole_b0" exec_name "${exec_name}")
-
-    add_executable(${exec_name} ${THREAD_POOL_BENCHMARK_SRC})
-
-    target_link_libraries(
-        ${exec_name}
-        PRIVATE
-            tt_metal
-            test_common_libs
-            benchmark::benchmark
-    )
-
-    target_include_directories(
-        ${exec_name}
-        PRIVATE
-            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-            ${PROJECT_SOURCE_DIR}/tests
-    )
-
-    set_target_properties(
-        ${exec_name}
-        PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY
-                ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
-    )
-endfunction()
-
-# Define the architectures for which to create test executables
-set(ARCHITECTURES
-    "wormhole"
-    "blackhole"
+target_link_libraries(
+    distributed_unit_tests
+    PRIVATE
+        tt_metal
+        test_common_libs
 )
 
-# Create distributed test executables for each architecture
-foreach(arch IN LISTS ARCHITECTURES)
-    create_unit_test_executable(${arch})
-endforeach()
+target_include_directories(
+    distributed_unit_tests
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+)
 
-# Create thread pool benchmark executable
-create_thread_pool_benchmark_executable()
+set_target_properties(
+    distributed_unit_tests
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+)
+
+add_executable(thread_pool_benchmark)
+target_sources(thread_pool_benchmark PRIVATE benchmark_thread_pool.cpp)
+
+target_link_libraries(
+    thread_pool_benchmark
+    PRIVATE
+        tt_metal
+        test_common_libs
+        benchmark::benchmark
+)
+
+target_include_directories(
+    thread_pool_benchmark
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+)
+
+set_target_properties(
+    thread_pool_benchmark
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+)

@@ -45,7 +45,7 @@ jobs:
           {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch"},
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth"},
           {name: sfpi, cmd: "./build/test/tt_metal/unit_tests_sfpi"},
-          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }}"},
+          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests"},
           {name: lightmetal, cmd: "./build/test/tt_metal/unit_tests_lightmetal"},
           {name: dispatch multicmd queue, cmd: "TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*"},
           {name: ttnn cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
