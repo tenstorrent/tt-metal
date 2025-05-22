@@ -5,7 +5,7 @@
 #include "generic_pools.hpp"
 
 #include <optional>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
@@ -13,7 +13,6 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
-#include <limits>
 
 namespace ttnn {
 namespace operations::pool {
@@ -60,7 +59,7 @@ static Tensor pool2d_invoke(
     uint32_t num_cores_c = 0;
 
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
-    if (!out_memory_config.shard_spec.has_value()) {
+    if (!out_memory_config.shard_spec().has_value()) {
         // Input is not sharded. Perform sharding.
         if (applied_shard_scheme.has_value()) {
             TT_FATAL(
@@ -91,9 +90,9 @@ static Tensor pool2d_invoke(
         out_memory_config = input_tensor_sharded.memory_config();
     } else {
         // input is already sharded, use it as is
-        const auto shard_grid = out_memory_config.shard_spec.value().grid;
-        const auto shard_scheme = out_memory_config.memory_layout;
-        const auto shard_orientation = out_memory_config.shard_spec.value().orientation;
+        const auto shard_grid = out_memory_config.shard_spec().value().grid;
+        const auto shard_scheme = out_memory_config.memory_layout();
+        const auto shard_orientation = out_memory_config.shard_spec().value().orientation;
         TT_FATAL(
             !applied_shard_scheme.has_value(), "A sharding scheme should not be specified for a sharded input tensor.");
         TT_FATAL(shard_orientation == ShardOrientation::ROW_MAJOR, "Only row major orientation is supported.");
@@ -105,7 +104,7 @@ static Tensor pool2d_invoke(
     }
 
     // update the shard spec to match the output shape
-    auto shard_spec = out_memory_config.shard_spec.value();
+    auto shard_spec = out_memory_config.shard_spec().value();
     uint32_t output_shard_width_padded =
         input_tensor.dtype() == DataType::BFLOAT8_B
             ? tt::round_up(channels / num_cores_c, tt::constants::TILE_WIDTH)
@@ -124,8 +123,8 @@ static Tensor pool2d_invoke(
         output_nhw_padded,
         output_shard_height_padded,
         output_shard_width_padded);
-    out_memory_config.shard_spec = tt::tt_metal::ShardSpec{
-        shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR};
+    out_memory_config = out_memory_config.with_shard_spec(tt::tt_metal::ShardSpec{
+        shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR});
 
     sliding_window_config = sliding_window::SlidingWindowConfig{
         .batch_size = batch_size,

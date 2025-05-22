@@ -34,7 +34,7 @@ uint32_t get_bf16_pool_scalar(
     std::vector<uint32_t>* scalars) {
     float value;
     bool first_scalar = true;
-    uint32_t packed_first_value;
+    uint32_t packed_first_value = 0;
     uint32_t last_pool_area = 0;
     uint32_t out_x_stick = out_x.value_or(0);
     uint32_t out_y_stick = out_y.value_or(0);
