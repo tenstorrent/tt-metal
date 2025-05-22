@@ -440,7 +440,7 @@ routing_plane_id_t ControlPlane::get_routing_plane_id(
 chan_id_t ControlPlane::get_downstream_eth_chan_id(
     routing_plane_id_t src_routing_plane_id, const std::vector<chan_id_t>& candidate_target_chans) const {
     if (candidate_target_chans.empty()) {
-        return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;
+        return eth_chan_magic_values::INVALID_DIRECTION;
     }
 
     for (const auto& target_chan_id : candidate_target_chans) {
@@ -458,7 +458,7 @@ chan_id_t ControlPlane::get_downstream_eth_chan_id(
     return candidate_target_chans[src_routing_plane_id];
     */
 
-    return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;
+    return eth_chan_magic_values::INVALID_DIRECTION;
 };
 
 void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
@@ -894,7 +894,7 @@ std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
             // Intra-mesh routing
             next_chan_id = this->intra_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_chip_id];
         }
-        if (next_chan_id == eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY) {
+        if (next_chan_id == eth_chan_magic_values::INVALID_DIRECTION) {
             // The complete route b/w src and dst not found, probably some eth cores are reserved along the path
             return {};
         }
