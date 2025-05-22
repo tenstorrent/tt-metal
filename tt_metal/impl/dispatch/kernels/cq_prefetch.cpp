@@ -79,12 +79,15 @@ constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(30);
 constexpr uint32_t outbound_eth_chan = get_compile_time_arg_val(31);
 constexpr uint32_t client_interface_addr = get_compile_time_arg_val(32);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(33);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(34);
+constexpr uint32_t ringbuffer_size = get_compile_time_arg_val(33);
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(34);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(35);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 constexpr uint32_t scratch_db_end = scratch_db_base + scratch_db_size;
+constexpr uint32_t ringbuffer_end = scratch_db_base + ringbuffer_size;
 
 // hd and h: fetch_q, cmddat_q, scratch_db
 static_assert(
@@ -1191,7 +1194,7 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
     }
 
     ASSERT(length % DRAM_ALIGNMENT == 0);
-    ASSERT(length + ringbuffer_wp <= scratch_db_end);
+    ASSERT(length + ringbuffer_wp <= ringbuffer_end);
 
     const bool is_dram = true;
     InterleavedPow2AddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .log_base_2_of_page_size = log2_page_size};

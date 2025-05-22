@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <boost/container/vector.hpp>
-#include <device_impl.hpp>
 #include <logger.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
@@ -25,6 +24,7 @@
 
 #include "allocator.hpp"
 #include "assert.hpp"
+#include "device/device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "mesh_trace.hpp"
 #include "shape_base.hpp"
