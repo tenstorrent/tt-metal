@@ -753,7 +753,7 @@ void InitDeviceProfiler(IDevice* device) {
 
         if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
             issue_fd_write_to_profiler_buffer(profiler.output_dram_buffer, device, inputs_DRAM);
-        } else if (supports_dma_operations(device)) {
+        } else if (supports_dma_operations(profiler.output_dram_buffer.get_buffer()->device())) {
             tt_metal::detail::WriteToBufferUsingDMA(*(profiler.output_dram_buffer.get_buffer()), inputs_DRAM);
         } else {
             tt_metal::detail::WriteToBuffer(*(profiler.output_dram_buffer.get_buffer()), inputs_DRAM);
