@@ -127,17 +127,17 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
             accumulated_total_per_dim[i]);
     }
     using namespace tt::tt_metal::experimental;
-    auto SRC_BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    auto DST_BUFFER_ALIGNMENT = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    auto ALIGNMENT = std::max(SRC_BUFFER_ALIGNMENT, DST_BUFFER_ALIGNMENT);
+    auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
-    uint32_t misalignment = begins_bytes % SRC_BUFFER_ALIGNMENT;
+    uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
-    uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, ALIGNMENT);
+    uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address
@@ -268,7 +268,6 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    // TT_FATAL(!output.is_sharded(),"Output tensor should not be sharded!");
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
