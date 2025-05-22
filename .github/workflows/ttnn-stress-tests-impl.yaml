@@ -29,7 +29,7 @@ jobs:
     runs-on:
       - "in-service"
       - "${{ inputs.runner-label }}"
-      - "${{ (inputs.runner == 'config-tg' || inputs.runner == 'config-6u') && 'bare-metal' || 'cloud-virtual-machine' }}"
+      - "${{ (inputs.runner-label == 'config-tg' || inputs.runner == 'config-6u') && 'bare-metal' || 'cloud-virtual-machine' }}"
 
 
     container:
