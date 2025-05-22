@@ -78,8 +78,7 @@ add_custom_target(
     DEPENDS
         ${METAL_TEST_TARGETS}
         metal_perf_microbenchmark_tests
-        unit_tests_api_wormhole_b0
-        unit_tests_api_blackhole
+        unit_tests_api
         unit_tests_data_movement
         unit_tests_debug_tools
         unit_tests_device
