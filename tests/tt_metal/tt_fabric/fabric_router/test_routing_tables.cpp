@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "fabric_fixture.hpp"
+#include "t3k_mesh_descriptor_chip_mappings.hpp"
+#include "utils.hpp"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
@@ -101,22 +103,6 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     }
 }
 
-std::vector<std::vector<chip_id_t>> get_physical_chip_mapping_from_eth_coords_mapping(
-    const std::vector<std::vector<eth_coord_t>>& mesh_graph_eth_coords) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    std::vector<std::vector<chip_id_t>> physical_chip_ids_mapping;
-    physical_chip_ids_mapping.reserve(mesh_graph_eth_coords.size());
-    for (const auto& mesh : mesh_graph_eth_coords) {
-        std::vector<chip_id_t> physical_chip_ids;
-        physical_chip_ids.reserve(mesh.size());
-        for (const auto& eth_coord : mesh) {
-            physical_chip_ids.push_back(cluster.get_physical_chip_id_from_eth_coord(eth_coord));
-        }
-        physical_chip_ids_mapping.push_back(physical_chip_ids);
-    }
-    return physical_chip_ids_mapping;
-}
-
 class T3kCustomMeshGraphControlPlaneFixture
     : public ControlPlaneFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>> {};
@@ -166,48 +152,7 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
 INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphControlPlaneTests,
     T3kCustomMeshGraphControlPlaneFixture,
-    ::testing::Values(
-        std::tuple{
-            "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml",
-            std::vector<std::vector<eth_coord_t>>{
-                {{0, 0, 0, 0, 0},
-                 {0, 1, 0, 0, 0},
-                 {0, 2, 0, 0, 0},
-                 {0, 3, 0, 0, 0},
-                 {0, 0, 1, 0, 0},
-                 {0, 1, 1, 0, 0},
-                 {0, 2, 1, 0, 0},
-                 {0, 3, 1, 0, 0}}}},
-        std::tuple{
-            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml",
-            std::vector<std::vector<eth_coord_t>>{
-                {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
-                {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}, {0, 2, 1, 0, 0}, {0, 3, 1, 0, 0}}}},
-        std::tuple{
-            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x2_mesh_graph_descriptor.yaml",
-            std::vector<std::vector<eth_coord_t>>{
-                {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}},
-                {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}},
-                {{0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
-                {{0, 2, 1, 0, 0}, {0, 3, 1, 0, 0}}}},
-        std::tuple{
-            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x1_mesh_graph_descriptor.yaml",
-            std::vector<std::vector<eth_coord_t>>{
-                {{0, 0, 0, 0, 0}},
-                {{0, 1, 0, 0, 0}},
-                {{0, 2, 0, 0, 0}},
-                {{0, 3, 0, 0, 0}},
-                {{0, 0, 1, 0, 0}},
-                {{0, 1, 1, 0, 0}},
-                {{0, 2, 1, 0, 0}},
-                {{0, 3, 1, 0, 0}}}},
-        std::tuple{
-            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_1x2_1x1_mesh_graph_descriptor.yaml",
-            std::vector<std::vector<eth_coord_t>>{
-                {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
-                {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}},
-                {{0, 2, 1, 0, 0}},
-                {{0, 3, 1, 0, 0}}}}));
+    ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
 
 TEST_F(ControlPlaneFixture, TestQuantaGalaxyControlPlaneInit) {
     const std::filesystem::path quanta_galaxy_mesh_graph_desc_path =

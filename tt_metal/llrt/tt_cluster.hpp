@@ -299,6 +299,12 @@ public:
 
     tt::tt_fabric::ControlPlane* get_control_plane();
 
+    void set_custom_control_plane_mesh_graph(
+        const std::string& mesh_graph_desc_file,
+        const std::vector<std::vector<chip_id_t>>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+
+    void set_default_control_plane_mesh_graph();
+
     void initialize_fabric_config(tt_metal::FabricConfig fabric_config);
 
     // Returns whether we are running on Galaxy.
