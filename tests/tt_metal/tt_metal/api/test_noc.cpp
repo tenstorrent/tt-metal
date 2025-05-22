@@ -24,8 +24,6 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
-// FIXME: ARCH_NAME
-#include "noc/noc_parameters.h"
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -34,6 +32,8 @@
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
+#include "impl/context/metal_context.hpp"
+#include "llrt/hal.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -54,18 +54,14 @@ void read_translation_table(
     CoreCoord logical_node,
     std::vector<unsigned int>& x_remap,
     std::vector<unsigned int>& y_remap) {
-#ifdef NOC_X_ID_TRANSLATE_TABLE_0
+    auto x_reg_addrs_full = tt::tt_metal::MetalContext::instance().hal().get_noc_x_id_translate_table();
+    auto y_reg_addrs_full = tt::tt_metal::MetalContext::instance().hal().get_noc_y_id_translate_table();
     std::vector<uint32_t> x_reg_addrs = {
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_1),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_2),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_3)};
-    std::vector<uint32_t> y_reg_addrs = {
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_0),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_1),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_2),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)};
+        x_reg_addrs_full[0], x_reg_addrs_full[1], x_reg_addrs_full[2], x_reg_addrs_full[3]};
     x_remap.clear();
+    std::vector<uint32_t> y_reg_addrs = {
+        y_reg_addrs_full[0], y_reg_addrs_full[1], y_reg_addrs_full[2], y_reg_addrs_full[3]};
+    y_remap.clear();
     for (const auto& reg_addr : x_reg_addrs) {
         auto regval = read_reg(device, logical_node, reg_addr);
         for (int i = 0; i < 8; i++) {
@@ -73,7 +69,6 @@ void read_translation_table(
             regval = regval >> 4;
         }
     }
-    y_remap.clear();
     for (const auto& reg_addr : y_reg_addrs) {
         auto regval = read_reg(device, logical_node, reg_addr);
         ASSERT_NE(regval, init_value);  // Need to make sure we read in valid reg
@@ -82,11 +77,6 @@ void read_translation_table(
             regval = regval >> 4;
         }
     }
-#else
-    // If the translation tables are not defined, we should skip :)
-    std::vector<uint32_t> x_reg_addrs = {};
-    std::vector<uint32_t> y_reg_addrs = {};
-#endif
 }
 
 }  // namespace unit_tests::basic::test_noc
@@ -135,11 +125,8 @@ TEST(NOC, TensixVerifyNocNodeIDs) {
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
 
-#if COORDINATE_VIRTUALIZATION_ENABLED != 0
-    uint32_t MY_NOC_ENCODING_REG = NOC_CFG(NOC_ID_LOGICAL);
-#else
-    uint32_t MY_NOC_ENCODING_REG = NOC_NODE_ID;
-#endif
+    uint32_t MY_NOC_ENCODING_REG = tt::tt_metal::MetalContext::instance().hal().get_noc_encoding_reg();
+
     // Ping all the Noc Nodes
     auto logical_grid_size = device->logical_grid_size();
     for (size_t y = 0; y < logical_grid_size.y; y++) {
@@ -151,8 +138,10 @@ TEST(NOC, TensixVerifyNocNodeIDs) {
             ASSERT_NE(
                 node_id_regval, unit_tests::basic::test_noc::init_value);  // Need to make sure we read in valid reg
             // Check it matches software translated xy
-            uint32_t my_x = node_id_regval & NOC_NODE_ID_MASK;
-            uint32_t my_y = (node_id_regval >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+            uint32_t node_id_mask = tt::tt_metal::MetalContext::instance().hal().get_noc_node_id_mask();
+            uint32_t node_id_bits = tt::tt_metal::MetalContext::instance().hal().get_noc_addr_node_id_bits();
+            uint32_t my_x = node_id_regval & node_id_mask;
+            uint32_t my_y = (node_id_regval >> node_id_bits) & node_id_mask;
             EXPECT_EQ(my_x, worker_core.x);
             EXPECT_EQ(my_y, worker_core.y);
         }
@@ -164,10 +153,6 @@ TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
     if (arch == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP();
     }
-#ifndef NOC_X_ID_TRANSLATE_TABLE_0
-    // If the translation tables are not defined, we should skip :)
-    GTEST_SKIP();
-#endif
     tt::tt_metal::IDevice* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
