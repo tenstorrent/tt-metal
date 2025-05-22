@@ -942,8 +942,9 @@ void run_receiver_channel_step(
             can_send_to_all_local_chip_receivers =
                 can_forward_packet_completely(cached_routing_fields, downstream_edm_interface[receiver_channel]);
         }
-        bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-        if (can_send_to_all_local_chip_receivers && trid_flushed) {
+        // bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+        // if (can_send_to_all_local_chip_receivers && trid_flushed) {
+        if (can_send_to_all_local_chip_receivers) {
             did_something = true;
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
