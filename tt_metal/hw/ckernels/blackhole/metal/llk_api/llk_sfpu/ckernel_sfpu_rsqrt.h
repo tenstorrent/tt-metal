@@ -39,7 +39,7 @@ inline void calculate_rsqrt() {
 
 template <bool APPROXIMATION_MODE>
 inline void rsqrt_init() {
-    recip_init<APPROXIMATION_MODE>();
+    rsqrt_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu
