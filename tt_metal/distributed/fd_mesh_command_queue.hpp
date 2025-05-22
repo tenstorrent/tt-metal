@@ -13,6 +13,7 @@
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "mesh_trace.hpp"
+#include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -152,6 +153,14 @@ private:
     // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
     std::atomic<bool> in_use_ = false;
 
+    const uint32_t prefetcher_dram_aligned_block_size_;
+    const uint64_t prefetcher_cache_sizeB_;
+    const uint32_t prefetcher_dram_aligned_num_blocks_;
+    const uint32_t prefetcher_cache_manager_size_;
+    std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
+
+    uint32_t max_program_kernels_sizeB_;
+
 protected:
     void write_shard_to_device(
         const MeshBuffer& buffer,
@@ -221,6 +230,14 @@ public:
     void copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor);
     // Helper function - read L1 data from Completion Queue
     void read_l1_data_from_completion_queue(MeshCoreDataReadDescriptor& read_l1_data_descriptor);
+
+    // Prefetcher Cache Manager APIs
+    std::pair<bool, size_t> query_prefetcher_cache(uint64_t workload_id, uint32_t lengthB);
+    void reset_prefetcher_cache_manager();
+    int get_prefetcher_cache_sizeB() const;
+
+    void set_max_program_kernels_sizeB(uint32_t size) { max_program_kernels_sizeB_ = size; }
+    uint32_t get_max_program_kernels_sizeB() const { return max_program_kernels_sizeB_; }
 };
 
 }  // namespace tt::tt_metal::distributed

@@ -45,6 +45,12 @@ struct ProgramDispatchMetadata {
     uint32_t sync_count;
     uint32_t stall_first;
     uint32_t stall_before_program;
+
+    struct {
+        uint32_t mesh_max_program_kernels_sizeB;
+        bool is_cached;
+        uint32_t offset;
+    } prefetcher_cache_info;
 };
 
 uint32_t configure_rta_offsets_for_kernel_groups(
@@ -165,6 +171,8 @@ void set_num_worker_sems_on_dispatch(
 
 void set_go_signal_noc_data_on_dispatch(
     IDevice* device, const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
+
+uint32_t get_program_kernel_bins_sizeB(IDevice* device, detail::ProgramImpl& program);
 
 }  // namespace program_dispatch
 

@@ -12,6 +12,7 @@ target_sources(
         dispatch_program/test_sub_device.cpp
         dispatch_util/test_device_command.cpp
         dispatch_util/test_dispatch_settings.cpp
+        dispatch_util/test_ringbuffer_cache.cpp
 )
 target_include_directories(
     unit_tests_dispatch_smoke

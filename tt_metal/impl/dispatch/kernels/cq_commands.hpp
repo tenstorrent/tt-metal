@@ -142,9 +142,9 @@ constexpr uint32_t CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START = 1;
 // Will always flush writes before reading.
 struct CQPrefetchPagedToRingbufferCmd {
     uint8_t flags;
-    uint8_t pad1;
     uint8_t log2_page_size;
-    uint32_t start_page;
+    uint8_t start_page;
+    uint32_t wp_offset_update;  // set final increment ringbuffer write pointer
     uint32_t base_addr;  // Base address of the interleaved buffer to read from.
     uint32_t length;     // multiple of DRAM alignment
 } __attribute__((packed));
