@@ -595,7 +595,7 @@ def test_concat_fuse(
     )
 
 
-@pytest.mark.skipif(not is_6u())
+@pytest.mark.skipif(not is_6u(), reason="skip when not 6u")
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
