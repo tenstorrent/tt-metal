@@ -50,7 +50,10 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
     Topology topology,
-    bool is_galaxy) :
+    bool is_galaxy,
+    bool en_dateline_upstream_sender_extra_buffer,
+    bool en_dateline_upstream_receiver_extra_buffer,
+    bool has_ring_loopback) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
@@ -137,21 +140,26 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
             }
 
-            auto num_devices_threshold = 4;
-            auto edm_dir = device_sequence.size() > num_devices_threshold
-                               ? tt::tt_fabric::FabricEriscDatamoverDirection::NorthSouth
-                               : tt::tt_fabric::FabricEriscDatamoverDirection::EastWest;
-
             edm_builders_forward_direction[src_device->id()].reserve(local_link_cores.size());
             edm_builders_backward_direction[dest_device->id()].reserve(local_link_cores.size());
             for (size_t l = 0; l < this->num_links; l++) {
                 // const auto curr_edm_config =
                 //     tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dateline,
                 //     is_dateline_neighbor);
-                const auto src_curr_edm_config =
-                    tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_device_edm_type, edm_dir);
-                const auto dest_curr_edm_config =
-                    tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dest_device_edm_type, edm_dir);
+                const auto src_curr_edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(
+                    edm_buffer_size,
+                    topology,
+                    src_device_edm_type,
+                    en_dateline_upstream_sender_extra_buffer,
+                    en_dateline_upstream_receiver_extra_buffer,
+                    has_ring_loopback);
+                const auto dest_curr_edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(
+                    edm_buffer_size,
+                    topology,
+                    dest_device_edm_type,
+                    en_dateline_upstream_sender_extra_buffer,
+                    en_dateline_upstream_receiver_extra_buffer,
+                    has_ring_loopback);
                 log_trace(
                     tt::LogOp,
                     "Building forward direction EDM on chip {} on link {}",

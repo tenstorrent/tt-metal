@@ -89,7 +89,9 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
             this->channel_buffer_size_bytes_,
             this->topology_,
             tt::tt_fabric::FabricEriscDatamoverType::Dateline,
-            tt::tt_fabric::FabricEriscDatamoverDirection::NorthSouth);
+            false,
+            false,
+            false);
         set_routing_mode(this->topology_, this->fabric_config_);
     } else {
         this->router_config_ = nullptr;
