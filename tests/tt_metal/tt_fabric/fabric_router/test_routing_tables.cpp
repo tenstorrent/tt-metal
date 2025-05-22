@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,6 +54,7 @@ TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 3);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(0, 0, 4, 31, chan);
+        EXPECT_EQ(path.size() > 0, true);
     }
 }
 
@@ -81,10 +82,12 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(0, 0, 0, 7, chan);
+        EXPECT_EQ(path.size() > 0, true);
     }
     valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 1);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(0, 0, 0, 7, chan);
+        EXPECT_EQ(path.size() > 0, true);
     }
 }
 
@@ -112,18 +115,22 @@ TEST_F(ControlPlaneFixture, TestT3kSplitMeshFabricRoutes) {
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(0, 0, 0, 3, chan);
+        EXPECT_EQ(path.size() > 0, true);
     }
     valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 1, 1);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(0, 1, 1, 2, chan);
+        EXPECT_EQ(path.size() > 0, true);
     }
     valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(0, 0, 1, 3, chan);
+        EXPECT_EQ(path.size() > 0, true);
     }
     valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(1, 2, 1);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(1, 2, 0, 2, chan);
+        EXPECT_EQ(path.size() > 0, true);
     }
 }
 

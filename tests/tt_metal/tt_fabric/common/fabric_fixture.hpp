@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -106,6 +106,8 @@ void RunTestUnicastRaw(
 
 void RunTestUnicastConnAPI(
     BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
+
+void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture);
 
 void RunTestMCastConnAPI(
     BaseFabricFixture* fixture,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -1045,11 +1045,11 @@ void build_tt_fabric_program(
         return;
     }
 
-    std::unordered_map<RoutingDirection, std::set<chan_id_t>> active_fabric_eth_channels;
+    std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
     std::unordered_map<RoutingDirection, chip_id_t> chip_neighbors;
     uint32_t num_intra_chip_neighbors = 0;
     const auto topology = fabric_context.get_fabric_topology();
-    bool is_2D_routing = topology == Topology::Mesh;
+    const bool is_2D_routing = topology == Topology::Mesh;
 
     for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
         auto active_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
@@ -1131,8 +1131,8 @@ void build_tt_fabric_program(
         bool can_connect =
             (chip_neighbors.find(dir1) != chip_neighbors.end()) && (chip_neighbors.find(dir2) != chip_neighbors.end());
         if (can_connect) {
-            auto eth_chans_dir1 = get_ordered_fabric_eth_chans(device->id(), active_fabric_eth_channels.at(dir1));
-            auto eth_chans_dir2 = get_ordered_fabric_eth_chans(device->id(), active_fabric_eth_channels.at(dir2));
+            auto eth_chans_dir1 = active_fabric_eth_channels.at(dir1);
+            auto eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
 
             auto eth_chans_dir1_it = eth_chans_dir1.begin();
             auto eth_chans_dir2_it = eth_chans_dir2.begin();
