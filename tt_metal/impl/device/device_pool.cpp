@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -754,26 +754,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
         pass &= dev->close();
-    }
-
-    // At this point the routing core clients (dispatch) have been terminated
-    // Terminate worker routing cores on device. Remaining ethernet cores will get reset during init
-    for (const auto& dev_id : devices_to_close) {
-        const auto mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id);
-        auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(dev_id);
-        for (const auto& core : routing_cores) {
-            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, dev_id)) {
-                continue;
-            }
-            log_debug(
-                tt::LogMetal,
-                "Resetting dispatch routing core {} on Device {} when closing Device {}",
-                core.str(),
-                mmio_device_id,
-                dev_id);
-            tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(tt_cxy_pair(dev_id, core));
-        }
     }
 
     return pass;
