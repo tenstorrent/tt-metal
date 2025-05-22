@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,7 +41,7 @@ void kernel_main() {
     constexpr bool dst0_is_dram = get_compile_time_arg_val(1) == 1;
 
     const InterleavedAddrGen<dst0_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = padded_stick_size};
-
+    const uint32_t noc_write_size = min(padded_stick_size, unpadded_stick_size);
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
@@ -51,7 +51,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
             uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s0);
-            noc_async_write(src_buffer_l1_addr, dst_noc_addr, unpadded_stick_size);
+            noc_async_write(src_buffer_l1_addr, dst_noc_addr, noc_write_size);
             src_buffer_l1_addr += stick_size_offset;
             dst_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
