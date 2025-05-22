@@ -35,9 +35,6 @@ ttnn::Tensor PaddedSliceOperation::invoke(
 
     TT_FATAL(input_rank == 4, "Only 4D tensors are supported for padded_slice");
 
-    if (input_rank == 0) {
-        return input_tensor;
-    }
     TT_FATAL(
         input_rank == begins.size(), "Input rank {} and begins {} must have the same size", input_rank, begins.size());
     TT_FATAL(begins.size() == ends.size(), "Start {} and end {} must have the same size", begins.size(), ends.size());
@@ -61,8 +58,6 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     TT_FATAL(input_layout == Layout::ROW_MAJOR, "Only Row Major Inputs are supported for padded_slice.");
     TT_FATAL(memory_config.is_sharded(), "Output Memory Config must be sharded. Use slice for non-sharded outputs.");
     TT_FATAL(!input_tensor.memory_config().is_sharded(), " padded_slice does not support sharded inputs.");
-
-    const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
 
     auto ret_adjustment([&](const ttnn::Tensor& ret_input_tensor) {
         if (ret_input_tensor.storage_type() == StorageType::DEVICE) {
@@ -99,16 +94,6 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttnn::SmallVector<uint32_t>& modified_ends) {
         return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
     };
-
-    auto check_handled_tile_alignment = [&modified_begins, &input_rank, &tile_shape]() -> bool {
-        return (
-            modified_begins[input_rank - 1] % tile_shape[1] == 0 &&
-            modified_begins[input_rank - 2] % tile_shape[0] == 0);
-    };
-
-    bool rm_only = false;
-    bool one_dimensional = input_rank == 1;
-    bool handled_tile_alignment = one_dimensional ? true : check_handled_tile_alignment();
 
     ttnn::SmallVector<uint32_t> padded_ends = modified_ends;
 

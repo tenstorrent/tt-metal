@@ -60,6 +60,7 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
     const auto& input_tensor = input_tensors[0];
     SmallVector<uint32_t> out_shape(input_tensor.get_logical_shape().rank());
 
+    TT_FATAL(out_shape.size() == 4, "Only 4D tensors are supported for padded_slice");
     auto output_dim_i = [this](size_t i) {
         return (this->padded_slice_end[i] - this->padded_slice_start[i] + this->step[i] - 1) / this->step[i];
     };
@@ -76,12 +77,7 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
     }
 
     ttnn::Shape output_tensor_shape(std::move(out_shape));
-    auto tensor_layout = TensorLayout::fromPaddedShape(
-        input_tensor.get_dtype(),
-        PageConfig(Layout::ROW_MAJOR),
-        this->output_mem_config,
-        output_tensor_shape,
-        output_tensor_shape);
+    auto tensor_layout = TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::ROW_MAJOR), this->output_mem_config);
     return {ttnn::TensorSpec(output_tensor_shape, tensor_layout)};
 }
 

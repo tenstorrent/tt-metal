@@ -75,8 +75,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
     auto output_shard_spec = output_tensor.shard_spec().value();
     auto output_shard_shape = output_shard_spec.shape;
 
-    tt::log_info("Input Buffer : {}", input_tensor.get_storage());
-
     auto num_cores_total = cores.size();
 
     bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
