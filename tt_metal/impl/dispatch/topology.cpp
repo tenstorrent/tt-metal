@@ -188,12 +188,12 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
-    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
+    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, {NOC::NOC_1, NOC::NOC_1, NOC::NOC_1}},
 
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
+    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
 
     // Sender path PREFETCH_H -> PREFETCH_D
     {5, 0, x, 0, FABRIC_ROUTER_VC, {3, x, x, x}, {7, x, x, x}},
@@ -201,9 +201,9 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
     // Return path DISPATCH_D -> DISPATCH_H
     {6, 0, x, 0, FABRIC_ROUTER_VC, {8, x, x, x}, {4, x, x, x}},
 
-    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
+    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
+    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, {NOC::NOC_1, NOC::NOC_1, NOC::NOC_1}},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
@@ -974,79 +974,6 @@ void configure_dispatch_cores(IDevice* device) {
     }
 }
 
-std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, FabricConfig fabric_config) {
-    std::unique_ptr<Program> fabric_program_ptr;
-    std::uint32_t router_mask = 0;
-    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-    auto& fabric_context = control_plane->get_fabric_context();
-
-    auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
-    fabric_context.set_num_fabric_initialized_routers(device->id(), router_chans_and_direction.size());
-    if (router_chans_and_direction.empty()) {
-        return nullptr;
-    }
-
-    fabric_program_ptr = std::make_unique<Program>();
-
-    for (const auto& router_chan : router_chans_and_direction) {
-        router_mask += 0x1 << (uint32_t)router_chan.first;
-    }
-
-    auto master_router_chan = (uint32_t)(router_chans_and_direction.begin()->first);
-    fabric_context.set_fabric_master_router_chan(device->id(), master_router_chan);
-
-    // setup runtime args
-    std::vector<uint32_t> router_runtime_args = {
-        router_chans_and_direction.size(),  // 0: number of active fabric routers
-        router_mask,                        // 1: active fabric router mask
-        master_router_chan,                 // 2: master router channel
-    };
-
-    std::vector<uint32_t> router_compile_args = {
-        (tt::tt_fabric::DEFAULT_ROUTER_RX_QUEUE_SIZE_BYTES >> 4),  // 0: rx_queue_size_words
-        0,                                                         // 1: test_results_addr
-        0,                                                         // 2: test_results_size
-        0,  // 3: timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
-        0,  // 4: is_master_router
-        0,  // 5: router direction
-    };
-
-    std::map<string, string> router_defines = {};
-    if (fabric_config == FabricConfig::FABRIC_2D) {
-        router_defines["FVC_MODE_PULL"] = "";
-        tt::tt_fabric::set_routing_mode(ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PULL);
-    } else {
-        // TODO: delete or selectively set
-        //       https://github.com/tenstorrent/tt-metal/issues/20000
-        if (isFabricUnitTest()) {
-            tt::tt_fabric::set_routing_mode(ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH);
-            router_defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
-        } else {
-            tt::tt_fabric::set_routing_mode(
-                ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH | ROUTING_MODE_LOW_LATENCY);
-        }
-    }
-
-    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    for (const auto& [router_chan, direction] : router_chans_and_direction) {
-        router_compile_args[4] = (master_router_chan == router_chan);
-        router_compile_args[5] = direction;
-        auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
-        auto kernel = tt_metal::CreateKernel(
-            *fabric_program_ptr,
-            "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
-            router_logical_core,
-            tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = router_defines});
-
-        tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, router_logical_core, router_runtime_args);
-    }
-
-    detail::CompileProgram(device, *fabric_program_ptr, /*force_slow_dispatch=*/device->using_fast_dispatch());
-    return fabric_program_ptr;
-}
-
 bool check_dateline(
     const tt_fabric::ControlPlane& control_plane,
     tt_fabric::Topology topology,
@@ -1324,8 +1251,6 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         return create_and_compile_tt_fabric_program(device);
-    } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
-        return create_and_compile_2d_fabric_program(device, fabric_config);
     }
     return nullptr;
 }

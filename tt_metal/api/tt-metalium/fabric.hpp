@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <vector>
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt {
 namespace tt_metal {
@@ -36,6 +37,7 @@ size_t get_tt_fabric_channel_buffer_size_bytes();
 // worker_program: program handle
 // worker_core: worker core logical coordinates
 // worker_args: list of existing run-time args to which the connection args will be appended
+// core_type: core type which the worker will be running on
 //
 // Constraints:
 // 1. Currently the sender and reciever chip should be physically adjacent
@@ -49,6 +51,7 @@ void append_fabric_connection_rt_args(
     uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
-    std::vector<uint32_t>& worker_args);
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type = CoreType::WORKER);
 
 }  // namespace tt::tt_fabric

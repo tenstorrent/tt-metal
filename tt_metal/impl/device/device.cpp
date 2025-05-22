@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "device_impl.hpp"
+
 #include <core_descriptor.hpp>
 #include "dev_msgs.h"
-#include <device_impl.hpp>
 #include <device_pool.hpp>
 #include <host_api.hpp>
 #include <magic_enum/magic_enum.hpp>
@@ -1644,12 +1645,6 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
-
-void Device::set_ethernet_core_count_on_dispatcher(uint32_t num_ethernet_cores) {
-    ethernet_core_count_on_dispatcher_ = num_ethernet_cores;
-}
-
-uint32_t Device::get_ethernet_core_count_on_dispatcher() const { return ethernet_core_count_on_dispatcher_; }
 
 }  // namespace tt_metal
 

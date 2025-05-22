@@ -13,7 +13,6 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_equal,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_grayskull, skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
@@ -196,9 +195,6 @@ def test_binary_subalpha_ttnn(input_shapes, alpha, device):
     ),
 )
 def test_binary_div_ttnn(accurate_mode, round_mode, input_shapes, device):
-    if is_grayskull():
-        if round_mode in ["trunc", "floor"]:
-            pytest.skip("does not work for Grayskull -skipping")
     if accurate_mode == False:  # If input_b is non-zero tensor
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
@@ -225,9 +221,6 @@ def test_binary_div_ttnn(accurate_mode, round_mode, input_shapes, device):
     ),
 )
 def test_binary_div_ttnn_ci(accurate_mode, round_mode, input_shapes, device):
-    if is_grayskull():
-        if round_mode in ["trunc", "floor"]:
-            pytest.skip("does not work for Grayskull -skipping")
     if accurate_mode == False:  # If input_b is non-zero tensor
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -1e6, 1e6, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, -1, device)
@@ -255,9 +248,6 @@ def test_binary_div_ttnn_ci(accurate_mode, round_mode, input_shapes, device):
     ),
 )
 def test_binary_div_ttnn_opt(accurate_mode, round_mode, input_shapes, device):
-    if is_grayskull():
-        if round_mode in ["trunc", "floor"]:
-            pytest.skip("does not work for Grayskull -skipping")
     if accurate_mode == False:  # If input_b is non-zero tensor
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
@@ -295,9 +285,6 @@ def test_binary_div_ttnn_opt(accurate_mode, round_mode, input_shapes, device):
 )
 @pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
 def test_binary_div_scalar_ttnn(accurate_mode, round_mode, input_shapes, value, device):
-    if is_grayskull():
-        if round_mode in ["trunc", "floor"]:
-            pytest.skip("does not work for Grayskull -skipping")
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     output_tensor = ttnn.div(input_tensor1, value, accurate_mode=accurate_mode, round_mode=round_mode)
@@ -320,9 +307,6 @@ def test_binary_div_scalar_ttnn(accurate_mode, round_mode, input_shapes, value, 
 )
 @pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
 def test_binary_div_scalar_ttnn_opt(accurate_mode, round_mode, input_shapes, value, device):
-    if is_grayskull():
-        if round_mode in ["trunc", "floor"]:
-            pytest.skip("does not work for Grayskull -skipping")
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -383,7 +367,6 @@ def test_binary_div_no_nan_overload_ttnn(input_shapes, value, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for Floor")
 def test_binary_floor_div_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -350, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
@@ -404,7 +387,6 @@ def test_binary_floor_div_ttnn(input_shapes, device):
     ),
 )
 @pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for Floor")
 def test_binary_floor_div_overload_ttnn(input_shapes, value, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
@@ -424,7 +406,6 @@ def test_binary_floor_div_overload_ttnn(input_shapes, value, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_remainder_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
@@ -442,7 +423,6 @@ def test_binary_remainder_ttnn(input_shapes, device):
         [[1, 1, 3, 3], [1, 1, 3, 3]],
     ],
 )
-@skip_for_grayskull("Unsupported for Grayskull")
 def test_shape_remainder(device, shapes):
     torch.manual_seed(0)
     high = 10
@@ -482,7 +462,6 @@ def test_shape_remainder(device, shapes):
     "scalar",
     {random.randint(-100, 100) + 0.5 for _ in range(5)},
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_remainder_ttnn(input_shapes, scalar, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
     output_tensor = ttnn.remainder(input_tensor1, scalar)
@@ -909,7 +888,6 @@ def test_nei_ttnn(input_shapes, scalar, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_gcd_ttnn(input_shapes, device):
     in_data1 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
     in_data2 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
@@ -931,7 +909,6 @@ def test_binary_gcd_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_lcm_ttnn(input_shapes, device):
     torch.manual_seed(213919)
     in_data1 = torch.randint(-32767, 32768, input_shapes, dtype=torch.int32)
@@ -955,7 +932,6 @@ def test_binary_lcm_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_gcd_int32(input_shapes, device):
     torch.manual_seed(213919)
     in_data1 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
@@ -980,7 +956,6 @@ def test_binary_gcd_int32(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_lcm_pos(input_shapes, device):
     torch.manual_seed(213919)
     in_data1 = torch.randint(1, 32768, input_shapes, dtype=torch.int32)
@@ -1005,7 +980,6 @@ def test_binary_lcm_pos(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_lcm_neg(input_shapes, device):
     torch.manual_seed(213919)
     in_data1 = torch.randint(-32767, 0, input_shapes, dtype=torch.int32)
@@ -1068,7 +1042,6 @@ def test_binary_prelu_ttnn(input_shapes, device):
     "scalar",
     {-0.25, -2.7, 0.45, 6.4},
 )
-@skip_for_grayskull()
 def test_binary_prelu_scalar_ttnn(input_shapes, scalar, device):
     in_data1 = torch.rand(input_shapes, dtype=torch.bfloat16) * 200 - 100
     input_tensor1 = ttnn.from_torch(in_data1, layout=ttnn.TILE_LAYOUT, device=device)
@@ -1105,7 +1078,6 @@ def test_binary_prelu_scalar_ttnn(input_shapes, scalar, device):
         [-1],
     ],
 )
-@skip_for_grayskull()
 def test_binary_prelu_1D_weight(input_shapes, weight, device):
     in_data1 = torch.rand(input_shapes, dtype=torch.bfloat16) * 200 - 100
     input_tensor1 = ttnn.from_torch(in_data1, layout=ttnn.TILE_LAYOUT, device=device)
@@ -1127,7 +1099,6 @@ def test_binary_prelu_1D_weight(input_shapes, weight, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("Unsupported in Grayskull")
 def test_binary_left_shift(input_shapes, device):
     torch.manual_seed(213919)
     in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
@@ -1153,7 +1124,6 @@ def test_binary_left_shift(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@skip_for_grayskull("Unsupported in Grayskull")
 def test_binary_right_shift(input_shapes, device):
     torch.manual_seed(213919)
     in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
@@ -1183,7 +1153,6 @@ def test_binary_right_shift(input_shapes, device):
     "scalar",
     {random.randint(0, 31)},
 )
-@skip_for_grayskull("Unsupported in Grayskull")
 def test_unary_left_shift(input_shapes, device, scalar):
     torch.manual_seed(213919)
     in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
@@ -1211,7 +1180,6 @@ def test_unary_left_shift(input_shapes, device, scalar):
     "scalar",
     {random.randint(0, 31)},
 )
-@skip_for_grayskull("Unsupported in Grayskull")
 def test_unary_right_shift(input_shapes, device, scalar):
     torch.manual_seed(213919)
     in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)

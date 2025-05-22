@@ -64,6 +64,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.scratch_db_size = my_dispatch_constants.scratch_db_size();
         static_config_.downstream_sync_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+        static_config_.ringbuffer_size = my_dispatch_constants.ringbuffer_size();
 
         // prefetch_d only
         static_config_.cmddat_q_pages = my_dispatch_constants.prefetch_d_buffer_pages();
@@ -116,6 +117,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.scratch_db_base = my_dispatch_constants.scratch_db_base();
         static_config_.scratch_db_size = my_dispatch_constants.scratch_db_size();
         static_config_.downstream_sync_sem_id = 0;  // Unused for prefetch_h
+        static_config_.ringbuffer_size = my_dispatch_constants.ringbuffer_size();
 
         static_config_.cmddat_q_pages = my_dispatch_constants.prefetch_d_buffer_pages();
         static_config_.my_upstream_cb_sem_id =
@@ -166,6 +168,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.scratch_db_size = my_dispatch_constants.scratch_db_size();
         static_config_.downstream_sync_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+        static_config_.ringbuffer_size = my_dispatch_constants.ringbuffer_size();
 
         static_config_.cmddat_q_pages = my_dispatch_constants.prefetch_d_buffer_pages();
         static_config_.my_upstream_cb_sem_id =
@@ -389,10 +392,11 @@ void PrefetchKernel::CreateKernel() {
         dependent_config_.fabric_router_noc_xy.value_or(0),
         dependent_config_.outbound_eth_chan.value_or(0),
         static_config_.client_interface_addr.value_or(0),
+        static_config_.ringbuffer_size.value(),
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 35);
+    TT_ASSERT(compile_args.size() == 36);
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
     auto upstream_virtual_core =
         device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());

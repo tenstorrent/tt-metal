@@ -77,12 +77,11 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
     auto width_b = input_shape_b[-1];
 
     if (height_a == height_b and width_a == width_b) {
-        bool device_check = tensor_args.input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
         BinaryOpType op = operation_attributes.binary_op_type;
         DataType dtype1 = tensor_args.input_tensor_a.get_dtype();
         DataType dtype2 = tensor_args.input_tensor_b->get_dtype();
         bool sfpu_op_check = utils::is_binary_sfpu_op(op, dtype1, dtype2);
-        if(device_check && sfpu_op_check){
+        if(sfpu_op_check){
             return ElementWiseMultiCoreSfpu{};
         } else {
             return ElementWiseMultiCore{};

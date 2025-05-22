@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <boost/container/vector.hpp>
-#include <device_impl.hpp>
 #include <logger.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
@@ -25,6 +24,7 @@
 
 #include "allocator.hpp"
 #include "assert.hpp"
+#include "device/device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "mesh_trace.hpp"
 #include "shape_base.hpp"
@@ -639,16 +639,8 @@ std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t /*connected_ch
 
 uint32_t MeshDevice::num_virtual_eth_cores(SubDeviceId sub_device_id) {
     // Issue #19729: Return the maximum number of active ethernet cores across physical devices in the Mesh.
-    TT_FATAL(
-        *(sub_device_manager_tracker_->get_active_sub_device_manager()->id()) ==
-            *(this->get_default_sub_device_manager_id()),
-        "Virtualizing Ethernet Cores across a MeshDevice is not supported when a custom SubDeviceManager is loaded.");
-    if (not max_num_eth_cores_) {
-        for (auto device : this->get_devices()) {
-            max_num_eth_cores_ = std::max(device->num_virtual_eth_cores(SubDeviceId{0}), max_num_eth_cores_);
-        }
-    }
-    return max_num_eth_cores_;
+    TT_FATAL(*sub_device_id == 0, "Cannot query virtual ethernet cores per sub-device when using MeshDevice");
+    return num_virtual_eth_cores_;
 }
 
 // Core and worker management methods (These are OK)
@@ -789,6 +781,9 @@ bool MeshDevice::initialize(
     const auto& allocator = reference_device()->allocator();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
+    // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
+    // as the number of virtual ethernet cores seen by the MeshDevice
+    num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {

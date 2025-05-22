@@ -21,7 +21,7 @@ import torch
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16],
+    [None, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",

@@ -20,42 +20,24 @@ from tt_metal.tools.profiler.process_model_log import (
 from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
-DECODE_OP_START_INDEX = 4
-DECODE_OP_END_INDEX = -13
+DECODER_OP_START_INDEX = 4
+DECODER_OP_END_INDEX = -12
 
 perf_targets = {
     "RMSAllGather_0": {
-        "op_name": "PreRMS_0",
-        "kernel_duration": 11694.534722222223,
-        "op_to_op": 759.6666666666666,
-        "non-overlapped-dispatch-time": 7260,
+        "op_name": "RMS_0",
+        "kernel_duration": 18530.621527777777,
+        "op_to_op": 839.6666666666666,
+        "non-overlapped-dispatch-time": 8380,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
     "RMSAllGather_1": {
-        "op_name": "PostRMS_0",
-        "kernel_duration": 9400.361111111111,
-        "op_to_op": 634.3333333333334,
-        "non-overlapped-dispatch-time": 6301.3,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "RMSAllGather_2": {
-        "op_name": "PreRMS_1",
-        "kernel_duration": 11078.270833333334,
-        "op_to_op": 748.3333333333334,
-        "non-overlapped-dispatch-time": 7326,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "RMSAllGather_3": {
-        "op_name": "PostRMS_1",
-        "kernel_duration": 9197.204861111111,
-        "op_to_op": 641.0,
-        "non-overlapped-dispatch-time": 6431.2,
+        "op_name": "RMS_1",
+        "kernel_duration": 18100.121527777777,
+        "op_to_op": 816.2222222222222,
+        "non-overlapped-dispatch-time": 8139.7,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
@@ -80,9 +62,9 @@ perf_targets = {
     },
     "Matmul_0": {
         "op_name": "QKV_MM",
-        "kernel_duration": 10623,
+        "kernel_duration": 8556.222222222223,
         "op_to_op": 716.4444444444445,
-        "non-overlapped-dispatch-time": 6956.1,
+        "non-overlapped-dispatch-time": 6102.0,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
@@ -91,23 +73,23 @@ perf_targets = {
         "op_name": "DO_MM",
         "kernel_duration": 8902,
         "op_to_op": 723.0,
-        "non-overlapped-dispatch-time": 6412.2,
+        "non-overlapped-dispatch-time": 5760.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
     },
     "Matmul_2": {
         "op_name": "FF1_MM",
-        "kernel_duration": 10829,
+        "kernel_duration": 9483.888888888889,
         "op_to_op": 711.8888888888889,
-        "non-overlapped-dispatch-time": 6109.0,
+        "non-overlapped-dispatch-time": 5380.6,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
     },
     "Matmul_3": {
         "op_name": "FF3_MM",
-        "kernel_duration": 10848,
+        "kernel_duration": 9435.333333333334,
         "op_to_op": 688.7777777777778,
         "non-overlapped-dispatch-time": 6144.8,
         "kernel_duration_relative_margin": 0.05,
@@ -126,7 +108,7 @@ perf_targets = {
     "AllReduceCreateQkvHeads_0": {
         "op_name": "AllReduce_Fuse_Createheads",
         "kernel_duration": 14541.059027777777,
-        "op_to_op": 667.0,
+        "op_to_op": 966.0,
         "non-overlapped-dispatch-time": 7932.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.4,
@@ -162,7 +144,7 @@ perf_targets = {
     "LlamaReduceScatterDeviceOperation_1": {
         "op_name": "ReduceScatter_FF3",
         "kernel_duration": 9817.020833333334,
-        "op_to_op": 655.1111111111111,
+        "op_to_op": 812.1111111111111,
         "non-overlapped-dispatch-time": 7359.9,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
@@ -196,28 +178,10 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.3,
     },
     "BinaryDeviceOperation_0": {
-        "op_name": "Binary_Residual_0",
-        "kernel_duration": 1059,
-        "op_to_op": 725.6666666666666,
-        "non-overlapped-dispatch-time": 6316.8,
-        "kernel_duration_relative_margin": 0.25,
-        "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "BinaryDeviceOperation_1": {
         "op_name": "Binary_Mult_Silu",
-        "kernel_duration": 2929,
+        "kernel_duration": 2923.5555555555557,
         "op_to_op": 661.0,
         "non-overlapped-dispatch-time": 6111.2,
-        "kernel_duration_relative_margin": 0.1,
-        "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "BinaryDeviceOperation_2": {
-        "op_name": "Binary_Residual_1",
-        "kernel_duration": 1052,
-        "op_to_op": 731.4444444444445,
-        "non-overlapped-dispatch-time": 6751.9,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
@@ -232,9 +196,6 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.5,
     },
 }
-
-DECODER_OP_START_IDX = 4
-DECODER_OP_END_IDX = -11
 
 
 @pytest.mark.parametrize(
@@ -516,9 +477,10 @@ def test_llama_TG_perf_device(
     df_model_trace = df[int(len(df) / 3 * 2) :]
 
     # Excluding model embeddings and lmhead+sampling ops
-    df_layers_compilation = df_model_compilation[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
-    df_layers_trace = df_model_trace[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
+    df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
+    assert len(df_layers_compilation) % num_layers == 0
     df_first_layer_compilation = df_layers_compilation[: int(len(df_layers_compilation) / num_layers)]
     df_first_layer_trace = df_layers_trace[: int(len(df_layers_trace) / num_layers)]
 
@@ -807,7 +769,10 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = merge_device_rows(df)
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
-    df_layers = df_model[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
+    # Add 1 as early return means
+    df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    assert len(df_layers) % num_layers == 0
+
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
