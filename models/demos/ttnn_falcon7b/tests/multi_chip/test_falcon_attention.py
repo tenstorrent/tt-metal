@@ -2,27 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-import ttnn
+import torch
+import transformers
+from loguru import logger
+from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.demos.ttnn_falcon7b.tt.falcon_attention import TtFalconAttention
-from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
+import ttnn
 from models.demos.ttnn_falcon7b.tt.common import (
-    create_custom_preprocessor,
-    create_attention_mask,
-    create_kv_cache,
     create_attention_input,
+    create_attention_mask,
+    create_custom_preprocessor,
+    create_kv_cache,
     create_position_ids,
     strip_state_dict_prefix,
 )
-from ttnn.model_preprocessing import preprocess_model_parameters
+from models.demos.ttnn_falcon7b.tt.falcon_attention import TtFalconAttention
+from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from tests.ttnn.utils_for_testing import assert_with_pcc
-import transformers
-
-from loguru import logger
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
-
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh, ShardTensorToMesh
 
 PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
 
@@ -146,7 +144,7 @@ def test_falcon_attention(
         configuration.max_position_embeddings,
         model_config,
         parameters=parameters,
-        core_grid=mesh_device.get_devices()[0].core_grid,
+        core_grid=mesh_device.core_grid,
     )
 
     tt_out, tt_layer_present = tt_FalconAttention_model(

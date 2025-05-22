@@ -62,7 +62,7 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
         outputs.push_back(std::nullopt);
         outputs.push_back(std::nullopt);
     }
-    return std::move(outputs);
+    return outputs;
 }
 
 }  // namespace ttnn::operations::moreh::moreh_group_norm_backward

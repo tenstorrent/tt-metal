@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
@@ -395,9 +395,8 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def(
         py::init<
             DataType,
-            DataType,
+            std::optional<DataType>,
             string,
-            uint32_t,
             bool,
             bool,
             uint32_t,
@@ -417,9 +416,8 @@ void py_bind_conv2d(py::module& module) {
             bool>(),
         py::kw_only(),
         py::arg("dtype") = DataType::BFLOAT16,
-        py::arg("weights_dtype") = DataType::BFLOAT16,
+        py::arg("weights_dtype") = std::nullopt,
         py::arg("activation") = "",
-        py::arg("input_channels_alignment") = 32,
         py::arg("deallocate_activation") = false,
         py::arg("reallocate_halo_output") = true,
         py::arg("act_block_h_override") = 0,
@@ -442,9 +440,10 @@ void py_bind_conv2d(py::module& module) {
         &Conv2dConfig::dtype,
         R"doc(Specifies the data type of the output tensor. Supports ttnn.float32, ttnn.bfloat16 and ttnn.bfloat8_b. )doc");
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
-        Specifies the data type of the weights & bias tensor if the Conv2D op is responsible for preparing the weights.
+        Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
-        If ttnn.bfloat8_b is selected, then the weights should be passed in as ttnn.float32.
+        If unspecified, the preprocessed weights will be in the same format as the input weights.
+        If ttnn.bfloat8_b is selected, then the weights should be passed in as ttnn.bfloat16 or ttnn.float32 in row major format.
     )doc");
     py_conv_config.def_readwrite(
         "activation",
@@ -453,10 +452,6 @@ void py_bind_conv2d(py::module& module) {
         Empty string means no activation function.
         Supported activation function strings are:
         relu, silu, mish, sigmoid, sigmoid_approx, tanh, log, softplus, gelu, sqrt
-    )doc");
-    py_conv_config.def_readwrite("input_channels_alignment", &Conv2dConfig::input_channels_alignment, R"doc(
-        The channels dimension of the input tensor is aligned to this value.
-        Must be either 8, 16, 24 or 32.
     )doc");
     py_conv_config.def_readwrite("deallocate_activation", &Conv2dConfig::deallocate_activation, R"doc(
         Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.

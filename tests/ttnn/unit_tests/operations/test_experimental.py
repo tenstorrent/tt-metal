@@ -7,7 +7,14 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import is_wormhole_b0, torch_random, is_wormhole_b0, is_grayskull, is_blackhole
+from models.utility_functions import (
+    is_wormhole_b0,
+    torch_random,
+    is_wormhole_b0,
+    is_grayskull,
+    is_blackhole,
+    skip_for_blackhole,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -142,7 +149,7 @@ def test_ttnn_linear(
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
 
-@pytest.mark.skipif(is_grayskull(), reason="parallelization not supported for GS")
+@skip_for_blackhole("Does not work on BH P100a. Issue #22271")
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [8192])
 @pytest.mark.parametrize("n_size", [1024])
@@ -181,6 +188,13 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
         memory_config=in1_mem_config,
     )
 
+    # output shard config
+    out_shard_shape = (32, 128)
+    out_shard_spec = ttnn.ShardSpec(shard_grid, out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    out_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, out_shard_spec
+    )
+
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=32,
         per_core_M=1,
@@ -199,7 +213,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
         input_tensor_in0,
         input_tensor_in1,
         program_config=program_config,
-        memory_config=sharded_mem_config,
+        memory_config=out_sharded_mem_config,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
     )

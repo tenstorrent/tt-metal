@@ -65,7 +65,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
 namespace operations::ccl {
 
 Tensor barrier_function(const Tensor& input_tensor, const ttnn::Barrier& barrier_struct) {
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor.mesh_device())};
+    std::vector<Tensor> output_tensors = {input_tensor};
     return tt::tt_metal::operation::run(barrier_struct, {input_tensor}).at(0);
 }
 

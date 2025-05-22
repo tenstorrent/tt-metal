@@ -85,7 +85,8 @@ CoreCoord get_core_coord_for_test(const std::shared_ptr<tt::tt_metal::Buffer>& b
     if (buffer->is_l1()) {
         return buffer->device()->worker_core_from_logical_core(buffer->allocator()->get_logical_core_from_bank_id(0));
     } else {
-        return buffer->device()->logical_core_from_dram_channel(0);
+        auto logical_dram_core = buffer->device()->logical_core_from_dram_channel(0);
+        return buffer->device()->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
     }
 }
 
@@ -227,7 +228,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     int noc = (use_ncrisc) ? 1 : 0;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
-    string risc_name = (is_eth_core) ? "erisc" : "brisc";
+    string risc_name = (is_eth_core) ? "erisc" : " brisc";
     if (use_ncrisc) {
         risc_name = "ncrisc";
     }
@@ -238,12 +239,12 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "bytes from local L1[{:#08x}] to Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
                 "address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
                 virtual_core.y,
-                (is_eth_core) ? "erisc" : "brisc",
+                (is_eth_core) ? "erisc" : " brisc",
                 buffer_size,
                 buffer_addr,
                 output_buf_noc_xy.str(),
@@ -255,7 +256,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -274,7 +275,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -292,7 +293,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
                 "overwrites mailboxes).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -310,12 +311,12 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (Local L1 "
                 "overwrites mailboxes).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,
                 virtual_core.y,
-                (is_eth_core) ? "erisc" : "brisc",
+                (is_eth_core) ? "erisc" : " brisc",
                 buffer_size,
                 buffer_addr,
                 input_buf_noc_xy.str(),
@@ -327,7 +328,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 "from local L1[{:#08x}] to DRAM core w/ virtual coords {} DRAM[addr=0x{:08x}] (inline dw writes do not "
                 "support DRAM destination addresses).",
                 device->id(),
-                (is_eth_core) ? "active ethnet" : "worker",
+                (is_eth_core) ? "acteth" : "worker",
                 core.x,
                 core.y,
                 virtual_core.x,

@@ -212,7 +212,7 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
             case CQ_DISPATCH_CMD_SINK: break;
             case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: break;
-            case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL: break;
+            case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL: break;
             case CQ_DISPATCH_CMD_TERMINATE: break;
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
@@ -334,7 +334,7 @@ void dump_completion_queue_entries(
         cq_interface.id,
         completion_write_ptr,
         completion_read_ptr);
-    uint32_t last_span_start;
+    uint32_t last_span_start{};
     bool last_span_invalid = false;
     print_progress_bar(0.0, true);
     for (uint32_t page_offset = 0; page_offset < completion_q_bytes;) {  // page_offset increment at end of loop
@@ -430,7 +430,7 @@ void dump_issue_queue_entries(
         cq_interface.id,
         issue_write_ptr,
         issue_read_ptr);
-    uint32_t last_span_start;
+    uint32_t last_span_start{};
     bool last_span_invalid = false;
     print_progress_bar(0.0, true);
     uint32_t first_page_addr = issue_q_base_addr - (issue_q_base_addr % DispatchSettings::TRANSFER_PAGE_SIZE);

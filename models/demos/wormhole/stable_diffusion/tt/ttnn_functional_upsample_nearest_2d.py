@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-
 import math
+
+import ttnn
 
 
 class upsample_nearest2d:

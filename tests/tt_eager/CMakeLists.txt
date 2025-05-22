@@ -17,7 +17,6 @@ set(TT_EAGER_TESTS_TENSORS
     tensors/test_host_device_loopback.cpp
     tensors/test_raw_host_memory_pointer.cpp
     # tensors/test_sharded_loopback.cpp       # <- not called in run_tt_eager.py
-    tensors/test_async_tensor_apis.cpp
 )
 
 set(TT_EAGER_TESTS_INTEGRATION integration_tests/test_bert.cpp)

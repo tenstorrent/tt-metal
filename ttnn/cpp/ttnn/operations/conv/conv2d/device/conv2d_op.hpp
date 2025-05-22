@@ -19,13 +19,13 @@ namespace conv2d {
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 struct Conv2dConfig {
     tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16;
-    tt::tt_metal::DataType weights_dtype = tt::tt_metal::DataType::BFLOAT16;
+
+    // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
+    // prepare_conv_bias needs this to always be set to the same dtype as the weights.
+    std::optional<tt::tt_metal::DataType> weights_dtype = std::nullopt;
 
     // Either "relu" or ""
     string activation = "";
-
-    // Used in the beginning of a network, when in_channels is small, set to 16.
-    uint32_t input_channels_alignment = 32;
 
     // If user tensor will be deallocated if it's on device.
     bool deallocate_activation = false;
@@ -78,7 +78,7 @@ struct Conv2dConfig {
     bool enable_weights_double_buffer = false;
 
     // Only for height sharding.
-    // Increases perf. Act_block_h should be a multiple of 64, if true
+    // Increases perf if op is reader bound. Act_block_h should be >= 64, if true
     bool enable_split_reader = false;
 
     bool enable_subblock_padding = false;
@@ -90,7 +90,6 @@ struct Conv2dConfig {
         "dtype",
         "weights_dtype",
         "activation",
-        "input_channels_alignment",
         "deallocate_activation",
         "reallocate_halo_output",
         "act_block_h_override",
@@ -112,7 +111,6 @@ struct Conv2dConfig {
             std::cref(this->dtype),
             std::cref(this->weights_dtype),
             std::cref(this->activation),
-            std::cref(this->input_channels_alignment),
             std::cref(this->deallocate_activation),
             std::cref(this->reallocate_halo_output),
             std::cref(this->act_block_h_override),

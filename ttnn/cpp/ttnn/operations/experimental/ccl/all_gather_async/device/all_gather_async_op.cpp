@@ -5,56 +5,11 @@
 #include "all_gather_async_op.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn {
-
-bool AllGatherAsync::is_tensor_aligned_by_tile(const Tensor& input_tensor) {
-    using namespace tt::constants;
-    auto input_tensor_shape = input_tensor.get_padded_shape();
-    return ((input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2]) % TILE_HEIGHT == 0) &&
-           (input_tensor_shape[3] % TILE_WIDTH == 0);
-}
-
-bool AllGatherAsync::best_effort_interleave(
-    const Tensor& input_tensor, const uint32_t dim, const BufferType output_buffer_type, bool use_optimized) {
-    using namespace tt::constants;
-    auto input_tensor_shape = input_tensor.get_padded_shape();
-    auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
-    auto input_tensor_page_layout = input_tensor.layout();
-    auto device = input_tensor.device();
-    const auto& allocator = device->allocator();
-    uint32_t num_banks = allocator->get_num_banks(input_tensor.buffer()->buffer_type());
-
-    bool fit_tile = is_tensor_aligned_by_tile(input_tensor);
-    bool is_dim3_bf16 = false;
-    bool is_dim3_bf8 = false;
-    bool is_dim2 = false;
-    if (dim == 3) {
-        uint32_t dim3_tiles = input_tensor_shape[3] / TILE_WIDTH;
-        is_dim3_bf16 = input_tensor.dtype() == DataType::BFLOAT16 && fit_tile && dim3_tiles % num_banks == 0;
-
-        // DRAM only yet
-        if (output_buffer_type == BufferType::DRAM) {
-            is_dim3_bf8 = input_tensor.dtype() == DataType::BFLOAT8_B && fit_tile && dim3_tiles % num_banks == 0;
-        }
-    }
-    if (0 <= dim && dim < 3) {
-        is_dim2 = fit_tile;
-    }
-
-    bool is_interleaved = input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
-    bool is_tiled = input_tensor_page_layout == tt::tt_metal::Layout::TILE;
-
-    bool canbe_optimized = (is_dim3_bf16 || is_dim3_bf8 || is_dim2) && is_interleaved && is_tiled;
-    if (use_optimized) {
-        return canbe_optimized;
-    }
-    // allow generic case
-    return canbe_optimized || (fit_tile && is_interleaved && is_tiled);
-}
 
 void AllGatherAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
@@ -73,12 +28,12 @@ void AllGatherAsync::validate_with_output_tensors(
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
-        input_tensor.memory_config().memory_layout);
+        input_tensor.memory_config().memory_layout());
 
     if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
         TT_FATAL(
@@ -134,9 +89,9 @@ void AllGatherAsync::validate_with_output_tensors(
 
         // check memory layout
         TT_FATAL(
-            output_tensor.value().memory_config().memory_layout == input_tensor.memory_config().memory_layout,
+            output_tensor.value().memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
             "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
-            output_tensor.value().memory_config().memory_layout);
+            output_tensor.value().memory_config().memory_layout());
     }
 }
 
@@ -154,20 +109,23 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
     auto input_tensor_page_layout = input_tensor.layout();
     auto input_tensor_memory_config = input_tensor.memory_config();
-    bool input_is_sharded = input_tensor_memory_config.shard_spec.has_value();
-    bool output_is_sharded = output_mem_config.shard_spec.has_value();
+    bool input_is_sharded = input_tensor_memory_config.shard_spec().has_value();
+    bool output_is_sharded = output_mem_config.shard_spec().has_value();
     uint32_t input_shard_num_cores = 0;
     uint32_t output_shard_num_cores = 0;
     if (input_is_sharded) {
-        input_shard_num_cores = input_tensor_memory_config.shard_spec->grid.num_cores();
+        input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
         log_trace(
             tt::LogOp,
-            "[select_version] input_tensor_memory_config.shard_spec->shape: {}",
-            input_tensor_memory_config.shard_spec->shape);
+            "[select_version] input_tensor_memory_config.shard_spec()->shape: {}",
+            input_tensor_memory_config.shard_spec()->shape);
     }
     if (output_is_sharded) {
-        output_shard_num_cores = output_mem_config.shard_spec->grid.num_cores();
-        log_trace(tt::LogOp, "[select_version] output_mem_config.shard_spec->shape: {}", output_mem_config.shard_spec->shape);
+        output_shard_num_cores = output_mem_config.shard_spec()->grid.num_cores();
+        log_trace(
+            tt::LogOp,
+            "[select_version] output_mem_config.shard_spec()->shape: {}",
+            output_mem_config.shard_spec()->shape);
     }
 
     log_trace(tt::LogOp, "[select_version] input_tensor_shape: {}", input_tensor_shape);
@@ -176,7 +134,10 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] input_shard_num_cores: {}", input_shard_num_cores);
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
-    if (AllGatherAsync::best_effort_interleave(input_tensor, dim, output_mem_config.buffer_type)) {
+    // Check for minimal interleaved case
+    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
+        input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        input_tensor_page_layout == tt::tt_metal::Layout::TILE) {
         return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
     }
 
@@ -186,14 +147,13 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     if (input_is_sharded && output_is_sharded) {
         // Check for llama post binary mult+silu case
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
-            input_tensor_shape[3] == 960 && input_tensor_memory_config.buffer_type == BufferType::L1 &&
-            output_mem_config.buffer_type == BufferType::L1 &&
-            input_tensor_memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
-            output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
-            input_tensor_memory_config.shard_spec->shape[0] == 32 &&
-            input_tensor_memory_config.shard_spec->shape[1] == 32 &&
-            output_mem_config.shard_spec->shape[0] == 32 &&
-            output_mem_config.shard_spec->shape[1] == 160 && input_shard_num_cores == 30 &&
+            input_tensor_shape[3] == 960 && input_tensor_memory_config.buffer_type() == BufferType::L1 &&
+            output_mem_config.buffer_type() == BufferType::L1 &&
+            input_tensor_memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            input_tensor_memory_config.shard_spec()->shape[0] == 32 &&
+            input_tensor_memory_config.shard_spec()->shape[1] == 32 && output_mem_config.shard_spec()->shape[0] == 32 &&
+            output_mem_config.shard_spec()->shape[1] == 160 && input_shard_num_cores == 30 &&
             output_shard_num_cores == 24) {
             log_trace(
                 tt::LogOp,
@@ -203,28 +163,27 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
 
         // Check for llama post SDPA case
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 8 && input_tensor_shape[2] == 32 &&
-            input_tensor_shape[3] == 128 && input_tensor_memory_config.buffer_type == BufferType::L1 &&
-            output_mem_config.buffer_type == BufferType::L1 &&
-            input_tensor_memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-            output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-            input_tensor_memory_config.shard_spec->shape[0] == 32 &&
-            input_tensor_memory_config.shard_spec->shape[1] == 128 &&
-            output_mem_config.shard_spec->shape[0] == 32 &&
-            output_mem_config.shard_spec->shape[1] == 128 && input_shard_num_cores == 8 &&
-            output_shard_num_cores == 32) {
+            input_tensor_shape[3] == 128 && input_tensor_memory_config.buffer_type() == BufferType::L1 &&
+            output_mem_config.buffer_type() == BufferType::L1 &&
+            input_tensor_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+            output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+            input_tensor_memory_config.shard_spec()->shape[0] == 32 &&
+            input_tensor_memory_config.shard_spec()->shape[1] == 128 &&
+            output_mem_config.shard_spec()->shape[0] == 32 && output_mem_config.shard_spec()->shape[1] == 128 &&
+            input_shard_num_cores == 8 && output_shard_num_cores == 32) {
             log_trace(tt::LogOp, "Matching conditions for Llama post SDPA, using LLAMA_MINIMAL_SHARDED implementation");
             return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
         }
 
         // Check for llama rms norm case
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
-            input_tensor_shape[3] == 32 && input_tensor_memory_config.buffer_type == BufferType::L1 &&
-            output_mem_config.buffer_type == BufferType::L1 &&
-            input_tensor_memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
-            output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
-            input_tensor_memory_config.shard_spec->shape[0] == 32 &&
-            input_tensor_memory_config.shard_spec->shape[1] == 32 && output_mem_config.shard_spec->shape[0] == 32 &&
-            output_mem_config.shard_spec->shape[1] == 128 && input_shard_num_cores == 1 &&
+            input_tensor_shape[3] == 32 && input_tensor_memory_config.buffer_type() == BufferType::L1 &&
+            output_mem_config.buffer_type() == BufferType::L1 &&
+            input_tensor_memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            input_tensor_memory_config.shard_spec()->shape[0] == 32 &&
+            input_tensor_memory_config.shard_spec()->shape[1] == 32 && output_mem_config.shard_spec()->shape[0] == 32 &&
+            output_mem_config.shard_spec()->shape[1] == 128 && input_shard_num_cores == 1 &&
             output_shard_num_cores == 1) {
             log_trace(
                 tt::LogOp, "Matching conditions for Llama rms norm case, using LLAMA_MINIMAL_SHARDED implementation");

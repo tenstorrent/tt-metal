@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "ttnn/operations/experimental/paged_cache/paged_cache.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"
@@ -120,7 +120,13 @@ void bind_experimental_paged_cache_operations(py::module& module) {
 
     auto paged_fill_cache_doc =
         R"doc(
-        Paged fill cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, 1, seq_len, head_dim]. batch_idx specifies which index in the batch dimension to update with input_tensor.
+        Paged fill cache operation. This operation expects the following inputs: cache_tensor, input_tensor, and page_table.
+        It uses either batch_idx_tensor (if provided, kwarg batch_idx_tensor) or batch_idx (kwarg batch_idx) as a fallback to determine the batch index for updating the cache.
+        cache_tensor shape: [max_num_blocks, 1, block_size, head_dim]
+        input_tensor shape: [1, num_heads, input_seq_len, head_dim]
+        page_table shape: [batch_size, max_num_blocks_per_seq]
+        batch_idx_tensor (optional) shape: [1] (scalar uint32 tensor)
+        batch_idx (scalar, defaults to 0) is used if batch_idx_tensor is not provided.
         )doc";
 
     using PagedFillCacheType = decltype(ttnn::experimental::paged_fill_cache);
@@ -133,14 +139,16 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                const ttnn::Tensor& cache_tensor,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& page_table,
+               std::optional<const ttnn::Tensor> batch_idx_tensor,
                const uint32_t batch_idx,
                std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(cache_tensor, input_tensor, page_table, batch_idx, compute_kernel_config);
+                return self(cache_tensor, input_tensor, page_table, batch_idx_tensor, batch_idx, compute_kernel_config);
             },
             py::arg("cache_tensor").noconvert(),
             py::arg("input_tensor").noconvert(),
             py::arg("page_table").noconvert(),
             py::kw_only(),
+            py::arg("batch_idx_tensor").noconvert() = std::nullopt,
             py::arg("batch_idx") = 0,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
         });

@@ -48,7 +48,7 @@ def get_devices(test_module):
 
 
 def gather_single_test_perf(device, test_passed):
-    if not isinstance(device, ttnn.Device):
+    if device.get_num_devices() > 1:
         logger.error("Multi-device perf is not supported. Failing.")
         return None
     ttnn.DumpDeviceProfiler(device)

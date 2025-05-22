@@ -5,7 +5,6 @@
 #include <boost/core/span.hpp>
 #include <device.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <algorithm>
 #include <array>
 #include <optional>
@@ -18,6 +17,7 @@
 #include "dispatch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include "math.hpp"
@@ -741,7 +741,7 @@ void write_to_device_buffer(
     const BufferDispatchConstants buf_dispatch_constants =
         generate_buffer_dispatch_constants(sysmem_manager, dispatch_core_type, cq_id);
 
-    // TODO: When writing to L1, modify this function to use enqueue_write_to_core_l1
+    // TODO: When writing to L1, modify this function to use enqueue_write_to_core
 
     if (is_sharded(buffer.buffer_layout())) {
         ShardedBufferWriteDispatchParams dispatch_params = initialize_sharded_buf_dispatch_params(

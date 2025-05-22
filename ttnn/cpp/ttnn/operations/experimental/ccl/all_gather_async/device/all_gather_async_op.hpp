@@ -14,7 +14,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include <tt-metalium/global_semaphore.hpp>
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/run_operation.hpp"
 
@@ -91,13 +91,6 @@ struct AllGatherAsync {
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 
     AllGatherAsyncVersion select_version(const Tensor& input_tensor) const;
-
-    static bool best_effort_interleave(
-        const Tensor& input_tensor,
-        const uint32_t dim,
-        const BufferType output_buffer_type,
-        bool use_optimized = false);
-    static bool is_tensor_aligned_by_tile(const Tensor& input_tensor);
 };
 
 // All Gather Variants

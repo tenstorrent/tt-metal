@@ -56,8 +56,8 @@
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
+#include <tt-metalium/device_pool.hpp>
 #include "rtoptions.hpp"
-#include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -182,7 +182,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             .defines = kernel_defines});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
-    if (device->dispatch_firmware_active()) {
+    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             auto device_coord = mesh_device->get_view().find_device(device_id);
             distributed::MeshWorkload workload;
@@ -221,7 +221,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             &sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
-    if (device->dispatch_firmware_active()) {
+    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             mesh_device->mesh_command_queue().finish();
         } else {
@@ -258,11 +258,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
 
     uint32_t hostStartTime_H = 0;
 
-    uint64_t preDeviceTimeLarge = 0;
-    uint64_t preHostTimeLarge = 0;
-    uint64_t firstDeviceTimeLarge = 0;
-    uint64_t firstHostTimeLarge = 0;
-
     for (int i = 2; i < 2 * (sampleCount + 1); i += 2) {
         uint32_t deviceTime = sync_times[i];
         if (deviceTime < preDeviceTime) {
@@ -282,13 +277,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         deviceHostTimePair[device_id].push_back(std::pair<uint64_t, uint64_t>{deviceTimeLarge, hostTimeLarge});
 
         if (firstSample) {
-            firstDeviceTimeLarge = deviceTimeLarge;
-            firstHostTimeLarge = hostTimeLarge;
             firstSample = false;
         }
-
-        preDeviceTimeLarge = deviceTimeLarge;
-        preHostTimeLarge = hostTimeLarge;
     }
 
     double hostSum = 0;
@@ -713,9 +703,9 @@ void InitDeviceProfiler(IDevice* device) {
 
         if (tt_metal_device_profiler_map.find(device_id) == tt_metal_device_profiler_map.end()) {
             if (firstInit.exchange(false)) {
-                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(true));
+                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, true));
             } else {
-                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(false));
+                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, false));
             }
         }
 
@@ -761,7 +751,7 @@ void InitDeviceProfiler(IDevice* device) {
 
         std::vector<uint32_t> inputs_DRAM(output_dram_buffer_ptr->size() / sizeof(uint32_t), 0);
 
-        if (device->dispatch_firmware_active()) {
+        if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
             issue_fd_write_to_profiler_buffer(profiler.output_dram_buffer, device, inputs_DRAM);
         } else {
             tt_metal::detail::WriteToBuffer(*(profiler.output_dram_buffer.get_buffer()), inputs_DRAM);
@@ -786,20 +776,15 @@ void DumpDeviceProfileResults(
         auto virtualCore = device->virtual_core_from_logical_core(core, CoreType::ETH);
         workerCores.push_back(virtualCore);
     }
-    IDevice* push_work_device = device;
-    if (auto mesh_device = device->get_mesh_device()) {
-        push_work_device = mesh_device.get();
-    }
-    push_work_device->push_work([device, workerCores, state, metadata]() mutable {
-        DumpDeviceProfileResults(device, workerCores, state, metadata);
-        if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and
-            state == ProfilerDumpState::CLOSE_DEVICE_SYNC) {
-            for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
-                chip_id_t sender_id = device->id();
-                chip_id_t receiver_id = connected_device.first;
-            }
+
+    DumpDeviceProfileResults(device, workerCores, state, metadata);
+    if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and
+        state == ProfilerDumpState::CLOSE_DEVICE_SYNC) {
+        for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
+            chip_id_t sender_id = device->id();
+            chip_id_t receiver_id = connected_device.first;
         }
-    });
+    }
 
 #endif
 }

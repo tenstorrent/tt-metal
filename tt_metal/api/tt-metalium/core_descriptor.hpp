@@ -30,14 +30,13 @@ struct core_descriptor_t {
     std::vector<CoreCoord> logical_dispatch_cores;
 };
 
-inline const std::string& get_product_name(tt::ARCH arch, uint32_t num_harvested_rows) {
+inline const std::string& get_product_name(tt::ARCH arch, uint32_t num_harvested_on_axis) {
     const static std::map<tt::ARCH, std::map<uint32_t, std::string>> product_name = {
         {tt::ARCH::GRAYSKULL, {{0, "E150"}, {2, "E75"}}},
         {tt::ARCH::WORMHOLE_B0, {{0, "galaxy"}, {1, "nebula_x1"}, {2, "nebula_x2"}}},
-        {tt::ARCH::BLACKHOLE, {{0, "blackhole"}}}  // TODO (abhullar): revisit blackhole product names
-    };
+        {tt::ARCH::BLACKHOLE, {{0, "unharvested"}, {1, "1xharvested"}, {2, "2xharvested"}}}};
 
-    return product_name.at(arch).at(num_harvested_rows);
+    return product_name.at(arch).at(num_harvested_on_axis);
 }
 
 const core_descriptor_t& get_core_descriptor_config(

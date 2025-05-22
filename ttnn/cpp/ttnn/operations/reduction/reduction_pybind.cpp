@@ -4,7 +4,7 @@
 
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/export_enum.hpp"
+#include "ttnn-pybind/export_enum.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions_pybind.hpp"

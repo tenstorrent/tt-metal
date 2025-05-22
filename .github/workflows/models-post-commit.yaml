@@ -78,8 +78,6 @@ jobs:
           prefix: "test_reports_"
 
   models-tests-slow-runtime-mode:
-    # BH runs only FD tests to avoid using too many CI resources
-    if: ${{ inputs.arch != 'blackhole' }}
     strategy:
       fail-fast: false
       matrix:

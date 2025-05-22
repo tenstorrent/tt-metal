@@ -45,10 +45,7 @@ using MultiCommandQueueSingleDeviceFixture = ::ttnn::MultiCommandQueueSingleDevi
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     auto device = this->device_;
-    MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+    MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
     uint32_t input_buf_size_datums = 1024 * 1024;
     uint32_t output_buf_size_datums = 1024 * 32;
@@ -68,8 +65,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     ttnn::SmallVector<int64_t> reduce_dims = {3};
     Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
     Tensor np_out_host = np_out.cpu();
-    const auto golden_output =
-        std::get<MultiDeviceHostStorage>(np_out_host.get_storage()).buffers.at(0).view_as<bfloat16>();
+    auto buffer = std::get<MultiDeviceHostStorage>(np_out_host.get_storage()).get_buffer(0);
+    const auto golden_output = buffer.view_as<bfloat16>();
     // Events for host - device synchronization
     // Running sum-reduce with preallocated output
     // Preallocate Input and Output Tensors on Device
@@ -103,10 +100,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
 }
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
-    MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+    MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
     uint32_t buf_size_datums = 1024 * 1024;
     uint32_t datum_size_bytes = 2;
@@ -159,10 +153,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     // Test functionality for the buffer destructor, which will call deallocate asynchronously
     // We must ensure that the deallocate step, which can run after the buffer has been destroyed
     // does not rely on stale buffer state, after the buffer has been destroyed on host
-    MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+    MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
     uint32_t buf_size_datums = 1024 * 1024;
     uint32_t datum_size_bytes = 2;

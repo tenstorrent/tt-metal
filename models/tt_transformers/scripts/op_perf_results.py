@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-from collections import defaultdict
-from argparse import ArgumentParser
 import csv
+from argparse import ArgumentParser
+from collections import defaultdict
 
 
 def main():

@@ -6,11 +6,11 @@ set(ARCHS
 set(PROCS
     brisc
     ncrisc
-    trisc0
-    trisc1
-    trisc2
     ierisc
-    slave_ierisc
+    subordinate_ierisc
+    trisc=0
+    trisc=1
+    trisc=2
     aerisc
 )
 set(TYPES
@@ -28,41 +28,39 @@ set(IRAM_OPTIONS
     ENABLE_IRAM # With IRAM
 )
 
-include(FetchContent)
-# Break out the version setter for access control reasons
-include(cmake/sfpi-version.cmake)
-if(DEFINED SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE)
-    set(SFPI_RELEASE "${SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE}")
-    list(GET SFPI_RELEASE 0 SFPI_FILE)
-    list(GET SFPI_RELEASE 1 SFPI_MD5)
-    FetchContent_Declare(
-        sfpi
-        URL
-            "https://github.com/tenstorrent/sfpi/releases/download/${SFPI_FILE}"
-        URL_HASH "MD5=${SFPI_MD5}"
-        SOURCE_DIR
-        "${PROJECT_SOURCE_DIR}/runtime/sfpi"
-    )
-    FetchContent_MakeAvailable(sfpi)
-else()
-    message(FATAL_ERROR "SFPI binaries for ${CMAKE_HOST_SYSTEM_PROCESSOR}-${CMAKE_HOST_SYSTEM_NAME} not available")
+# Get the appropriate SFPI tarball
+file(STRINGS "../sfpi-version.sh" SFPI)
+set(SFPI_arch_os "${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}")
+foreach(tuple ${SFPI})
+    string(REPLACE "=" ";" pair ${tuple})
+    list(LENGTH pair count)
+    if(count EQUAL 2)
+        list(GET pair 0 key)
+        list(GET pair 1 value)
+        if(key STREQUAL "sfpi_version")
+            set(SFPI_VERSION "${value}")
+        elseif(key STREQUAL "sfpi_url")
+            set(SFPI_URL "${value}")
+        elseif(key STREQUAL "sfpi_${SFPI_arch_os}_txz_md5")
+            set(SFPI_TXZ_MD5 "${value}")
+        endif()
+    endif()
+endforeach()
+
+if(NOT DEFINED SFPI_TXZ_MD5)
+    message(FATAL_ERROR "SFPI tarball for ${SFPI_arch_os} is not available")
 endif()
 
-# Transcode the SFPI version to a JSON file
-set(SFPI_VERSION_JSON_PATH "${PROJECT_BINARY_DIR}/sfpi-version.json")
-
-add_custom_command(
-    OUTPUT
-        ${SFPI_VERSION_JSON_PATH}
-    COMMAND
-        ${CMAKE_COMMAND} -DOUTPUT_FILE=${SFPI_VERSION_JSON_PATH} -P
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate-sfpi-json.cmake
-    DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/sfpi-version.cmake
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate-sfpi-json.cmake
-    COMMENT "Regenerating SFPI version JSON file"
-    VERBATIM
+include(FetchContent)
+FetchContent_Declare(
+    sfpi
+    URL
+        "${SFPI_URL}/${SFPI_VERSION}/sfpi-${SFPI_arch_os}.txz"
+    URL_HASH "MD5=${SFPI_TXZ_MD5}"
+    SOURCE_DIR
+    "${PROJECT_SOURCE_DIR}/runtime/sfpi"
 )
+FetchContent_MakeAvailable(sfpi)
 
 foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
@@ -101,32 +99,30 @@ foreach(ARCH IN LISTS ARCHS)
     endif()
 
     foreach(PROC IN LISTS PROCS)
+        string(REPLACE "=" "" PROC_FILE "${PROC}")
         foreach(TYPE IN LISTS TYPES)
-            set(HW_OUTPUT_FILE "${HW_OUTPUT_DIR}/${TYPE}_${PROC}.ld")
+            set(HW_OUTPUT_FILE "${TYPE}_${PROC_FILE}.ld")
             string(TOUPPER ${PROC} PROC_DEFINE)
             string(TOUPPER ${TYPE} TYPE_DEFINE)
 
             # custom command to preprocess/generate the output file
             add_custom_command(
                 OUTPUT
-                    ${HW_OUTPUT_FILE}
+                    ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
                 COMMAND
-                    ${CMAKE_CXX_COMPILER} -DLD_TARGET=${PROC_DEFINE} -DLD_TYPE=${TYPE_DEFINE} -DTARGET_${PROC_DEFINE}
-                    -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -I${HW_INCLUDES} -E -P -x c -o ${HW_OUTPUT_FILE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
+                    ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -I${HW_INCLUDES} -E -P -x c
+                    -o ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                 DEPENDS
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
-                    ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/memory.ld
-                    ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/sections.ld
                     ${DEV_MEM_MAP}
-                COMMENT "Preprocessing toolchain/${PROC}.ld"
+                COMMENT "Preprocessing toolchain/${HW_OUTPUT_FILE}"
                 VERBATIM
             )
 
             # add output file to the custom target
-            list(APPEND PREPROCESSED_LD_FILES ${HW_OUTPUT_FILE})
+            list(APPEND PREPROCESSED_LD_FILES ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE})
         endforeach()
     endforeach()
 endforeach()
@@ -141,10 +137,10 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
 endfunction()
 
 # Define the compiler command
-set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++)
 
 # May switch to this someday
-# set(GPP_CMD /opt/tenstorrent/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+# set(GPP_CMD /opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++)
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
@@ -247,7 +243,9 @@ foreach(ARCH IN LISTS ARCHS)
                 ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/${HWLIB}.o ${${HWLIB}_SOURCE}
             DEPENDS
                 ${${HWLIB}_SOURCE}
-            COMMENT "Building hw lib ${HWLIB}.o"
+                # If the compiler changes, rebuild
+                ../sfpi-version.sh
+            COMMENT "Building ${ARCH} hw lib ${HWLIB}.o"
             VERBATIM
         )
         list(APPEND PREPROCESSED_O_FILES ${HW_OUTPUT_FILE})
@@ -277,22 +275,118 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
             TYPE HEADERS
             BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
             FILES
+                ckernels/blackhole/metal/llk_api/llk_math_binary_api.h
+                ckernels/blackhole/metal/llk_api/llk_math_reduce_api.h
+                ckernels/blackhole/metal/llk_api/llk_math_unary_sfpu_api.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_abs.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp2.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_expm1.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_heaviside.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_log.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_log1p.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_max.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_unary_max_min.h
+                ckernels/blackhole/metal/llk_api/llk_unpack_untilize_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_math_binary_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_math_reduce_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_math_unary_sfpu_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_unpack_untilize_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_abs.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add1.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add_int32.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_add_uint16.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_alt_complex_rotate90.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_bitwise.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binop_with_unary.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bitwise_and.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bitwise_not.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bitwise_or.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bitwise_xor.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_cdf.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_ceil.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_clamp.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_copy_dest_values.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_cumsum.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_dropout.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_elu.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erf_erfc.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfinv.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_exp2.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_expm1.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_fill.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_floor.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_fmod.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_hardtanh.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_heaviside.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_i0.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_i1.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_identity.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_int_sum.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_isinf_isnan.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_left_shift.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_log.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_log1p.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_logical_not_noti.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_mask.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_max.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_min.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_negative.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_power_iterative.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_prelu.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_quant.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_rand.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_relu.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_remainder.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_reshuffle_rows.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_right_shift.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_round.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_rsqrt.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_shift.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sigmoid_appx.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sign.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_signbit.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_silu.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_softplus.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sqrt.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sub_int32.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tanh.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tanh_derivative.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tiled_prod.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_topk.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_trigonometry.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_typecast.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_unary_comp.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_unary_max_min.h
                 ckernels/blackhole/metal/common/chlkc_list.h
                 ckernels/blackhole/metal/llk_api/llk_math_common_api.h
                 ckernels/blackhole/metal/llk_api/llk_math_matmul_api.h
                 ckernels/blackhole/metal/llk_api/llk_math_unary_datacopy_api.h
                 ckernels/blackhole/metal/llk_api/llk_pack_api.h
                 ckernels/blackhole/metal/llk_api/llk_param_structs.h
-                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_exp.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_init.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_params.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu_types.h
+                ckernels/blackhole/metal/llk_api/llk_unpack_AB_api.h
                 ckernels/blackhole/metal/llk_api/llk_unpack_AB_matmul_api.h
                 ckernels/blackhole/metal/llk_api/llk_unpack_A_api.h
                 ckernels/blackhole/metal/llk_api/llk_unpack_common_api.h
+                ckernels/blackhole/metal/llk_api/llk_unpack_reduce_api.h
+                ckernels/blackhole/metal/llk_api/llk_unpack_tilize_api.h
                 ckernels/blackhole/metal/llk_io/llk_io.h
                 ckernels/blackhole/metal/llk_io/llk_io_pack.h
                 ckernels/blackhole/metal/llk_io/llk_io_unpack.h
@@ -304,21 +398,61 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_math_unary_datacopy_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_pack_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_param_structs.h
-                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_exp.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_init.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_params.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu_types.h
+                ckernels/wormhole_b0/metal/llk_api/llk_unpack_AB_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_unpack_AB_matmul_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_unpack_A_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_unpack_common_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_unpack_reduce_api.h
+                ckernels/wormhole_b0/metal/llk_api/llk_unpack_tilize_api.h
                 ckernels/wormhole_b0/metal/llk_io/llk_io.h
                 ckernels/wormhole_b0/metal/llk_io/llk_io_pack.h
                 ckernels/wormhole_b0/metal/llk_io/llk_io_unpack.h
                 ckernels/wormhole_b0/metal/llk_io/llk_operands.h
                 ckernels/wormhole_b0/metal/llk_io/llk_outputs.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_init.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_abs.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_comp.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_unary_max_min.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_exp2.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_expm1.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_heaviside.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_log.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_log1p.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_max.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_power.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_rsqrt.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_tiled_prod.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_sigmoid.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_sign.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_signbit.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_floor.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_ceil.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_round.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_silu.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_square.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_tanh.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_topk.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_unary_comp.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_trigonometry.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_unary_comp.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_remainder.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_bitwise_xor.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_bitwise_not.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_fmod.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_bitwise_and.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_bitwise_or.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_right_shift.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_left_shift.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_fill.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_alt_complex_rotate90.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_prelu.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_i1.h
                 inc/atomic_rwptr.h
                 inc/bit_utils.h
                 inc/blackhole/c_tensix_core.h
@@ -353,6 +487,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 inc/debug/stack_usage.h
                 inc/debug/watcher_common.h
                 inc/debug/waypoint.h
+                inc/dev_msgs.h
                 inc/ethernet/dataflow_api.h
                 inc/ethernet/erisc.h
                 inc/ethernet/tt_eth_api.h

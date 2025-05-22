@@ -7,64 +7,43 @@
 #include <climits>
 
 inline __attribute__((always_inline)) unsigned int mulsi3(unsigned int a, unsigned int b) {
-    unsigned int r = 0;
+    return a * b;
+}
 
-#ifdef ARCH_GRAYSKULL
-    while (a) {
-        if (a & 1) {
-            r += b;
-        }
-        a >>= 1;
-        b <<= 1;
-    }
-#else
-    // Wormhole b0 has native multipliers
-    r = a * b;
-#endif
-
-    return r;
+inline __attribute__((always_inline)) uint32_t fast_udiv_7(uint32_t n) {
+    return (((uint64_t)n * 0x92492493) >> 32) >> 2;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_12(uint32_t n) {
-    // Uses embedding style magic number
-    // * fixed point 1/12 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
     return (((uint64_t)n * 0xAAAAAAAB) >> 32) >> 3;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_56(uint32_t n) {
-    // Uses embedding style magic number
-    // * fixed point 1/12 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
     return (((uint64_t)n * 0x24924925) >> 32) >> 3;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_63(uint32_t n) {
-    // Uses embedding style magic number
-    // * fixed point 1/63 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
     return (((uint64_t)n * 0x82082083) >> 32) >> 5;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_70(uint32_t n) {
-    // Uses embedding style magic number
-    // * fixed point 1/70 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
     return (((uint64_t)n * 0xEA0EA0EB) >> 32) >> 6;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_80(uint32_t n) {
-    // Uses embedding style magic number
-    // * fixed point 1/80 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
     return (((uint64_t)n * 0xCCCCCCCD) >> 32) >> 6;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_94(uint32_t n) {
-    // Uses embedding style magic number
-    // * fixed point 1/12 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
     return (((uint64_t)n * 0xAE4C415D) >> 32) >> 6;
+}
+
+inline __attribute__((always_inline)) uint32_t fast_udiv_110(uint32_t n) {
+    return (((uint64_t)n * 0x094F2095) >> 32) >> 2;
+}
+
+inline __attribute__((always_inline)) uint32_t fast_udiv_120(uint32_t n) {
+    return (((uint64_t)n * 0x88888889) >> 32) >> 6;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_124(uint32_t n) {
@@ -72,22 +51,21 @@ inline __attribute__((always_inline)) uint32_t fast_udiv_124(uint32_t n) {
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_130(uint32_t n) {
-    // Uses embedding style magic number
-    // * fixed point 1/12 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
     return (((uint64_t)n * 0xFC0FC0FD) >> 32) >> 7;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_140(uint32_t n) {
-    // Uses embedding style magic number
-    // * fixed point 1/12 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
     return (((uint64_t)n * 0xEA0EA0EB) >> 32) >> 7;
 }
 
 template <uint32_t d>
 inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n) {
-    if constexpr (d == 12) {
+    // Uses embedding style magic number
+    // * fixed point 1/12 then shifting.
+    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
+    if constexpr (d == 7) {
+        return fast_udiv_7(n);
+    } else if constexpr (d == 12) {
         // fast divide for 12 divisor
         return fast_udiv_12(n);
     } else if constexpr (d == 56) {
@@ -100,6 +78,10 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
     } else if constexpr (d == 94) {
         // fast divide for 94 divisor. Handles Banked L1 address generation for E75
         return fast_udiv_94(n);
+    } else if constexpr (d == 110) {
+        return fast_udiv_110(n);
+    } else if constexpr (d == 120) {
+        return fast_udiv_120(n);
     } else if constexpr (d == 124) {
         return fast_udiv_124(n);
     } else if constexpr (d == 130) {

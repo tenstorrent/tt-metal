@@ -20,9 +20,6 @@ from models.demos.llama3_subdevices.tt.model_config import (
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
-from models.demos.llama3_subdevices.tt.llama_common import (
-    check_mesh_tensor_alloc,
-)
 
 
 SUB_DEVICE_CRS = ttnn.CoreRangeSet(
@@ -154,7 +151,6 @@ def run_all_reduce_impl(
         memory_config=input_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
-    check_mesh_tensor_alloc(tt_input_tensor)
 
     intermediate_tensor = torch.zeros(intermediate_shape)
     tt_intermediate_tensors = []
@@ -168,8 +164,6 @@ def run_all_reduce_impl(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
 
-        # Validate that the tensor is allocated in same location across devices
-        check_mesh_tensor_alloc(tt_intermediate_tensor)
         tt_intermediate_tensors.append(tt_intermediate_tensor)
 
     # All-Reduce Golden
@@ -373,7 +367,7 @@ def test_all_reduce(
 ):
     if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
         pytest.skip("Skipping LM Head test with bfloat16 due to OOM")
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     profiler = BenchmarkProfiler()
@@ -461,7 +455,7 @@ def test_all_reduce_loopback(
     use_program_cache,
     function_level_defaults,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     run_all_reduce_impl(

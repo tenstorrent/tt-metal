@@ -115,6 +115,7 @@ from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
     wait_for_event,
+    event_synchronize,
 )
 
 from ttnn._ttnn.operations.trace import (
@@ -187,6 +188,14 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    CBFormatDescriptor,
+    CBDescriptor,
+    ReaderConfigDescriptor,
+    WriterConfigDescriptor,
+    ComputeConfigDescriptor,
+    KernelDescriptor,
+    SemaphoreDescriptor,
+    ProgramDescriptor,
 )
 
 from ttnn.device import (
@@ -196,8 +205,6 @@ from ttnn.device import (
     DispatchCoreConfig,
     open_device,
     close_device,
-    enable_program_cache,
-    disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
     dump_device_memory_state,
@@ -348,6 +355,8 @@ from ttnn.operations.conv2d import (
     Conv2dSliceWidth,
     prepare_conv_weights,
     prepare_conv_bias,
+    prepare_conv_transpose2d_weights,
+    prepare_conv_transpose2d_bias,
 )
 from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,

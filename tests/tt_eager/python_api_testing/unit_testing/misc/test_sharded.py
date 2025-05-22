@@ -1852,9 +1852,9 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
             interleaved_mem_config,
         )
 
-    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()[:, :, :1, :]
+    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
-    y = torch.max(x, 2, True)[0]
+    y = torch.amax(x, 2)
 
     if dtype == ttnn.bfloat16:
         passing, output = comp_equal(y, tt_got_back)
@@ -2366,6 +2366,7 @@ def test_interleaved_2_sharded_DRAM(device, dtype, y):
     yt = ttnn.interleaved_to_sharded(xt, shard_grid, (y // 8, 18 * 32), shard_scheme, ttnn.ShardOrientation.ROW_MAJOR)
 
 
+@skip_for_blackhole("Failing on harvested BH, see #21144")
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "seq_len",

@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "hw/inc/grayskull/tensix_types.h"
+#include "tensix_types.h"
 
 // #define DEBUG
 #ifdef DEBUG

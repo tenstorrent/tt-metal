@@ -2,25 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from transformers import AutoImageProcessor, SegformerForSemanticSegmentation
-from PIL import Image
-import os
-import torch
-import ttnn
-from torch.utils.data import Dataset, DataLoader
-import numpy as np
-import torch
-import evaluate
-import pytest
 import math
+import os
+
+import evaluate
+import numpy as np
+import pytest
+import torch
 from loguru import logger
-from tests.ttnn.integration_tests.segformer.test_segformer_for_semantic_segmentation import create_custom_preprocessor
-from tests.ttnn.integration_tests.segformer.test_segformer_model import move_to_device
+from PIL import Image
+from torch.utils.data import DataLoader, Dataset
+from transformers import AutoImageProcessor, SegformerForSemanticSegmentation
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
 from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
     SegformerForSemanticSegmentationReference,
 )
 from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import TtSegformerForSemanticSegmentation
+from tests.ttnn.integration_tests.segformer.test_segformer_for_semantic_segmentation import create_custom_preprocessor
+from tests.ttnn.integration_tests.segformer.test_segformer_model import move_to_device
 
 
 class SemanticSegmentationDataset(Dataset):

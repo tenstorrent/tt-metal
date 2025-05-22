@@ -4,15 +4,13 @@
 
 
 import torch
-
 from loguru import logger
+from tt_lib.utils import pad_activation, pad_weight
 
 import ttnn
-
-from models.demos.metal_BERT_large_11.tt.embeddings import TtEmbeddings
 from models.demos.metal_BERT_large_11.tt.bert_encoder import TtBertEncoder
-
-from tt_lib.utils import pad_activation, pad_weight
+from models.demos.metal_BERT_large_11.tt.embeddings import TtEmbeddings
+from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 
 
 class TtBertBatchDram:
@@ -43,30 +41,42 @@ class TtBertBatchDram:
 
         num_classes, hidden_size = state_dict["qa_outputs.weight"].shape
 
+        qa_weight_path = None
+        qa_bias_path = None
         if tt_cache_path is not None:
-            weight = ttnn.load_tensor(
-                str(tt_cache_path / f"qa_outputs.weight_{self.model_config['QA_LINEAR_WEIGHTS_DTYPE'].name}.bin")
-            ).to(device, self.model_config["QA_LINEAR_WEIGHTS_MEMCFG"])
-            bias = ttnn.load_tensor(
-                str(tt_cache_path / f"qa_outputs.bias_{self.model_config['QA_LINEAR_BIAS_DTYPE'].name}.bin")
-            ).to(device, self.model_config["QA_LINEAR_BIAS_MEMCFG"])
-        else:
-            weight = pad_weight(torch.transpose(state_dict["qa_outputs.weight"], -2, -1))
-            weight = ttnn.from_torch(
-                weight,
-                model_config["QA_LINEAR_WEIGHTS_DTYPE"],
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=model_config["QA_LINEAR_WEIGHTS_MEMCFG"],
+            qa_weight_path = str(
+                f"{tt_cache_path}/qa_outputs.weight_{self.model_config['QA_LINEAR_WEIGHTS_DTYPE'].name}.bin"
             )
-            bias = pad_weight(state_dict["qa_outputs.bias"])
-            bias = ttnn.from_torch(
-                bias,
-                model_config["QA_LINEAR_BIAS_DTYPE"],
+            qa_bias_path = str(f"{tt_cache_path}/qa_outputs.bias_{self.model_config['QA_LINEAR_BIAS_DTYPE'].name}.bin")
+
+        def compute_qa_weight():
+            weight_torch = pad_weight(torch.transpose(state_dict["qa_outputs.weight"], -2, -1))
+            return ttnn.from_torch(
+                weight_torch,
+                dtype=model_config["QA_LINEAR_WEIGHTS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=model_config["QA_LINEAR_BIAS_MEMCFG"],
             )
+
+        def compute_qa_bias():
+            bias_torch = pad_weight(state_dict["qa_outputs.bias"])
+            return ttnn.from_torch(
+                bias_torch,
+                dtype=model_config["QA_LINEAR_BIAS_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+            )
+
+        weight = load_or_compute_and_cache(
+            qa_weight_path,
+            compute_qa_weight,
+            device=device,
+            mem_config=self.model_config["QA_LINEAR_WEIGHTS_MEMCFG"],
+        )
+        bias = load_or_compute_and_cache(
+            qa_bias_path,
+            compute_qa_bias,
+            device=device,
+            mem_config=self.model_config["QA_LINEAR_BIAS_MEMCFG"],
+        )
 
         # QA linear
         # TODO: Replace with custom op with fused bias?

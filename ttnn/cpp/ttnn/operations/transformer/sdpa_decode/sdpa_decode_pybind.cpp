@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "sdpa_decode.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::transformer {
 
