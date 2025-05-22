@@ -30,8 +30,7 @@ uint32_t get_bf16_pool_scalar(
     std::optional<uint32_t> pad_h,
     std::optional<uint32_t> pad_w,
     std::optional<uint32_t> out_nhw_per_core,
-    std::vector<uint32_t>* sinchronization_indexes,
-    std::vector<uint32_t>* scalars) {
+    std::vector<ScalarInfo>* scalars) {
     float value;
     bool first_scalar = true;
     uint32_t packed_first_value = 0;
@@ -43,11 +42,9 @@ uint32_t get_bf16_pool_scalar(
         case Pool2DType::MAX_POOL2D:
             value = 1.;
             packed_first_value = bfloat16(value).to_packed();
+
             if (scalars != nullptr) {
-                scalars->push_back(packed_first_value);
-            }
-            if (sinchronization_indexes != nullptr) {
-                sinchronization_indexes->push_back(0);
+                scalars->push_back({0, packed_first_value, out_nhw_per_core.value_or(0) - 1});
             }
             break;
         case Pool2DType::AVG_POOL2D:
@@ -55,10 +52,7 @@ uint32_t get_bf16_pool_scalar(
                 value = 1. / (float)divisor_override.value();
                 packed_first_value = bfloat16(value).to_packed();
                 if (scalars != nullptr) {
-                    scalars->push_back(packed_first_value);
-                }
-                if (sinchronization_indexes != nullptr) {
-                    sinchronization_indexes->push_back(0);
+                    scalars->push_back({0, packed_first_value, out_nhw_per_core.value_or(0) - 1});
                 }
             } else if (ceil_mode.value_or(false) && (ceil_w.value_or(0) > 0 || ceil_h.value_or(0) > 0)) {
                 for (uint32_t i = 0; i < out_nhw_per_core.value(); i++) {
@@ -88,10 +82,8 @@ uint32_t get_bf16_pool_scalar(
                             packed_first_value = bfloat16(value).to_packed();
                         }
                         if (scalars != nullptr) {
-                            scalars->push_back(bfloat16(value).to_packed());
-                        }
-                        if (sinchronization_indexes != nullptr) {
-                            sinchronization_indexes->push_back(i);
+                            scalars->back().end = i - 1;
+                            scalars->push_back({i, bfloat16(value).to_packed(), i});
                         }
                         first_scalar = false;
                     }
@@ -106,14 +98,14 @@ uint32_t get_bf16_pool_scalar(
                 value = 1. / (float)(kernel_h * kernel_w);
                 packed_first_value = bfloat16(value).to_packed();
                 if (scalars != nullptr) {
-                    scalars->push_back(packed_first_value);
-                }
-                if (sinchronization_indexes != nullptr) {
-                    sinchronization_indexes->push_back(0);
+                    scalars->push_back({0, packed_first_value, out_nhw_per_core.value_or(0) - 1});
                 }
             }
             break;
         default: TT_FATAL(false, "Unsupported pool operation type");
+    }
+    if (scalars != nullptr) {
+        scalars->back().end = out_nhw_per_core.value_or(0) - 1;
     }
     return packed_first_value;
 }
