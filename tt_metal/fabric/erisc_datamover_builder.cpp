@@ -202,8 +202,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     constexpr std::array<std::pair<size_t, size_t>, 1> linear_buffer_slot_options = {std::pair<size_t, size_t>{8, 16}};
     constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options = {
         std::pair<size_t, size_t>{8, 8}, std::pair<size_t, size_t>{4, 8}};
-    constexpr std::array<std::pair<size_t, size_t>, 1> ring_buffer_slot_options_dateline = {
-        std::pair<size_t, size_t>{16, 16}};
+    constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options_dateline = {
+        std::pair<size_t, size_t>{16, 16}, std::pair<size_t, size_t>{8, 8}};
 
     std::array<size_t, num_sender_channels> num_sender_buffer_slots = {0};
     std::array<size_t, num_sender_channels> num_remote_sender_buffer_slots = {0};
@@ -228,26 +228,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         }
     };
 
-    auto num_alive_sender_channels = 0;
-    auto num_alive_receiver_channels = 0;
     auto dateline_sender_channel_skip_idx = 2;
     auto dateline_receiver_channel_skip_idx = 0;
     auto dateline_upstream_sender_channel_skip_idx = 1;
     auto dateline_upstream_receiver_channel_skip_idx = 1;
 
-    switch (edm_type) {
-        case FabricEriscDatamoverType::Default:
-        case FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
-            num_alive_sender_channels = this->num_used_sender_channels;
-            num_alive_receiver_channels = this->num_used_receiver_channels;
-            break;
-        case FabricEriscDatamoverType::Dateline:
-        case FabricEriscDatamoverType::DatelineUpstream:
-            num_alive_sender_channels = this->num_used_sender_channels - 1;
-            num_alive_receiver_channels = this->num_used_receiver_channels - 1;
-            break;
-        default: TT_THROW("unsupported edm types!");
-    }
     bool is_dateline = edm_type == FabricEriscDatamoverType::Dateline;
     bool is_dateline_upstream = edm_type == FabricEriscDatamoverType::DatelineUpstream;
 
@@ -257,8 +242,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         // get the default buffer slots
         get_optimal_num_slots(
             ring_buffer_slot_options,
-            num_alive_sender_channels,
-            num_alive_receiver_channels,
+            this->num_used_sender_channels,
+            this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
             default_num_receiver_buffer_slots);
         // get the dateline buffer slots
@@ -266,8 +251,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         size_t dateline_num_receiver_buffer_slots;
         get_optimal_num_slots(
             ring_buffer_slot_options_dateline,
-            num_alive_sender_channels,
-            num_alive_receiver_channels,
+            this->num_used_sender_channels - 1,
+            this->num_used_receiver_channels - 1,
             dateline_num_sender_buffer_slots,
             dateline_num_receiver_buffer_slots);
 
@@ -304,7 +289,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         switch (edm_type) {
             case FabricEriscDatamoverType::Dateline:
                 // set num_sender_buffer_slots
-                num_alive_sender_channels = this->num_used_sender_channels - 1;
                 for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
                     bool skip_current_channel = i == dateline_sender_channel_skip_idx;
                     if (skip_current_channel) {
