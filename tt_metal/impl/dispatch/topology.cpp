@@ -12,7 +12,6 @@
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
-#include <initializer_list>
 #include <map>
 #include <typeinfo>
 #include <memory>
@@ -235,6 +234,29 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
 
     // D2H via MUX
     {9, 1, 0, 0, FABRIC_MUX, /*Full size*/ {7}, /*Header Only*/ {6}, k_fabric_mux_noc},
+};
+
+static const std::vector<DispatchKernelNode> two_chip_arch_2cq_fabric = {
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, k_prefetcher_noc},
+    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, k_prefetcher_noc},
+    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, k_dispatcher_noc},
+    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {x, x, x, x}, k_dispatcher_noc},
+
+    {4, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {9, 8, x, x}, k_prefetcher_noc},
+    {5, 0, 1, 1, PREFETCH_H, {x, x, x, x}, {10, 8, x, x}, k_prefetcher_noc},
+    {6, 0, 1, 0, DISPATCH_H, {11, x, x, x}, {4, 8, x, x}, k_dispatcher_noc},
+    {7, 0, 1, 1, DISPATCH_H, {12, x, x, x}, {5, 8, x, x}, k_dispatcher_noc},
+
+    // H2D via MUX
+    {8, 0, 1, 0, FABRIC_MUX, /*Full size*/ {4, 5}, /*Header Only*/ {6, 7}, k_fabric_mux_noc},
+
+    {9, 1, x, 0, PREFETCH_D, {4, x, x, x}, {11, 13, x, x}, k_prefetcher_noc},
+    {10, 1, x, 1, PREFETCH_D, {5, x, x, x}, {12, 13, x, x}, k_prefetcher_noc},
+    {11, 1, x, 0, DISPATCH_D, {9, x, x, x}, {6, 13, x, x}, k_dispatcher_noc},
+    {12, 1, x, 1, DISPATCH_D, {10, x, x, x}, {7, 13, x, x}, k_dispatcher_noc},
+
+    // D2H via MUX
+    {13, 1, 0, 0, FABRIC_MUX, /*Full size*/ {11, 12}, /*Header Only*/ {9, 10}, k_fabric_mux_noc},
 };
 
 static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_1cq = {
@@ -621,13 +643,8 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                 "N300/T3K expects devices in mmio/remote pairs.");
             std::vector<DispatchKernelNode> nodes_for_one_mmio;
             // TODO: Put this in a better place
-            if (tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
-                TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
-                // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
-                nodes_for_one_mmio = two_chip_arch_1cq_fabric;
-            } else {
-                nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq : two_chip_arch_2cq;
-            }
+            // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
+            nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq_fabric : two_chip_arch_2cq_fabric;
 
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
@@ -1238,6 +1255,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     }
 
     std::map<string, string> defines = {};
+    defines["TT_FABRIC_KERNEL"] = "1";
     const auto topology = fabric_context.get_fabric_topology();
     if (topology == tt::tt_fabric::Topology::Mesh) {
         defines["FABRIC_2D"] = "";

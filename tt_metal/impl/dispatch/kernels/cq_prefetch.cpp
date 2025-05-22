@@ -1683,10 +1683,12 @@ void kernel_main() {
         is_h_variant && is_d_variant>
         mux_connection_scope(edm_sender);
 
-    DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": in. upstream_noc_xy: " << HEX() << upstream_noc_xy
-           << " downstream_noc_xy: " << HEX() << downstream_noc_xy << " my_downstream_cb_sem_id: 0x" << HEX()
+    DPRINT << "prefetcher_" << is_h_variant << is_d_variant << " " << (uint32_t)my_x[0] << ", " << (uint32_t)my_y[0]
+           << ": in. upstream_noc_xy: " << HEX() << upstream_noc_xy << " downstream_noc_xy: " << HEX()
+           << downstream_noc_xy << " my_downstream_cb_sem_id: 0x" << HEX()
            << get_semaphore<fd_core_type>(my_downstream_cb_sem_id) << " my_upstream_cb_sem_id: 0x" << HEX()
-           << get_semaphore<fd_core_type>(my_upstream_cb_sem_id) << ENDL();
+           << get_semaphore<fd_core_type>(my_upstream_cb_sem_id) << " mux base addr: 0x" << HEX()
+           << (uint32_t)fabric_mux_channel_base_address << ENDL();
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();

@@ -16,7 +16,6 @@
 #include "dprint_server.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
-#include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "mux.hpp"

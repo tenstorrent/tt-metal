@@ -1223,8 +1223,7 @@ static inline bool process_cmd_h(
     bool done = false;
 
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
-    DPRINT << "dispatch_" << is_h_variant << is_d_variant << DEC() << " PROCESS_CMD_H " << (uint32_t)cmd->base.cmd_id
-           << ENDL();
+
     DeviceTimestampedData("process_cmd_h_dispatch", (uint32_t)cmd->base.cmd_id);
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
@@ -1286,8 +1285,9 @@ void kernel_main() {
         is_h_variant && is_d_variant>
         mux_connection_scope(edm_sender);
 
-    DPRINT << "dispatcher_" << is_h_variant << is_d_variant << ": in. upstream_noc_xy: " << HEX() << upstream_noc_xy
-           << " downstream_noc_xy: " << HEX() << downstream_noc_xy << " my_downstream_cb_sem_id: 0x" << HEX()
+    DPRINT << "dispatcher_" << is_h_variant << is_d_variant << " " << (uint32_t)my_x[0] << ", " << (uint32_t)my_y[0]
+           << ": in. upstream_noc_xy: " << HEX() << upstream_noc_xy << " downstream_noc_xy: " << HEX()
+           << downstream_noc_xy << " my_downstream_cb_sem_id: 0x" << HEX()
            << get_semaphore<fd_core_type>(my_downstream_cb_sem_id) << " my_dispatch_cb_sem_id: 0x" << HEX()
            << get_semaphore<fd_core_type>(my_dispatch_cb_sem_id) << ENDL();
 

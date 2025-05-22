@@ -1078,23 +1078,15 @@ bool Device::close() {
     DprintServerDetach(this->id());
     watcher_detach(this->id());
 
-    // Assert worker cores only for this device
-    auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(this->id());
-    auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(this->id());
-
     CoreCoord grid_size = this->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
-            if (!dispatch_cores.contains(worker_core) && !routing_cores.contains(worker_core)) {
-                if (!this->storage_only_cores_.contains(logical_core)) {
-                    tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
-                        tt_cxy_pair(this->id(), worker_core));
-                }
-            } else {
-                log_debug(tt::LogMetal, "{} will not be Reset when closing Device {}", worker_core.str(), this->id());
+            if (!this->storage_only_cores_.contains(logical_core)) {
+                tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
+                    tt_cxy_pair(this->id(), worker_core));
             }
         }
     }

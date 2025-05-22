@@ -5,10 +5,13 @@
 #include "fabric_mux.hpp"
 #include "context/metal_context.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch_core_common.hpp"
 #include "fabric/fabric_mux_config.hpp"
 #include "hal_types.hpp"
+#include "logger.hpp"
 #include "tt_align.hpp"
 #include "tt_metal.hpp"
+#include "umd/device/tt_core_coordinates.h"
 #include <algorithm>
 #include <tt-metalium/fabric.hpp>
 
@@ -84,25 +87,14 @@ void FabricMux::GenerateStaticConfigs() {
 
     mux_rt_args.clear();
     tt_fabric::append_fabric_connection_rt_args(
-        device_id_, servicing_device_id_, 0, *program_, {logical_core_}, mux_rt_args);
+        device_id_, servicing_device_id_, 0, *program_, {logical_core_}, mux_rt_args, GetCoreType());
 }
 
 void FabricMux::GenerateDependentConfigs() {}
 
 void FabricMux::CreateKernel() {
-    std::map<string, string> defines = {
-        {"DISPATCH_KERNEL", "1"},
-    };
-
-    auto mux_kernel = tt::tt_metal::CreateKernel(
-        *program_,
-        dispatch_kernel_file_names[FABRIC_MUX],
-        logical_core_,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = mux_ct_args,
-            .defines = defines});
+    auto mux_kernel =
+        configure_kernel_variant(dispatch_kernel_file_names[FABRIC_MUX], mux_ct_args, {}, false, false, false);
 
     tt::tt_metal::SetRuntimeArgs(*program_, mux_kernel, logical_core_, mux_rt_args);
 }
@@ -111,7 +103,7 @@ void FabricMux::ConfigureCore() {
     // TODO: Only need to clear the read/write pointers to 0
     std::vector<uint32_t> mux_zero_vec((mux_kernel_config_->get_num_bytes_to_clear() / sizeof(uint32_t)), 0);
     tt::tt_metal::detail::WriteToDeviceL1(
-        device_, logical_core_, mux_kernel_config_->get_start_address_to_clear(), mux_zero_vec);
+        device_, logical_core_, mux_kernel_config_->get_start_address_to_clear(), mux_zero_vec, GetCoreType());
 }
 
 int FabricMux::GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const {
