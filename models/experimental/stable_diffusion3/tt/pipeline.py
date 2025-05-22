@@ -49,7 +49,7 @@ class TtStableDiffusion3Pipeline:
             torch_text_encoder_3 = T5EncoderModel.from_pretrained(
                 checkpoint,
                 subfolder="text_encoder_3",
-                dtype=torch.bfloat16,
+                torch_dtype=torch.bfloat16,
             )
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint, subfolder="scheduler")
         vae = AutoencoderKL.from_pretrained(
