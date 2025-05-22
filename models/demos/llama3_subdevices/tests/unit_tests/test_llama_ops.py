@@ -339,20 +339,22 @@ def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
     use_program_cache,
     pcc,
 ):
-    run_test_paged_fused_update_cache_decode(
-        paged_update,
-        cache_idx,
-        block_size,
-        head_dim,
-        max_seq_len,
-        num_users,
-        num_heads,
-        input_dtype,
-        cache_dtype,
-        device,
-        pcc,
-        row_major=True,
-    )
+    for _ in range(2):
+        run_test_paged_fused_update_cache_decode(
+            paged_update,
+            cache_idx,
+            block_size,
+            head_dim,
+            max_seq_len,
+            num_users,
+            num_heads,
+            input_dtype,
+            cache_dtype,
+            device,
+            pcc,
+            row_major=True,
+        )
+    assert device.num_program_cache_entries() == 1
 
 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")

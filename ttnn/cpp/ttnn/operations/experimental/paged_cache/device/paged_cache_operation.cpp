@@ -30,7 +30,7 @@ void PagedUpdateCacheDeviceOperation::validate(
         }
     };
 
-    const auto validateTensorBasics = [](const Tensor& cache_tensor, const Tensor& input_tensor) {
+    const auto validateTensorBasics = [this](const Tensor& cache_tensor, const Tensor& input_tensor) {
         // Device and storage validation
         TT_FATAL(
             input_tensor.storage_type() == StorageType::DEVICE && cache_tensor.storage_type() == StorageType::DEVICE,
@@ -42,7 +42,7 @@ void PagedUpdateCacheDeviceOperation::validate(
             "Operands to update_cache need to be allocated in buffers on device!");
 
         // Layout and data type validation
-        if (op_type == PagedUpdateCacheOpType::UPDATE) {
+        if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
             TT_FATAL(
                 input_tensor.get_layout() == Layout::TILE, "Input tensor in non-fused update_cache must be tilized");
         }
