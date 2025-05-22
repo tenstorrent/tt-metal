@@ -836,9 +836,10 @@ class ModelArgs:
                         )
                     lm_head_num_rows = 8
             self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
-            self.max_columns_per_device_lm_head = (
-                128256 // 8 if is_blackhole() else 668 * self.lm_head_core_grid.num_cores
-            )  # FIXME: figure out a per-core value for BH
+            # 128256 comes from original llama 3 vocab size. 128256 / 4 was experimentally the maximum columns that worked per device.
+            # The LM head for that was on 48 cores, so we know 128256 / 4 / 48 = 668 columns per core is close to the L1 limit.
+            # FIXME: Update blackhole figure to be per-core as well.
+            self.max_columns_per_device_lm_head = 128256 // 8 if is_blackhole() else 668 * self.lm_head_core_grid.num_cores
 
             self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
