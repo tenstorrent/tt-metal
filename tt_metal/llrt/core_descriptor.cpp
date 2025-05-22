@@ -32,6 +32,7 @@ inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
     string core_desc_dir;
+    string base_file;
     if (getenv("TT_METAL_HOME")) {
         core_desc_dir = getenv("TT_METAL_HOME");
     } else {
@@ -62,9 +63,14 @@ inline std::string get_core_descriptor_file(
                                             ? "wormhole_b0_80_arch_eth_dispatch.yaml"
                                             : "wormhole_b0_80_arch.yaml");
             case tt::ARCH::BLACKHOLE:
+                base_file = "blackhole_140_arch.yaml";
+                if (auto* env = getenv("TT_METAL_SIMULATE_BOS")) {
+                    log_info(tt::LogDevice, "using simulated BOS core descriptor!");
+                    base_file = "blackhole_24_BOS_arch.yaml";
+                }
                 return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
                                             ? "blackhole_140_arch_eth_dispatch.yaml"
-                                            : "blackhole_140_arch.yaml");
+                                            : base_file);
             case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
         };
     }
