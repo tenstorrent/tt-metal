@@ -260,8 +260,8 @@ public:
 
     uint32_t get_stack_size(uint32_t type) const { return stack_size_func_(type); }
 
-    std::vector<uint32_t> get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
-    std::vector<uint32_t> get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
+    const std::vector<uint32_t>& get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
+    const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
