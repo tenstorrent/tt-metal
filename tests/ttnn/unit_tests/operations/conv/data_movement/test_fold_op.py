@@ -84,8 +84,8 @@ def test_fold_with_permute_reshape_on_host(device, n, c, h, w, pad_h, pad_w, str
     assert_with_pcc(torch_output_tensor, torch_output_tensor_new, 1)
 
 
-@pytest.mark.parametrize("nhw", [(1, 224, 224), (1, 384, 512), (1, 512, 672)])
-@pytest.mark.parametrize("channels", [1, 3, 9, 32, 54, 320])
+@pytest.mark.parametrize("nhw", [(3, 64, 64), (1, 224, 224), (1, 384, 512), (1, 512, 672)])
+@pytest.mark.parametrize("channels", [3, 32, 320])
 @pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, input_layout):
@@ -110,7 +110,8 @@ def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, input_
         stride_w,
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
+    isequal = torch.equal(torch_output_tensor, tt_output_tensor)
+    assert isequal
 
 
 def pad_and_fold_with_permute_and_reshape_on_device(

@@ -32,51 +32,62 @@ void kernel_main() {
     // Initialize DRAM address generator
     const InterleavedAddrGen<true> d = {.bank_base_address = dst_addr, .page_size = stick_nbytes};
 
-    // Calculate output dimensions and patch size
-    uint32_t OH = input_height / stride_height;                         // Output height
-    uint32_t OW = input_width / stride_width;                           // Output width
-    uint32_t patch_size = stride_height * stride_width;                 // Size of each patch
+    // Pre-calculate output dimensions and patch size - moved outside loops
+    const uint32_t OH = input_height / stride_height;                   // Output height
+    const uint32_t OW = input_width / stride_width;                     // Output width
+    const uint32_t patch_size = stride_height * stride_width;           // Size of each patch
     const uint32_t W_PAD = TILE_HEIGHT;                                 // Width padding
     const uint32_t C_PAD = TILE_WIDTH * element_size * ntiles_per_row;  // Channel padding
 
-    // Calculate tile dimensions
-    uint32_t tile_cols = (input_width + W_PAD - 1) / W_PAD;  // Number of tile columns
-    uint32_t tiles_per_batch = input_height * tile_cols;     // Tiles per batch
+    // Calculate tile dimensions - moved outside loops
+    const uint32_t tile_cols = (input_width + W_PAD - 1) / W_PAD;  // Number of tile columns
+    const uint32_t tiles_per_batch = input_height * tile_cols;     // Tiles per batch
 
-    uint32_t end_block_id = start_block_id + num_blocks;
+    const uint32_t end_block_id = start_block_id + num_blocks;
     for (uint32_t i = start_block_id; i < end_block_id; ++i) {
         // Wait for input data to be available
         cb_wait_front(cb_id_in1, ntiles_per_row);
         uint64_t l1_read_addr = get_read_ptr(cb_id_in1);
 
-        // Calculate batch and position indices
-        uint32_t batch_idx = i / tiles_per_batch;    // Batch index
-        uint32_t bh_index = i % tiles_per_batch;     // Index within batch
-        uint32_t height_idx = bh_index / tile_cols;  // Height index
-        uint32_t tile_col = bh_index % tile_cols;    // Tile column index
+        // Pre-calculate batch and position indices - moved outside inner loop
+        const uint32_t batch_idx = i / tiles_per_batch;    // Batch index
+        const uint32_t bh_index = i % tiles_per_batch;     // Index within batch
+        const uint32_t height_idx = bh_index / tile_cols;  // Height index
+        const uint32_t tile_col = bh_index % tile_cols;    // Tile column index
 
-        uint32_t kernel_row_offset = (height_idx % stride_height) * stride_width;
-        uint32_t output_row_idx = height_idx / stride_height;
+        const uint32_t kernel_row_offset = (height_idx % stride_height) * stride_width;
+        const uint32_t output_row_idx = height_idx / stride_height;
+        const uint32_t base_dst_row = batch_idx * OH * OW + output_row_idx * OW;
 
         // Process each element in the tile
-        uint32_t w_start = tile_col * W_PAD;
-        uint32_t w_end = (w_start + W_PAD > input_width) ? input_width : w_start + W_PAD;
+        const uint32_t w_start = tile_col * W_PAD;
+        const uint32_t w_end = (w_start + W_PAD > input_width) ? input_width : w_start + W_PAD;
+
+        // Pre-calculate as much as possible before entering the inner loop
+        uint32_t width_idx = w_start;
+        uint32_t out_width_idx = width_idx / stride_width;
+        uint32_t kernel_width_idx = width_idx % stride_width;
+
+        // Pre-compute values for the entire inner loop range
         for (uint32_t w_local = 0; w_start + w_local < w_end; ++w_local) {
-            uint32_t width_idx = w_start + w_local;
-            uint64_t src = l1_read_addr + w_local * C_PAD;
+            const uint64_t src = l1_read_addr + w_local * C_PAD;
 
-            // Calculate output indices based on stride
-            uint32_t out_width_idx = width_idx / stride_width;
-            uint32_t kernel_width_idx = width_idx % stride_width;
-
-            // Calculate destination address
-            uint32_t dst_row = batch_idx * OH * OW + output_row_idx * OW + out_width_idx;
-            uint32_t dst_col = kernel_row_offset + kernel_width_idx;
-            uint64_t dst = dst_row * patch_size + dst_col;
-            uint64_t dst_addr_ = get_noc_addr(dst, d);
+            // Use pre-calculated values where possible
+            const uint32_t dst_row = base_dst_row + out_width_idx;
+            const uint32_t dst_col = kernel_row_offset + kernel_width_idx;
+            const uint64_t dst = dst_row * patch_size + dst_col;
+            const uint64_t dst_addr_ = get_noc_addr(dst, d);
 
             // Write data to DRAM
             noc_async_write(src, dst_addr_, stick_nbytes);
+
+            // Update indices for next iteration
+            width_idx++;
+            kernel_width_idx++;
+            if (kernel_width_idx == stride_width) {
+                kernel_width_idx = 0;
+                out_width_idx++;
+            }
         }
         // Ensure all writes are completed
         noc_async_write_barrier();

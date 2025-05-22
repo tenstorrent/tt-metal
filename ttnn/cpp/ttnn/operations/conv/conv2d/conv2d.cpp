@@ -403,16 +403,15 @@ Result conv2d_L1(
     std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     if (conv_config.enable_kernel_stride_folding) {
-        if (input_height % stride[0] != 0 || input_width % stride[1] != 0) {
-            TT_FATAL(true, "Input height and width must be divisible by stride for kernel stride folding.");
-        }
+        TT_FATAL(input_height % stride[0] == 0, "Input height must be divisible by stride for kernel stride folding.");
+        TT_FATAL(input_width % stride[1] == 0, "Input width must be divisible by stride for kernel stride folding.");
         // Fold the input tensor to reduce spatial dimensions by stride factors, effectively converting
         // a large kernel convolution into a matmul operation.
         input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);
         // If the weight is not preprocessed on device, fold it.
-        if (!tt::tt_metal::is_device_tensor(weight_tensor)) {
+        if (!tt::tt_metal::is_device_tensor(weight_tensor) || conv_config.always_preprocess_weights) {
             weight_tensor =
-                fold_tensor(weight_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, true);
+                fold_tensor(weight_tensor, device, stride, kernel_size, padding_n4, conv_config.weights_dtype, true);
         }
         // If the bias is not on device, move it to device.
         if (bias_tensor.has_value()) {
@@ -502,7 +501,9 @@ Result conv2d_L1(
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     // If kernel stride folding is enabled, we don't need to preprocess weights.
-    if (!conv_config.enable_kernel_stride_folding) {
+    if (conv_config.enable_kernel_stride_folding) {
+        // Skip weight preprocessing for kernel stride folding
+    } else {
         if (!weight_is_on_device || conv_config.always_preprocess_weights) {
             // prepare weights in desired layout and move to device
 

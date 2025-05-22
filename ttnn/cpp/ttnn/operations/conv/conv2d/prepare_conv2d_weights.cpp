@@ -35,7 +35,7 @@ ttnn::Tensor fold_tensor(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 4> padding_n4,
-    DataType dtype,
+    std::optional<DataType> dtype,
     bool is_weight_tensor) {
     // Validation checks
     TT_FATAL(
@@ -48,7 +48,10 @@ ttnn::Tensor fold_tensor(
     TT_FATAL(
         padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0,
         "Padding must be 0 for folding");
-    TT_FATAL(dtype != tt_metal::DataType::BFLOAT8_B, "Conv2D DRAM folding currently doesn't support BFLOAT8_B");
+    if (!dtype.has_value()) {
+        dtype = tensor.get_dtype();
+    }
+    TT_FATAL(dtype.value() != tt_metal::DataType::BFLOAT8_B, "Conv2D DRAM folding currently doesn't support BFLOAT8_B");
 
     // Move to device if needed
     ttnn::Tensor tensor_on_device = tensor;

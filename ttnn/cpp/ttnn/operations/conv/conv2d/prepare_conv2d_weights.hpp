@@ -70,7 +70,7 @@ ttnn::Tensor fold_tensor(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 4> padding_n4,
-    DataType dtype,
+    std::optional<DataType> dtype,
     bool is_weight_tensor = false);
 
 template <typename T>

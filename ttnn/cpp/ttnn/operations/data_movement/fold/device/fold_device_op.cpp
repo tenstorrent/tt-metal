@@ -41,11 +41,11 @@ void validate_fold(
             (input_shape[-1] * input_tensor.element_size()) % 16 == 0,
             "Fold: Expect input tensor's pages to be multiples of 16 bytes.");
     } else if (is_dram_interleaved) {
-        TT_FATAL(input_shape[1] % stride_h == 0, "Error");
-        TT_FATAL(input_shape[2] % stride_w == 0, "Error");
+        TT_FATAL(input_shape[1] % stride_h == 0, "Fold: Input height must be divisible by stride_h.");
+        TT_FATAL(input_shape[2] % stride_w == 0, "Fold: Input width must be divisible by stride_w.");
     } else {
-        TT_FATAL(input_shape[1] % stride_h == 0, "Error");
-        TT_FATAL(input_shape[2] % stride_w == 0, "Error");
+        TT_FATAL(input_shape[1] % stride_h == 0, "Fold: Input height must be divisible by stride_h.");
+        TT_FATAL(input_shape[2] % stride_w == 0, "Fold: Input width must be divisible by stride_w.");
         TT_FATAL(
             (input_shape[-1] * input_tensor.element_size()) % 16 == 0,
             "Fold: Expect input tensor's pages to be multiples of 16 bytes.");
