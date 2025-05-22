@@ -3,14 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gather_device_operation.hpp"
+#include <sys/types.h>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::gather {
 
+constexpr uint32_t WT_THRESHOLD = 60;
+
 GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return gather::program::GatherProgramFactory{};
+    // Calculate Wt to decide which program factory to use
+    const auto input_tensor_shape = tensor_args.input_tensor.get_padded_shape();
+    const auto input_index_tensor_shape = tensor_args.input_index_tensor.get_padded_shape();
+    const uint32_t Wt_input = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    const uint32_t Wt_index = input_index_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    // TODO: Remove comment
+    // if (Wt_input > WT_THRESHOLD || Wt_index > WT_THRESHOLD) {
+    // Use GatherProgramFactorySRMC for larger Wt
+    return gather::program::GatherProgramFactorySRMC{};
+    // }
+    // return gather::program::GatherProgramFactorySRSC{};
 }
 
 void GatherDeviceOperation::validate_on_program_cache_hit(

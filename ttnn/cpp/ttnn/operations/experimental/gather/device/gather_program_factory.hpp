@@ -14,8 +14,8 @@
 
 namespace ttnn::operations::experimental::gather::program {
 using namespace tt::tt_metal;
-
-struct GatherProgramFactory {
+// Single row - single core (horizontal parallelism)
+struct GatherProgramFactorySRSC {
     struct shared_variables_t {
         KernelHandle gather_reader_kernel_id;
         KernelHandle gather_writer_kernel_id;
@@ -29,4 +29,19 @@ struct GatherProgramFactory {
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
+// Single row - multi core (vertical parallelism)
+struct GatherProgramFactorySRMC {
+    struct shared_variables_t {
+        // KernelHandle gather_reader_kernel_id;
+        // KernelHandle gather_writer_kernel_id;
+        // TODO: add kernel handles
+        CoreCoord storage_grid_size;
+    };
+
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static void override_runtime_arguments(
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+};
 }  // namespace ttnn::operations::experimental::gather::program

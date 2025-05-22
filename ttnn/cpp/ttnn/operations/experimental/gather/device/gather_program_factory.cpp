@@ -9,8 +9,8 @@
 #include <tt-metalium/util.hpp>
 
 namespace ttnn::operations::experimental::gather::program {
-
-GatherProgramFactory::cached_program_t GatherProgramFactory::create(
+// Single row - single core (horizontal parallelism)
+GatherProgramFactorySRSC::cached_program_t GatherProgramFactorySRSC::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     tt::tt_metal::Program program{};
 
@@ -196,7 +196,7 @@ GatherProgramFactory::cached_program_t GatherProgramFactory::create(
     return {std::move(program), {gather_reader_kernel_id, gather_writer_kernel_id, compute_with_storage_grid_size}};
 }
 
-void GatherProgramFactory::override_runtime_arguments(
+void GatherProgramFactorySRSC::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
@@ -237,5 +237,24 @@ void GatherProgramFactory::override_runtime_arguments(
             }
         }  // core_x loop
     }  // core_y loop
+}
+
+// Single row - multi core (vertical parallelism)
+GatherProgramFactorySRMC::cached_program_t GatherProgramFactorySRMC::create(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    tt::tt_metal::Program program{};
+
+    tt::log_error("GatherProgramFactorySRMC::create not implemented");
+
+    return {std::move(program), {}};
+}
+
+void GatherProgramFactorySRMC::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    // TODO: Implement this function
+    tt::log_error("GatherProgramFactorySRMC::override_runtime_arguments not implemented");
 }
 }  // namespace ttnn::operations::experimental::gather::program
