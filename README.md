@@ -181,5 +181,16 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 - [Matmul Multi_core Reuse (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_reuse.md)
 - [Matmul Multi_core Multi-Cast (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_mcast.md)
 
+### Tools and Instruments
+
+#### [TT_NN Visualizer](https://github.com/tenstorrent/ttnn-visualizer)
+A comprehensive tool for visualizing and analyzing model execution, offering interactive graphs, memory plots, tensor details, buffer overviews, operation flow graphs, and multi-instance support with file or SSH-based report loading.
+Install via pip or build from source:
+```bash
+pip install ttnn-visualizer
+```
+
+
+
 ### Tenstorrent Bounty Program Terms and Conditions
 This repo is a part of Tenstorrent’s bounty program. If you are interested in helping to improve tt-metal, please make sure to read the [Tenstorrent Bounty Program Terms and Conditions](https://docs.tenstorrent.com/bounty_terms.html) before heading to the issues tab. Look for the issues that are tagged with both “bounty” and difficulty level!
