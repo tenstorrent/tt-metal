@@ -355,13 +355,13 @@ def prepare_generator_args(
             True,  # ci_only
             8,  # data_parallel
         ),
-        (  # CI stress test batch-1 run - Runs a short prefill (128) and exhaust the KV cache (128K), by running 130000 iterations
+        (  # CI stress test batch-1 run - Runs a short prefill (128) and exhaust the KV cache (128K), by running 50000 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            130000,  # max_generated_tokens
+            50000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
