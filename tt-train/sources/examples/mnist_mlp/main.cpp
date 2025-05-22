@@ -283,8 +283,9 @@ int main(int argc, char **argv) {
         output = run_model(model, data);
         loss = ttml::ops::cross_entropy_loss(output, target);
         optimizer.zero_grad();
-        loss->backward(/*retain_graph=*/true);
+        loss->backward();
         optimizer.step();
+        ttml::autograd::ctx().reset_graph();
     };
 
     auto full_step = [&](const auto &data, const auto &target) {

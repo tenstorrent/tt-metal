@@ -5,7 +5,6 @@
 #include "adamw.hpp"
 
 #include "autograd/autocast_tensor.hpp"
-#include "autograd/module_base.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
