@@ -82,6 +82,8 @@ enum SfpuType {
     unary_eq,
     unary_gt,
     unary_lt,
+    unary_ge,
+    unary_le,
     softplus,
     tiled_prod,
     bitwise_xor,
