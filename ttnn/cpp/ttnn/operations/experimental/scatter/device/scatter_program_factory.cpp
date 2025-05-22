@@ -54,6 +54,7 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t num_src_tiles = src_tensor.volume() / TILE_HW;
     const uint32_t num_output_tiles = output_tensor.volume() / TILE_HW;
 
+    const uint32_t logical_index_height = index_shape[0] * index_shape[1] * index_shape[2];
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     const uint32_t Wt_input = input_shape[3] / TILE_WIDTH;
     const uint32_t Wt_index = index_shape[3] / TILE_WIDTH;
@@ -107,6 +108,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
          static_cast<uint32_t>(ScatterCB::SRC),
          static_cast<uint32_t>(ScatterCB::DST),
          Wt_input,
+         index_tensor.get_logical_shape()[-1],
+         logical_index_height,
          Wt_index,
          Ht,
          total_number_of_cores,
@@ -118,7 +121,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         CoreRangeSet{core},
         ReaderDataMovementConfig{compile_time_args},
         compile_time_args);
-
     auto writer_kernel = create_kernel(
         program,
         writer_kernel_path,

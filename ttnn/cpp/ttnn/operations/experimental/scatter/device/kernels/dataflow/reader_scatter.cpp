@@ -24,8 +24,10 @@ FORCE_INLINE void read_wt_tiles(
 
 template <typename unsigned_type, typename number_type>
 FORCE_INLINE void scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push_to_output(
-    const uint32_t& Ht,
+    const uint32_t& h,
     const uint32_t& Wt_input,
+    const uint32_t& logical_index_width,
+    const uint32_t& logical_index_height,
     const uint32_t& Wt_index,
     const uint32_t& input_cb,
     const uint32_t& index_cb,
@@ -34,6 +36,7 @@ FORCE_INLINE void scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push
     // working with Wt_input (== Wt_index) tiles at the same time - will implement a full algo with sorting soon.
     cb_wait_front(input_cb, Wt_input);
     cb_wait_front(index_cb, Wt_index);
+    cb_wait_front(source_cb, Wt_index);
 
     cb_reserve_back(output_cb, Wt_input);
     const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
@@ -54,29 +57,49 @@ FORCE_INLINE void scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push
         output_l1_ptr[i] = input_l1_ptr[i];
     }
 
-    for (uint32_t face_x = 0; face_x < 2; ++face_x) {
-        for (uint32_t face_y = 0; face_y < 2; ++face_y) {
-            for (uint32_t scalar_x = 0; scalar_x < 16; ++scalar_x) {
-                for (uint32_t scalar_y = 0; scalar_y < 16; ++scalar_y) {
-                    // get scatter info
-                    volatile unsigned_type& index_value =
-                        tile_guts<unsigned_type>(index_l1_ptr, face_x, face_y, scalar_x, scalar_y);
-                    volatile number_type& source_value =
-                        tile_guts<number_type>(source_l1_ptr, face_x, face_y, scalar_x, scalar_y);
-                    const uint32_t dest_tile_id_in_row = index_value / 32;
-                    const uint32_t x_index_in_tile = index_value % 32;
-                    const uint32_t dest_scalar_x = (x_index_in_tile < 16) ? x_index_in_tile : (x_index_in_tile - 16);
-                    const uint32_t dest_face_id_x = (x_index_in_tile < 16) ? 0 : 1;
+    DPRINT << "h: " << h << ENDL();
+    DPRINT << "Wt_index: " << Wt_index << ENDL();
+    DPRINT << "logical_index_width: " << logical_index_width << ENDL();
 
-                    // scatter the value
-                    tile_guts<number_type>(
-                        output_l1_ptr, dest_face_id_x, face_y, dest_scalar_x, scalar_y, dest_tile_id_in_row) =
-                        source_value;
+    // scatter along Wt tiles
+    for (uint32_t tile_id = 0; tile_id < Wt_index; ++tile_id) {
+        for (uint32_t face_x = 0; face_x < 2; ++face_x) {
+            for (uint32_t face_y = 0; face_y < 2; ++face_y) {
+                for (uint32_t scalar_x = 0; scalar_x < 16; ++scalar_x) {
+                    for (uint32_t scalar_y = 0; scalar_y < 16; ++scalar_y) {
+                        const uint32_t width_scalar_index = get_width_scalar_index(tile_id, face_x, scalar_x);
+                        const uint32_t height_scalar_index = get_height_scalar_index(h, face_y, scalar_y);
+                        if (width_scalar_index >= logical_index_width || height_scalar_index >= logical_index_height) {
+                            continue;
+                        }
+
+                        // get scatter info
+                        volatile unsigned_type& index_value =
+                            tile_guts<unsigned_type>(index_l1_ptr, face_x, face_y, scalar_x, scalar_y, tile_id);
+                        if (index_value >= logical_index_width) {
+                            continue;
+                        }
+                        volatile number_type& source_value =
+                            tile_guts<number_type>(source_l1_ptr, face_x, face_y, scalar_x, scalar_y, tile_id);
+                        const uint32_t dest_tile_id_in_row = index_value / 32;
+                        const uint32_t x_index_in_tile = index_value % 32;
+                        const uint32_t dest_scalar_x =
+                            (x_index_in_tile < 16) ? x_index_in_tile : (x_index_in_tile - 16);
+                        const uint32_t dest_face_id_x = (x_index_in_tile < 16) ? 0 : 1;
+
+                        // scatter the value
+                        tile_guts<number_type>(
+                            output_l1_ptr, dest_face_id_x, face_y, dest_scalar_x, scalar_y, dest_tile_id_in_row) =
+                            source_value;
+                    }
                 }
             }
         }
     }
     cb_push_back(output_cb, Wt_input);
+    cb_pop_front(input_cb, Wt_input);
+    cb_pop_front(index_cb, Wt_index);
+    cb_pop_front(source_cb, Wt_index);
 }
 
 // TODO(jbbieniekTT): stream-scatter after sorting
@@ -115,18 +138,17 @@ void kernel_main() {
 
     for (uint32_t h = 0; h < ctas.Ht; ++h) {
         // first phase: read input/index/src
-        DPRINT << "READING EVERYTHING Wt_input = " << ctas.Wt_input << ENDL();
         read_wt_tiles<ctas.input_tensor_is_dram>(input_addr_gtor, ctas.input_tensor_cb, ctas.Wt_input, h);
-        DPRINT << "INPUT TENSOR READ" << ENDL();
         read_wt_tiles<ctas.index_tensor_is_dram>(index_addr_gtor, ctas.index_tensor_cb, ctas.Wt_index, h);
-        DPRINT << "INDEX TENSOR READ" << ENDL();
         read_wt_tiles<ctas.source_tensor_is_dram>(source_addr_gtor, ctas.source_tensor_cb, ctas.Wt_index, h);
-        DPRINT << "SOURCE TENSDR READ" << ENDL();
 
         // second phase: copy input to output + scatter src onto output + push output
+        // TODO(jbbieniekTT): infer proper data types
         scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push_to_output<uint32_t, float>(
-            ctas.Ht,
+            h,
             ctas.Wt_input,
+            ctas.logical_index_width,
+            ctas.logical_index_height,
             ctas.Wt_index,
             ctas.input_tensor_cb,
             ctas.index_tensor_cb,
