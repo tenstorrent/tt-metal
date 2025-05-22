@@ -246,6 +246,7 @@ static void watcher_loop(int sleep_usecs) {
 }  // namespace watcher
 
 void watcher_init(chip_id_t device_id) {
+    const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
     std::vector<uint32_t> watcher_init_val;
     watcher_init_val.resize(sizeof(watcher_msg_t) / sizeof(uint32_t), 0);
     watcher_msg_t* data = reinterpret_cast<watcher_msg_t*>(&(watcher_init_val[0]));
@@ -460,13 +461,15 @@ void watcher_attach(chip_id_t device_id) {
 
     // Always register the device w/ watcher, even if disabled
     // This allows dump() to be called from debugger
-    watcher::devices.emplace(
-        device_id,
-        watcher::WatcherDeviceReader(
-            watcher::logfile, device_id, watcher::kernel_names, &watcher::set_watcher_exception_message));
+    watcher::devices.try_emplace(
+        device_id, watcher::logfile, device_id, watcher::kernel_names, &watcher::set_watcher_exception_message);
 }
 
 void watcher_detach(chip_id_t device_id) {
+    if (!tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+        // TODO: reinstate this after watcher server singleton is removed.
+        return;
+    }
     {
         const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 

@@ -188,11 +188,6 @@ int main() {
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
-#ifndef ARCH_BLACKHOLE
-        while (1) {
-            RISC_POST_HEARTBEAT(heartbeat);
-        }
-#endif
     }
 
     return 0;
