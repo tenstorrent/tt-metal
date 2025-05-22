@@ -12,6 +12,8 @@
 
 namespace tt::tt_fabric {
 
+namespace fabric_router_tests {
+
 static const std::array<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>, 5>
     t3k_mesh_descriptor_chip_mappings = {
         std::tuple{
@@ -55,5 +57,7 @@ static const std::array<std::tuple<std::string, std::vector<std::vector<eth_coor
                 {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}},
                 {{0, 2, 1, 0, 0}},
                 {{0, 3, 1, 0, 0}}}}};
+
+}  // namespace fabric_router_tests
 
 }  // namespace tt::tt_fabric
