@@ -22,7 +22,6 @@ void ScatterDeviceOperation::validate_on_program_cache_hit(
 void ScatterDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor{tensor_args.input_tensor};
-    const int32_t dim{(args.dim < 0) ? (args.dim + input_tensor.get_padded_shape().rank()) : args.dim};
     const auto& index_tensor{tensor_args.index_tensor};
     const auto& src_tensor{tensor_args.src_tensor};
     const auto& input_dtype{input_tensor.get_dtype()};
@@ -34,6 +33,14 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const uint32_t input_rank{input_shape.rank()};
     const uint32_t index_rank{index_shape.rank()};
     const uint32_t src_rank{src_shape.rank()};
+
+    TT_FATAL(
+        args.dim < static_cast<int32_t>(input_rank) && -static_cast<int32_t>(input_rank) <= args.dim,
+        "dim must follow the condition -input_rank <= dim < input_rank (dim: {}, rank: {}).",
+        args.dim,
+        static_cast<int32_t>(input_rank));
+
+    const int32_t dim{(args.dim < 0) ? (args.dim + input_tensor.get_padded_shape().rank()) : args.dim};
 
     if (tensor_args.opt_output.has_value()) {
         const auto& output_tensor{tensor_args.opt_output.value()};
@@ -64,6 +71,9 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
             dim,
             static_cast<int32_t>(output_rank));
 
+        TT_FATAL(
+            output_tensor.get_layout() == Layout::TILE,
+            "Output tensor doesn't have a tile layout - only tile layout is supported.");
         TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor's buffer is null.");
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor must be allocated on a device.");
         TT_FATAL(!output_tensor.is_sharded(), "Sharded tensors are not supported - output_tensor is sharded.");
@@ -93,23 +103,26 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
         "index_dtype is not integer, it is {}.",
         magic_enum::enum_name(index_dtype));
 
+    TT_FATAL(
+        index_shape[dim] <= input_shape[dim],
+        "Index tensor's scatter axis (dimension no {}) bigger than input tensor's (input_shape[scatter_axis]: {}, "
+        "index_shape[scatter_axis]: {})",
+        static_cast<int32_t>(args.dim),
+        input_shape[dim],
+        index_shape[dim]);
+
     for (uint32_t probe_dim = 0; probe_dim < input_shape.rank(); ++probe_dim) {
         if (probe_dim != dim) {
             TT_FATAL(
                 index_shape[probe_dim] == input_shape[probe_dim],
-                "Index tensor has dimension no {} other than input shape (index dimension: {}, input_dimension: "
+                "Index tensor has other dimension {}'s length than input shape's (index dimension: {}, "
+                "input_dimension: "
                 "{}).",
                 probe_dim,
                 index_shape[probe_dim],
                 input_shape[probe_dim]);
         }
     }
-
-    TT_FATAL(
-        dim < static_cast<int32_t>(input_rank),
-        "dim must be lower than input shape's positive rank (dim: {}, rank: {}).",
-        dim,
-        static_cast<int32_t>(input_rank));
 
     TT_FATAL(!input_tensor.is_sharded(), "Sharded tensors are not supported - input_tensor is sharded.");
     TT_FATAL(!index_tensor.is_sharded(), "Sharded tensors are not supported - index_tensor is sharded.");
