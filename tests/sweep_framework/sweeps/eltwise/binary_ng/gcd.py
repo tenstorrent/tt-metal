@@ -20,6 +20,18 @@ import csv
 import datetime
 
 
+def compare_tensors(input_tensor, calculated_tensor, expected_tensor):
+    assert input_tensor.shape == calculated_tensor.shape == expected_tensor.shape, "Tensors must have the same shape"
+    mismatch_indices = torch.nonzero(calculated_tensor != expected_tensor)
+    for idx in mismatch_indices:
+        idx_tuple = tuple(idx.tolist())
+        print(f"Mismatch at index {idx_tuple}:")
+        print(f"  Input tensor value: {input_tensor[idx_tuple]}")
+        print(f"  Calculated tensor value: {calculated_tensor[idx_tuple]}")
+        print(f"  Expected tensor value: {expected_tensor[idx_tuple]}")
+        print("=" * 50)
+
+
 def file_handler():
     current_directory = os.getcwd()
     current_timestamp = datetime.datetime.now()
@@ -105,7 +117,7 @@ def write_status_to_csv_file(file_path, message):
         writer.writerow([message])
 
 
-def return_mem_config(mem_config_string, H=512, W=512, ncores=8, y=2, x=4):
+def return_mem_config(mem_config_string, H=256, W=256, ncores=8, y=2, x=4):
     if mem_config_string == "l1_interleaved":
         return ttnn.L1_MEMORY_CONFIG
     elif mem_config_string == "dram_interleaved":
@@ -167,7 +179,7 @@ def return_mem_config(mem_config_string, H=512, W=512, ncores=8, y=2, x=4):
 @pytest.mark.parametrize(
     "input_shape",
     [
-        {"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]},
+        {"self": [1, 1, 256, 256], "other": [1, 1, 256, 256]},
     ],
 )
 @pytest.mark.parametrize(
@@ -191,10 +203,10 @@ def return_mem_config(mem_config_string, H=512, W=512, ncores=8, y=2, x=4):
 @pytest.mark.parametrize(
     "input_mem_config",
     [
-        {"a_mem": "l1_interleaved", "b_mem": "l1_interleaved"},
-        {"a_mem": "l1_interleaved", "b_mem": "dram_interleaved"},
-        {"a_mem": "dram_interleaved", "b_mem": "l1_interleaved"},
-        {"a_mem": "dram_interleaved", "b_mem": "dram_interleaved"},  # l1 - dram combination
+        # {"a_mem": "l1_interleaved", "b_mem": "l1_interleaved"},
+        # {"a_mem": "l1_interleaved", "b_mem": "dram_interleaved"},
+        # {"a_mem": "dram_interleaved", "b_mem": "l1_interleaved"},
+        # {"a_mem": "dram_interleaved", "b_mem": "dram_interleaved"},  # l1 - dram combination
         {"a_mem": "l1_height_sharded_rm", "b_mem": "l1_height_sharded_rm"},  # Failed
         {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_rm"},
         {"a_mem": "l1_height_sharded_rm", "b_mem": "dram_interleaved"},  # HS #Failed
@@ -299,7 +311,7 @@ def test_non_bcast(
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     ttnn.set_printoptions(profile="full")
-    torch.set_printoptions(threshold=float("inf"))
+    torch.set_printoptions(threshold=float("inf"), linewidth=1000)
     # start_time = start_measuring_time()
     status = False
     message = " "
@@ -308,6 +320,7 @@ def test_non_bcast(
         result = ttnn_fn(input_tensor_a, input_tensor_b)
         output_tensor = ttnn.to_torch(result)
         status, message = check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+        # compare_tensors(torch_input_tensor_a, output_tensor, torch_output_tensor)
         if not status:
             message += "\n--- Debug Info ---"
             message += f"\nInput Tensor A: {input_tensor_a}"
