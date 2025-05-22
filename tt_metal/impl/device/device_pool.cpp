@@ -421,6 +421,27 @@ IDevice* DevicePool::get_device(chip_id_t id) const {
     return it->get();
 }
 
+std::size_t DevicePool::get_max_num_eth_cores_across_all_devices() const {
+    // This API is needed due to Issue #19729:
+    // Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
+    // Records the maximum number of active ethernet cores across all devices opened in the cluster.
+    // TT-Mesh dispatch assumes that all physical devices in the Mesh have the maximum number of active
+    // ethernet cores (uniformity assumption)
+    // Dispatch firmware running on each physical device knows how many ethernet cores are actually
+    // available and will dispatch to/wait on the correct number of cores (effectively ignoring the
+    // value host dispatch provides, if its incorrect).
+    std::size_t max_eth_core_count = 0;
+    for (const auto& device : this->devices) {
+        max_eth_core_count = std::max(
+            MetalContext::instance()
+                .get_cluster()
+                .get_active_ethernet_cores(device->id(), /*skip_reserved_tunnel_cores*/ true)
+                .size(),
+            max_eth_core_count);
+    }
+    return max_eth_core_count;
+}
+
 void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     std::set<chip_id_t> devices_to_activate;
     if (this->skip_remote_devices) {
@@ -446,27 +467,6 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     for (const auto& device_id : devices_to_activate) {
         if (not this->is_device_active(device_id)) {
             this->activate_device(device_id);
-        }
-    }
-    // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
-    // Record the maximum number of active ethernet cores across all devices.
-    // TT-Mesh dispatch assumes that all physical devices in the Mesh have the maximum number of active
-    // ethernet cores (uniformity assumption)
-    // Dispatch firmware running on each physical device knows how many ethernet cores are actually
-    // available and will dispatch to/wait on the correct number of cores (effectively ignoring the
-    // value host dispatch provides, if its incorrect).
-    if (use_max_eth_core_count_on_all_devices_) {
-        std::size_t max_eth_core_count = 0;
-        for (const auto& device : this->devices) {
-            max_eth_core_count = std::max(
-                MetalContext::instance()
-                    .get_cluster()
-                    .get_active_ethernet_cores(device->id(), /*skip_reserved_tunnel_cores*/ true)
-                    .size(),
-                max_eth_core_count);
-        }
-        for (auto& device : this->devices) {
-            dynamic_cast<Device*>(device.get())->set_ethernet_core_count_on_dispatcher(max_eth_core_count);
         }
     }
 
