@@ -6,8 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
-#include <limits>
 
 using namespace sfpi;
 
@@ -16,12 +14,12 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_rsqrt() {
-    _calculate_rsqrt_<APPROXIMATION_MODE, ITERATIONS>();
+    _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS, true>();
 }
 
 template <bool APPROXIMATION_MODE>
 void rsqrt_init() {
-    _init_rsqrt_<APPROXIMATION_MODE>();
+    _init_sqrt_<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu
