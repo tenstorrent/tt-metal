@@ -87,14 +87,6 @@ def run_tt_iteration(
     i,
 ):
     B, C, H, W = input_shape
-    if isinstance(input_tensor, torch.Tensor):
-        input_tensor = ttnn.from_torch(
-            input_tensor,
-            dtype=ttnn.bfloat16,
-            device=ttnn_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
 
     input_tensor = tt_scheduler.scale_model_input(input_tensor, tt_scheduler.tt_timesteps[i])
     ttnn_noise_pred, output_shape = tt_unet.forward(
