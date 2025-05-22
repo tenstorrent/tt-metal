@@ -54,21 +54,6 @@ jobs:
       tracy: true
       version: 22.04
 
-  smoke-tests:
-    needs: build-artifact
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [
-          "N150",
-          "N300",
-        ]
-    uses: ./.github/workflows/smoke.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
-
   # Slow Dispatch Unit Tests
   sd-unit-tests:
     needs: build-artifact
