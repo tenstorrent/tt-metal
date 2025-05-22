@@ -1093,6 +1093,8 @@ void build_tt_fabric_program(
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const auto& fabric_context = control_plane->get_fabric_context();
     const auto& edm_config = fabric_context.get_fabric_router_config();
+    const auto risc_core_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
     if (is_TG && device->is_mmio_capable()) {
         auto router_chans_and_direction =
@@ -1103,7 +1105,8 @@ void build_tt_fabric_program(
             auto remote_chip_id = device->id() + 1;
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders_for_cores;
-            for (size_t risc_id = 0; risc_id < (device->arch() == ARCH::BLACKHOLE ? 2 : 1); risc_id++) {
+
+            for (size_t risc_id = 0; risc_id < risc_core_count; risc_id++) {
                 auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                     device,
                     *fabric_program_ptr,
@@ -1188,7 +1191,7 @@ void build_tt_fabric_program(
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders_for_cores;
-            for (size_t risc_id = 0; risc_id < (device->arch() == ARCH::BLACKHOLE ? 2 : 1); risc_id++) {
+            for (size_t risc_id = 0; risc_id < risc_core_count; risc_id++) {
                 auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                     device,
                     *fabric_program_ptr,
@@ -1230,7 +1233,7 @@ void build_tt_fabric_program(
 
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
-                for (size_t risc_id = 0; risc_id < (device->arch() == ARCH::BLACKHOLE ? 2 : 1); risc_id++) {
+                for (size_t risc_id = 0; risc_id < risc_core_count; risc_id++) {
                     edm_builder1[risc_id].connect_to_downstream_edm(edm_builder2[risc_id]);
                     edm_builder2[risc_id].connect_to_downstream_edm(edm_builder1[risc_id]);
 
