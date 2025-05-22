@@ -86,25 +86,13 @@ jobs:
           if [[ "${{ matrix.test-group.runner-label }}" == "config-t3000" ]]; then
             export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
             export MESH_DEVICE="T3K"
-            export TT_LLAMA_TEXT_VER="tt_transformers"
           fi
 
-          # Set TT Cache path
-          MODEL_ID="${{ matrix.test-group.model }}"
-          MODEL_NAME="${MODEL_ID/\//--}"
+          export HF_MODEL="${{ matrix.test-group.model }}"
+
+          # Keep TT cache separate from HF hub
+          MODEL_NAME="${HF_MODEL/\//--}"
           export TT_CACHE_PATH="$HF_HOME/tt_cache/$MODEL_NAME"
-
-          case "$MODEL_ID" in
-            "meta-llama/Llama-3.1-8B-Instruct")
-              MODEL_SNAPSHOT="hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659/"
-              ;;
-            *)
-              echo "❌ Unknown model: ${{ matrix.test-group.model }}"
-              exit 1
-              ;;
-          esac
-
-          export HF_MODEL="$HF_HOME/$MODEL_SNAPSHOT"
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
@@ -113,6 +101,9 @@ jobs:
             --model ${{ matrix.test-group.model }} \
             "${OVERRIDE_TT_CONFIG[@]}" \
             > ./output/vllm_server.log 2>&1 &
+
+          # Store server's pid for cleanup
+          echo $! > ./server.pid
 
       - name: ⏰ Wait for server to be ready
         run: |
@@ -124,7 +115,7 @@ jobs:
 
           while [ $elapsed -lt $timeout_seconds ]; do
             if curl -sf http://localhost:8000/health; then
-              echo "Server is up!"
+              echo "Server is up! 🚀"
               exit 0
             fi
             sleep $interval
@@ -150,6 +141,17 @@ jobs:
             --save-result \
             --result-filename output/vllm_result.json \
             2>&1 | tee output/vllm_benchmark.log
+
+      - name: 🧹 Cleanup server process
+        if: always()
+        run: |
+          file = ./server.pid
+          if [ -f "$file" ]; then
+            pid = $(cat $file)
+            kill "$pid" 2>/dev/null || true
+            echo "Server process with pid $pid terminated 🧹"
+            rm -f "$file"
+          fi
 
       - name: Show report
         if: always()
