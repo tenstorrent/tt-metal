@@ -40,6 +40,7 @@ class TtConv:
         enable_split_reader=False,
         reshard_if_not_optimal=True,
         batch_size=1,
+        alternate_conv_compute_config=False,
     ):
         self.device = device
         self.parameters = parameters
@@ -62,6 +63,7 @@ class TtConv:
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
         self.reshape_tensor = reshape_tensor
+        self.alternate_conv_compute_config = alternate_conv_compute_config
 
         self.conv_config = self._initialize_conv_config()
         self.conv_1x1_config = self.default_1x1_conv_config()
@@ -121,7 +123,21 @@ class TtConv:
         )
 
     def default_1x1_conv_config(self):
-        return None
+        if self.alternate_conv_compute_config:
+            return ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        return ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
 
     def is_1x1_conv(self, kernel_size, stride, padding, dilation, conv_config):
         return (
@@ -143,6 +159,7 @@ class TtConv:
             input_height = int(math.sqrt(x.shape[2]) // self.batch_size)
             input_width = int(math.sqrt(x.shape[2]) // self.batch_size)
 
+        # print("kernel_size", str(self.input_params[0])+" ,"+ str(self.input_params[0]))
         [x, [out_height, out_width], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weights,
@@ -185,6 +202,7 @@ class TtConv:
         return x, out_height, out_width
 
 
+# 2 convs
 class TtBottleneck:
     def __init__(
         self,
@@ -228,6 +246,7 @@ class TtBottleneck:
         return ttnn.add(x, cv2, memory_config=x.memory_config()) if self.shortcut else cv2
 
 
+# 2 + n convs
 class TtC2f:
     def __init__(
         self,
@@ -327,6 +346,7 @@ class TtC2f:
         return x, out_h, out_w
 
 
+# 2 convs
 class TtSPPF:
     def __init__(self, device, parameters, input_params, batch_size):
         self.device = device
@@ -335,7 +355,12 @@ class TtSPPF:
         self.batch_size = batch_size
         self.cv1 = TtConv(device, parameters["cv1"], input_params=input_params[0], deallocate_activation=True)
         self.cv2 = TtConv(
-            device, parameters["cv2"], input_params=input_params[1], change_shard=True, deallocate_activation=True
+            device,
+            parameters["cv2"],
+            input_params=input_params[1],
+            change_shard=True,
+            deallocate_activation=True,
+            alternate_conv_compute_config=True,
         )
 
     def __call__(self, x):
@@ -374,6 +399,7 @@ class TtSPPF:
         return x, out_h, out_w
 
 
+# 2 convs
 class TtMaxSigmoidAttnBlock:
     """Max Sigmoid attention block."""
 
@@ -473,6 +499,7 @@ class TtMaxSigmoidAttnBlock:
         return ttnn.reshape(x, (1, 1, x.shape[1] * x.shape[2], x.shape[3])), h, w
 
 
+# 1 + n*2 + 2 + 1 = 4 + n*2
 class TtC2fAttn:
     """C2f module with an additional attn module."""
 
@@ -491,6 +518,8 @@ class TtC2fAttn:
         gc=512,
         g=1,
         e=0.5,
+        alternate_conv_compute_config_cv1=False,
+        alternate_conv_compute_config_cv2=False,
     ):
         """Initializes C2f module with attention mechanism for enhanced feature extraction and processing."""
         super().__init__()
@@ -506,6 +535,7 @@ class TtC2fAttn:
             self.parameters["cv1"],
             input_params=input_params[0],
             deallocate_activation=self.deallocate_activation,
+            alternate_conv_compute_config=alternate_conv_compute_config_cv1,
         )
         self.cv2 = TtConv(
             self.device,
@@ -513,6 +543,7 @@ class TtC2fAttn:
             input_params=input_params[1],
             change_shard=True,
             deallocate_activation=self.deallocate_activation,
+            alternate_conv_compute_config=alternate_conv_compute_config_cv2,
         )
         self.m = [
             TtBottleneck(
@@ -566,6 +597,7 @@ class TtC2fAttn:
         return x, out_h, out_w
 
 
+# len(ch) convs
 class TtImagePoolingAttn:
     """ImagePoolingAttn: Enhance the text embeddings with image-aware information."""
 
@@ -740,6 +772,7 @@ class TtImagePoolingAttn:
         return x
 
 
+# 1 conv
 class TtDFL:
     def __init__(self, device, parameters, input_params):
         self.device = device
@@ -762,6 +795,7 @@ class TtDFL:
         return x
 
 
+# 0 conv
 class TtContrastiveHead:
     """Implements contrastive learning head for region-text similarity in vision-language models."""
 
@@ -1012,6 +1046,7 @@ class TtWorldModel:
                 input_params=[3, 2, 1, 64, 32],
                 deallocate_activation=True,
             ),
+            # 2
             TtC2f(
                 device, parameters["model"][2], n=1, shortcut=True, input_params=c2f_configs["model.2"]["input_params"]
             ),
@@ -1021,6 +1056,7 @@ class TtWorldModel:
                 input_params=[3, 2, 1, 128, 64],
                 deallocate_activation=True,
             ),
+            # 2+2 =4
             TtC2f(
                 device, parameters["model"][4], n=2, shortcut=True, input_params=c2f_configs["model.4"]["input_params"]
             ),
@@ -1030,6 +1066,7 @@ class TtWorldModel:
                 input_params=[3, 2, 1, 256, 128],
                 # deallocate_activation=True,
             ),
+            # 4 + 2 = 6
             TtC2f(
                 device, parameters["model"][6], n=2, shortcut=True, input_params=c2f_configs["model.6"]["input_params"]
             ),
@@ -1039,12 +1076,15 @@ class TtWorldModel:
                 input_params=[3, 2, 1, 512, 256],
                 # deallocate_activation=True,
             ),
+            # 6 + 2 = 8
             TtC2f(
                 device, parameters["model"][8], n=1, shortcut=True, input_params=c2f_configs["model.8"]["input_params"]
             ),
+            # 8 + 2 = 10
             TtSPPF(device, parameters["model"][9], input_params=sppf_configs["input_params"], batch_size=1),
             ttnn.upsample,
             ttnn.concat,
+            # 10 + 2 = 12
             TtC2fAttn(
                 device,
                 parameters["model"][12],
@@ -1054,9 +1094,11 @@ class TtWorldModel:
                 n=1,
                 ec=128,
                 nh=4,
+                alternate_conv_compute_config_cv2=True,
             ),
             ttnn.upsample,
             ttnn.concat,
+            # 12 + 2 = 14
             TtC2fAttn(
                 device,
                 parameters["model"][15],
@@ -1066,7 +1108,9 @@ class TtWorldModel:
                 n=1,
                 ec=64,
                 nh=2,
+                alternate_conv_compute_config_cv2=True,
             ),
+            # 14 + 3 = 17
             TtImagePoolingAttn(
                 device,
                 parameters["model"][16],
@@ -1081,6 +1125,7 @@ class TtWorldModel:
                 # deallocate_activation=True,
             ),
             ttnn.concat,
+            # 17 + 2 = 19
             TtC2fAttn(
                 device,
                 parameters["model"][19],
@@ -1090,6 +1135,7 @@ class TtWorldModel:
                 n=1,
                 ec=128,
                 nh=4,
+                alternate_conv_compute_config_cv2=True,
             ),
             TtConv(
                 device,
@@ -1098,6 +1144,7 @@ class TtWorldModel:
                 # deallocate_activation=True,
             ),
             ttnn.concat,
+            # 19 + 2 = 21
             TtC2fAttn(
                 device,
                 parameters["model"][22],
@@ -1107,7 +1154,9 @@ class TtWorldModel:
                 n=1,
                 ec=256,
                 nh=8,
+                alternate_conv_compute_config_cv2=True,
             ),
+            # 21 + 6 + 1 = 28
             TtWorldDetect(
                 device,
                 parameters["model"][23],
