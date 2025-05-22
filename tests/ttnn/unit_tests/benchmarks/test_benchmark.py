@@ -51,9 +51,9 @@ from models.utility_functions import is_grayskull, profiler, is_wormhole_b0, is_
 from pathlib import Path
 import os
 import numpy as np
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, rm
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, rm
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
