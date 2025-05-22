@@ -57,7 +57,7 @@ done
 
 # Function to run the profiling command and extract the CSV path
 run_profile_and_extract_csv() {
-    command="./tt_metal/tools/profiler/profile_this.py -n all_gather_async_$TARGET -c 'pytest tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_async_perf.py::test_all_gather_async_$TARGET'"
+    command="./tools/tracy/profile_this.py -n all_gather_async_$TARGET -c 'pytest tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_async_perf.py::test_all_gather_async_$TARGET'"
 
     if [ "$DEBUG" = true ]; then
         echo "Running profiling command for target $TARGET in debug mode..."
