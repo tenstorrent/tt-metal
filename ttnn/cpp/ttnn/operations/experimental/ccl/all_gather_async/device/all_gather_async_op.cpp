@@ -97,8 +97,16 @@ void AllGatherAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
+    AllGatherAsyncVersion version = select_version(input_tensor);
     auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
-    shape[this->dim] *= this->ring_size;
+
+    // Adjust shape for llama post binary mult+silu case to remove padding in the output tensor
+    if (version == AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED && shape[this->dim] == 960) {
+        shape[this->dim] = 896 * this->ring_size;
+    } else {
+        shape[this->dim] *= this->ring_size;
+    }
+
     return {TensorSpec(
         shape,
         TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
