@@ -233,7 +233,7 @@ def model_location_generator(is_ci_v2_env):
 
     :return: The path to the model files (internal MLPerf path, CI v2 cache
              path, or just model_version which uses HF_HOME)
-    :rtype: str
+    :rtype: os.PathLike (str, pathlib.Path etc.)
 
     :raises AssertionError: If trying to run in CIv2 environment with MLPerf
     files which is impossible, or if model_subdir contains unsupported
