@@ -60,3 +60,53 @@ install(
     REGEX
     "/kernels/"
 )
+
+
+install(
+    DIRECTORY
+        add_2_integers_in_compute
+    # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
+    # FIXME(afuller): Something funky is happening when installing files into /usr/share/doc on a default Docker image.
+    #                 Speculation: some dependency for magic doc handling is missing.
+    #                 For now keep it out of 'doc'.
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/tt-metalium/examples"
+    COMPONENT metalium-examples
+    REGEX
+    "/kernels/"
+        EXCLUDE
+)
+
+install(
+    DIRECTORY
+        add_2_integers_in_compute
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
+    COMPONENT metalium-examples
+    FILES_MATCHING
+    REGEX
+    "/kernels/"
+)
+
+
+install(
+    DIRECTORY
+        add_2_integers_in_riscv
+    # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
+    # FIXME(afuller): Something funky is happening when installing files into /usr/share/doc on a default Docker image.
+    #                 Speculation: some dependency for magic doc handling is missing.
+    #                 For now keep it out of 'doc'.
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/tt-metalium/examples"
+    COMPONENT metalium-examples
+    REGEX
+    "/kernels/"
+        EXCLUDE
+)
+
+install(
+    DIRECTORY
+        add_2_integers_in_riscv
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
+    COMPONENT metalium-examples
+    FILES_MATCHING
+    REGEX
+    "/kernels/"
+)
