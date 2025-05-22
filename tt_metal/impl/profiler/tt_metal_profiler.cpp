@@ -653,8 +653,10 @@ void ProfilerSync(ProfilerSyncState state) {
 
     if (state == ProfilerSyncState::CLOSE_DEVICE and do_sync_on_close) {
         do_sync_on_close = false;
-        auto device_0 = tt::DevicePool::instance().get_active_device(0);
-        syncDeviceHost(device_0, SYNC_CORE, false);
+        for (const auto& synced_with_host_device : deviceHostTimePair) {
+            auto deviceToSync = tt::DevicePool::instance().get_active_device(synced_with_host_device.first);
+            syncDeviceHost(deviceToSync, SYNC_CORE, false);
+        }
         //  If at least one sender reciever pair has been found
         if (first_connected_device_id != -1) {
             syncAllDevices(first_connected_device_id);

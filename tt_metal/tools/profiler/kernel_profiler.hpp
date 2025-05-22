@@ -323,7 +323,6 @@ __attribute__((noinline)) void quick_push() {
 
     if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
         return;
-        invalidate_l1_cache();
     }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
