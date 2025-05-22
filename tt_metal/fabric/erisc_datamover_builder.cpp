@@ -63,7 +63,31 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
-    for (uint32_t risc_id = 0; risc_id < FabricEriscDatamoverConfig::num_riscv_cores; risc_id++) {
+    this->num_riscv_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    receiver_channels_counters_address.resize(this->num_riscv_cores, {});
+    sender_channels_counters_address.resize(this->num_riscv_cores, {});
+    receivers_completed_packet_header_cb_address.resize(this->num_riscv_cores, {});
+    senders_completed_packet_header_cb_address.resize(this->num_riscv_cores, {});
+    is_sender_channel_serviced.resize(this->num_riscv_cores, {});
+    sender_channels_buffer_index_address.resize(this->num_riscv_cores, {});
+    sender_channels_worker_conn_info_base_address.resize(this->num_riscv_cores, {});
+    sender_channels_local_flow_control_semaphore_address.resize(this->num_riscv_cores, {});
+    sender_channels_producer_terminate_connection_address.resize(this->num_riscv_cores, {});
+    sender_channels_connection_semaphore_address.resize(this->num_riscv_cores, {});
+    sender_channels_buffer_index_semaphore_address.resize(this->num_riscv_cores, {});
+    is_receiver_channel_serviced.resize(this->num_riscv_cores, {});
+    receiver_channels_local_buffer_index_address.resize(this->num_riscv_cores, {});
+    receiver_channels_downstream_flow_control_semaphore_address.resize(this->num_riscv_cores, {});
+    receiver_channels_downstream_teardown_semaphore_address.resize(this->num_riscv_cores, {});
+    sender_channels_base_address.resize(this->num_riscv_cores, {});
+    receiver_channels_base_address.resize(this->num_riscv_cores, {});
+    enable_handshake.resize(this->num_riscv_cores, false);
+    enable_context_switch.resize(this->num_riscv_cores, false);
+    enable_interrupts.resize(this->num_riscv_cores, false);
+    iterations_between_ctx_switch_and_teardown_checks.resize(this->num_riscv_cores, 0);
+
+    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         if (shared_buffer_mode) {
             buffer_address = edm_status_address + field_size;
         }
@@ -129,10 +153,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, bool is_dateline, tt::ARCH arch) :
     FabricEriscDatamoverConfig(topology) {
-    this->num_used_riscv_cores = FabricEriscDatamoverConfig::num_riscv_cores;
-    if (arch == tt::ARCH::BLACKHOLE) {
-        this->num_used_riscv_cores += 1;
-    }
     this->sender_txq_id = 0;
     this->receiver_txq_id = 0;
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
@@ -153,7 +173,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->num_fwd_paths -= 1;
     }
 
-    for (uint32_t risc_id = 0; risc_id < this->num_used_riscv_cores; risc_id++) {
+    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         // TODO: update appropriately for each RISC-V core
         this->enable_context_switch[risc_id] = true;
         this->enable_handshake[risc_id] = true;
@@ -335,7 +355,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     }
 
     uint32_t buffer_addr = buffer_region_start;
-    for (uint32_t risc_id = 0; risc_id < this->num_used_riscv_cores; risc_id++) {
+    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         if (shared_buffer_mode) {
             buffer_addr = buffer_region_start;
         }
