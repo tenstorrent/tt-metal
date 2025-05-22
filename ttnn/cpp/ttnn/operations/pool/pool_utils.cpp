@@ -115,7 +115,7 @@ uint32_t get_bf16_pool_scalar(
     float value;
     bool first_scalar = true;
     uint32_t packed_first_value = 0;
-    uint32_t last_area_signature = 0;
+    uint32_t last_pool_area = 0;
     uint32_t out_x_stick = out_x.value_or(0);
     uint32_t out_y_stick = out_y.value_or(0);
 
@@ -179,7 +179,7 @@ uint32_t get_bf16_pool_scalar(
                     uint32_t area_signature = pool_h * pool_w;
 
                     // Add new scalar if padding config changes
-                    if (first_scalar || area_signature != last_area_signature) {
+                    if (first_scalar || (uint32_t)pool_area != last_pool_area) {
                         if (first_scalar) {
                             packed_first_value = bfloat16(value).to_packed();
                         }
@@ -191,7 +191,7 @@ uint32_t get_bf16_pool_scalar(
                         }
                         first_scalar = false;
                     }
-                    last_area_signature = area_signature;
+                    last_pool_area = (uint32_t)pool_area;
 
                     out_x_stick = (out_x_stick + 1) % out_h.value_or(0);
                     if (out_x_stick == 0) {
