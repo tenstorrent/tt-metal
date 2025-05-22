@@ -39,6 +39,8 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "work_executor.hpp"
+#include "ringbuffer_cache.hpp"
+#include "program/dispatch.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -67,7 +69,15 @@ HWCommandQueue::HWCommandQueue(
     uint32_t completion_queue_reader_core) :
     manager_(device->sysmem_manager()),
     completion_queue_thread_{},
-    completion_queue_reader_core_(completion_queue_reader_core) {
+    completion_queue_reader_core_(completion_queue_reader_core),
+    prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
+    prefetcher_cache_sizeB_(
+        MetalContext::instance().dispatch_mem_map(this->get_dispatch_core_type()).ringbuffer_size()),
+    prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
+    prefetcher_cache_manager_size_(
+        1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
+    prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
+        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
     ZoneScopedN("CommandQueue_constructor");
     this->device_ = device;
     this->worker_launch_message_buffer_state_ = worker_launch_message_buffer_state;
@@ -241,6 +251,7 @@ void HWCommandQueue::enqueue_read_buffer(
             }
         }
     } else if (is_sharded(buffer_obj.buffer_layout())) {
+        bool reset_prefetcher_cache_manager = false;
         // Forward data from each core to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
@@ -256,10 +267,16 @@ void HWCommandQueue::enqueue_read_buffer(
                 cores[core_id],
                 MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
             if (dispatch_params.pages_per_txn > 0) {
+                reset_prefetcher_cache_manager = true;
                 this->issued_completion_q_reads_.push(
                     buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
                 this->increment_num_entries_in_completion_q();
             }
+        }
+        if (reset_prefetcher_cache_manager) {
+            // reset prefetcher cache if we have issued any reads, since cache state will not be preserved across the
+            // reads
+            this->reset_prefetcher_cache_manager();
         }
     } else {
         // Forward data from device to the completion queue.
@@ -278,6 +295,9 @@ void HWCommandQueue::enqueue_read_buffer(
             sub_device_ids,
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
         if (dispatch_params->pages_per_txn > 0) {
+            // reset prefetcher cache if we have issued any reads, since cache state will not be preserved across the
+            // reads
+            this->reset_prefetcher_cache_manager();
             this->issued_completion_q_reads_.push(
                 buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
             this->increment_num_entries_in_completion_q();
@@ -430,7 +450,12 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     // Lower the program to device: Generate dispatch commands.
     // Values in these commands will get updated based on kernel config ring
     // buffer state at runtime.
-    program.generate_dispatch_commands(device_);
+    auto program_sizeB = program.get_program_kernel_bins_sizeB(device_);
+    bool use_prefetcher_cache = program_sizeB <= this->prefetcher_cache_sizeB_;
+    ProgramCommandSequence& cached_program_command_sequences =
+        program.generate_dispatch_commands(device_, use_prefetcher_cache);
+    cached_program_command_sequences.prefetcher_cache_used = use_prefetcher_cache;
+    cached_program_command_sequences.kernel_bins_sizeB = program_sizeB;
     program.set_last_used_command_queue_for_testing(this);
 
 #ifdef DEBUG
@@ -476,6 +501,20 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     }
 
     auto& worker_launch_message_buffer_state = (*this->worker_launch_message_buffer_state_)[*sub_device_id];
+
+    // Dispatch metadata contains runtime information based on
+    // the kernel config ring buffer state
+    program_dispatch::ProgramDispatchMetadata dispatch_metadata;
+    if (cached_program_command_sequences.prefetcher_cache_used) {
+        std::tie(dispatch_metadata.prefetcher_cache_info.is_cached, dispatch_metadata.prefetcher_cache_info.offset) =
+            this->query_prefetcher_cache(program.get_id(), program.pimpl_->program_kernel_bins_sizeB);
+        dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB =
+            cached_program_command_sequences.kernel_bins_sizeB;
+    } else {
+        // prefetcher cache will be overwritten, reset for next program
+        this->reset_prefetcher_cache_manager();
+    }
+
     auto command = EnqueueProgramCommand(
         this->id_,
         this->device_,
@@ -488,7 +527,8 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         // The assembled program command will encode the location of the launch messages in the ring buffer
         worker_launch_message_buffer_state.get_mcast_wptr(),
         worker_launch_message_buffer_state.get_unicast_wptr(),
-        sub_device_id);
+        sub_device_id,
+        dispatch_metadata);
     // Update wptrs for tensix and eth launch message in the device class
     if (program.runs_on_noc_multicast_only_cores()) {
         worker_launch_message_buffer_state.inc_mcast_wptr(1);
@@ -749,5 +789,19 @@ void HWCommandQueue::terminate() {
 }
 
 WorkerConfigBufferMgr& HWCommandQueue::get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; }
+
+std::pair<bool, size_t> HWCommandQueue::query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB) {
+    auto result = prefetcher_cache_manager_->get_cache_offset(pgm_id, lengthB);
+    TT_FATAL(
+        result.has_value(),
+        "Prefetcher cache query failed. Cache size: {}, requested: {}",
+        this->prefetcher_cache_manager_->get_cache_sizeB(),
+        lengthB);
+    return std::make_pair(result.value().is_cached, result.value().offset * this->prefetcher_dram_aligned_block_size_);
+}
+
+void HWCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_manager_->reset(); }
+
+int HWCommandQueue::get_prefetcher_cache_sizeB() const { return this->prefetcher_cache_manager_->get_cache_sizeB(); }
 
 }  // namespace tt::tt_metal

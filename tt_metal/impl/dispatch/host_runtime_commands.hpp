@@ -26,6 +26,7 @@
 #include "trace_buffer.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "worker_config_buffer.hpp"
+#include "program/dispatch.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -84,6 +85,7 @@ private:
     uint32_t unicast_cores_launch_message_wptr = 0;
     // TODO: There will be multiple ids once programs support spanning multiple sub_devices
     SubDeviceId sub_device_id = SubDeviceId{0};
+    program_dispatch::ProgramDispatchMetadata& dispatch_metadata;
 
 public:
     EnqueueProgramCommand(
@@ -97,7 +99,8 @@ public:
         uint32_t expected_num_workers_completed,
         uint32_t multicast_cores_launch_message_wptr,
         uint32_t unicast_cores_launch_message_wptr,
-        SubDeviceId sub_device_id);
+        SubDeviceId sub_device_id,
+        program_dispatch::ProgramDispatchMetadata& dispatch_md);
 
     void process();
 

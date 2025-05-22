@@ -16,6 +16,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <atomic>
 
 #include "assert.hpp"
 #include "buffer.hpp"
@@ -34,6 +35,7 @@
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "util.hpp"
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -45,6 +47,9 @@ enum class HalProgrammableCoreType;
 }  // namespace tt
 
 namespace tt::tt_metal::distributed {
+
+std::atomic<uint64_t> MeshWorkloadImpl::workload_counter = 0;
+
 namespace {
 
 // Returns an intersecting range from `programs` if it exists, otherwise returns std::nullopt.
@@ -60,7 +65,7 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
-MeshWorkloadImpl::MeshWorkloadImpl() {
+MeshWorkloadImpl::MeshWorkloadImpl() : id(workload_counter++) {
     // A MeshWorkload tracks maintains its own handles to kernels across all
     // encapsulated programs
     kernel_groups_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
@@ -188,8 +193,20 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // These commands will be updated based on MeshDevice state when the
     // workload is enqueued.
     auto mesh_device = mesh_cq.device();
+    FDMeshCommandQueue& mesh_cq_impl = static_cast<FDMeshCommandQueue&>(mesh_cq);
+    uint32_t prefetcher_cache_sizeB = mesh_cq_impl.get_prefetcher_cache_sizeB();
+    // determine max program size across all programs
+    uint32_t max_program_sizeB = 0;
     for (auto& [device_range, program] : programs_) {
-        program.generate_dispatch_commands(mesh_device);
+        auto program_sizeB = program.get_program_kernel_bins_sizeB(mesh_device);
+        max_program_sizeB = std::max(max_program_sizeB, program_sizeB);
+    }
+    mesh_cq_impl.set_max_program_kernels_sizeB(max_program_sizeB);
+    bool use_prefetcher_cache = max_program_sizeB <= prefetcher_cache_sizeB;
+    for (auto& [device_range, program] : programs_) {
+        auto& cached_cmd_seq = program.generate_dispatch_commands(mesh_device, use_prefetcher_cache);
+        cached_cmd_seq.prefetcher_cache_used = use_prefetcher_cache;
+        cached_cmd_seq.kernel_bins_sizeB = program.get_program_kernel_bins_sizeB(mesh_device);
     }
 }
 

@@ -74,7 +74,14 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state) :
     MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool),
     reader_thread_pool_(reader_thread_pool),
-    worker_launch_message_buffer_state_(worker_launch_message_buffer_state)  //
+    worker_launch_message_buffer_state_(worker_launch_message_buffer_state),
+    prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
+    prefetcher_cache_sizeB_(MetalContext::instance().dispatch_mem_map(this->dispatch_core_type_).ringbuffer_size()),
+    prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
+    prefetcher_cache_manager_size_(
+        1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
+    prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
+        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_))  //
 {
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         config_buffer_mgr_,
@@ -239,6 +246,20 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     std::unordered_set<uint32_t> chip_ids_in_workload = {};
     std::vector<MeshCoordinateRange> active_sub_grids = {};
+
+    bool use_prefetcher_cache = this->max_program_kernels_sizeB_ <= this->prefetcher_cache_sizeB_;
+    if (use_prefetcher_cache) {
+        bool is_cached;
+        uint32_t cache_offset;
+        std::tie(is_cached, cache_offset) =
+            this->query_prefetcher_cache(mesh_workload.impl().get_id(), this->max_program_kernels_sizeB_);
+        dispatch_metadata.prefetcher_cache_info.is_cached = is_cached;
+        dispatch_metadata.prefetcher_cache_info.offset = cache_offset;
+        dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB = this->max_program_kernels_sizeB_;
+    } else {
+        // prefetcher cache will be overwritten, reset for next workload
+        this->reset_prefetcher_cache_manager();
+    }
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
@@ -924,6 +945,22 @@ void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
             tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());
     }
 #endif
+}
+
+std::pair<bool, size_t> FDMeshCommandQueue::query_prefetcher_cache(uint64_t workload_id, uint32_t lengthB) {
+    auto result = prefetcher_cache_manager_->get_cache_offset(workload_id, lengthB);
+    TT_FATAL(
+        result.has_value(),
+        "Prefetcher cache query failed. Cache size: {}, requested: {}",
+        this->prefetcher_cache_manager_->get_cache_sizeB(),
+        lengthB);
+    return std::make_pair(result.value().is_cached, result.value().offset * this->prefetcher_dram_aligned_block_size_);
+}
+
+void FDMeshCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_manager_->reset(); }
+
+int FDMeshCommandQueue::get_prefetcher_cache_sizeB() const {
+    return this->prefetcher_cache_manager_->get_cache_sizeB();
 }
 
 }  // namespace tt::tt_metal::distributed

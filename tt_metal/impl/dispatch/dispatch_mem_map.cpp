@@ -35,6 +35,8 @@ uint32_t DispatchMemMap::scratch_db_base() const { return scratch_db_base_; }
 
 uint32_t DispatchMemMap::scratch_db_size() const { return settings.prefetch_scratch_db_size_; }
 
+uint32_t DispatchMemMap::ringbuffer_size() const { return settings.prefetch_scratch_db_size_; }
+
 uint32_t DispatchMemMap::dispatch_buffer_block_size_pages() const { return dispatch_buffer_block_size_pages_; }
 
 uint32_t DispatchMemMap::dispatch_buffer_base() const { return dispatch_buffer_base_; }
