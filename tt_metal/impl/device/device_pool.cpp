@@ -506,8 +506,7 @@ void DevicePool::wait_for_fabric_router_sync() const {
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(dev->id()).get_eth_core_for_channel(
                 master_router_chan, CoordSystem::LOGICAL);
 
-        const auto [router_sync_address, expected_status] =
-            fabric_context.get_fabric_router_sync_address_and_status(dev->id());
+        const auto [router_sync_address, expected_status] = fabric_context.get_fabric_router_sync_address_and_status();
         std::vector<std::uint32_t> master_router_status{0};
         while (master_router_status[0] != expected_status) {
             tt_metal::detail::ReadFromDeviceL1(
