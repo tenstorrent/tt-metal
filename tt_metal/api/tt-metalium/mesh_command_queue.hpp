@@ -25,7 +25,6 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_trace.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -50,6 +49,7 @@ struct ProgramCommandSequence;
 namespace tt::tt_metal::distributed {
 
 class MeshEvent;
+class MeshTraceDescriptor;
 struct MeshBufferReadDescriptor;
 struct MeshReadEventDescriptor;
 struct MeshCoreDataReadDescriptor;
