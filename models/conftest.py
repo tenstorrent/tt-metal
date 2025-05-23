@@ -5,6 +5,10 @@
 import ast
 import gc
 
+import pytest
+import torchvision.transforms as transforms
+from PIL import Image
+
 
 @pytest.fixture(autouse=True)
 def ensure_gc():

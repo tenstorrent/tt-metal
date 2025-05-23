@@ -2,16 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 from loguru import logger
 
-from models.demos.qwen25_vl.tt.common import (
-    get_padded_prefill_len,
-    num_blocks_in_seq,
-    get_block_size,
-    get_max_prefill_chunk_size,
-)
+import ttnn
+from models.demos.qwen25_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
@@ -24,15 +19,17 @@ class Generator:
 
         """
         # favor composition over inheritance: __ is convention for private variables
-        self._ttt_generator = TTTGenerator(model, model_args, mesh_device, tokenizer, formatter)
+        self.__ttt_generator = TTTGenerator([model], [model_args], mesh_device, tokenizer, formatter)
 
     @property
     def model(self):
-        return self._ttt_generator.model
+        # todo)) change this when implementing data parallelism
+        return self.__ttt_generator.model[0]
 
     @property
     def model_args(self):
-        return self._ttt_generator.model_args
+        # todo)) change this when implementing data parallelism
+        return self.__ttt_generator.model_args[0]
 
     @property
     def mesh_device(self):

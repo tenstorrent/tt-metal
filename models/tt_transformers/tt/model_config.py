@@ -1649,7 +1649,7 @@ class ModelArgs:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
                 # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-                if "Qwen/Qwen2.5-VL" in self.model_name:
+                if "Qwen2.5-VL" in self.model_name:
                     from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
                         Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
                     )
@@ -2054,10 +2054,10 @@ class ModelArgs:
         else:
             # Special case Qwen2.5-VL models until they are fully integrated into a HF release
             if "Qwen/Qwen2.5-VL" in self.model_name:
+                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
                 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
                     Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
                 )
-                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
             else:
                 from transformers import AutoConfig, AutoModelForCausalLM
 

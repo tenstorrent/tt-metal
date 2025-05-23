@@ -2,31 +2,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from loguru import logger
-from datetime import datetime
-import torch
-import pytest
 import os
-import ttnn
+from datetime import datetime
 
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
-from transformers import AutoProcessor
+import pytest
+import torch
+from loguru import logger
 from qwen_vl_utils import process_vision_info
+from transformers import AutoProcessor
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
 
-from models.demos.qwen25_vl.tt.generator import Generator
+import ttnn
 from models.demos.qwen25_vl.tt.common import (
     PagedAttentionConfig,
-    sample_host,
-    preprocess_inputs_prefill,
     merge_vision_tokens,
     multimodal_rope_from_hf,
+    preprocess_inputs_prefill,
+    sample_host,
 )
+from models.demos.qwen25_vl.tt.generator import Generator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
-from models.tt_transformers.tt.model_config import ModelOptimizations, ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
 
 def create_tt_model(
@@ -146,7 +145,7 @@ def create_tt_model(
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
-            2,  # batch_size -- samples to load from the prompt JSON
+            1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
@@ -179,9 +178,10 @@ def create_tt_model(
 @pytest.mark.parametrize(
     "optimizations",
     [
-        ModelOptimizations.performance,
-        # ModelOptimizations.accuracy,
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
+    ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 25663488, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
@@ -215,8 +215,8 @@ def test_demo(
     """
     Simple demo with limited dependence on reference code.
     """
-
-    if is_ci_env and (optimizations == ModelOptimizations.accuracy or not ci_only):
+    test_id = request.node.callspec.id
+    if is_ci_env and (("accuracy" in test_id) or not ci_only):
         pytest.skip("CI only runs the CI-only tests")
     if not is_ci_env and ci_only:
         pytest.skip("CI only runs the CI-only tests")
@@ -225,7 +225,6 @@ def test_demo(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    mesh_device.enable_async(True)
     logger.info(f"mesh_device: {mesh_device}")
     use_tt_vision = True
     enable_trace = True  # Use tracing for better perf
@@ -250,6 +249,12 @@ def test_demo(
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
+    json_config_file = request.config.getoption("--decoder_config_file")
+
+    if json_config_file:
+        optimizations = parse_decoder_json(json_config_file)
+    else:
+        optimizations = request.config.getoption("--optimizations") or optimizations
 
     if paged_attention:
         page_cache_max_seq_len = page_params["page_block_size"] * page_params["page_max_num_blocks"] / batch_size
@@ -310,12 +315,13 @@ def test_demo(
     from transformers import logging as transformers_logging
 
     # Set logging level to ERROR to suppress warnings about unexpected keys
+    ref_model_name = "Qwen/" + model_args.model_name  # Qwen2.5-VL reference models expects "Qwen/" prefix
     transformers_logging.set_verbosity_error()
-    config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(model_args.model_name)
+    config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
     if ci_only:
         config.vision_config.depth = 1
     reference_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        model_args.model_name, config=config, torch_dtype="auto", device_map="auto"
+        ref_model_name, config=config, torch_dtype="auto", device_map="auto"
     )
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
@@ -328,7 +334,7 @@ def test_demo(
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
     else:
         visual_model = reference_model.visual
-    processor = AutoProcessor.from_pretrained(model_args.model_name)
+    processor = AutoProcessor.from_pretrained(ref_model_name)
     num_tokens_generated_decode = []
     num_image_tokens = []
 

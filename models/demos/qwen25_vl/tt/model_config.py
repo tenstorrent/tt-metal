@@ -3,16 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 from loguru import logger
 
 from models.demos.qwen25_vl.tt.common import nearest_multiple
-
-from models.tt_transformers.tt.load_checkpoints import (
-    load_hf_state_dict,
-    convert_hf_to_meta,
-    standardize_hf_keys,
-)
 from models.tt_transformers.tt.model_config import ModelArgs
+
+
+class ModelOptimizations:
+    def __init__(self, model_name):
+        """Configuration optimized for accuracy
+        Only 70B models uses bfp4 MLPs in this configuration
+        """
+        self.bfp4_mlp = "Qwen2.5-VL-72B" in model_name
 
 
 class VisionModelArgs(ModelArgs):
@@ -39,34 +42,15 @@ class VisionModelArgs(ModelArgs):
         self.qkv_size = self.padded_head_dim * (2 * self.n_kv_heads + self.n_heads)
         self.MAX_QKV_MM_SEQ_LEN = self.MAX_QKV_MM_SEQ_LEN
 
+        self.optimizations = ModelOptimizations(
+            self.model_name
+        )  # todo)) implement finer grained control similar to tt_transformers'
+
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
 
     # Visual model does not use distributed norm for now
     def is_distributed_norm(self, mode):
         return False
-
-    def load_state_dict(self):
-        assert False, "FIXME"
-        if self.from_hf_url:
-            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-            from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-            )
-
-            print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
-            model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-            state_dict = {k: v for k, v in model.state_dict().items() if k.startswith("visual.")}
-        else:
-            state_dict = load_hf_state_dict(self.CKPT_DIR)
-        state_dict = standardize_hf_keys(state_dict)
-        state_dict = convert_hf_to_meta(state_dict, self.head_dim)
-        keys_dict = list(state_dict.keys())[:]
-        remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
-        for k in keys_dict:
-            if any([r in k for r in remv]):
-                state_dict.pop(k)
-
-        return state_dict
 
     def get_state_dict_prefix(self, module_name, layer_num=None):
         layer_prefix = f"visual.blocks.{layer_num}." if layer_num is not None else ""
