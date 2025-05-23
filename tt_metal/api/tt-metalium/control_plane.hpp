@@ -61,6 +61,12 @@ public:
     // reserved along the way for tunneling etc.
     std::vector<chan_id_t> get_forwarding_eth_chans_to_chip(
         mesh_id_t src_mesh_id, chip_id_t src_chip_id, mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) const;
+    std::vector<chan_id_t> get_forwarding_eth_chans_to_chip(
+        mesh_id_t src_mesh_id,
+        chip_id_t src_chip_id,
+        mesh_id_t dst_mesh_id,
+        chip_id_t dst_chip_id,
+        RoutingDirection forwarding_direction) const;
 
     stl::Span<const chip_id_t> get_intra_chip_neighbors(
         mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const;
