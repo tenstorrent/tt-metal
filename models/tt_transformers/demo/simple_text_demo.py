@@ -761,8 +761,7 @@ def test_demo_text(
         iteration = 0
         users_decoding = True
 
-        if "accuracy" in test_id:
-            out_tok = prefilled_token
+        out_tok = prefilled_token
 
         logger.info(f"Starting decode loop...")
 
