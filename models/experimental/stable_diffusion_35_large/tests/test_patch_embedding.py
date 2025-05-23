@@ -46,13 +46,13 @@ def test_patch_embedding(
 ) -> None:
     dtype = ttnn.bfloat16
 
-    model_name = model_location_generator(f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large")
-    parent_torch_model = SD3Transformer2DModel.from_pretrained(model_name, subfolder="transformer", torch_dtype=torch.bfloat16)
+    model_name = model_location_generator(
+        f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large"
+    )
+    parent_torch_model = SD3Transformer2DModel.from_pretrained(
+        model_name, subfolder="transformer", torch_dtype=torch.bfloat16
+    )
 
-    #parent_torch_model = SD3Transformer2DModel.from_pretrained(
-    #    f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch.bfloat16
-    #)
-    
     if model_name == "medium":
         embedding_dim = 1536
     else:
