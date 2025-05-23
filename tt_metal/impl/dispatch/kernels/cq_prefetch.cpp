@@ -1185,21 +1185,35 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
     uint32_t page_size = 1 << log2_page_size;
     uint32_t length = cmd->paged_to_ringbuffer.length;
     uint8_t flags = cmd->paged_to_ringbuffer.flags;
+    uint32_t wp_update_offset = cmd->paged_to_ringbuffer.wp_offset_update;
 
-    /*DPRINT << "paged_to_ringbuffer: base_addr: " << HEX() << base_addr << ", ringbuffer_wp: " << ringbuffer_wp
-        << ", length: " << DEC() << length << ", wp_offset_update: " << cmd->paged_to_ringbuffer.wp_offset_update
-        << ", start_page: " << start_page << ", flags: " << flags << ", log2_page_size: " <<
-       static_cast<int>(log2_page_size)
-        << ENDL();*/
+    ASSERT(length <= wp_update_offset);
+
+    /*DPRINT << "paged_to_ringbuffer: base_addr: " << HEX() << base_addr << ", length: " << length
+        << ", wp_offset_update: " << wp_update_offset << DEC() << ", start_page: " << start_page
+        << ", flags: " << static_cast<int>(flags) << ", log2_page_size: " << static_cast<int>(log2_page_size)
+        << HEX() << ", oldringbuffer_wp: " << ringbuffer_wp  << ", newringbuffer_wp: " << (ringbuffer_wp +
+       wp_update_offset)
+        << DEC() << ENDL();*/
 
     if (flags & CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START) {
         ringbuffer_wp = scratch_db_base;
     }
 
     ASSERT(length % DRAM_ALIGNMENT == 0);
-    ASSERT(length + ringbuffer_wp <= scratch_db_end);
+    ASSERT(wp_update_offset + ringbuffer_wp <= scratch_db_end);
+    /*if (wp_update_offset + ringbuffer_wp > scratch_db_end) {
+        DPRINT << "ASSERT: scratch_db_base: " << HEX() << scratch_db_base << ", ringbuffer_wp: " << ringbuffer_wp
+            << ", wp_update_offset: " << wp_update_offset << ", ringbuffer_wp + wp_update_offset: "
+            << (ringbuffer_wp + wp_update_offset) << ", scratch_db_end: " << scratch_db_end << ENDL();
+        DPRINT << ENDL();
+        DPRINT << ENDL();
+        DPRINT << ENDL();
+        DPRINT << ENDL();
+        ASSERT(false);
+    }*/
 
-    ringbuffer_offset = ringbuffer_wp - scratch_db_base;  // this is to avoid inserting offset command after cache load
+    ringbuffer_offset = ringbuffer_wp - scratch_db_base;
 
     const bool is_dram = true;
     InterleavedPow2AddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .log_base_2_of_page_size = log2_page_size};
@@ -1219,7 +1233,7 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
         scratch_read_addr += length;
     }
 
-    ringbuffer_wp = scratch_db_base + ringbuffer_offset + cmd->paged_to_ringbuffer.wp_offset_update;
+    ringbuffer_wp += wp_update_offset;
 
     // The consumer will perform a read barrier.
 
@@ -1231,8 +1245,11 @@ uint32_t process_set_ringbuffer_offset(uint32_t cmd_ptr) {
     uint32_t offset = cmd->set_ringbuffer_offset.offset;
 
     ringbuffer_offset = offset;
+    if (offset == 0) {
+        ringbuffer_wp = scratch_db_base;
+    }
 
-    // DPRINT << "set_ringbuffer_offset: " << offset << ENDL();
+    // DPRINT << "set_ringbuffer_offset: " << HEX() << offset << DEC() << ENDL();
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }

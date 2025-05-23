@@ -1962,19 +1962,26 @@ void update_program_dispatch_commands(
 
         auto is_cached = dispatch_md.prefetcher_cache_info.is_cached;
         auto cache_offset = dispatch_md.prefetcher_cache_info.offset;
-        CQPrefetchCmd cq_prefetch;
+        auto program_sizeB = cached_program_command_sequence.kernel_bins_sizeB;
+        auto max_program_sizeB = dispatch_md.prefetcher_cache_info.mesh_max_program_kernels_sizeB;
         if (is_cached) {
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_set_ringbuffer_offset(cache_offset);
         } else {
+            TT_ASSERT(
+                program_sizeB <= max_program_sizeB,
+                "Kernel binary size exceeds prefetcher cache size ({}, {})",
+                program_sizeB,
+                max_program_sizeB);
+            bool wraparound_flag = cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_paged_to_ringbuffer(CQPrefetchPagedToRingbufferCmd{
-                    .flags = uint8_t(cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START),
+                    .flags = uint8_t(wraparound_flag),
                     .log2_page_size = uint16_t(HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE),
                     .start_page = 0,
-                    .wp_offset_update = dispatch_md.prefetcher_cache_info.mesh_max_program_kernels_sizeB,
+                    .wp_offset_update = max_program_sizeB,
                     .base_addr = cached_program_command_sequence.kernel_bins_base_addr,
-                    .length = cached_program_command_sequence.kernel_bins_sizeB});
+                    .length = program_sizeB});
         }
         TT_ASSERT(
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes() ==

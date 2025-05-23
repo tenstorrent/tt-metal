@@ -1702,6 +1702,9 @@ void detail::ProgramImpl::finalize_program_offsets(
 }
 
 uint32_t detail::ProgramImpl::get_program_kernel_bins_sizeB(IDevice* device) {
+    if (this->program_kernel_bins_sizeB) {
+        return this->program_kernel_bins_sizeB;
+    }
     const auto& program_transfer_info = this->get_program_transfer_info();
     if (program_transfer_info.kernel_bins.size()) {
         TT_FATAL(this->get_kernels_buffer(device).get(), "Expected Kernel Binary Buffer to be allocated for program.");

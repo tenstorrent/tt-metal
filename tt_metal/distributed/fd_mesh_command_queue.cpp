@@ -253,6 +253,12 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         uint32_t cache_offset;
         std::tie(is_cached, cache_offset) =
             this->query_prefetcher_cache(mesh_workload.impl().get_id(), this->max_program_kernels_sizeB_);
+        TT_ASSERT(
+            cache_offset + this->max_program_kernels_sizeB_ <= this->prefetcher_cache_sizeB_,
+            "Prefetcher cache offset: {}, max_program_kernels_sizeB_: {}, prefetcher_cache_sizeB_: {}",
+            cache_offset,
+            this->max_program_kernels_sizeB_,
+            this->prefetcher_cache_sizeB_);
         dispatch_metadata.prefetcher_cache_info.is_cached = is_cached;
         dispatch_metadata.prefetcher_cache_info.offset = cache_offset;
         dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB = this->max_program_kernels_sizeB_;
@@ -265,6 +271,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // physical device tied to the program.
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
         auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
+        TT_ASSERT(
+            use_prefetcher_cache == program_cmd_seq.prefetcher_cache_used,
+            "use_prefetcher_cache: {}, program_cmd_seq.prefetcher_cache_used: {}",
+            use_prefetcher_cache,
+            program_cmd_seq.prefetcher_cache_used);
         program_dispatch::update_program_dispatch_commands(
             program.impl(),
             program_cmd_seq,
@@ -299,7 +310,12 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Send go signals to devices not running a program to ensure consistent global state
     if (not sysmem_manager.get_bypass_mode()) {
         this->write_go_signal_to_unused_sub_grids(
-            chip_ids_in_workload, sub_device_id, expected_num_workers_completed, mcast_go_signals, unicast_go_signals);
+            chip_ids_in_workload,
+            sub_device_id,
+            expected_num_workers_completed,
+            mcast_go_signals,
+            unicast_go_signals,
+            dispatch_metadata);
     } else {
         MeshCoordinateRangeSet active_sub_grids_set;
         for (const auto& sub_grid : active_sub_grids) {
@@ -311,7 +327,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             sub_device_id,
             expected_num_workers_completed,
             mcast_go_signals,
-            unicast_go_signals);
+            unicast_go_signals,
+            dispatch_metadata);
     }
     // Increment Launch Message Buffer Write Pointers
     if (mcast_go_signals) {
@@ -774,7 +791,8 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
-    bool unicast_go_signals) {
+    bool unicast_go_signals,
+    const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     for (auto& device : this->mesh_device_->get_devices()) {
         if (chip_ids_in_workload.find(device->id()) == chip_ids_in_workload.end()) {
             write_go_signal(
@@ -785,7 +803,8 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
                 expected_num_workers_completed,
                 this->virtual_program_dispatch_core(),
                 mcast_go_signals,
-                unicast_go_signals);
+                unicast_go_signals,
+                dispatch_md);
         }
     }
 }
@@ -840,7 +859,8 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
-    bool unicast_go_signals) {
+    bool unicast_go_signals,
+    const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     MeshCoordinateRange full_grid(mesh_device_->shape());
     MeshCoordinateRangeSet unused_grids = subtract(full_grid, active_grid);
     for (const auto& unused_grid : unused_grids.ranges()) {
@@ -854,7 +874,8 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
             expected_num_workers_completed,
             this->virtual_program_dispatch_core(),
             mcast_go_signals,
-            unicast_go_signals);
+            unicast_go_signals,
+            dispatch_md);
         auto mesh_trace_md = MeshTraceStagingMetadata{
             unused_grid,
             unused_grid.start_coord(),

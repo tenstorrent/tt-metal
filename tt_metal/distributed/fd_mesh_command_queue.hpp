@@ -13,6 +13,7 @@
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
+#include "tt_metal/impl/program/dispatch.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -60,7 +61,8 @@ private:
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
-        bool unicast_go_signals);
+        bool unicast_go_signals,
+        const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Workload dispatch utility functions
     // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
     void write_program_cmds_to_subgrid(
@@ -78,7 +80,8 @@ private:
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
-        bool unicast_go_signals);
+        bool unicast_go_signals,
+        const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // When the device profiler is not enabled, launch messages are identical across all physical devices running the
     // same program, to reduce state managed on host. When the profiler is enabled, the host_assigned_id field in the
     // launch message must be unique across physical devices to accurately capture program execution time on host and

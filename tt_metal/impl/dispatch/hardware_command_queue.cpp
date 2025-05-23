@@ -506,10 +506,17 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     // the kernel config ring buffer state
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
     if (cached_program_command_sequences.prefetcher_cache_used) {
-        std::tie(dispatch_metadata.prefetcher_cache_info.is_cached, dispatch_metadata.prefetcher_cache_info.offset) =
-            this->query_prefetcher_cache(program.get_id(), program.pimpl_->program_kernel_bins_sizeB);
-        dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB =
-            cached_program_command_sequences.kernel_bins_sizeB;
+        bool& is_cached = dispatch_metadata.prefetcher_cache_info.is_cached;
+        uint32_t& cache_offset = dispatch_metadata.prefetcher_cache_info.offset;
+        const uint32_t& program_sizeB = cached_program_command_sequences.kernel_bins_sizeB;
+        std::tie(is_cached, cache_offset) = this->query_prefetcher_cache(program.get_id(), program_sizeB);
+        TT_ASSERT(
+            cache_offset + program_sizeB <= this->prefetcher_cache_sizeB_,
+            "Prefetcher cache offset: {}, program size: {}, cache size: {}",
+            cache_offset,
+            program_sizeB,
+            this->prefetcher_cache_sizeB_);
+        dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB = program_sizeB;
     } else {
         // prefetcher cache will be overwritten, reset for next program
         this->reset_prefetcher_cache_manager();
