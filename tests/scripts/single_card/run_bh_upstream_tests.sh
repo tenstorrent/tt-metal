@@ -15,3 +15,4 @@ ARCH_NAME=blackhole TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_cpp_fd2_te
 
 echo "[upstream-tests] Running BH upstream small model tests"
 pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation
+pytest models/demos/blackhole/resnet50/tests/upstream_pipeline
