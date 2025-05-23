@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -447,6 +447,8 @@ class TtModelArgs:
             self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
+            else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
+                self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
             self.model_name = HF_MODEL  # May be overridden by config
             self.from_hf_url = True
         else:
@@ -1603,7 +1605,7 @@ class TtModelArgs:
         )
         return xs_1BSH
 
-    def _set_params_from_dict(self, params):
+    def _set_params_from_dict(self, params, is_hf=False):
         # Common params with different names between Meta and HF
         self.dim = params.get("dim", params.get("hidden_size"))
         self.n_heads = params.get("n_heads", params.get("num_attention_heads"))
@@ -1614,6 +1616,12 @@ class TtModelArgs:
         self.vocab_size = params["vocab_size"]
         self.padded_vocab_size = 128 * 1024
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
+        if is_hf:
+            self.max_context_len = params.get("max_position_embeddings")
+        else:
+            self.max_context_len = (
+                128 * 1024
+            )  # For Llama3 Meta weights TODO: Remove this when we move to HF weights only
 
         # Handle different MLP dimension specifications
         if "intermediate_size" in params:
@@ -1626,7 +1634,17 @@ class TtModelArgs:
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
         if "_name_or_path" in params:
-            self.model_name = os.path.basename(params["_name_or_path"])
+            if is_hf:
+                normalized_path = os.path.normpath(params["_name_or_path"])
+                # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
+                if "snapshots" in normalized_path:
+                    full_model_name = normalized_path.split(os.path.sep)[-3]
+                    self.model_name = full_model_name.split("--")[-1]
+                else:
+                    self.model_name = os.path.basename(normalized_path)
+            else:
+                self.model_name = os.path.basename(params["_name_or_path"])
+            logger.info(f"Model name from params: {self.model_name}")
 
         if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
             raise AssertionError(
@@ -1662,9 +1680,10 @@ class TtModelArgs:
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
-        if "rope_scaling" in params and params.get("use_scaled_rope", True):
-            self.rope_scaling_factor = params.get("factor", None)
-            self.orig_context_len = params.get("original_max_position_embeddings", None)
+        rope_scaling_params = params.get("rope_scaling", None)
+        if rope_scaling_params:
+            self.rope_scaling_factor = rope_scaling_params.get("factor", None)
+            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", None)
         else:
             self.rope_scaling_factor = None
             self.orig_context_len = None
@@ -1694,7 +1713,10 @@ class TtModelArgs:
 
     @property
     def base_model_name(self):
-        return self.model_name.split("B-")[0] + "B" if "B-" in self.model_name else self.model_name
+        # HuggingFace name contains a dash, but Meta name does not (e.g. Llama-3.1-70B vs Llama3.1-70B)
+        # Until we switch to HF weights-first, we need to force the dash out
+        model_name = self.model_name.replace("Llama-", "Llama")
+        return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
 
     @property
     def vision_chunk_ntok(self):
@@ -1756,7 +1778,10 @@ class TtModelArgs:
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
-        self._set_params_from_dict(config)
+        self._set_params_from_dict(config, is_hf=True)
+        self.is_70b = self.dim == 8192 and self.n_layers == 80
+        if self.is_70b:
+            self.max_prefill_chunk_size = 64 * 1024
         # TODO Hack for deepseek distill 70b. generalize if needed
         if "Llama-70B" in checkpoint_dir:  # if we're using a distill version of 70B, use same settings as Llama-70b
             self.model_name = "Deepseek-R1-Distill-70B"
@@ -1767,6 +1792,7 @@ class TtModelArgs:
 
     def __repr__(self):
         return f"""ModelArgs(
+    model_name={self.model_name}
     dim={self.dim},
     n_layers={self.n_layers},
     n_heads={self.n_heads},

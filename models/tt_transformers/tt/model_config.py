@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1437,9 +1437,10 @@ class ModelArgs:
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
-        if "rope_scaling" in params and params.get("use_scaled_rope", True):
-            self.rope_scaling_factor = params.get("factor", None)
-            self.orig_context_len = params.get("original_max_position_embeddings", None)
+        rope_scaling_params = params.get("rope_scaling", None)
+        if rope_scaling_params:
+            self.rope_scaling_factor = rope_scaling_params.get("factor", None)
+            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", None)
         else:
             self.rope_scaling_factor = None
             self.orig_context_len = None
