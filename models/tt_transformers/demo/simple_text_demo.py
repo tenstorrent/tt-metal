@@ -798,8 +798,7 @@ def test_demo_text(
         iteration = 0
         users_decoding = True
 
-        if "accuracy" in test_id:
-            out_tok = prefilled_token
+        out_tok = prefilled_token
 
         logger.info(f"Starting decode loop...")
 
@@ -812,7 +811,8 @@ def test_demo_text(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            logits = token_acc.collect_top1n5_logits(logits)
+            if "accuracy" in test_id:
+                logits = token_acc.collect_top1n5_logits(logits)
 
             # Run decode forward
             logits = generator.decode_forward_text(
