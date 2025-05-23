@@ -66,7 +66,7 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
 
     // the subset of routers that support forwarding b/w those chips
     const std::vector<chan_id_t>& forwarding_channels = control_plane->get_forwarding_eth_chans_to_chip(
-        src_mesh_id, src_logical_chip_id, dst_mesh_id, dst_logical_chip_id);
+        src_mesh_id, src_logical_chip_id, dst_mesh_id, dst_logical_chip_id, direction);
 
     const std::vector<chan_id_t>& fabric_channels =
         control_plane->get_active_fabric_eth_channels_in_direction(src_mesh_id, src_logical_chip_id, direction);
