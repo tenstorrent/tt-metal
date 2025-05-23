@@ -6,33 +6,19 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_log.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_log_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::log, APPROXIMATE>(sfpu::log_init<APPROXIMATE>);
-}
+SFPU_INIT_WITH_FN(log)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_log(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_log<APPROXIMATE, false>, dst_index, vector_mode, 0);
-}
+SFPU_CALCULATE_RC(log, calculate_log, PARAM_LIST(ARG(false)), PARAM_LIST(ARG(0)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_log_with_base_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::log_with_base, APPROXIMATE>(sfpu::log_init<APPROXIMATE>);
-}
+SFPU_INIT_CUSTOM_NAME_WITH_FN(log_with_base, log_with_base, log_init)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_log_with_base(
-    uint dst_index, uint base_scale, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_log<APPROXIMATE, true>, dst_index, vector_mode, base_scale);
-}
+SFPU_CALCULATE_RC(log_with_base, calculate_log, PARAM_LIST(ARG(true)), PARAM_LIST(PARAM(uint, base_scale)))
 
 }  // namespace ckernel

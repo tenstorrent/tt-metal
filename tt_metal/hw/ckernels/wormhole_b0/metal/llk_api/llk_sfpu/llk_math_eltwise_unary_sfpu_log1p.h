@@ -6,19 +6,13 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_log1p.h"
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_log1p_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::log1p, APPROXIMATE>(sfpu::log1p_init<APPROXIMATE>);
-}
+SFPU_INIT_WITH_FN(log1p)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_log1p(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_log1p<APPROXIMATE>, dst_index, vector_mode);
-}
+SFPU_CALCULATE(log1p)
 
 }  // namespace ckernel

@@ -6,6 +6,7 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_trigonometry.h"
 
 namespace ckernel {
@@ -13,72 +14,33 @@ namespace ckernel {
 // New LLK SFPU APIs
 
 // sine
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_sine_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::sine, APPROXIMATE>();
-}
+SFPU_INIT(sine)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_sine_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_trig<SfpuType::sine, APPROXIMATE>, dst_index, (int)VectorMode::RC);
-}
+SFPU_CALCULATE_ALWAYS_RC_APPROX_LAST(sine_op, calculate_sfpu_trig, PARAM_LIST(ARG(SfpuType::sine)), PARAM_LIST())
 
 // cosine
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_cosine_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::cosine, APPROXIMATE>();
-}
+SFPU_INIT(cosine)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_cosine_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_trig<SfpuType::cosine, APPROXIMATE>, dst_index, (int)VectorMode::RC);
-}
+SFPU_CALCULATE_ALWAYS_RC_APPROX_LAST(cosine_op, calculate_sfpu_trig, PARAM_LIST(ARG(SfpuType::cosine)), PARAM_LIST())
 
 // tangent
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_tan_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::tan, APPROXIMATE>();
-}
+SFPU_INIT(tan)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_tan_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_trig<SfpuType::tan, APPROXIMATE>, dst_index, (int)VectorMode::RC);
-}
+SFPU_CALCULATE_ALWAYS_RC_APPROX_LAST(tan_op, calculate_sfpu_trig, PARAM_LIST(ARG(SfpuType::tan)), PARAM_LIST())
 
 // asin
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_asin_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::asin, APPROXIMATE>();
-}
+SFPU_INIT(asin)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_asin(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_asin<APPROXIMATE>, dst_index, vector_mode);
-}
+SFPU_CALCULATE(asin)
 
 // acos
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_acos_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::acos, APPROXIMATE>();
-}
+SFPU_INIT(acos)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_acos(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_acos<APPROXIMATE>, dst_index, vector_mode);
-}
+SFPU_CALCULATE(acos)
 
 // atan
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_atan_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::atan, APPROXIMATE>(sfpu::atan_init<APPROXIMATE>);
-}
+SFPU_INIT_WITH_FN(atan)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_atan(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_atan<APPROXIMATE>, dst_index, vector_mode);
-}
+SFPU_CALCULATE(atan)
 
 }  // namespace ckernel

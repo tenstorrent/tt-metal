@@ -6,21 +6,15 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_logical_not_noti.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_logical_not_unary_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::logical_not_unary, APPROXIMATE>();
-}
+SFPU_INIT(logical_not_unary)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_logical_not_unary_op(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_logical_not_unary<APPROXIMATE>, dst_index, (int)VectorMode::RC);
-}
+SFPU_CALCULATE_ALWAYS_RC(logical_not_unary_op, calculate_logical_not_unary, PARAM_LIST(), PARAM_LIST())
 
 }  // namespace ckernel

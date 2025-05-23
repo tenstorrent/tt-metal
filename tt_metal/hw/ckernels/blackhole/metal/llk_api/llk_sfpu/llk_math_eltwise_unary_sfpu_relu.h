@@ -6,53 +6,26 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_relu.h"
 
 namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_relu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROXIMATE>();
-}
+SFPU_INIT_CUSTOM_NAME(relu, relu_min)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_lrelu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::lrelu, APPROXIMATE>();
-}
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_relu_max_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_max, APPROXIMATE>();
-}
+SFPU_INIT(lrelu)
+SFPU_INIT(relu_max)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_relu_min_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROXIMATE>();
-}
+SFPU_INIT(relu_min)
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_lrelu(uint dst_index, uint param0 = 0) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_lrelu<APPROXIMATE>, dst_index, (int)VectorMode::RC, param0);
-}
+SFPU_CALCULATE_ALWAYS_RC(lrelu, calculate_lrelu, PARAM_LIST(), PARAM_LIST(DEFAULT_PARAM(uint, param0, 0)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_relu_max(uint dst_index, uint param0 = 0) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::relu_max<APPROXIMATE>, dst_index, (int)VectorMode::RC, param0);
-}
+SFPU_CALCULATE_ALWAYS_RC(relu_max, relu_max, PARAM_LIST(), PARAM_LIST(DEFAULT_PARAM(uint, param0, 0)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_relu_min(uint dst_index, uint param0 = 0) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::relu_min<APPROXIMATE>, dst_index, (int)VectorMode::RC, param0);
-}
+SFPU_CALCULATE_ALWAYS_RC(relu_min, relu_min, PARAM_LIST(), PARAM_LIST(DEFAULT_PARAM(uint, param0, 0)))
 
-template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_relu(uint dst_index) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::relu_min<APPROXIMATE>, dst_index, (int)VectorMode::RC, 0);
-}
+SFPU_CALCULATE_ALWAYS_RC(relu, relu_min, PARAM_LIST(), PARAM_LIST(ARG(0)))
 
 }  // namespace ckernel
