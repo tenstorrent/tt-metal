@@ -22,8 +22,6 @@
 #include "debug/stack_usage.h"
 // clang-format on
 
-uint32_t halt_stack_ptr_save;
-
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
 volatile tt_l1_ptr uint8_t *const ncrisc_run = &mailboxes->subordinate_sync.dm1;
 
@@ -60,6 +58,10 @@ namespace kernel_profiler {
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }
+#endif
+
+#ifdef ARCH_WORMHOLE
+extern "C" uint32_t notify_brisc_and_halt_to_iram(uint32_t status, uint32_t first_argument);
 #endif
 
 inline __attribute__((always_inline)) void notify_brisc_and_wait() {
@@ -152,7 +154,6 @@ int main(int argc, char *argv[]) {
 #else
         // Jumping to IRAM causes bizarre behavior, so signal the brisc to reset the ncrisc to the IRAM address.
         mailboxes->ncrisc_halt.resume_addr = (uint32_t)kernel_init;
-        extern "C" uint32_t notify_brisc_and_halt_to_iram(uint32_t status, uint32_t first_argument);
         auto stack_free = notify_brisc_and_halt_to_iram(RUN_SYNC_MSG_WAITING_FOR_RESET, (uint32_t)kernel_address);
 #endif
         record_stack_usage(stack_free);
