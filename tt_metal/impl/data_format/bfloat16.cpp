@@ -14,7 +14,7 @@
 #include "tracy/Tracy.hpp"
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
-    os << bfp16.to_uint16();
+    os << bfp16.to_float();
     return os;
 }
 
