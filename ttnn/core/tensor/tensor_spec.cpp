@@ -146,6 +146,14 @@ void TensorSpec::populate_sharding_specs() {
         if (auto upd_mem_config = populate_nd_shard_spec_from_legacy()) {
             tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
         }
+    } else {
+        // Ensure nd shard shape matches tensor shape rank
+        if (memory_config().nd_shard_spec()->shard_shape.rank() != padded_shape().rank()) {
+            auto upd_mem_config = memory_config();
+            upd_mem_config.nd_shard_spec_->shard_shape =
+                upd_mem_config.nd_shard_spec_->shard_shape.to_rank(padded_shape().rank());
+            tensor_layout_ = tensor_layout_.with_memory_config(std::move(upd_mem_config));
+        }
     }
     if (!memory_config().shard_spec().has_value() && memory_config().nd_shard_spec().has_value()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
@@ -162,7 +170,8 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
         auto page_shape = tensor_layout_.compute_page_shape(physical_shape());
         NdShardSpec nd_shard_spec{
             .shard_shape =
-                Shape({static_cast<uint32_t>(page_shape.height()), static_cast<uint32_t>(page_shape.width())}),
+                Shape({static_cast<uint32_t>(page_shape.height()), static_cast<uint32_t>(page_shape.width())})
+                    .to_rank(padded_shape().rank()),
             .cores = std::nullopt,
             .shard_orientation = ShardOrientation::ROW_MAJOR,
         };

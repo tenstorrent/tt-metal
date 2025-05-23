@@ -364,14 +364,14 @@ INSTANTIATE_TEST_SUITE_P(
             .memory_layout = TensorMemoryLayout::INTERLEAVED,
             .shard_shape_2d = std::nullopt,
             .layout = Layout::TILE,
-            .shard_shape_nd = Shape({32, 32}),
+            .shard_shape_nd = Shape({1, 32, 32}),
         },
         LegacyToNdShardingParams{
             .shape = Shape({3, 4, 5}),
             .memory_layout = TensorMemoryLayout::INTERLEAVED,
             .shard_shape_2d = std::nullopt,
             .layout = Layout::ROW_MAJOR,
-            .shard_shape_nd = Shape({1, 5}),
+            .shard_shape_nd = Shape({1, 1, 5}),
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 32 * 2, 32 * 2}),
