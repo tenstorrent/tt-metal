@@ -49,11 +49,6 @@ Alignment legacyShapeToAlignment(
         return Alignment{};
     }
 
-    // ND SHARDED
-    if (memory_config.nd_shard_spec().has_value()) {
-        return Alignment{};
-    }
-
     // INTERLEAVED with only height/width padding
     if (alignment_can_be_2D) {
         ttnn::SmallVector<uint32_t> values(std::min((int)padded_rank, 2));
