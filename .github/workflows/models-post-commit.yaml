@@ -40,20 +40,14 @@ jobs:
         github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
-    container:
-      image: ${{ inputs.docker-image }}
-      env:
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        PYTHONPATH: /work
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+    env:
+      ARCH_NAME: ${{ inputs.arch }}
+      LOGURU_LEVEL: INFO
+      PYTHONPATH: ${{ github.workspace }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -61,6 +55,7 @@ jobs:
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          path: ${{ github.workspace }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
@@ -89,21 +84,15 @@ jobs:
       - ${{ inputs.runner-label }}
       - in-service
       - cloud-virtual-machine
-    container:
-      image: ${{ inputs.docker-image }}
-      env:
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        PYTHONPATH: /work
-        SLOW_RUNTIME_MODE: true
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+    env:
+      ARCH_NAME: ${{ inputs.arch }}
+      LOGURU_LEVEL: INFO
+      PYTHONPATH: ${{ github.workspace }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      SLOW_RUNTIME_MODE: true
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -111,6 +100,7 @@ jobs:
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          path: ${{ github.workspace }}
       - name: ${{ matrix.test-group.name }} slow runtime mode tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

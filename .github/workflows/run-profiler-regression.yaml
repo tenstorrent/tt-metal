@@ -70,31 +70,23 @@ jobs:
         ((inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
-    container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        PROFILER_SCRIPTS_ROOT: /work/tt_metal/tools/profiler
-        PROFILER_TEST_SCRIPTS_ROOT: /work/tests/tt_metal/tools/profiler
-        PROFILER_ARTIFACTS_DIR: /work/generated/profiler
-        PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
-        DONT_USE_VIRTUAL_ENVIRONMENT: 1
-        GITHUB_ACTIONS: true
-        # TODO: Revisit the addition of this env var https://github.com/tenstorrent/tt-metal/issues/20161
-        TRACY_NO_INVARIANT_CHECK: 1
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+    env:
+      TT_METAL_HOME: ${{ github.workspace }}
+      PYTHONPATH: ${{ github.workspace }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      ARCH_NAME: ${{ inputs.arch }}
+      LOGURU_LEVEL: INFO
+      PROFILER_SCRIPTS_ROOT: ${{ github.workspace }}/tt_metal/tools/profiler
+      PROFILER_TEST_SCRIPTS_ROOT: ${{ github.workspace }}/tests/tt_metal/tools/profiler
+      PROFILER_ARTIFACTS_DIR: ${{ github.workspace }}/generated/profiler
+      PROFILER_OUTPUT_DIR: ${{ github.workspace }}/generated/profiler/reports
+      DONT_USE_VIRTUAL_ENVIRONMENT: 1
+      GITHUB_ACTIONS: true
+      # TODO: Revisit the addition of this env var https://github.com/tenstorrent/tt-metal/issues/20161
+      TRACY_NO_INVARIANT_CHECK: 1
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -103,6 +95,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          path: ${{ github.workspace }}
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

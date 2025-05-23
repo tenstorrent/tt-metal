@@ -40,24 +40,17 @@ jobs:
         || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
-    container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
-      env:
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        LD_LIBRARY_PATH: /work/build/lib
-        PYTHONPATH: /work
-        TT_METAL_HOME: /work
-        TT_METAL_SLOW_DISPATCH_MODE: 1
-        GTEST_OUTPUT: xml:/work/generated/test_reports/
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+    env:
+      ARCH_NAME: ${{ inputs.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      PYTHONPATH: ${{ github.workspace }}
+      TT_METAL_HOME: ${{ github.workspace }}
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      GTEST_OUTPUT: xml:${{ github.workspace }}/generated/test_reports/
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -65,6 +58,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          path: ${{ github.workspace }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

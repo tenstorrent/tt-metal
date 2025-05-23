@@ -54,29 +54,22 @@ jobs:
           {name: ttnn tensor cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_tensor},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    container:
-      image: ${{ inputs.docker-image }}
-      env:
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        GTEST_OUTPUT: xml:/work/generated/test_reports/
-        TT_METAL_HOME: /work
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: >-
       ${{
         (startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)))
         || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
+    env:
+      ARCH_NAME: ${{ inputs.arch }}
+      LOGURU_LEVEL: INFO
+      PYTHONPATH: ${{ github.workspace }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      GTEST_OUTPUT: xml:${{ github.workspace }}/generated/test_reports/
+      TT_METAL_HOME: ${{ github.workspace }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -87,6 +80,7 @@ jobs:
           # https://github.com/tenstorrent/tt-metal/issues/20166
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          path: ${{ github.workspace }}
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
