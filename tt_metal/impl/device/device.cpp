@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -74,6 +74,11 @@
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
+#include "fabric_edm_packet_header.hpp"
+#include "fabric_types.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
 #include <umd/device/coordinate_manager.h>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_silicon_driver_common.hpp>
