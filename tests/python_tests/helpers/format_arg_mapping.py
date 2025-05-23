@@ -106,6 +106,7 @@ class ReducePool(Enum):
     Max = "PoolType::MAX"
     Sum = "PoolType::SUM"
     Average = "PoolType::AVG"
+    No = " "
 
 
 class DestAccumulation(Enum):
