@@ -7,7 +7,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/trace.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <tt-metalium/mesh_trace.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -15,9 +15,7 @@ namespace ttnn::operations::trace {
 
 MeshTraceId begin_trace_capture(MeshDevice* device, QueueId cq_id) {
     ZoneScoped;
-    MeshTraceId trace_id = tt::tt_metal::distributed::MeshTrace::next_id();
-    device->begin_mesh_trace(*cq_id, trace_id);
-    return trace_id;
+    return BeginTraceCapture(device, *cq_id);
 }
 void end_trace_capture(MeshDevice* device, MeshTraceId trace_id, QueueId cq_id) {
     ZoneScoped;
