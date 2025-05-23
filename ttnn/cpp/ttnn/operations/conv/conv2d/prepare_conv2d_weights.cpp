@@ -1536,6 +1536,24 @@ template ttnn::Tensor prepare_conv_bias<MeshDevice>(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
+template ttnn::Tensor fold_tensor<tt::tt_metal::IDevice>(
+    const ttnn::Tensor& tensor,
+    tt::tt_metal::IDevice* device,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 4> padding_n4,
+    std::optional<DataType> dtype,
+    bool is_weight_tensor);
+
+template ttnn::Tensor fold_tensor<tt::tt_metal::distributed::MeshDevice>(
+    const ttnn::Tensor& tensor,
+    tt::tt_metal::distributed::MeshDevice* device,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 4> padding_n4,
+    std::optional<DataType> dtype,
+    bool is_weight_tensor);
+
 template ttnn::Tensor conv_bias_layout_convert(
     const ttnn::Tensor& bias_tensor,
     DataType bias_dtype,
