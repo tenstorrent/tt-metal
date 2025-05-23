@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,17 +8,8 @@ from tqdm import tqdm
 from models.demos.llama3_subdevices.tt.generator import Generator
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations, TtModelArgs
+from models.tt_transformers.tt.generator import create_submeshes
 from vllm.inputs import INPUT_REGISTRY
-
-
-def generate_submeshes(mesh_device, data_parallel):
-    if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
-        return [mesh_device]
-
-    num_devices = mesh_device.get_num_devices()
-    assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
-
-    return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
@@ -59,7 +50,7 @@ def initialize_vllm_text_transformer(
     dtype=ttnn.bfloat8_b,
     optimizations=LlamaOptimizations.performance,
 ):
-    submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
+    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
     # Load model args, weights
     model_args = []
     for submesh in submesh_devices:

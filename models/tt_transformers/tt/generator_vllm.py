@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,20 +15,10 @@ from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN, MLLAMA_IMAGE_T
 
 import ttnn
 from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
-from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 from models.utility_functions import nearest_32
-
-
-def generate_submeshes(mesh_device, data_parallel):
-    if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
-        return [mesh_device]
-
-    num_devices = mesh_device.get_num_devices()
-    assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
-
-    return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -68,7 +58,7 @@ def initialize_vllm_text_transformer(
     dtype=ttnn.bfloat8_b,
     optimizations=DecodersPrecision.performance,
 ):
-    submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
+    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
     # Load model args, weights
     model_args = []
     for submesh in submesh_devices:
@@ -176,7 +166,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, tt_data_parallel=1):
         max_seq_len = 131072
 
-        submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
         model_args = []
         model = []
