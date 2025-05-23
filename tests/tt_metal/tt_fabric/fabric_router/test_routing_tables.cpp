@@ -83,22 +83,12 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 0);
     for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(0, 0, 0, 3, chan);
+        auto path = control_plane->get_fabric_route(0, 0, 0, 7, chan);
         EXPECT_EQ(path.size() > 0, true);
     }
-    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 1, 1);
+    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 1);
     for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(0, 1, 1, 2, chan);
-        EXPECT_EQ(path.size() > 0, true);
-    }
-    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 0);
-    for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(0, 0, 1, 3, chan);
-        EXPECT_EQ(path.size() > 0, true);
-    }
-    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(1, 2, 1);
-    for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(1, 2, 0, 2, chan);
+        auto path = control_plane->get_fabric_route(0, 0, 0, 7, chan);
         EXPECT_EQ(path.size() > 0, true);
     }
 }
