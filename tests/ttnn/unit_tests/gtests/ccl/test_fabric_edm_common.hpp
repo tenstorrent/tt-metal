@@ -1218,6 +1218,9 @@ void setup_test_with_persistent_fabric(
                 devices.back()->id(),
                 edm_builders_per_conn.begin()->my_noc_x,
                 edm_builders_per_conn.begin()->my_noc_y);
+            // TODO: update from vector<vector> to specified struct/class
+            //       Conceptually this method (connect_to_downstream_edm) call
+            //       is for each connection. not for each risc.
             for (auto& edm_per_risc : edm_builders_per_conn) {
                 edm_per_risc.connect_to_downstream_edm(edm_per_risc);
             }

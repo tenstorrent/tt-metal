@@ -308,6 +308,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             auto& backward_direction_edm = edm_builders_backward_direction.at(device_sequence[i]->id());
 
             for (size_t l = 0; l < num_links; l++) {
+                // TODO: update from vector<vector> to specified struct/class
+                //       Conceptually this method (connect_to_downstream_edm) call
+                //       is for each connection. not for each risc.
                 for (size_t risc_id = 0; risc_id < forward_direction_edm[l].size(); risc_id++) {
                     forward_direction_edm[l][risc_id].connect_to_downstream_edm(backward_direction_edm[l][risc_id]);
                     backward_direction_edm[l][risc_id].connect_to_downstream_edm(forward_direction_edm[l][risc_id]);
@@ -427,6 +430,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             auto& backward_direction_edm = edm_builders_backward_direction.at(local_device->id());
 
             for (size_t l = 0; l < this->num_links; l++) {
+                // TODO: update from vector<vector> to specified struct/class
+                //       Conceptually this method (connect_to_downstream_edm) call
+                //       is for each connection. not for each risc.
                 for (size_t risc_id = 0; risc_id < forward_direction_edm[l].size(); risc_id++) {
                     forward_direction_edm[l][risc_id].connect_to_downstream_edm(backward_direction_edm[l][risc_id]);
                     backward_direction_edm[l][risc_id].connect_to_downstream_edm(forward_direction_edm[l][risc_id]);

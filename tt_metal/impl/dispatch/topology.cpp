@@ -1233,6 +1233,9 @@ void build_tt_fabric_program(
 
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
+                // TODO: update from vector<vector> to specified struct/class
+                //       Conceptually this method (connect_to_downstream_edm) call
+                //       is for each connection. not for each risc.
                 for (size_t risc_id = 0; risc_id < risc_core_count; risc_id++) {
                     edm_builder1[risc_id].connect_to_downstream_edm(edm_builder2[risc_id]);
                     edm_builder2[risc_id].connect_to_downstream_edm(edm_builder1[risc_id]);
