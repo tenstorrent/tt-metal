@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-# SPDX-FileCopyrightText: Copyright 2024 Stability AI, The HuggingFace Team and The InstantX Team. All rights reserved.
 
 # SPDX-License-Identifier: Apache-2.0
 
