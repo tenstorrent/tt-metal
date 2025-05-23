@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -19,14 +19,14 @@
 #include "utils.hpp"
 
 enum class CoreType;
+
 namespace tt {
 namespace tt_metal {
+
 class IDevice;
 class Program;
 enum DispatchWorkerType : uint32_t;
 enum NOC : uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
 
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
 #define UNUSED_SEM_ID 0
@@ -42,6 +42,13 @@ enum class FDKernelType : uint32_t {
     VIRTUAL,   // Not a real kernel
     DISPATCH,  // Dispatch kernels
     ROUTING,   // Routing/Tunneling kernels
+};
+
+struct TerminationInfo {
+    CoreCoord logical_core;  // Logical core coordination
+    CoreType core_type;      // Core Type
+    uint32_t address;        // Termination signal address in L1
+    uint32_t val;            // Termination signal value
 };
 
 static std::vector<string> dispatch_kernel_file_names = {
@@ -127,6 +134,7 @@ public:
             logical_core_, GetCoreType());
     }
     chip_id_t GetDeviceId() { return device_id_; }  // Since this->device may not exist yet
+    virtual std::optional<tt::tt_metal::TerminationInfo> GetTerminationInfo() const { return std::nullopt; }
 
     // Get the port index for which a given kernel is upstream/downstream of this one
     int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
@@ -171,3 +179,6 @@ protected:
     std::vector<FDKernel*> upstream_kernels_;
     std::vector<FDKernel*> downstream_kernels_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt
