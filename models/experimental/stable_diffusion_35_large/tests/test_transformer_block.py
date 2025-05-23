@@ -57,9 +57,6 @@ def test_transformer_block(
         model_name, subfolder="transformer", torch_dtype=torch_dtype
     )
 
-    # parent_torch_model = SD3Transformer2DModel.from_pretrained(
-    #     f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch_dtype
-    # )
     if model_name == "medium":
         embedding_dim = 1536
     else:

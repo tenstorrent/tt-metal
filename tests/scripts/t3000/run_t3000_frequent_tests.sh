@@ -355,7 +355,7 @@ run_t3000_sd35large_tests() {
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
+  echo "LOG_METAL: Running run_t3000_sd35large_tests"
 
   # Run test_model (decode and prefill) for llama3 70B
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
