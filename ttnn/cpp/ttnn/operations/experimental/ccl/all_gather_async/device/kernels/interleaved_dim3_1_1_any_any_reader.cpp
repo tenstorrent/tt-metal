@@ -62,7 +62,6 @@ void kernel_main() {
     uint32_t tiles_to_read = slice_num_pages;
     while (tiles_read < tiles_to_read) {
         uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-
         cb_reserve_back(cb_forward_id, num_pages_to_read);
         const uint32_t l1_write_addr_base = get_write_ptr(cb_forward_id);
         uint32_t l1_write_addr = l1_write_addr_base;
@@ -173,9 +172,9 @@ void kernel_main() {
 
                 uint32_t packet_id = 0;
                 while (tiles_read < tiles_to_read) {
-                    cb_reserve_back(cb_backward_id, packet_size_in_pages);
-                    size_t l1_write_addr = get_write_ptr(cb_backward_id);
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
+                    cb_reserve_back(cb_backward_id, num_pages_to_read);
+                    size_t l1_write_addr = get_write_ptr(cb_backward_id);
                     for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                         uint32_t intermediate_packet_id = actual_forward_chip_id + packet_id * ring_size;
                         uint32_t intermediate_packet_first_tile_id =
@@ -187,11 +186,10 @@ void kernel_main() {
                         noc_async_read(packet_addr, l1_write_addr, payload_size_bytes);
                         l1_write_addr += payload_size_bytes;
                         tiles_read += contig_pages_advanced;
+                        packet_id++;
                     }
-
-                    packet_id++;
                     noc_async_read_barrier();
-                    cb_push_back(cb_backward_id, packet_size_in_pages);
+                    cb_push_back(cb_backward_id, num_pages_to_read);
                 }
             }
         }
