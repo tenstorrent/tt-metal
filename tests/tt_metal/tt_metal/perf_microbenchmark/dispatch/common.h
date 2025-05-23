@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,13 +12,14 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
 
-#include "noc/noc_parameters.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
-#include <tt-metalium/hal.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <magic_enum/magic_enum.hpp>
+
+#include "llrt/hal.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
 
 using namespace tt::tt_metal;  // test only
 
@@ -852,7 +853,8 @@ inline void add_dispatcher_packed_cmd(
     add_bare_dispatcher_cmd(cmds, cmd);
     for (CoreCoord core : worker_cores) {
         CoreCoord phys_worker_core = device->worker_core_from_logical_core(core);
-        cmds.push_back(NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y));
+        cmds.push_back(
+            tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y));
     }
     cmds.resize(
         padded_size(cmds.size(), MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t)));
@@ -872,7 +874,8 @@ inline void gen_bare_dispatcher_unicast_write_cmd(
     const uint32_t bank_id = 0;  // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
-    cmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
+    cmd.write_linear.noc_xy_addr =
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y);
     cmd.write_linear.addr = device_data.get_result_data_addr(worker_core, bank_id);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
@@ -892,7 +895,8 @@ inline void gen_dispatcher_unicast_write_cmd(
     const uint32_t bank_id = 0;  // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
-    cmd.write_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
+    cmd.write_linear.noc_xy_addr =
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y);
     cmd.write_linear.addr = device_data.get_result_data_addr(worker_core, bank_id);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
@@ -918,8 +922,8 @@ inline void gen_dispatcher_multicast_write_cmd(
     const uint32_t bank_id = 0;  // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
-    cmd.write_linear.noc_xy_addr =
-        NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+    cmd.write_linear.noc_xy_addr = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+        physical_start.x, physical_start.y, physical_end.x, physical_end.y);
     cmd.write_linear.addr = device_data.get_result_data_addr(worker_core_range.start_coord);
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = worker_core_range.size();
@@ -1124,8 +1128,8 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
         CQDispatchWritePackedLargeSubCmd sub_cmd;
         CoreCoord physical_start = device->worker_core_from_logical_core(range.start_coord);
         CoreCoord physical_end = device->worker_core_from_logical_core(range.end_coord);
-        sub_cmd.noc_xy_addr =
-            NOC_MULTICAST_ENCODING(physical_start.x, physical_start.y, physical_end.x, physical_end.y);
+        sub_cmd.noc_xy_addr = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
+            physical_start.x, physical_start.y, physical_end.x, physical_end.y);
         sub_cmd.addr = device_data.get_result_data_addr(range.start_coord);
         sub_cmd.length = xfer_size_bytes;
         sub_cmd.num_mcast_dests =
