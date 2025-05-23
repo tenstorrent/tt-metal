@@ -63,7 +63,7 @@ uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, ui
     uint32_t divisor = start_divisor;
     uint32_t big_divisor = divisor * mult;
     uint32_t padded_num = round_up(num, big_divisor);
-    while ((padded_num - num) >= (int)(padded_num / big_divisor)) {
+    while ((padded_num - num) >= (int)(padded_num / big_divisor) && divisor > 1) {
         divisor = divisor - 1;
         big_divisor = divisor * mult;
         padded_num = round_up(num, big_divisor);
@@ -299,10 +299,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     auto shard_orientation = parallel_config.shard_orientation;
 
     uint32_t nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2];
-    uint32_t nhw_padded = nhw_shape;
-    if (shard_scheme != TensorMemoryLayout::WIDTH_SHARDED) {
-        nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
-    }
+    uint32_t nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
     TT_FATAL(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
@@ -947,7 +944,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
             get_num_cores_channels_from_parallel_config(largest_parallel_config));
 
     uint32_t nhw_out_padded_ntile_per_core =
-        conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
+        tt::div_up(conv_out_memory_config.shard_spec().value().shape[0], tt::constants::TILE_HEIGHT);
 
     OptimizedConvBlockConfig opt_conv_op_block_config = determine_per_core_conv_block_config(
         input_parallel_config,
