@@ -115,11 +115,7 @@ def check_file(path: Path, expected_lines, normalize_year=True, git_year=None):
 
     actual = strip_noise_lines(actual_lines)
     expected = strip_noise_lines(expected_lines)
-    print(f"Expected: {expected}")
-    print(f"Actual: {actual}")
-    print(f" Check {actual == expected}")
-    print("Expected Line 0 chars:", [ord(c) for c in expected[0]])
-    print("Actual Line 0 chars:  ", [ord(c) for c in actual[0]])
+    
     for i, (e, a) in enumerate(zip(expected, actual)):
         print(f"Line {i}:")
         print(f"  expected: {repr(e)}")
