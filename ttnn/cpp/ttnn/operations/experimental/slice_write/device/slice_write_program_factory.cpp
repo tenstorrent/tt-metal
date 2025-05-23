@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "slice_write_op.hpp"
-#include "tt-metalium/logger.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -189,10 +188,29 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     TT_FATAL(input_tensor.dtype() == output_tensor.dtype(), "Input & output should have the same dtype");
 
     TT_FATAL(input_tensor.shard_spec().has_value(), "Input tensor should be sharded");
+
     auto shard_spec = input_tensor.shard_spec().value();
     auto input_cores = shard_spec.grid;
     auto input_shard_shape = shard_spec.shape;
+
+    bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    uint32_t num_cores_channels = 1;
+    auto total_cores = shard_spec.grid;
+    if (is_block_sharded) {
+        if (rm_orientation) {
+            num_cores_channels = total_cores.bounding_box().grid_size().x;
+        } else {
+            num_cores_channels = total_cores.bounding_box().grid_size().y;
+        }
+    }
+
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
+    TT_FATAL(
+        output_row_size_bytes % num_cores_channels == 0,
+        "Output row size {} should be divisible by num_cores_channels {}",
+        output_row_size_bytes,
+        num_cores_channels);
     uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
@@ -266,9 +284,6 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         common_writer_kernel_args.end(), num_output_sticks_per_dim.begin(), num_output_sticks_per_dim.end());
 
     auto num_cores_total = cores.size();
-
-    bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     auto total_num_input_sticks = input_tensor.volume() / input_shape[-1];
     const auto num_sticks_per_core = shard_spec.shape[0];
