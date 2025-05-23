@@ -108,7 +108,7 @@ jobs:
             echo "Model is not in cache, downloading now to save it in cache..."
             python3 <<EOF
 from transformers import AutoModel
-model_name = "$model_name"  # Pass the Bash variable into the Python script
+model_name = "falcon7b"  # Pass the Bash variable into the Python script
 cache_dir = '/mnt/MLPerf/tt-dnn_models/hf_cache'
 AutoModel.from_pretrained(model_name, cache_dir=cache_dir)
 EOF
