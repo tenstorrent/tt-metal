@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -212,7 +212,6 @@ void kernel_main() {
                         act_multicast_data_addr,
                         act_mcast_sender_size_bytes,
                         num_reader_cores,
-                        false,
                         false);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
@@ -229,7 +228,6 @@ void kernel_main() {
                         act_mcast_sender_semaphore_valid_addr,
                         act_mcast_receiver_semaphore_noc_addr,
                         num_reader_cores,
-                        false,
                         false);
 
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
