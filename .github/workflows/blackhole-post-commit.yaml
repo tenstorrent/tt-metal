@@ -205,6 +205,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
       runner: ${{ inputs.runner-label || 'BH' }}
+
   fabric-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -215,6 +216,17 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  t3000-fast-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      extra-tag: ${{ inputs.runner-label || 'BH' }}
+
 #   build-and-test-wheels:
 #     uses: Check all-post-commit yaml for directions
 #     secrets: inherit
