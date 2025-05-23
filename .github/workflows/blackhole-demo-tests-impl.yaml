@@ -35,7 +35,7 @@ jobs:
             cmd: LLAMA_DIR=/proj_sw/user_dev/hf_data/Llama3/Llama3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1,
             owner_id: U03PUAKE719 # Miguel Tairum
           },
-          {
+          { # This should be moved to a BH perf regression pipeline in the future
             name: "unet_shallow_performance",
             arch: blackhole,
             cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device",
