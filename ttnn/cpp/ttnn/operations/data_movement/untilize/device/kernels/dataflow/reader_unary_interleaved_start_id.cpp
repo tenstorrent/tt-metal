@@ -49,8 +49,6 @@ void kernel_main() {
         cb_reserve_back(cb_id_in0, onetile);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
-        // noc_async_read_tile not yet supported for ShardedAddrGen
-        // noc_async_read_page not yet supported for InterleavedAddrGenFast
 #ifdef SHARDED
         noc_async_read_page(i, s, l1_write_addr);
 #else
