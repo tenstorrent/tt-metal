@@ -75,7 +75,7 @@ public:
 
     void add_prefetch_paged_to_ringbuffer(const CQPrefetchPagedToRingbufferCmd& paged_to_ringbuffer_info);
 
-    void add_prefetch_set_ringbuffer_offset(uint32_t offset);
+    void add_prefetch_set_ringbuffer_offset(uint32_t offset, bool update_wp = false);
 
     void add_prefetch_relay_ringbuffer(
         uint32_t num_sub_cmds, const std::vector<CQPrefetchRelayRingbufferSubCmd>& sub_cmds, uint32_t offset_idx = 0);

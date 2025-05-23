@@ -44,7 +44,7 @@ void write_go_signal(
 
     HugepageDeviceCommand go_signal_cmd_sequence(cmd_region, cmd_sequence_sizeB);
 
-    go_signal_cmd_sequence.add_prefetch_set_ringbuffer_offset(dispatch_md.prefetcher_cache_info.offset);
+    go_signal_cmd_sequence.add_prefetch_set_ringbuffer_offset(dispatch_md.prefetcher_cache_info.offset, true);
 
     go_msg_t run_program_go_signal;
     run_program_go_signal.signal = RUN_MSG_GO;

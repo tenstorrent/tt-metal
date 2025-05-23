@@ -1245,7 +1245,7 @@ uint32_t process_set_ringbuffer_offset(uint32_t cmd_ptr) {
     uint32_t offset = cmd->set_ringbuffer_offset.offset;
 
     ringbuffer_offset = offset;
-    if (offset == 0) {
+    if (offset == 0 and cmd->set_ringbuffer_offset.update_wp) {
         ringbuffer_wp = scratch_db_base;
     }
 

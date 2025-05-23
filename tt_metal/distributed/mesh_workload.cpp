@@ -193,14 +193,15 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // These commands will be updated based on MeshDevice state when the
     // workload is enqueued.
     auto mesh_device = mesh_cq.device();
-    FDMeshCommandQueue& mesh_cq_impl = static_cast<FDMeshCommandQueue&>(mesh_cq);
-    uint32_t prefetcher_cache_sizeB = mesh_cq_impl.get_prefetcher_cache_sizeB();
+    auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map(dispatch_core_type).ringbuffer_size();
     // determine max program size across all programs
     uint32_t max_program_sizeB = 0;
     for (auto& [device_range, program] : programs_) {
         auto program_sizeB = program.get_program_kernel_bins_sizeB(mesh_device);
         max_program_sizeB = std::max(max_program_sizeB, program_sizeB);
     }
+    FDMeshCommandQueue& mesh_cq_impl = static_cast<FDMeshCommandQueue&>(mesh_cq);
     mesh_cq_impl.set_max_program_kernels_sizeB(max_program_sizeB);
     bool use_prefetcher_cache = max_program_sizeB <= prefetcher_cache_sizeB;
     for (auto& [device_range, program] : programs_) {

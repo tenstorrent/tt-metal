@@ -75,6 +75,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool),
     reader_thread_pool_(reader_thread_pool),
     worker_launch_message_buffer_state_(worker_launch_message_buffer_state),
+    dispatch_core_type_(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
     prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
     prefetcher_cache_sizeB_(MetalContext::instance().dispatch_mem_map(this->dispatch_core_type_).ringbuffer_size()),
     prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
@@ -145,17 +146,10 @@ void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
 }
 
 void FDMeshCommandQueue::populate_dispatch_core_type() {
-    uint32_t device_idx = 0;
     for (auto device : this->mesh_device_->get_devices()) {
-        if (device_idx) {
-            TT_FATAL(
-                this->dispatch_core_type_ ==
-                    MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
-                "Expected the Dispatch Core Type to match across device in a Mesh");
-        } else {
-            this->dispatch_core_type_ = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-        }
-        device_idx++;
+        TT_FATAL(
+            this->dispatch_core_type_ == MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
+            "Expected the Dispatch Core Type to match across device in a Mesh");
     }
 }
 

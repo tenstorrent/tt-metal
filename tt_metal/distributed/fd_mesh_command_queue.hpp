@@ -123,7 +123,7 @@ private:
     std::vector<MeshTraceStagingMetadata> ordered_mesh_trace_md_;
 
     CoreCoord dispatch_core_;
-    CoreType dispatch_core_type_ = CoreType::WORKER;
+    const CoreType dispatch_core_type_;
     // MeshCommandQueues and the MeshDevice share thread-pools for dispatching to and reading from the Mesh
     std::shared_ptr<ThreadPool>
         reader_thread_pool_;  // Thread pool used to read from the Mesh (used by the Completion Queue Reader thread)
