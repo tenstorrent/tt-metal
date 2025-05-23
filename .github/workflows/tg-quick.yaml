@@ -115,6 +115,7 @@ jobs:
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
       - name: Run quick tests
+        if: ${{ !cancelled() }}
         timeout-minutes: 20
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         run: |
