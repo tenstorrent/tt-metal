@@ -81,7 +81,9 @@ uint32_t get_bf16_pool_scalar(
                             packed_first_value = bfloat16(value).to_packed() << 16;
                         }
                         if (scalars != nullptr) {
-                            scalars->back().end = i - 1;
+                            if (!scalars->empty()) {
+                                scalars->back().end = i - 1;
+                            }
                             scalars->push_back({i, bfloat16(value).to_packed() << 16, i});
                         }
                         first_scalar = false;
