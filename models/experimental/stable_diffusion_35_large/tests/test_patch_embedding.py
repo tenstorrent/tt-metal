@@ -24,7 +24,7 @@ TILE_SIZE = 32
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -42,19 +42,24 @@ def test_patch_embedding(
     mesh_device: ttnn.MeshDevice,
     model_name,
     batch_size: int,
+    model_location_generator,
 ) -> None:
     dtype = ttnn.bfloat16
 
-    parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch.bfloat16
-    )
+    model_name = model_location_generator(f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large")
+    parent_torch_model = SD3Transformer2DModel.from_pretrained(model_name, subfolder="transformer", torch_dtype=torch.bfloat16)
+
+    #parent_torch_model = SD3Transformer2DModel.from_pretrained(
+    #    f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch.bfloat16
+    #)
+    
     if model_name == "medium":
         embedding_dim = 1536
     else:
         embedding_dim = 2432
 
     num_devices = mesh_device.get_num_devices()
-    if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
+    if os.environ["MESH_DEVICE"] == "T3K" and embedding_dim == 2432:
         hidden_dim_padding = (
             ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE
         ) * num_devices - embedding_dim

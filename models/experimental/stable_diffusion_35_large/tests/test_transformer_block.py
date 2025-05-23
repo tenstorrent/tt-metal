@@ -23,7 +23,7 @@ TILE_SIZE = 32
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -45,13 +45,17 @@ def test_transformer_block(
     batch_size: int,
     spatial_sequence_length: int,
     prompt_sequence_length: int,
+    model_location_generator,
 ) -> None:
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
-    parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch_dtype
-    )
+    model_name = model_location_generator(f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large")
+    parent_torch_model = SD3Transformer2DModel.from_pretrained(model_name, subfolder="transformer", torch_dtype=torch_dtype)
+
+    # parent_torch_model = SD3Transformer2DModel.from_pretrained(
+    #     f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch_dtype
+    # )
     if model_name == "medium":
         embedding_dim = 1536
     else:
@@ -63,7 +67,7 @@ def test_transformer_block(
     num_devices = mesh_device.get_num_devices()
     ## heads padding for T3K TP
     pad_embedding_dim = False
-    if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
+    if os.environ["MESH_DEVICE"] == "T3K" and embedding_dim == 2432:
         pad_embedding_dim = True
         hidden_dim_padding = (
             ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE

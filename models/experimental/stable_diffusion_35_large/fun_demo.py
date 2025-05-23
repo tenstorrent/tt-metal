@@ -19,7 +19,7 @@ from .tt.parallel_config import create_dit_parallel_config, ParallelConfig
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
