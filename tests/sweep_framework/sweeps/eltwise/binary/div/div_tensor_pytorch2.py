@@ -17,7 +17,7 @@ from models.utility_functions import torch_random
 
 
 parameters = {
-    "nightly": {
+    "test03": {
         "input_specs": [
             {"shape": [0, 1], "other": 1.0},
             {"shape": [1, 1, 16384, 256], "other": 5.656854249492381},
@@ -142,18 +142,18 @@ def run(
     torch.manual_seed(0)
 
     input_shape = input_specs["shape"]
-    if len(input_shape) == 0:
-        torch_input_tensor_a = torch.empty([])
-    else:
-        torch_input_tensor_a = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-        )(input_shape)
+    # if len(input_shape) == 0:
+    #     torch_input_tensor_a = torch.empty([])
+    # else:
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
 
     other = input_specs["other"]
     if isinstance(other, (int, float)):
         torch_other_tensor = torch.tensor(other, dtype=torch.float32)
-    elif len(other) == 0:
-        torch_other_tensor = torch.empty([])
+    # elif len(other) == 0:
+    #     torch_other_tensor = torch.empty([])
     else:
         torch_other_tensor = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
@@ -180,9 +180,22 @@ def run(
 
     start_time = start_measuring_time()
 
-    output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, memory_config=output_memory_config, use_legacy=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+
+
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# |         | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN | FAIL (L1 Out of Mem) | FAIL (Watcher) | FAIL (Unsupported Device Perf) |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | nightly | 127  |           609           |         0         |    0    |          0           |       0        |               0                |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | test01  | 128  | old binary 608          |         0         |    0    |          0           |       0        |               0                |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | test02  | 734  |            2            |         0         |    0    |          0           |       0        |               0                |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | test03  | 736  | with binary_ng  0       |         0         |    0    |          0           |       0        |               0                |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
