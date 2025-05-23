@@ -170,13 +170,23 @@ void kernel_main() {
 
                             noc_async_read_barrier();
 
-                            if ((block == num_blocks_inner_dim - 1) && (in0_last_ktile_w > 0)) {
-                                auto in0_last_ktile_w_ptr = l1_write_extract_shard_in0 - in0_single_tile_size_bytes;
-                                pad_last_ktile<in0_data_format>(in0_last_ktile_w, in0_last_ktile_w_ptr);
+                            if constexpr (in0_last_ktile_w > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    auto in0_last_ktile_w_ptr = l1_write_extract_shard_in0 - in0_single_tile_size_bytes;
+                                    pad_last_ktile<in0_data_format>(in0_last_ktile_w, in0_last_ktile_w_ptr);
+                                }
                             }
                         } else {
                             in0_tensor_read_addr = in0_tensor_current_inner_dim_block_start_addr;
                             in0_tensor_current_inner_dim_block_start_addr += in0_block_size_bytes;
+
+                            if constexpr (in0_last_ktile_w > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    auto in0_last_ktile_w_ptr =
+                                        in0_tensor_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
+                                    pad_last_ktile<in0_data_format>(in0_last_ktile_w, in0_last_ktile_w_ptr);
+                                }
+                            }
                         }
 
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
