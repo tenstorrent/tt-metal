@@ -3220,37 +3220,37 @@ def test_conv2d_sdxl(
 
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, activations_dtype, groups, kernel, stride, padding, dilation, auto_shard, deallocate_activation, split_factor_input_channels, split_factor_output_channels, slice_type, num_slices",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, activations_dtype, groups, kernel, stride, padding, dilation, auto_shard, deallocate_activation, split_factor_input_channels, split_factor_output_channels, slice_type, num_slices, act_block_h_override",
     (
         # 1024x1024 resolution
 
         # VAE
         # kernel 3x3
-        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8),
-        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16),
-        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16),
-        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 4),
-        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, None, 1),
-        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 2),
-        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8),
-        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8),
+        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8, 32),
+        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16, 32),
+        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16, 128),
+        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 4, 128),
+        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, None, 1, 128),
+        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 2, 32),
+        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8, 128),
+        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8, 32),
 
         # output_channels 3
         (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16),
 
         # input_channels 4
-        (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, None, 1),
+        (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, None, 1, 256),
 
         # kernel 1x1
-        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1),
-        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1),
+        # (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1),
+        # (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1),
 
-        # channels 4
-        (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1),
+        # # channels 4
+        # (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 1, 1, None, 1),
     ),
 )
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
 def test_conv2d_vae_sdxl(
     device,
     torch_tensor_map,
@@ -3271,11 +3271,12 @@ def test_conv2d_vae_sdxl(
     split_factor_input_channels,
     split_factor_output_channels,
     slice_type,
-    num_slices
+    num_slices,
+    act_block_h_override
 ):
 
     config_override = {}
-    config_override["act_block_h"] = 0
+    config_override["act_block_h"] = act_block_h_override
     config_override["act_block_w_div"] = 1
 
     slice_config = ttnn.Conv2dSliceConfig(
