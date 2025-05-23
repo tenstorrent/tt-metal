@@ -37,7 +37,7 @@ FORCE_INLINE void clear_out_tiles() {
         noc_async_read(clear_value_addr, write_addr, tile_size);
         write_addr += tile_size;
     }
-    noc_async_write_barrier();
+    noc_async_read_barrier();
 }
 
 /**
@@ -82,6 +82,12 @@ void kernel_main() {
         cb_push_back(in_scalar_cb_id, 1);
     }
 
+    // We only need to clear out temp CB tiles if the window size is larger than 16.
+    // If <= 16, than we use only upper to faces of the tile, and we can configure
+    // reduce to only process as many rows as needed.
+    // In case we need bottom two faces, than we have to configure reduce to process all rows,
+    // as number of valid rows in upper two faces will be 16 and in bottom two some different number.
+    // In that case not all rows will have valid data, so we need to clear them out.
     constexpr uint32_t window_hw = window_h * window_w;
     if constexpr (window_hw > 16) {
         fill_with_val(get_read_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);

@@ -37,7 +37,7 @@ FORCE_INLINE void clear_out_tiles() {
         noc_async_read(clear_value_addr, write_addr, tile_size);
         write_addr += tile_size;
     }
-    noc_async_write_barrier();
+    noc_async_read_barrier();
 }
 
 template <uint32_t clear_value_cb_id, uint32_t num_tiles>
@@ -68,7 +68,6 @@ void kernel_main() {
     constexpr int32_t in_w = get_compile_time_arg_val(5);
 
     constexpr uint32_t in_c = get_compile_time_arg_val(6);
-    constexpr uint32_t in_nbytes_leftover = (in_c % (32 * 8)) * 2;
 
     constexpr uint32_t split_reader = get_compile_time_arg_val(7);
     constexpr uint32_t reader_id = get_compile_time_arg_val(8);
@@ -93,6 +92,7 @@ void kernel_main() {
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
     constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
 
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
@@ -103,6 +103,13 @@ void kernel_main() {
     constexpr uint32_t window_hw = window_h * window_w;
     constexpr bool full_dest_width = in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION) == 0;
     constexpr uint32_t leftover_num_tiles = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) / TILE_WIDTH;
+
+    // We only need to clear out temp CB tiles if the window size is larger than 16.
+    // If <= 16, than we use only upper to faces of the tile, and we can configure
+    // reduce to only process as many rows as needed.
+    // In case we need bottom two faces, than we have to configure reduce to process all rows,
+    // as number of valid rows in upper two faces will be 16 and in bottom two some different number.
+    // In that case not all rows will have valid data, so we need to clear them out.
     if constexpr (window_hw > 16) {
         fill_with_val(get_read_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
         clear_out_tiles<in_cb_id, clear_value_cb_id>();
