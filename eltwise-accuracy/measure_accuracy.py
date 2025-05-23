@@ -153,7 +153,7 @@ operations_dict = {
         None,
         "exp",
     ),
-    "exp_alt": (
+    "exp_cond": (
         torch.exp,
         ttnn.exp,
         None,
@@ -698,10 +698,10 @@ def main(args):
     all_operations = [
         # "exp",
         # "exp_hybrid",
-        # "exp_alt",
+        "exp_cond",
         # "exp_approx",
         # "exp_approx0",
-        "exp_approx_21f",
+        # "exp_approx_21f",
         # "exp_accurate_python",
         # "exp_python_alt1",
         # "pow_2",
@@ -742,8 +742,8 @@ def main(args):
     highres_operations = [
         # "exp_hybrid",
         # "exp",
-        # "exp_alt",
-        "exp_approx_21f",
+        "exp_cond",
+        # "exp_approx_21f",
         # "exp_approx",
         # "exp_approx0",
         # "exp_accurate_python",
