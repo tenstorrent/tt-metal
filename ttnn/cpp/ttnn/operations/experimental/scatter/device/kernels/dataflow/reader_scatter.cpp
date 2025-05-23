@@ -22,7 +22,7 @@ FORCE_INLINE void read_wt_tiles(
     }
 }
 
-template <typename unsigned_type, typename number_type>
+template <typename number_type, typename index_type>
 FORCE_INLINE void scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push_to_output(
     const uint32_t& h,
     const uint32_t& Wt_input,
@@ -45,8 +45,7 @@ FORCE_INLINE void scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push
     const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
     volatile tt_l1_ptr number_type* input_l1_ptr =
         reinterpret_cast<volatile tt_l1_ptr number_type*>(input_l1_read_addr);
-    volatile tt_l1_ptr unsigned_type* index_l1_ptr =
-        reinterpret_cast<volatile tt_l1_ptr unsigned_type*>(index_l1_read_addr);
+    volatile tt_l1_ptr index_type* index_l1_ptr = reinterpret_cast<volatile tt_l1_ptr index_type*>(index_l1_read_addr);
     volatile tt_l1_ptr number_type* source_l1_ptr =
         reinterpret_cast<volatile tt_l1_ptr number_type*>(source_l1_read_addr);
     volatile tt_l1_ptr number_type* output_l1_ptr =
@@ -57,9 +56,13 @@ FORCE_INLINE void scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push
         output_l1_ptr[i] = input_l1_ptr[i];
     }
 
-    DPRINT << "h: " << h << ENDL();
-    DPRINT << "Wt_index: " << Wt_index << ENDL();
-    DPRINT << "logical_index_width: " << logical_index_width << ENDL();
+    // constexpr DataFormat input_data_format = get_data_format(input_cb);
+    // constexpr DataFormat index_data_format = get_data_format(index_cb);
+    // constexpr DataFormat source_data_format = get_data_format(source_cb);
+
+    // DPRINT << "h: " << h << ENDL();
+    // DPRINT << "Wt_index: " << Wt_index << ENDL();
+    // DPRINT << "logical_index_width: " << logical_index_width << ENDL();
 
     // scatter along Wt tiles
     for (uint32_t tile_id = 0; tile_id < Wt_index; ++tile_id) {
@@ -74,8 +77,8 @@ FORCE_INLINE void scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push
                         }
 
                         // get scatter info
-                        volatile unsigned_type& index_value =
-                            tile_guts<unsigned_type>(index_l1_ptr, face_x, face_y, scalar_x, scalar_y, tile_id);
+                        volatile index_type& index_value =
+                            tile_guts<index_type>(index_l1_ptr, face_x, face_y, scalar_x, scalar_y, tile_id);
                         if (index_value >= logical_index_width) {
                             continue;
                         }
@@ -103,7 +106,7 @@ FORCE_INLINE void scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push
 }
 
 // TODO(jbbieniekTT): stream-scatter after sorting (pt. 2 of the whole implementation) (issue no #)
-template <typename unsigned_type, typename number_type>
+template <typename number_type, typename index_type>
 FORCE_INLINE void scatter_along_whole_axis(
     const uint32_t& Ht,
     const uint32_t& Wt_input,
@@ -125,17 +128,23 @@ void kernel_main() {
     const auto source_addr_gtor{
         make_addr_gtor<ctas.source_tensor_is_dram>(ctas.source_tensor_cb, ctas.source_tensor_addr)};
 
-    const uint32_t tile_offset = get_arg_val<uint32_t>(0);
-    const uint32_t start_ht_id = get_arg_val<uint32_t>(1);
+    const uint32_t start_ht_id = get_arg_val<uint32_t>(0);
+    const uint32_t ht_per_core = get_arg_val<uint32_t>(1);
 
-    for (uint32_t h = start_ht_id; h < start_ht_id + tile_offset; ++h) {
+    using input_std_format = std_type_t<get_dataformat(ctas.input_tensor_cb)>;
+    using index_std_format = std_type_t<get_dataformat(ctas.index_tensor_cb)>;
+    // using source_std_format = std_type_t<get_dataformat(ctas.source_tensor_cb)>;
+
+    // DPRINT << "::: " << start_ht_id << "::: " << ht_per_core << ENDL();
+
+    for (uint32_t h = start_ht_id; h < start_ht_id + ht_per_core; ++h) {
         // first phase: read input/index/src
         read_wt_tiles<ctas.input_tensor_is_dram>(input_addr_gtor, ctas.input_tensor_cb, ctas.Wt_input, h);
         read_wt_tiles<ctas.index_tensor_is_dram>(index_addr_gtor, ctas.index_tensor_cb, ctas.Wt_index, h);
         read_wt_tiles<ctas.source_tensor_is_dram>(source_addr_gtor, ctas.source_tensor_cb, ctas.Wt_index, h);
 
         // second phase: copy input to output + scatter src onto output + push output
-        scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push_to_output<uint32_t, float>(
+        scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push_to_output<input_std_format, index_std_format>(
             h,
             ctas.Wt_input,
             ctas.logical_index_width,

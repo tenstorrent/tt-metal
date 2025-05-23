@@ -6,8 +6,6 @@
 
 #include <cstdint>
 
-#include <tuple>
-
 #include <tt-metalium/constants.hpp>
 
 constexpr uint32_t ONE_TILE = 1;
@@ -21,9 +19,45 @@ constexpr uint32_t TILE_FACE_HW = TILE_FACE_WIDTH * TILE_FACE_HEIGHT;
 template <bool is_dram>
 using IAGF = InterleavedAddrGenFast<is_dram>;
 
+template <DataFormat df>
+struct df_to_std {
+    using std_type = void;
+};
+
+template <>
+struct df_to_std<DataFormat::Float32> {
+    using std_type = float;
+};
+
+template <>
+struct df_to_std<DataFormat::Float16> {
+    using std_type = uint16_t;
+};
+
+template <>
+struct df_to_std<DataFormat::Int32> {
+    using std_type = uint32_t;
+};
+
+template <>
+struct df_to_std<DataFormat::UInt32> {
+    using std_type = uint32_t;
+};
+
+template <>
+struct df_to_std<DataFormat::UInt16> {
+    using std_type = uint16_t;
+};
+
+template <>
+struct df_to_std<DataFormat::Uint8> {
+    using std_type = uint8_t;
+};
+
+template <DataFormat df>
+using std_type_t = typename df_to_std<df>::std_type;
+
 // TODO(jbbieniekTT): return immediately calculated result using face bit mask
-// (this will speed up the scatter kernel altogether - this method is called
-// a multitude of times)
 FORCE_INLINE uint32_t calc_offset_inside_tile(
     const std::size_t& face_x, const std::size_t& face_y, const std::size_t& scalar_x, const std::size_t& scalar_y) {
     uint32_t offset = 0;
