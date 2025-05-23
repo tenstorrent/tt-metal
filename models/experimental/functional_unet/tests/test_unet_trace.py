@@ -6,6 +6,8 @@ import time
 import ttnn
 import pytest
 
+from ttnn.device import is_wormhole_b0
+
 from loguru import logger
 
 from models.experimental.functional_unet.tt.model_preprocessing import (
@@ -19,12 +21,24 @@ from models.experimental.functional_unet.tests.common import (
     is_n300_with_eth_dispatch_cores,
     is_t3k_with_eth_dispatch_cores,
     UNET_FULL_MODEL_PCC,
+    UNET_FULL_MODEL_PCC_BH,
     UNET_TRACE_REGION_SIZE,
     UNET_L1_SMALL_REGION_SIZE,
     UNetPerformanceStatistics,
 )
 
-from models.utility_functions import skip_for_grayskull, divup
+from models.utility_functions import skip_for_grayskull, divup, nearest_32
+
+
+def get_dram_sharded_memory_config_for_output_tensor(output_tensor, dram_grid_size):
+    output_dram_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
+        ),
+        [output_tensor.shape[-2], nearest_32(divup(output_tensor.shape[-1], dram_grid_size.x))],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_dram_shard_spec)
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
@@ -133,7 +147,11 @@ def test_unet_trace_2cq(
     logger.info(f"Running sanity check against reference model output")
     B, C, H, W = torch_output_tensor.shape
     ttnn_output_tensor = ttnn.to_torch(outputs[-1]).reshape(B, C, H, W)
-    verify_with_pcc(torch_output_tensor, ttnn_output_tensor, UNET_FULL_MODEL_PCC)
+    verify_with_pcc(
+        torch_output_tensor,
+        ttnn_output_tensor,
+        UNET_FULL_MODEL_PCC if is_wormhole_b0(device) else UNET_FULL_MODEL_PCC_BH,
+    )
 
     ttnn.release_trace(device, tid)
 
@@ -259,7 +277,11 @@ def test_unet_trace_2cq_multi_device(
     logger.info(f"Running sanity check against reference model output")
     B, C, H, W = torch_output_tensor.shape
     ttnn_output_tensor = ttnn.to_torch(outputs[-1], mesh_composer=output_mesh_composer).reshape(B, C, H, W)
-    verify_with_pcc(torch_output_tensor, ttnn_output_tensor, UNET_FULL_MODEL_PCC)
+    verify_with_pcc(
+        torch_output_tensor,
+        ttnn_output_tensor,
+        UNET_FULL_MODEL_PCC if is_wormhole_b0(mesh_device) else UNET_FULL_MODEL_PCC_BH,
+    )
 
     ttnn.release_trace(mesh_device, tid)
 
@@ -327,16 +349,8 @@ def test_unet_trace_2cq_same_io(
     l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config)
     op_event = ttnn.record_event(device, 0)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
-    output_dram_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
-        ),
-        [output_tensor.shape[-2], output_tensor.shape[-1] // dram_grid_size.x],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    output_dram_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_dram_shard_spec
-    )
+
+    output_dram_memory_config = get_dram_sharded_memory_config_for_output_tensor(output_tensor, dram_grid_size)
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config)
     inference_and_compile_time = time.time() - start
     logger.info(f"Done compile run")
@@ -399,7 +413,11 @@ def test_unet_trace_2cq_same_io(
 
     logger.info(f"Running sanity check against reference model output")
     B, C, H, W = torch_output_tensor.shape
-    verify_with_pcc(torch_output_tensor, ttnn.to_torch(outputs[-1]).reshape(B, C, H, W), pcc=UNET_FULL_MODEL_PCC)
+    verify_with_pcc(
+        torch_output_tensor,
+        ttnn.to_torch(outputs[-1]).reshape(B, C, H, W),
+        pcc=UNET_FULL_MODEL_PCC if is_wormhole_b0(device) else UNET_FULL_MODEL_PCC_BH,
+    )
     ttnn.release_trace(device, tid)
 
     return UNetPerformanceStatistics(groups, batch, 1, inference_and_compile_time, inference_time)
@@ -488,16 +506,8 @@ def test_unet_trace_2cq_same_io_multi_device(
     l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config)
     op_event = ttnn.record_event(mesh_device, 0)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
-    output_dram_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
-        ),
-        [output_tensor.shape[-2], output_tensor.shape[-1] // dram_grid_size.x],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    output_dram_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_dram_shard_spec
-    )
+
+    output_dram_memory_config = get_dram_sharded_memory_config_for_output_tensor(output_tensor, dram_grid_size)
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config)
     inference_and_compile_time = time.time() - start
     logger.info(f"Done compile run")
@@ -568,7 +578,7 @@ def test_unet_trace_2cq_same_io_multi_device(
     verify_with_pcc(
         torch_output_tensor,
         ttnn.to_torch(outputs[-1], mesh_composer=output_mesh_composer).reshape(B, C, H, W),
-        pcc=UNET_FULL_MODEL_PCC,
+        pcc=UNET_FULL_MODEL_PCC if is_wormhole_b0(mesh_device) else UNET_FULL_MODEL_PCC_BH,
     )
     ttnn.release_trace(mesh_device, tid)
 
