@@ -268,13 +268,17 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return result;
     }
 
-    // More than 2 dimensional sharding can't be converted to legacy sharding
-    if (nd_shard_shape.volume() != nd_shard_shape[-1] * nd_shard_shape[-2]) {
+    ShardSpec shard_spec(
+        *nd_shard_spec.cores,
+        {nd_shard_shape.volume() / nd_shard_shape[-1], nd_shard_shape[-1]},
+        nd_shard_spec.shard_orientation);
+
+    bool width_sharded = shard_spec.shape[0] == padded_shape().volume() / padded_shape()[-1];
+
+    // More than 2 dimensional sharding can't be converted to legacy sharding, except for width sharded case
+    if (!width_sharded && nd_shard_shape.volume() != nd_shard_shape[-1] * nd_shard_shape[-2]) {
         return std::nullopt;
     }
-
-    ShardSpec shard_spec(
-        *nd_shard_spec.cores, {nd_shard_shape[-2], nd_shard_shape[-1]}, nd_shard_spec.shard_orientation);
 
     // Check that the number of shards fits onto the cores
     size_t num_shards_along_height = div_up(physical_shape().height(), shard_spec.shape[0]);
@@ -287,18 +291,17 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    // Height sharding
-    if (shard_spec.shape[1] == padded_shape()[-1]) {
+    if (width_sharded) {
         auto result = mem_config;
-        result.memory_layout_ = TensorMemoryLayout::HEIGHT_SHARDED;
+        result.memory_layout_ = TensorMemoryLayout::WIDTH_SHARDED;
         result.shard_spec_ = shard_spec;
         return result;
     }
 
-    // Width sharding
-    if (shard_spec.shape[0] == padded_shape()[-2]) {
+    // Height sharding
+    if (shard_spec.shape[1] == padded_shape()[-1]) {
         auto result = mem_config;
-        result.memory_layout_ = TensorMemoryLayout::WIDTH_SHARDED;
+        result.memory_layout_ = TensorMemoryLayout::HEIGHT_SHARDED;
         result.shard_spec_ = shard_spec;
         return result;
     }
