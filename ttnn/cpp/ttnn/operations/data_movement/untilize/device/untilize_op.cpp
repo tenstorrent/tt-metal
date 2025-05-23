@@ -73,7 +73,7 @@ std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<T
     const auto& input_tensor = input_tensors.at(0);
     DataType output_dtype =
         input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
-    if (output_mem_config.is_sharded()) {
+    if (this->output_mem_config.is_sharded()) {
         if (input_tensor.memory_config().is_sharded()) {
             auto mem_config = this->output_mem_config.with_shard_spec(input_tensor.memory_config().shard_spec());
             return {TensorSpec(
@@ -112,7 +112,7 @@ std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<T
         TensorLayout::fromPaddedShape(
             output_dtype,
             PageConfig(Layout::ROW_MAJOR),
-            output_mem_config,
+            this->output_mem_config,
             input_tensor.get_logical_shape(),
             input_tensor.get_padded_shape()))};
 }
