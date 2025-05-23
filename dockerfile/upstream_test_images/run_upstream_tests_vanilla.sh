@@ -34,7 +34,7 @@ hw_topology_test_suites["blackhole_no_models"]="test_suite_bh_single_pcie_python
 # Function to display help
 show_help() {
     echo "Usage: $0 [options] <hw_topology>"
-    echo "  hw_topology    Required. The hardware topology to run tests against."
+    echo "  hw_topology    Required. The hardware/topology to run tests against."
     echo "  -h, --help     Show this help message."
     echo "  --test-suite   Optional. Specify which test suite to run. Available options:"
     # Dynamically list available test functions
@@ -82,27 +82,33 @@ if [[ -z "$hw_topology" ]]; then
     exit 1
 fi
 
+
+# Check if the test suite is part of the specified hardware topology
+if [[ -z "${hw_topology_test_suites[$hw_topology]:-}" ]]; then
+    echo "Error: Unsupported hw/topology: $hw_topology"
+    echo "We support the following: ${!hw_topology_test_suites[@]}"
+    exit 1
+fi
+
 # Validate test_suite if provided
 if [[ -n "$test_suite" ]]; then
     # Check if the function exists
     if ! declare -F "$test_suite" > /dev/null; then
-        echo "Error: Invalid test suite: $test_suite"
+        echo "Error: The requested test suite $test_suite is not available. Please check the help for available test suites."
         show_help
         exit 1
     fi
-fi
 
-if [[ -n "$test_suite" ]]; then
-    $test_suite
-else
-    # Check if the hardware topology exists in our mapping
-    if [[ -z "${hw_topology_test_suites[$hw_topology]:-}" ]]; then
-        echo "Error: Unsupported hw_topology: $hw_topology"
-        echo "We support the following: ${!hw_topology_test_suites[@]}"
+    # Check if the test suite is in the list of test suites for this topology
+    if ! echo "${hw_topology_test_suites[$hw_topology]}" | grep -q "\b$test_suite\b"; then
+        echo "Error: Test suite '$test_suite' is not part of the '$hw_topology' hw/topology"
+        echo "Available test suites for $hw_topology: ${hw_topology_test_suites[$hw_topology]}"
         exit 1
     fi
 
-    # Run all test suites for the specified hardware topology
+    $test_suite
+else
+    # Run all test suites for the specified hardware topology as opposed to just one
     for test_func in ${hw_topology_test_suites[$hw_topology]}; do
         $test_func
     done
