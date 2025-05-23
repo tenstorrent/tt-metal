@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 from loguru import logger
@@ -11,9 +11,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 
 
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 1, 128 * 128, 4),
+    ],
+)
 @pytest.mark.parametrize("num_inference_steps", [5])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_euler_discrete_scheduler(device, num_inference_steps):
+def test_euler_discrete_scheduler(device, input_shape, num_inference_steps):
     try:
         from tracy import signpost
     except ImportError:
@@ -66,7 +72,7 @@ def test_euler_discrete_scheduler(device, num_inference_steps):
         tt_sigma = tt_scheduler.init_noise_sigma
         assert_with_pcc(ref_sigma, tt_sigma, 0.999)
 
-        ref_latent = torch.randn((1, 4, 128, 128), dtype=torch.float32)
+        ref_latent = torch.randn(input_shape, dtype=torch.float32)
         tt_latent = ttnn.from_torch(ref_latent, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device=device)
         tt_latent = ttnn.to_memory_config(tt_latent, ttnn.L1_MEMORY_CONFIG)
 
@@ -79,7 +85,7 @@ def test_euler_discrete_scheduler(device, num_inference_steps):
             passed, msg = assert_with_pcc(ref_scaled_latent, torch_scaled_latent, 0.999)
             logger.debug(f"{i}: scaled_model_input pcc passed: {msg}")
 
-            noise_pred = torch.randn((1, 4, 128, 128), dtype=torch.float32)  # this comes from unet
+            noise_pred = torch.randn(input_shape, dtype=torch.float32)  # this comes from unet
             tt_noise_pred = ttnn.from_torch(noise_pred, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device=device)
 
             ref_prev_sample, ref_pred_original_sample = scheduler.step(
