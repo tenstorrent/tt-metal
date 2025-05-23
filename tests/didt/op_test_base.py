@@ -215,6 +215,6 @@ class OpTestBase:
         assert catch_nd_on_fail
 
 
-def get_blackhole_grid_size():
+def get_blackhole_grid_size(mesh_device):
     assert is_blackhole()
-    return ttnn.CoreCoord(13, 10)
+    return mesh_device.compute_with_storage_grid_size()
