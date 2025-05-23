@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -146,8 +146,9 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandl
                     act_tile_size);
             }
             cb_indices.act_cb = cb_indices.get_next_cb_index();
-            tt::tt_metal::create_cb(cb_indices.act_cb, program, core, act_tile_size, num_cb0_tiles, act_df);
-            log_debug(LogOp, "Act CB: {}, npages: {}, pagesize: {}", cb_indices.act_cb, num_cb0_tiles, act_tile_size);
+            tt::tt_metal::create_cb(cb_indices.act_cb, program, core, act_tile_size, num_cb0_tiles * 3, act_df);
+            log_debug(
+                LogOp, "Act CB: {}, npages: {}, pagesize: {}", cb_indices.act_cb, num_cb0_tiles * 3, act_tile_size);
         }
     } else {
         TT_THROW("Input must be sharded!");

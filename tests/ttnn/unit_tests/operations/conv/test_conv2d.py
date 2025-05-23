@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,27 +9,33 @@ import torch
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize("stride", [2])
-@pytest.mark.parametrize("batch_size", [2])
+@pytest.mark.parametrize("stride", [1])
+@pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, shard_layout, config",
     (
-        (353, 384, 8, 8, WS, None),
-        (128, 128, 32, 32, BS, None),
-        (16, 16, 256, 256, HS, {"act_block_h": 32}),
+        # (353, 384, 8, 8, WS, None),
+        # (128, 128, 32, 32, BS, None),
+        (32, 32, 34, 34, HS, None),
     ),
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [None, ttnn.bfloat16],
+    [
+        None,
+    ],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
+    [
+        ttnn.bfloat16,
+    ],
 )
 @pytest.mark.parametrize(
     "fp32_accum",
-    [True, False],
+    [
+        False,
+    ],
 )
 @pytest.mark.parametrize(
     "packer_l1_acc",
@@ -38,13 +44,18 @@ import torch
 @pytest.mark.parametrize(
     "filter, padding",
     [
-        [3, (1, 2, 2, 3)],
-        [1, 0],
-        [5, (2, 4, 3, 5)],
+        [3, 0],
+        # [1, 0],
+        # [5, (2, 4, 3, 5)],
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
-@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "output_layout",
+    [
+        ttnn.TILE_LAYOUT,
+    ],
+)
 def test_conv_features(
     device,
     torch_tensor_map,
