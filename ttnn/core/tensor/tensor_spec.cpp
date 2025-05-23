@@ -158,20 +158,7 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
     auto mem_layout = mem_config.memory_layout();
 
     if (mem_layout == TensorMemoryLayout::INTERLEAVED) {
-        auto page_shape = tensor_layout_.compute_page_shape(physical_shape());
-        NdShardSpec nd_shard_spec{
-            .shard_shape =
-                Shape({static_cast<uint32_t>(page_shape.height()), static_cast<uint32_t>(page_shape.width())})
-                    .to_rank(padded_shape().rank()),
-            .cores = std::nullopt,
-            .shard_orientation = ShardOrientation::ROW_MAJOR,
-        };
-        return MemoryConfig(
-            mem_config.memory_layout(),
-            mem_config.buffer_type(),
-            mem_config.shard_spec(),
-            std::move(nd_shard_spec),
-            mem_config.created_with_nd_shard_spec());
+        return std::nullopt;
     }
 
     if (!mem_config.shard_spec().has_value()) {
@@ -259,34 +246,18 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    // We can convert only to interleaved layout if cores are not explicitly specified
-    if (!nd_shard_spec.cores.has_value()) {
-        // For interleaved layout, shard shape must match page shape
-        auto page_shape = tensor_layout_.compute_page_shape(physical_shape());
-        if (nd_shard_shape[-2] != page_shape.height() || nd_shard_shape[-1] != page_shape.width()) {
-            return std::nullopt;
-        }
-
-        return MemoryConfig(
-            TensorMemoryLayout::INTERLEAVED,
-            mem_config.buffer_type(),
-            std::nullopt,
-            mem_config.nd_shard_spec(),
-            mem_config.created_with_nd_shard_spec());
-    }
-
     // Detect single bank case
     if (nd_shard_shape == padded_shape()) {
         return MemoryConfig(
             TensorMemoryLayout::SINGLE_BANK,
             mem_config.buffer_type(),
-            ShardSpec(*nd_shard_spec.cores, physical_shape(), nd_shard_spec.shard_orientation),
+            ShardSpec(nd_shard_spec.cores, physical_shape(), nd_shard_spec.shard_orientation),
             mem_config.nd_shard_spec(),
             mem_config.created_with_nd_shard_spec());
     }
 
     ShardSpec shard_spec(
-        *nd_shard_spec.cores,
+        nd_shard_spec.cores,
         {nd_shard_shape.volume() / nd_shard_shape[-1], nd_shard_shape[-1]},
         nd_shard_spec.shard_orientation);
 

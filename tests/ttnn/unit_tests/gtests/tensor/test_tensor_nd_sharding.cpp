@@ -27,7 +27,7 @@ struct NdToLegacyShardingParams {
     Shape shape;
     Shape shard_shape_nd;
     Layout layout = Layout::TILE;
-    std::optional<CoreCoord> grid_size;
+    CoreCoord grid_size;
 
     TensorMemoryLayout memory_layout = TensorMemoryLayout::BLOCK_SHARDED;
     std::optional<Shape2D> shard_shape_2d;
@@ -35,7 +35,7 @@ struct NdToLegacyShardingParams {
 struct NDShardingOpCompatParams {
     Shape shape;
     Shape shard_shape;
-    std::optional<CoreCoord> grid_size;
+    CoreCoord grid_size;
 };
 }  // namespace
 
@@ -84,14 +84,11 @@ TEST_P(LegacyToNdShardingTests, LegacyToNdSharding) {
     ASSERT_EQ(nd_shard_spec.has_value(), params.shard_shape_nd.has_value());
     if (nd_shard_spec.has_value()) {
         ASSERT_EQ(nd_shard_spec->shard_shape, params.shard_shape_nd.value());
-        ASSERT_EQ(nd_shard_spec->cores.has_value(), params.memory_layout != TensorMemoryLayout::INTERLEAVED);
-        if (nd_shard_spec->cores.has_value()) {
-            if (params.grid_size.has_value()) {
-                ASSERT_EQ(nd_shard_spec->cores->ranges().size(), 1);
-                ASSERT_EQ(nd_shard_spec->cores->ranges()[0].grid_size(), params.grid_size.value());
-            } else {
-                ASSERT_EQ(nd_shard_spec->cores, cores);
-            }
+        if (params.grid_size.has_value()) {
+            ASSERT_EQ(nd_shard_spec->cores.ranges().size(), 1);
+            ASSERT_EQ(nd_shard_spec->cores.ranges()[0].grid_size(), params.grid_size.value());
+        } else {
+            ASSERT_EQ(nd_shard_spec->cores, cores);
         }
     }
 }
@@ -101,10 +98,7 @@ class NdToLegacyShardingTests : public ::testing::TestWithParam<NdToLegacyShardi
 TEST_P(NdToLegacyShardingTests, NdToLegacySharding) {
     const auto& params = GetParam();
 
-    std::optional<CoreRangeSet> cores;
-    if (params.grid_size.has_value()) {
-        cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size->x - 1, params.grid_size->y - 1}));
-    }
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
     NdShardSpec nd_shard_spec{params.shard_shape_nd, cores, ShardOrientation::ROW_MAJOR};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
     TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
@@ -125,10 +119,7 @@ class NdShardingOpCompatTests : public ttnn::TTNNFixtureWithDevice,
 TEST_P(NdShardingOpCompatTests, TestAdd) {
     const auto& params = GetParam();
 
-    std::optional<CoreRangeSet> cores;
-    if (params.grid_size.has_value()) {
-        cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size->x - 1, params.grid_size->y - 1}));
-    }
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
     NdShardSpec nd_shard_spec{params.shard_shape, cores, ShardOrientation::ROW_MAJOR};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
     TensorLayout tensor_layout(DataType::UINT32, PageConfig(Layout::TILE), memory_config);
@@ -364,14 +355,14 @@ INSTANTIATE_TEST_SUITE_P(
             .memory_layout = TensorMemoryLayout::INTERLEAVED,
             .shard_shape_2d = std::nullopt,
             .layout = Layout::TILE,
-            .shard_shape_nd = Shape({1, 32, 32}),
+            .shard_shape_nd = std::nullopt,
         },
         LegacyToNdShardingParams{
             .shape = Shape({3, 4, 5}),
             .memory_layout = TensorMemoryLayout::INTERLEAVED,
             .shard_shape_2d = std::nullopt,
             .layout = Layout::ROW_MAJOR,
-            .shard_shape_nd = Shape({1, 1, 5}),
+            .shard_shape_nd = std::nullopt,
         },
         LegacyToNdShardingParams{
             .shape = Shape({2, 32 * 2, 32 * 2}),
@@ -620,9 +611,4 @@ INSTANTIATE_TEST_SUITE_P(
             .shape = Shape({1, 2, 32 * 4, 32 * 5}),
             .shard_shape = Shape({1, 1, 32 * 2, 32 * 2}),
             .grid_size = CoreCoord{3, 4},
-        },
-        NDShardingOpCompatParams{
-            .shape = Shape({1, 1, 32 * 10, 32 * 10}),
-            .shard_shape = Shape({1, 1, 32, 32}),
-            .grid_size = std::nullopt,
         }));

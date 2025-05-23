@@ -90,7 +90,7 @@ using Array8D = std::array<uint32_t, 8>;
 
 struct NdShardSpec {
     Shape shard_shape;
-    std::optional<CoreRangeSet> cores;  // Distribute over all cores if not specified
+    CoreRangeSet cores;
     ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
 };
 

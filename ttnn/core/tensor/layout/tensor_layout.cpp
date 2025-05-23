@@ -215,7 +215,7 @@ std::variant<std::monostate, ShardSpecBuffer, BufferDistributionSpec> TensorLayo
 
     auto& nd_shard_spec = memory_config_.nd_shard_spec().value();
     return BufferDistributionSpec::from_shard_spec(
-        shape, nd_shard_spec.shard_shape, page_shape, *nd_shard_spec.cores, nd_shard_spec.shard_orientation);
+        shape, nd_shard_spec.shard_shape, page_shape, nd_shard_spec.cores, nd_shard_spec.shard_orientation);
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const {
