@@ -170,7 +170,7 @@ perf_targets = {
     },
     "ScaledDotProductAttentionDecode_0": {
         "op_name": "SDPA",
-        "kernel_duration": 13338,
+        "kernel_duration": 9300,
         "op_to_op": 652.6666666666666,
         "non-overlapped-dispatch-time": 9741.5,
         "kernel_duration_relative_margin": 0.07,
