@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 #include <stdexcept>
 #include <string>
 
@@ -190,6 +189,10 @@ RunTimeOptions::RunTimeOptions() {
 
     if (getenv("TT_METAL_DISABLE_RELAXED_MEM_ORDERING")) {
         this->disable_relaxed_memory_ordering = true;
+    }
+
+    if (getenv("TT_METAL_ENABLE_GATHERING")) {
+        this->enable_gathering = true;
     }
 
     const char *arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");

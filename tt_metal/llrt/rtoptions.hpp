@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,6 @@
 #include <map>
 #include <set>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include "core_coord.hpp"
@@ -157,6 +156,9 @@ class RunTimeOptions {
     // e.g. Store A followed by Load A will be unchanges but Store A followed by Load B may return B before A is written
     // This option will disable the relaxed ordering
     bool disable_relaxed_memory_ordering = false;
+
+    // Enable instruction gathering in Tensix core.
+    bool enable_gathering = false;
 
     // Buffer in DRAM to store various ARC processor samples. Feature not ready yet
     uint32_t arc_debug_buffer_size = 0;
@@ -358,6 +360,7 @@ public:
     inline bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
     inline bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
+    inline bool get_gathering_enabled() const { return this->enable_gathering; }
 
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
