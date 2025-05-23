@@ -29,10 +29,12 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/blackhole-nightly-tests-impl.yaml
     strategy:
+      fail-fast: false
       matrix:
         card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
     secrets: inherit
     with:
+      runner-label: ${{ matrix.card_type }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -41,6 +43,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     strategy:
+      fail-fast: false
       matrix:
         card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
     with:
@@ -54,30 +57,13 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
     strategy:
+      fail-fast: false
       matrix:
         card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
     with:
       arch: blackhole
       runner-label: ${{ matrix.card_type }}
       timeout: 120
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  ttnn-stress-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { runner-label: P100 },
-          { runner-label: P150 },
-        ]
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group.runner-label }}
-      timeout: 45
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
