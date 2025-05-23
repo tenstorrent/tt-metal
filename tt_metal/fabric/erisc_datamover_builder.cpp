@@ -498,11 +498,6 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const {
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
     TT_ASSERT(this->my_chip_id != this->peer_chip_id);
-    TT_ASSERT(
-        std::unordered_set<size_t>(
-            sender_channels_num_buffers.begin(), sender_channels_num_buffers.begin() + config.num_used_sender_channels)
-                .size() == 1,
-        "Implementation expects sender_channels_num_buffers to all be the same for now");
 
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
         log_trace(tt::LogTest, "Sender {} num buffers: {}", i, this->sender_channels_num_buffers[i]);
