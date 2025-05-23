@@ -950,9 +950,19 @@ std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
         return {};
     }
 
+    return this->get_forwarding_eth_chans_to_chip(
+        src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, *forwarding_direction);
+}
+
+std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
+    mesh_id_t src_mesh_id,
+    chip_id_t src_chip_id,
+    mesh_id_t dst_mesh_id,
+    chip_id_t dst_chip_id,
+    RoutingDirection forwarding_direction) const {
     std::vector<chan_id_t> forwarding_channels;
     const auto& active_channels =
-        this->get_active_fabric_eth_channels_in_direction(src_mesh_id, src_chip_id, forwarding_direction.value());
+        this->get_active_fabric_eth_channels_in_direction(src_mesh_id, src_chip_id, forwarding_direction);
     for (const auto& src_chan_id : active_channels) {
         // check for end-to-end route before accepting this channel
         if (get_fabric_route(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_chan_id).empty()) {
