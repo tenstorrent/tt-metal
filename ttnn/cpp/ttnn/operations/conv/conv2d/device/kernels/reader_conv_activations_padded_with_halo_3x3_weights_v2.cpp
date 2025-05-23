@@ -6,6 +6,22 @@
 #include "height_sharded_reader_common.hpp"
 
 #include "debug/dprint.h"
+#include "debug/dprint_pages.h"
+
+FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    return local_cb.fifo_rd_ptr;
+}
+
+FORCE_INLINE void update_local_cb_rd_ptr(uint32_t cb_id, uint32_t val) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    local_cb.fifo_rd_ptr = val;
+}
+
+FORCE_INLINE void update_local_cb_wr_ptr(uint32_t cb_id, uint32_t val) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    local_cb.fifo_wr_ptr = val;
+}
 
 void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
@@ -68,23 +84,48 @@ void kernel_main() {
 
     // coalesce reads along weight_size_w
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
-
     static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
     // set_state uses just x/y from the get_noc_addr, addr is ignored
     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     uint32_t start_reader_idx = 0;
+    uint32_t first_block, second_block, third_block;
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         uint32_t reader_offset = act_l1_read_addr;
         cb_reserve_back(cb_id_act, act_block_num_tiles * window_outer);
+
+        if (bh > 0) {
+            uint32_t res = bh % window_outer;
+            if (res == 0) {
+                update_local_cb_wr_ptr(cb_id_act, first_block);
+            } else if (res == 1) {
+                update_local_cb_wr_ptr(cb_id_act, second_block);
+            } else if (res == 2) {
+                update_local_cb_wr_ptr(cb_id_act, third_block);
+            }
+        }
+
         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
+        uint32_t prev_l1 = l1_write_addr_act;
+
         for (uint32_t outer = 0; outer < window_outer; outer++) {
+            bool dry_run = outer != 2 && bh != 0;
             // Reset reader_idx to finish act_block_h_datums
             reader_idx = start_reader_idx;
 
             uint32_t act_block_h_datums_read_curr =
                 bh == act_num_blocks_h - 1 ? act_block_h_datums_read_last_block : act_block_h_datums_read;
+
+            if (bh == 0) {
+                if (outer == 0) {
+                    first_block = l1_write_addr_act;
+                } else if (outer == 1) {
+                    second_block = l1_write_addr_act;
+                } else if (outer == 2) {
+                    third_block = l1_write_addr_act;
+                }
+            }
 
             read_sticks<
                 dilation_w,
@@ -93,13 +134,21 @@ void kernel_main() {
                 act_block_w_extra_align_bytes,
                 stride_w_bytes,
                 weight_size_w>(
-                act_block_h_datums_read_curr, packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
+                act_block_h_datums_read_curr,
+                packed_reader_indices_ptr,
+                reader_offset,
+                l1_write_addr_act,
+                reader_idx,
+                dry_run);
 
             noc_async_read_barrier();
 
             reader_offset += window_outer_offset;
+
+            outer++;
         }
 
+        // print_full_tile(cb_id_act, 0, false);
         cb_push_back(cb_id_act, act_block_num_tiles * window_outer);
         start_reader_idx = reader_idx;
 #ifdef SPLIT_READER

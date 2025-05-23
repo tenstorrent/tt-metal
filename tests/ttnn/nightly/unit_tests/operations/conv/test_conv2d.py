@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -53,7 +53,14 @@ def randomize_torch_tensor(torch_tensor_map, tensor_shape):
     if tensor_shape in torch_tensor_map.keys():
         torch_tensor = torch_tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+        torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16).float()
+
+        counter = 0
+        for i in range(torch_tensor.shape[2]):
+            for j in range(torch_tensor.shape[3]):
+                torch_tensor[:, :, i, j] = counter
+                counter += 1
+
         torch_tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
@@ -243,6 +250,7 @@ def run_conv(
         return_output_dim=True,
         return_weights_and_bias=True,
     )
+    breakpoint()
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,

@@ -16,7 +16,7 @@ import torch
     (
         # (353, 384, 8, 8, WS, None),
         # (128, 128, 32, 32, BS, None),
-        (32, 32, 34, 34, HS, None),
+        (32, 32, 32 * 2 + 2, 34, HS, {"act_block_h": 32}),
     ),
 )
 @pytest.mark.parametrize(
