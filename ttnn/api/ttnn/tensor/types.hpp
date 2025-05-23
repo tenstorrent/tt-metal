@@ -16,7 +16,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
