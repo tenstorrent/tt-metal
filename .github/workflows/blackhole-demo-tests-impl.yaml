@@ -39,22 +39,14 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ["in-service", "${{ inputs.runner-label }}"]
     steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@williamly/bh-qb-test
         timeout-minutes: 10
         with:
-          name: ${{ inputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          path: ${{ github.workspace }}
+
       - name: Enable Performance mode
         if: ${{ contains(matrix.test-group.name, 'performance') }}
         run: |
@@ -68,6 +60,7 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
           HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         run: |
+          source ${{ github.workspace }}/python_env/bin/activate
           if [[ "${{ matrix.test-group.name }}" == *"Llama"* ]]; then
             pip install -r ${{ github.workspace }}/models/tt_transformers/requirements.txt
           fi

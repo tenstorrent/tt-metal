@@ -37,11 +37,13 @@ jobs:
         shell: bash
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@williamly/bh-qb-test
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           path: ${{ github.workspace }}
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: build/test/umd/${{ inputs.arch }}/unit_tests
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          build/test/umd/${{ inputs.arch }}/unit_tests
