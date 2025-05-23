@@ -23,6 +23,21 @@ test_suite_bh_single_pcie_metal_unit_tests() {
 test_suite_bh_single_pcie_small_ml_model_tests() {
     echo "[upstream-tests] Running BH upstream small model tests"
     pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation
+
+    if [ -z "${HF_HOME}" ]; then
+      echo "Error: HF_HOME environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
+      exit 1
+    fi
+
+    if [ -d "$HF_HOME" ] && [ "$(ls -A $HF_HOME)" ]; then
+      echo "[upstream-tests] Some huggingface weights detected, continuing"
+    else
+      echo "[upstream-tests] Error: Huggingface weights do not seem to exist in $HF_HOME, exiting" >&2
+      exit 1
+    fi
+
+    pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct MESH_DEVICE=N150 pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
 }
 
 # Define test suite mappings for different hardware topologies

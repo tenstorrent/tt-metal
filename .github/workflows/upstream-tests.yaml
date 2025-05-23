@@ -183,8 +183,11 @@ jobs:
       - cloud-virtual-machine
     steps:
       - name: Run image
-        timeout-minutes: 30
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-image-tag }}
+        timeout-minutes: 45
+        env:
+          SOURCE_HF_HOME: /localdev/blackhole_demos/huggingface_data
+          HF_HOME: /huggingface_data
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_HF_HOME:$HF_HOME:ro -e HF_HOME ${{ needs.get-image-tags.outputs.bh-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
