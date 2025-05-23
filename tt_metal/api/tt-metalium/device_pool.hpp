@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,8 +36,10 @@ public:
     DevicePool(const DevicePool&) = delete;
     DevicePool(DevicePool&& other) noexcept = delete;
 
+    static bool is_initialized() { return _inst != nullptr; }
+
     static DevicePool& instance() noexcept {
-        TT_ASSERT(_inst != nullptr, "Trying to get DevicePool without initializing it");
+        TT_ASSERT(DevicePool::is_initialized(), "Trying to get DevicePool without initializing it");
         return *_inst;
     }
 

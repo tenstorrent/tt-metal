@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "control_plane.hpp"
+#include "device_pool.hpp"
 #include "fabric_host_interface.h"
 #include "fabric_types.hpp"
 #include "fmt/base.h"
@@ -380,6 +381,16 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coord
 
 std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_all_chip_ethernet_coordinates() const {
     return this->cluster_desc_->get_chip_locations();
+}
+
+chip_id_t Cluster::get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const {
+    for (const auto& [physical_chip_id, coord] : this->get_all_chip_ethernet_coordinates()) {
+        if (coord == eth_coord) {
+            return physical_chip_id;
+        }
+    }
+    TT_FATAL(false, "Physical chip id not found for eth coord");
+    return 0;
 }
 
 size_t Cluster::number_of_user_devices() const {
@@ -1079,6 +1090,31 @@ tt::tt_fabric::ControlPlane* Cluster::get_control_plane() {
         this->initialize_control_plane();
     }
     return control_plane_.get();
+}
+
+void Cluster::set_custom_control_plane_mesh_graph(
+    const std::string& mesh_graph_desc_file,
+    const std::vector<std::vector<chip_id_t>>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    TT_FATAL(
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
+        "Modifying control plane requires no devices to be active");
+    if (control_plane_.get() != nullptr) {
+        control_plane_.reset();
+    }
+    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
+        mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
+    this->initialize_fabric_config(fabric_config_);
+}
+
+void Cluster::set_default_control_plane_mesh_graph() {
+    TT_FATAL(
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
+        "Modifying control plane requires no devices to be active");
+    if (control_plane_.get() != nullptr) {
+        control_plane_.reset();
+    }
+    this->initialize_control_plane();
+    this->initialize_fabric_config(fabric_config_);
 }
 
 void Cluster::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
