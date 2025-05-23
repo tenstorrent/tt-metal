@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,20 +101,22 @@ public:
     // for user facing host apis
     std::unordered_map<chip_id_t, eth_coord_t> get_user_chip_ethernet_coordinates() const;
     size_t number_of_user_devices() const;
-    std::unordered_set<chip_id_t> user_exposed_chip_ids() const;
+    std::set<chip_id_t> user_exposed_chip_ids() const;
 
-    size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
+    size_t number_of_devices() const { return this->driver_->get_target_device_ids().size(); }
 
-    const std::unordered_set<chip_id_t>& all_chip_ids() const { return this->cluster_desc_->get_all_chips(); };
+    std::set<chip_id_t> all_chip_ids() const { return this->driver_->get_target_device_ids(); };
 
-    size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
+    size_t number_of_pci_devices() const { return this->driver_->get_target_mmio_device_ids().size(); }
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
-    const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
+    std::unordered_map<chip_id_t, uint64_t> get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
+
+    chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
 
     ARCH arch() const { return this->arch_; }
 
@@ -172,7 +174,7 @@ public:
     }
 
     std::function<void(uint32_t, uint32_t, const uint8_t*)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
-        chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
+        chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
         return driver_->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
@@ -269,7 +271,7 @@ public:
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
-        return this->device_to_mmio_device_.at(device_id);
+        return this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
     }
 
     uint16_t get_assigned_channel_for_device(chip_id_t device_id) const {
@@ -277,12 +279,12 @@ public:
     }
 
     // Returns collection of devices that are controlled by the specified MMIO device inclusive of the MMIO device
-    const std::set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
+    const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
         TT_ASSERT(
-            this->devices_grouped_by_assoc_mmio_device_.count(mmio_device_id),
+            this->cluster_desc_->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
             "Expected device {} to be an MMIO device!",
             mmio_device_id);
-        return this->devices_grouped_by_assoc_mmio_device_.at(mmio_device_id);
+        return this->cluster_desc_->get_chips_grouped_by_closest_mmio().at(mmio_device_id);
     }
 
     // Returns map of connected chip ids to active ethernet cores
@@ -296,6 +298,12 @@ public:
     }
 
     tt::tt_fabric::ControlPlane* get_control_plane();
+
+    void set_custom_control_plane_mesh_graph(
+        const std::string& mesh_graph_desc_file,
+        const std::vector<std::vector<chip_id_t>>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+
+    void set_default_control_plane_mesh_graph();
 
     void initialize_fabric_config(tt_metal::FabricConfig fabric_config);
 
@@ -332,7 +340,8 @@ private:
     void generate_cluster_descriptor();
     void initialize_device_drivers();
     void assert_risc_reset();
-    void assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t>& controlled_device_ids);
+    void assign_mem_channels_to_devices(
+        chip_id_t mmio_device_id, const std::unordered_set<chip_id_t>& controlled_device_ids);
     void open_driver(const bool& skip_driver_allocs = false);
     void start_driver(tt_device_params& device_params) const;
     void validate_harvesting_masks() const;
@@ -372,11 +381,6 @@ private:
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 
-    // Collections of devices that are grouped based on the associated MMIO device. MMIO device is included in the
-    // grouping
-    std::unordered_map<chip_id_t, std::set<chip_id_t>> devices_grouped_by_assoc_mmio_device_;
-    // Save mapping of device id to associated MMIO device id for fast lookup
-    std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device_;
     // Data Structures Tracking Virtual Coordinates
     std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_worker_cores_;

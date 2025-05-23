@@ -5,7 +5,7 @@
 
 <h1>
 
-[Bounty $](https://github.com/tenstorrent/tt-metal/issues?q=is%3Aissue%20state%3Aopen%20label%3Abounty) | [Buy](https://tenstorrent.com/cards/) | [Install](./INSTALLING.md) | [Discord](https://discord.gg/tvhGzHQwaj) | [Join Us](https://boards.greenhouse.io/tenstorrent/jobs/4155609007)
+[Install](./INSTALLING.md) | [Buy Hardware](https://tenstorrent.com/hardware/blackhole) | [Bounty $](https://github.com/tenstorrent/tt-metal/issues?q=is%3Aissue%20state%3Aopen%20label%3Abounty) | [Join Us](https://boards.greenhouse.io/tenstorrent/jobs/4155609007) | [Discord](https://discord.gg/tvhGzHQwaj)
 
 </h1>
 
@@ -180,6 +180,17 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 - [Matmul OP on Multi_core (Basic)](./tech_reports/prog_examples/matmul_multi_core/matmul_multi_core.md)
 - [Matmul Multi_core Reuse (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_reuse.md)
 - [Matmul Multi_core Multi-Cast (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_mcast.md)
+
+### Tools and Instruments
+
+#### [TT_NN Visualizer](https://github.com/tenstorrent/ttnn-visualizer)
+A comprehensive tool for visualizing and analyzing model execution, offering interactive graphs, memory plots, tensor details, buffer overviews, operation flow graphs, and multi-instance support with file or SSH-based report loading.
+Install via pip or build from source:
+```bash
+pip install ttnn-visualizer
+```
+
+
 
 ### Tenstorrent Bounty Program Terms and Conditions
 This repo is a part of Tenstorrent’s bounty program. If you are interested in helping to improve tt-metal, please make sure to read the [Tenstorrent Bounty Program Terms and Conditions](https://docs.tenstorrent.com/bounty_terms.html) before heading to the issues tab. Look for the issues that are tagged with both “bounty” and difficulty level!

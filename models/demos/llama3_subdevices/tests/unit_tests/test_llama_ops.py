@@ -26,6 +26,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_concat_heads_d
 from tests.ttnn.unit_tests.operations.test_paged_fused_update_cache import run_test_paged_fused_update_cache_decode
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
+    run_test_row_major_rotary_embedding_llama,
 )
 
 
@@ -392,4 +393,34 @@ def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
 ):
     run_test_rotary_embedding_llama(
         device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
+    )
+
+
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(8, 4)],
+    indirect=True,
+)
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize("batch, seq_len", ((32, 1),))
+@pytest.mark.parametrize(
+    "n_heads, n_kv_heads, head_dim",
+    ((8, 8, 128),),
+)
+@pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
+@pytest.mark.parametrize("pcc", (0.9997,))
+def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
+    batch,
+    seq_len,
+    n_heads,
+    n_kv_heads,
+    head_dim,
+    datatype,
+    pcc,
+    mesh_device,
+    use_program_cache,
+):
+    run_test_row_major_rotary_embedding_llama(
+        mesh_device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
     )
