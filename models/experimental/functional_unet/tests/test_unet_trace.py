@@ -7,7 +7,6 @@ import ttnn
 import pytest
 
 from ttnn.device import is_wormhole_b0
-from models.utility_functions import nearest_32
 
 from loguru import logger
 
@@ -28,7 +27,7 @@ from models.experimental.functional_unet.tests.common import (
     UNetPerformanceStatistics,
 )
 
-from models.utility_functions import skip_for_grayskull, divup
+from models.utility_functions import skip_for_grayskull, divup, nearest_32
 
 
 def get_dram_sharded_memory_config_for_output_tensor(output_tensor, dram_grid_size):
@@ -39,7 +38,6 @@ def get_dram_sharded_memory_config_for_output_tensor(output_tensor, dram_grid_si
         [output_tensor.shape[-2], nearest_32(divup(output_tensor.shape[-1], dram_grid_size.x))],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    print(output_tensor.shape, output_dram_shard_spec)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_dram_shard_spec)
 
 
