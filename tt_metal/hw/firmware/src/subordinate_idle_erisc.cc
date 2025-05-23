@@ -95,7 +95,6 @@ int main(int argc, char *argv[]) {
         int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1);
         uint32_t (*kernel_address)(uint32_t) = (uint32_t (*)(uint32_t))
             (kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
-        mark_stack_usage();
         auto stack_free = (*kernel_address)((uint32_t)kernel_address);
         record_stack_usage(stack_free);
         WAYPOINT("D");

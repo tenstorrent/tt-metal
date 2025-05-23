@@ -24,6 +24,7 @@
 #include <stdint.h>
 
 uint32_t kernel_launch(uint32_t kernel_base_addr) {
+    mark_stack_usage();
     extern uint32_t __kernel_init_local_l1_base[];
     extern uint32_t __fw_export_text_end[];
     do_crt1((uint32_t tt_l1_ptr*)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base -
@@ -52,5 +53,5 @@ uint32_t kernel_launch(uint32_t kernel_base_addr) {
             ASSERT(erisc_info->channels[i].bytes_sent == 0);
         }
     }
-    return discover_stack_usage();
+    return measure_stack_usage();
 }

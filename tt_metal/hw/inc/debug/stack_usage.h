@@ -10,7 +10,7 @@
 #if defined(WATCHER_ENABLED) && !(defined(WATCHER_DISABLE_STACK_USAGE) || defined(COMPILE_FOR_ERISC) || \
                                   defined(FORCE_WATCHER_OFF))
 
-#if true || defined(KERNEL_BUILD)
+#if defined(KERNEL_BUILD)
 
 static inline uint32_t get_stack_base() {
 #if defined(COMPILE_FOR_BRISC)
@@ -50,7 +50,7 @@ static inline void mark_stack_usage() {
         *--ptr = stack_usage_pattern;
 }
 
-static inline int discover_stack_usage() {
+static inline int measure_stack_usage() {
     uint32_t *base = (uint32_t tt_l1_ptr *)get_stack_base();
 
     uint32_t tt_l1_ptr* stack_ptr = base;
@@ -105,12 +105,8 @@ static inline void record_stack_usage(uint32_t stack_free) {
 
 #else  // !WATCHER_ENABLED
 
-static inline void mark_stack_usage() {
-}
-static inline int discover_stack_usage() {
-    return 0;
-}
-static inline void record_stack_usage(uint32_t) {
-}
+static inline void mark_stack_usage() {}
+static inline int measure_stack_usage() { return 0; }
+static inline void record_stack_usage(uint32_t) {}
 
 #endif  // WATCHER_ENABLED

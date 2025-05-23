@@ -23,6 +23,7 @@
 #include <kernel_includes.hpp>
 
 uint32_t kernel_launch(uint32_t kernel_base_addr) {
+    mark_stack_usage();
     extern uint32_t __kernel_init_local_l1_base[];
     extern uint32_t __fw_export_text_end[];
     do_crt1((uint32_t tt_l1_ptr
@@ -46,5 +47,5 @@ uint32_t kernel_launch(uint32_t kernel_base_addr) {
             WAYPOINT("NKFD");
         }
     }
-    return discover_stack_usage();
+    return measure_stack_usage();
 }

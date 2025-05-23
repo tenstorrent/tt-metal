@@ -24,6 +24,7 @@
 #endif
 
 uint32_t kernel_launch(uint32_t kernel_base_addr) {
+    mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
 #ifdef KERNEL_RUN_TIME
@@ -62,5 +63,5 @@ uint32_t kernel_launch(uint32_t kernel_base_addr) {
         }
     }
 #endif
-    return discover_stack_usage();
+    return measure_stack_usage();
 }

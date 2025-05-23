@@ -39,6 +39,7 @@ volatile tt_reg_ptr uint * mailbox_base[4] = {
 }
 
 uint32_t kernel_launch(uint32_t kernel_base_addr) {
+    mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
@@ -65,5 +66,5 @@ uint32_t kernel_launch(uint32_t kernel_base_addr) {
     run_kernel();
     WAYPOINT("KD");
 #endif
-    return discover_stack_usage();
+    return measure_stack_usage();
 }

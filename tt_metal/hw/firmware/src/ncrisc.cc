@@ -143,7 +143,6 @@ int main(int argc, char *argv[]) {
 
         WAYPOINT("R");
 
-        mark_stack_usage();
         uint32_t (*kernel_address)(uint32_t) = (uint32_t (*)(uint32_t))
             (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
 #if !defined(ARCH_WORMHOLE)
