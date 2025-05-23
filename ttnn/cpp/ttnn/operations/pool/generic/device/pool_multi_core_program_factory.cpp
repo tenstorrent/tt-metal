@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
@@ -7,11 +6,125 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
+#include <vector>
 
 namespace ttnn::operations::pool {
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
+static Tensor create_scalar_config_tensor(
+    IDevice* device,
+    const ShardSpec& shard_spec,
+    Pool2DType pool_type,
+    uint32_t in_n,
+    uint32_t in_h,
+    uint32_t in_w,
+    uint32_t out_h,
+    uint32_t out_w,
+    uint32_t kernel_size_h,
+    uint32_t kernel_size_w,
+    std::optional<uint32_t> stride_h,
+    std::optional<uint32_t> stride_w,
+    std::optional<uint32_t> pad_h,
+    std::optional<uint32_t> pad_w,
+    std::optional<uint32_t> divisor_override,
+    bool ceil_mode,
+    uint32_t ceil_pad_h,
+    uint32_t ceil_pad_w,
+    uint32_t out_nhw_per_core,
+    uint32_t num_shards_c,
+    CoreRangeSet all_cores) {
+    auto ranges = all_cores.ranges();
+
+    std::vector<uint32_t> total_elems_per_c_shards(num_shards_c, out_h * out_w * in_n);
+
+    std::vector<uint32_t> config_vector;
+
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t num_of_ele = out_nhw_per_core;
+    uint32_t channel = 0;
+    uint32_t batch = 0;
+
+    for (const auto& range : ranges) {
+        for (auto it = range.begin(); it != range.end(); ++it) {
+            if (total_elems_per_c_shards[channel] > out_nhw_per_core) {
+                total_elems_per_c_shards[channel] -= out_nhw_per_core;
+                num_of_ele = out_nhw_per_core;
+            } else {
+                num_of_ele = total_elems_per_c_shards[channel];
+            }
+
+            std::vector<ScalarInfo> scalars;
+            get_bf16_pool_scalar(
+                pool_type,
+                kernel_size_h,
+                kernel_size_w,
+                divisor_override,
+                in_h,
+                in_w,
+                out_h,
+                out_w,
+                stride_h,
+                stride_w,
+                ceil_mode,
+                ceil_pad_h,
+                ceil_pad_w,
+                x,
+                y,
+                pad_h,
+                pad_w,
+                num_of_ele,
+                &scalars);
+
+            for (const auto& scalar : scalars) {
+                config_vector.push_back(scalar.start);
+                config_vector.push_back(scalar.value);
+                config_vector.push_back(scalar.end);
+            }
+
+            // Advance core and tensor location tracking
+            channel = (channel + 1) % num_shards_c;
+            if (channel == 0) {
+                uint32_t delta_y = y + num_of_ele;
+                y = delta_y % out_w;
+                uint32_t delta_x = x + delta_y / out_w;
+                x = delta_x % out_h;
+                batch += delta_x / out_h;
+                if (batch == in_n) {
+                    batch = 0;
+                    x = y = 0;
+                }
+            }
+        }
+    }
+
+    const uint32_t entry_size = 3;
+    const uint32_t entries_per_core = entry_size * out_nhw_per_core;
+
+    // Pad if not full
+    const uint32_t pad = (entries_per_core - (config_vector.size() % entries_per_core)) % entries_per_core;
+    if (pad != 0 && config_vector.size() >= 2) {
+        uint16_t last_core_start = *(config_vector.end() - 3);
+        uint16_t last_scalar = *(config_vector.end() - 2);
+        uint16_t last_core_end = *(config_vector.end() - 1);
+        for (uint32_t i = 0; i < pad / entry_size; ++i) {
+            config_vector.push_back(last_core_start);
+            config_vector.push_back(last_scalar);
+            config_vector.push_back(last_core_end);
+        }
+    }
+
+    TT_FATAL(
+        config_vector.size() % entries_per_core == 0,
+        "Config vector size {} should be a multiple of {}",
+        config_vector.size(),
+        entries_per_core);
+
+    auto config_shape = ttnn::Shape({tt::div_up(config_vector.size(), entries_per_core), entries_per_core});
+    HostBuffer buffer(std::move(config_vector));
+    return Tensor(std::move(buffer), config_shape, DataType::UINT32, Layout::ROW_MAJOR);
+}
 
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
     Program& program,
@@ -30,12 +143,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t stride_w,
     uint32_t pad_h,
     uint32_t pad_w,
+    uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
+    bool ceil_mode,
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
-    uint32_t nblocks) {
+    uint32_t nblocks,
+    std::optional<int32_t> divisor_override) {
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
@@ -87,8 +203,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto grid_size = device->compute_with_storage_grid_size();
     auto all_cores = input.shard_spec().value().grid;
     uint32_t ncores = all_cores.num_cores();
-    auto core_range = all_cores;
-    auto core_range_cliff = CoreRangeSet();
     uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
     uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
 
@@ -269,11 +383,58 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     /**
      * Reader Kernel: input rows -> input cb
      */
-    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_hw) << 16;
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
+    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
     uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
+    bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false ||
+                               (ceil_pad_h == 0 && ceil_pad_w == 0) || divisor_override.has_value();
 
+    CBHandle config_cb;
+    uint32_t config_cb_id = 32;
+    if (!one_scalar_per_core) {
+        // create config tensor
+        Tensor config_tensor;
+        config_tensor = create_scalar_config_tensor(
+            device,
+            input.shard_spec().value(),
+            pool_type,
+            in_n,
+            in_h,
+            in_w,
+            out_h,
+            out_w,
+            kernel_size_h,
+            kernel_size_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            divisor_override,
+            ceil_mode,
+            ceil_pad_h,
+            ceil_pad_w,
+            out_nhw_per_core,
+            num_shards_c,
+            all_cores);
+
+        auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
+        auto config_tensor_shard_orientation =
+            input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
+                ? ShardOrientation::COL_MAJOR
+                : input.shard_spec().value().orientation;
+        ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
+        MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
+        auto config_tensor_device = config_tensor.to_device(device, memory_config);
+
+        tt::DataFormat config_df = tt::DataFormat::RawUInt32;
+        auto config_storage = config_tensor_device.device_storage();
+        auto config_buffer = config_storage.get_buffer();
+        auto config_buffer_page_size = config_buffer->page_size();
+
+        std::tie(config_cb_id, config_cb) = tt::tt_metal::create_cb(
+            next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
+    }
     std::vector<uint32_t> reader0_ct_args = {
         out_nhw_per_core,
         kernel_size_h,
@@ -297,7 +458,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,
         in_scalar_cb_id,
         max_pool_partials_cb_id,
-        in_one_cb_id};
+        in_one_cb_id,
+        one_scalar_per_core,
+        config_cb_id};
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -322,7 +485,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,
         in_scalar_cb_id,
         max_pool_partials_cb_id,
-        in_one_cb_id};
+        in_one_cb_id,
+        one_scalar_per_core,
+        config_cb_id};
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
@@ -371,7 +536,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id,
         out_cb_id,
         max_pool_partials_cb_id,
-        in_one_cb_id};
+        in_one_cb_id,
+        one_scalar_per_core};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
@@ -388,7 +554,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core.cpp";
     }
 
-    auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
+    auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
     // Capture reader_indices_storage to cache this with the program
     return {
@@ -408,6 +574,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
     const auto& out_mem_config = op_attr.memory_config_;
+    std::optional<int32_t> divisor_override = op_attr.divisor_override_;
 
     tt::tt_metal::Program program{};
 
@@ -443,7 +610,9 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto stride_w = sliding_window_config.stride_hw.second;
     auto pad_h = sliding_window_config.get_pad_h();
     auto pad_w = sliding_window_config.get_pad_w();
+    auto ceil_pad_h = sliding_window_config.get_ceil_pad_h();
     auto ceil_pad_w = sliding_window_config.get_ceil_pad_w();
+    auto ceil_mode = sliding_window_config.ceil_mode;
     auto dilation_h = sliding_window_config.dilation_hw.first;
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
@@ -465,12 +634,15 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         stride_w,
         pad_h,
         pad_w,
+        ceil_pad_h,
         ceil_pad_w,
+        ceil_mode,
         dilation_h,
         dilation_w,
         num_shards_c,
         out_mem_config,
-        1);
+        1,
+        divisor_override);
 }
 
 void Pool2D::MultiCore::override_runtime_arguments(

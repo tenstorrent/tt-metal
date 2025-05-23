@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
@@ -29,6 +28,7 @@ inline void reduce_h_fused(
     cb_reserve_back(out_cb_id, num_output_tiles);
     const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
     cb_wait_front(curr_in_cb_id, 1);
+
     tile_regs_acquire();
     unpack_tilizeA_B_block(
         curr_in_cb_id,
@@ -69,6 +69,7 @@ void MAIN {
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(11);
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(12);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(16);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -90,9 +91,13 @@ void MAIN {
         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
     pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
 
-    cb_wait_front(in_scalar_cb_id, 1);
-    for (uint32_t i = 0; i < nsticks_per_core; ++i) {
-        // perform the reduction over the first N - 1 whole chunks
+    if constexpr (one_scalar_per_core) {
+        cb_wait_front(in_scalar_cb_id, 1);
+    }
+    for (uint32_t i = 0; i < nsticks_per_core; i++) {
+        if constexpr (!one_scalar_per_core) {
+            cb_wait_front(in_scalar_cb_id, 1);
+        }
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
             reduce_h_fused<max_tiles_per_iter, is_partial_tile, split_reader, window_size_hw>(
                 in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
@@ -100,8 +105,13 @@ void MAIN {
         // perform the reduction over the either whole or partial chunk N
         reduce_h_fused<partial_iter_output_tiles, is_partial_tile, split_reader, window_size_hw>(
             in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
+        if constexpr (!one_scalar_per_core) {
+            cb_pop_front(in_scalar_cb_id, 1);
+        }
     }
-    cb_pop_front(in_scalar_cb_id, 1);
+    if constexpr (one_scalar_per_core) {
+        cb_pop_front(in_scalar_cb_id, 1);
+    }
 }
 
 }  // namespace NAMESPACE
