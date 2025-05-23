@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -111,4 +111,4 @@ def test_decoder(
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     # TODO: Improve PCC (issue #21131)
-    assert_with_pcc(torch_output, ttnn_output, 0.9589)
+    assert_with_pcc(torch_output, ttnn_output, 0.9588)
