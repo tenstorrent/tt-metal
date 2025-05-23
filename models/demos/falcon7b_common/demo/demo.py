@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,9 +12,9 @@ import torch.nn.functional as F
 from loguru import logger
 from tqdm import tqdm
 from transformers import AutoTokenizer
-from transformers.generation.utils import top_k_top_p_filtering
 
 import ttnn
+from models.common.utils import top_k_top_p_filtering
 from models.demos.falcon7b_common.tests.test_utils import get_num_devices, initialize_kv_cache, load_hf_model
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
