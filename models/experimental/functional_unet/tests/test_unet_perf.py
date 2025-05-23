@@ -71,6 +71,12 @@ def test_unet_trace_perf(
     use_program_cache,
     reset_seeds,
 ):
+    if (
+        not is_wormhole_b0(device)
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
+    ):
+        pytest.skip(f"shallow unet only support 110 cores on bh (was {device.compute_with_storage_grid_size()})")
+
     from models.experimental.functional_unet.tests.test_unet_trace import (
         test_unet_trace_2cq_same_io,
     )
