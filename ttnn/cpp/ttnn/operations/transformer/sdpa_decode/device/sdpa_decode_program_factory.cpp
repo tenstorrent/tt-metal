@@ -51,7 +51,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const bool is_paged_attention = page_table_tensor.has_value();
 
     auto q_shape = input_tensor_q.get_padded_shape();
-    const bool tilize_q = input_tensor_q.get_layout() == ttnn::types::ROW_MAJOR_LAYOUT;
+    const bool tilize_q = input_tensor_q.get_layout() == Layout::ROW_MAJOR;
     q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);  // round up for row major Q tensor.
     const auto q_shape_unpadded = input_tensor_q.get_logical_shape();
     const auto k_shape = input_tensor_k.get_padded_shape();
