@@ -295,6 +295,7 @@ class Generator:
             tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
         )
         logger.info("Done Compiling Model")
+        # breakpoint()
 
         # Get inputs ready for trace run
         device_inputs = []

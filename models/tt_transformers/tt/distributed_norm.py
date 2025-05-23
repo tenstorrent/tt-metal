@@ -103,7 +103,7 @@ class DistributedNorm(LightweightModule):
                     topology=self.args.ccl_topology(),
                     subdevice_id=self.worker_sub_device_id,
                 )
-                ttnn.synchronize_device(self.args.mesh_device)
+                # ttnn.synchronize_device(self.args.mesh_device)
             else:
                 x = ttnn.all_gather(
                     x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg
@@ -125,7 +125,7 @@ class DistributedNorm(LightweightModule):
                     topology=self.args.ccl_topology(),
                     subdevice_id=self.worker_sub_device_id,
                 )
-                ttnn.synchronize_device(self.args.mesh_device)
+                # ttnn.synchronize_device(self.args.mesh_device)
             else:
                 x = ttnn.all_gather(
                     x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg
