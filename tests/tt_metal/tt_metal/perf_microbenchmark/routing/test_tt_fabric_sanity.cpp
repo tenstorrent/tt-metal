@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -482,8 +482,9 @@ struct test_board_t {
         return control_plane->get_intra_chip_neighbors(src_mesh_id, src_chip_id, routing_direction);
     }
 
-    inline routing_plane_id_t get_routing_plane_from_chan(chan_id_t eth_chan) {
-        return control_plane->get_routing_plane_id(eth_chan);
+    inline routing_plane_id_t get_routing_plane_from_chan(chip_id_t physical_chip_id, chan_id_t eth_chan) {
+        const auto mesh_chip_id = this->get_mesh_chip_id(physical_chip_id);
+        return control_plane->get_routing_plane_id(mesh_chip_id.first, mesh_chip_id.second, eth_chan);
     }
 
     inline eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t eth_chan) {
@@ -663,9 +664,8 @@ struct test_device_t {
             std::set<chip_id_t> chips_in_route;
             chan_id_t src_eth_chan = soc_desc.logical_eth_core_to_chan_map.at(router_logical_cores[i]);
             chips_in_route.insert(physical_chip_id);
-            try {
-                route = _get_route_to_chip(rx_device->mesh_id, rx_device->logical_chip_id, src_eth_chan);
-            } catch (const std::exception& e) {
+            route = _get_route_to_chip(rx_device->mesh_id, rx_device->logical_chip_id, src_eth_chan);
+            if (route.empty()) {
                 continue;
             }
 
@@ -976,7 +976,8 @@ struct test_traffic_t {
             tx_core = std::get<2>(tx_workers[i]);
             rx_core = std::get<2>(rx_workers[tx_to_rx_map[i]]);
 
-            auto routing_plane = tx_device->board_handle->get_routing_plane_from_chan(eth_chan);
+            auto routing_plane =
+                tx_device->board_handle->get_routing_plane_from_chan(tx_device->physical_chip_id, eth_chan);
 
             // setup runtime args
             std::vector<uint32_t> runtime_args = {
