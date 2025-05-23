@@ -635,16 +635,24 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
 
                 // Add dispatch kernels for the mmio/remote pair
                 for (DispatchKernelNode node : nodes_for_one_mmio) {
-                    TT_ASSERT(node.device_id == 0 || node.device_id == 1);
-                    if (node.device_id == 0) {
+                    constexpr uint32_t k_MMIO = 0;
+                    constexpr uint32_t k_Remote = 1;
+                    TT_ASSERT(node.device_id == k_MMIO || node.device_id == k_Remote);
+                    TT_ASSERT(
+                        node.servicing_device_id == k_MMIO || node.servicing_device_id == k_Remote ||
+                        node.servicing_device_id == x);
+
+                    if (node.device_id == k_MMIO) {
                         node.device_id = mmio_device_id;
-                        if (node.servicing_device_id == 0) {
-                            node.servicing_device_id = mmio_device_id;
-                        } else if (node.servicing_device_id == 1) {
-                            node.servicing_device_id = remote_device_id;
-                        }
                     } else {
+                        // node.device_id == k_Remote
                         node.device_id = remote_device_id;
+                    }
+
+                    if (node.servicing_device_id == k_MMIO) {
+                        node.servicing_device_id = mmio_device_id;
+                    } else if (node.servicing_device_id == k_Remote) {
+                        node.servicing_device_id = remote_device_id;
                     }
                     increment_node_ids(node, index_offset);
                     nodes.push_back(node);
