@@ -463,6 +463,7 @@ inline void set_eltwise_ternary_runtime_args(
     std::vector<std::vector<uint32_t>> unary_writer_args;
     bool out_sharded = output.memory_config().is_sharded();
     if constexpr (initialize_args) {
+        // Don't use hardcoded size
         binary_reader_args = {cores.size(), std::vector<uint32_t>(7)};
         eltwise_binary_args = {cores.size(), std::vector<uint32_t>(2)};
         if (block_or_width_sharded and not out_sharded) {
@@ -532,6 +533,7 @@ inline void set_eltwise_ternary_runtime_args(
             binary_reader_args[i] = {
                 src_buffer_a->address(),
                 src_buffer_b->address(),
+                src_buffer_c->address(),
                 num_tiles_per_core,
                 start_id,
                 block_height,
@@ -543,11 +545,12 @@ inline void set_eltwise_ternary_runtime_args(
             auto& reader_args = cached_reader_args.at(core.x).at(core.y);
             reader_args[0] = src_buffer_a->address();
             reader_args[1] = src_buffer_b->address();
-            reader_args[2] = num_tiles_per_core;
-            reader_args[3] = start_id;
-            reader_args[4] = block_height;
-            reader_args[5] = block_width;
-            reader_args[6] = num_shards_per_width;
+            reader_args[2] = src_buffer_c->address();
+            reader_args[3] = num_tiles_per_core;
+            reader_args[4] = start_id;
+            reader_args[5] = block_height;
+            reader_args[6] = block_width;
+            reader_args[7] = num_shards_per_width;
             auto& eltwise_args = cached_eltwise_args.at(core.x).at(core.y);
             eltwise_args[0] = block_cnt_per_core;
             eltwise_args[1] = block_size_per_core;

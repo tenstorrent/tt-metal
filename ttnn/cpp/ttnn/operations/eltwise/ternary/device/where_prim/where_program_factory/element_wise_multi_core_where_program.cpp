@@ -32,7 +32,7 @@ WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
 
     Program program{};
     IDevice* device = a.device();
-    CoreCoord core = {0, 0};
+    const auto& all_device_cores = operation_attributes.worker_grid;
 
     // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
     uint32_t src0_bank_id = 0;
@@ -55,39 +55,80 @@ WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
     auto cb_src0_config = tt::tt_metal::CircularBufferConfig(
                               num_input_tiles * src0_single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                               .set_page_size(src0_cb_index, src0_single_tile_size);
-    CBHandle cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    CBHandle cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
     auto cb_src1_config = tt::tt_metal::CircularBufferConfig(
                               num_input_tiles * src1_single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                               .set_page_size(src1_cb_index, src1_single_tile_size);
-    CBHandle cb_src1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    CBHandle cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
     constexpr uint32_t src2_cb_index = tt::CBIndex::c_2;
     auto cb_src2_config = tt::tt_metal::CircularBufferConfig(
                               num_input_tiles * src2_single_tile_size, {{src2_cb_index, tt::DataFormat::Float16_b}})
                               .set_page_size(src2_cb_index, src2_single_tile_size);
-    CBHandle cb_src2 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src2_config);
+    CBHandle cb_src2 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src2_config);
 
-    constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
-    constexpr uint32_t num_output_tiles = 1;
+    constexpr uint32_t src3_cb_index = tt::CBIndex::c_3;
+    auto cb_src3_config = tt::tt_metal::CircularBufferConfig(
+                              num_input_tiles * src2_single_tile_size, {{src3_cb_index, tt::DataFormat::Float16_b}})
+                              .set_page_size(src3_cb_index, src2_single_tile_size);
+    CBHandle cb_src3 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src3_config);
+
+    constexpr uint32_t src4_cb_index = tt::CBIndex::c_4;
+    auto cb_src4_config = tt::tt_metal::CircularBufferConfig(
+                              num_input_tiles * src2_single_tile_size, {{src4_cb_index, tt::DataFormat::Float16_b}})
+                              .set_page_size(src4_cb_index, src2_single_tile_size);
+    CBHandle cb_src4 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src4_config);
+
+    constexpr uint32_t src5_cb_index = tt::CBIndex::c_5;
+    auto cb_src5_config = tt::tt_metal::CircularBufferConfig(
+                              num_input_tiles * src2_single_tile_size, {{src5_cb_index, tt::DataFormat::Float16_b}})
+                              .set_page_size(src5_cb_index, src2_single_tile_size);
+    CBHandle cb_src5 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src5_config);
+
+    constexpr uint32_t src6_cb_index = tt::CBIndex::c_6;
+    auto cb_src6_config = tt::tt_metal::CircularBufferConfig(
+                              num_input_tiles * src2_single_tile_size, {{src6_cb_index, tt::DataFormat::Float16_b}})
+                              .set_page_size(src6_cb_index, src2_single_tile_size);
+    CBHandle cb_src6 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src6_config);
+
+    constexpr uint32_t output_cb_index = tt::CBIndex::c_7;
+    constexpr uint32_t num_output_tiles = 2;
     auto cb_output_config = tt::tt_metal::CircularBufferConfig(
                                 num_output_tiles * dst_single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
                                 .set_page_size(output_cb_index, dst_single_tile_size);
-    CBHandle cb_output = CreateCircularBuffer(program, core, cb_output_config);
+    CBHandle cb_output = CreateCircularBuffer(program, all_device_cores, cb_output_config);
+
+    std::map<string, string> reader_defines;
+    bool block_or_width_sharded = false;
+    bool src0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    bool src1_is_dram = b->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    bool src2_is_dram = c->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t)src0_is_dram,
+        (std::uint32_t)src1_is_dram,
+        (std::uint32_t)src2_is_dram,
+        (std::uint32_t)block_or_width_sharded};
+
+    std::map<string, string> writer_defines;
+    tt_metal::Buffer* dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     /* Specify data movement kernels for reading/writing data to/from DRAM */
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/ternary/device/where_prim/kernel/dataflow/elemwise_reader_kernel.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        all_device_cores,
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/ternary/device/where_prim/kernel/dataflow/writer.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        all_device_cores,
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     /* Set the parameters that the compute kernel will use */
     std::vector<uint32_t> compute_kernel_args = {};
@@ -95,15 +136,13 @@ WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
     KernelHandle compute_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/ternary/device/where_prim/kernel/compute/elemwise_where_kernel.cpp",
-        core,
+        all_device_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
-            .compile_args = compute_kernel_args,
-        });
+            .compile_args = compute_kernel_args});
 
-    const auto& all_device_cores = operation_attributes.worker_grid;
     set_eltwise_ternary_runtime_args<true>(
         program,
         a,

@@ -84,7 +84,7 @@ Tensor WhereOperation::invoke(
     const Tensor& value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-    return ternary_utils::where_impl(
+    return ternary_utils::where_impl_ng(
         queue_id,
         predicate,
         value_true,
