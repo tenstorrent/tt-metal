@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
@@ -226,6 +226,20 @@ def prepare_generator_args(
             False,  # ci_only
             1,  # data_parallel
         ),
+        (  # Long-context 32k run - Single user, long prompt (may vary based on the model's tokenizer)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+        ),
         (  # Long-context 16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
@@ -374,6 +388,7 @@ def prepare_generator_args(
         "batch-1",  # latency
         "batch-32",  # throughput
         "long-context-64k",  # 64k context, max_seq_len=128k
+        "long-context-32k",  # 32k context, max_seq_len=32k
         "long-context-16k",  # 16k context, max_seq_len=32k
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
@@ -529,6 +544,13 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
     )
+
+    for m_args in model_args:
+        if m_args.max_context_len < max_seq_len:
+            pytest.skip(
+                f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
+            )
+
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
@@ -544,11 +566,7 @@ def test_demo_text(
             decoding_pos,
             prefill_lens,
         ) = preprocess_inputs_prefill(
-            input_prompts,
-            tokenizer,
-            model_args,
-            instruct,
-            max_generated_tokens,
+            input_prompts, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
         )
 
         max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
