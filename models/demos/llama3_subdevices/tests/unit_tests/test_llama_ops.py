@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
@@ -313,6 +313,48 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
         device,
         pcc,
     )
+
+
+@pytest.mark.parametrize("paged_update", [True])
+@pytest.mark.parametrize("block_size", [64], ids=["block64"])
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [8])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("cache_idx", [127])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("pcc", [0.9995])
+def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
+    device,
+    paged_update,
+    cache_idx,
+    block_size,
+    head_dim,
+    max_seq_len,
+    num_users,
+    num_heads,
+    input_dtype,
+    cache_dtype,
+    use_program_cache,
+    pcc,
+):
+    for _ in range(2):
+        run_test_paged_fused_update_cache_decode(
+            paged_update,
+            cache_idx,
+            block_size,
+            head_dim,
+            max_seq_len,
+            num_users,
+            num_heads,
+            input_dtype,
+            cache_dtype,
+            device,
+            pcc,
+            row_major=True,
+        )
+    assert device.num_program_cache_entries() == 1
 
 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
