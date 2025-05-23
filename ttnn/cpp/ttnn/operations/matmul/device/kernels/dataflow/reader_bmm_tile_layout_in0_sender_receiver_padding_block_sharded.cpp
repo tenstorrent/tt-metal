@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -198,7 +198,6 @@ void kernel_main() {
                                         in0_multicast_data_addr,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores - 1,
-                                        true,
                                         true);
                                 }
                             }
@@ -215,7 +214,6 @@ void kernel_main() {
                                         in0_multicast_data_addr,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores,
-                                        true,
                                         true);
                                 }
                             }
@@ -240,7 +238,6 @@ void kernel_main() {
                                 in0_multicast_data_addr,
                                 in0_block_size_bytes,
                                 in0_mcast_num_cores,
-                                true,
                                 true);
 
                             // We should also multicast the flag to destinations

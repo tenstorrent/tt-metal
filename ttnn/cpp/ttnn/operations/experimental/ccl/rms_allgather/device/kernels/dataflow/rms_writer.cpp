@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -177,7 +177,7 @@ void kernel_main() {
 
         noc_semaphore_set(stats_set_semaphore_addr_ptr, VALID);
         noc_semaphore_set_multicast_loopback_src(
-            stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_blocks, false, false);
+            stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_blocks, false);
         noc_async_write_barrier();
         fabric_connection.close_finish();  // Includes a noc async write barrier
     } else {
