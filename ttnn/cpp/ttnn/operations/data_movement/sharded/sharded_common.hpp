@@ -14,10 +14,10 @@ namespace ttnn::operations::data_movement::detail {
 uint32_t calculate_starting_idx_h(const Tensor& tensor, uint32_t num_slices, uint32_t slice_index);
 
 struct WidthShardingReshardSegment {
-    uint32_t write_size;
-    uint32_t read_offset;
-    uint32_t bank_id;
-    uint32_t write_offset;
+    uint32_t write_size = 0;
+    uint32_t read_offset = 0;
+    uint32_t bank_id = 0;
+    uint32_t write_offset = 0;
 };
 
 // Precompute a set of reads/writes for each core needed to perform a width-sharded reshard operations
