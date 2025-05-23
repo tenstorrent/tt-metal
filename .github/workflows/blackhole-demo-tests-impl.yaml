@@ -38,7 +38,7 @@ jobs:
           {
             name: "unet_shallow_performance",
             arch: blackhole,
-            cmd: pytest -sv "models/experimental/functional_unet/tests/test_unet_perf.py::test_unet_trace_perf",
+            cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device",
             owner_id: U06ECNVR0EN # Evan Smal
           }
         ]
