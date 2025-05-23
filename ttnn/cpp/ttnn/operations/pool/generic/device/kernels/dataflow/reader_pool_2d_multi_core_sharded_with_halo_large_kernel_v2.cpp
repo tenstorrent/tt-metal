@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <sys/types.h>
@@ -67,14 +66,12 @@ void kernel_main() {
     constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(21);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(22);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(24);
     uint32_t scalar_index = 0;
-    uint32_t scalars_cnt = 1;
-    uint32_t runtime_args_before = 1;
-    uint32_t time_for_change = 0;
-    if constexpr (!one_scalar_per_core) {
-        scalars_cnt = get_arg_val<uint32_t>(0);
-        time_for_change = get_arg_val<uint32_t>(runtime_args_before);
-    }
+    uint32_t element_index = 0;
+    uint32_t scalar_start = 0;
+    uint32_t scalar_end = 1;
+    uint32_t scalar_value = 0;
 
     if constexpr (reader_id == 0) {
         constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
@@ -95,6 +92,8 @@ void kernel_main() {
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
+    uint32_t config_l1_addr = get_read_ptr(config_cb_id);
+    volatile tt_l1_ptr uint32_t* config_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
@@ -105,15 +104,33 @@ void kernel_main() {
     constexpr uint32_t read_bytes =
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
-    while (counter < reader_nindices || (reader_id == 0 && !one_scalar_per_core && scalar_index < scalars_cnt)) {
+    if constexpr (!one_scalar_per_core) {
+        scalar_start = config_ptr[3 * scalar_index];
+        scalar_value = config_ptr[3 * scalar_index + 1];
+        scalar_end = config_ptr[3 * scalar_index + 2];
+    }
+
+    while (counter < reader_nindices || (reader_id == 0 && !one_scalar_per_core && element_index < reader_nindices)) {
         if constexpr (!one_scalar_per_core && reader_id == 0) {
-            while (scalar_index < scalars_cnt && counter >= time_for_change) {
-                uint32_t scalar_val = get_arg_val<uint32_t>(2 * scalar_index + runtime_args_before + 1);
-                cb_reserve_back(in_scalar_cb_id, 1);
-                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
+            cb_reserve_back(in_scalar_cb_id, 1);
+            if (counter >= scalar_start) {
+                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value >> 16);
                 scalar_index++;
-                time_for_change = get_arg_val<uint32_t>(runtime_args_before + 2 * scalar_index);
+                scalar_start = scalar_end;
+                scalar_value = config_ptr[3 * scalar_index + 1];
+                scalar_end = config_ptr[3 * scalar_index + 2];
+            }
+            cb_push_back(in_scalar_cb_id, 1);
+            element_index++;
+            if (counter >= scalar_start) {
+                cb_reserve_back(in_scalar_cb_id, 1);
+                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value >> 16);
+                scalar_index++;
+                scalar_start = scalar_end;
+                scalar_value = config_ptr[3 * scalar_index + 1];
+                scalar_end = config_ptr[3 * scalar_index + 2];
                 cb_push_back(in_scalar_cb_id, 1);
+                element_index++;
             }
         }
         if (counter < reader_nindices || one_scalar_per_core) {

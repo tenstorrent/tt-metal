@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
@@ -135,27 +134,13 @@ void MAIN {
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
-    uint32_t num_od_ele = get_arg_val<uint32_t>(0);
-    uint32_t scalar_cnt = get_arg_val<uint32_t>(1);
-    uint32_t diff_index = 0;
-    uint32_t time_for_change = 0;
-    uint32_t runtime_args_before = 1;
-    if constexpr (!one_scalar_per_core) {
-        scalar_cnt = get_arg_val<uint32_t>(0);
-        time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
-    } else {
+    if constexpr (one_scalar_per_core) {
         cb_wait_front(in_scalar_cb_id, 1);
     }
 
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
         if constexpr (!one_scalar_per_core) {
-            if (i == time_for_change) {
-                cb_wait_front(in_scalar_cb_id, 1);
-                if (diff_index < scalar_cnt - 1) {
-                    diff_index++;
-                    time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
-                }
-            }
+            cb_wait_front(in_scalar_cb_id, 1);
         }
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; b_i++) {
             // perform the intermediate reductions over the first N - 1 whole chunks
@@ -204,9 +189,7 @@ void MAIN {
             interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
         // prepare for the next iteration if not last element
         if constexpr (!one_scalar_per_core) {
-            if ((i + 1 == time_for_change) || (i + 1 == nsticks_per_core_by_nblocks)) {
-                cb_pop_front(in_scalar_cb_id, 1);
-            }
+            cb_pop_front(in_scalar_cb_id, 1);
         }
     }
     if constexpr (one_scalar_per_core) {
