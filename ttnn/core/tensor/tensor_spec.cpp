@@ -252,6 +252,10 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     const auto& nd_shard_spec = mem_config.nd_shard_spec().value();
     const auto& nd_shard_shape = nd_shard_spec.shard_shape;
 
+    if (!mem_config.is_sharded()) {
+        return std::nullopt;
+    }
+
     // We can convert only to interleaved layout if cores are not explicitly specified
     if (!nd_shard_spec.cores.has_value()) {
         // For interleaved layout, shard shape must match page shape
