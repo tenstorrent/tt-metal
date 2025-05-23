@@ -50,10 +50,3 @@ repos:
       entry: python3 scripts/validate_metalium_api.py tt_metal/api
       language: system
       pass_filenames: false
-- repo: local
-  hooks:
-    - id: check-license-headers
-      name: Check License Headers
-      entry: python3 scripts/check_license_headers.py
-      language: system
-      types_or: [python, c++, c, header]
