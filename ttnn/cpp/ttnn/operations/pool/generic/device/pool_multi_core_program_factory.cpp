@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
@@ -279,7 +278,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
-    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override) << 16;
+    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
     uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
     bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false ||
                                (ceil_pad_h == 0 && ceil_pad_w == 0) || divisor_override.has_value();
@@ -397,8 +396,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                 } else {
                     num_of_ele = total_elems_per_c_shards[channel];
                 }
-                std::vector<uint32_t> sync_indices;
-                std::vector<uint32_t> scalar_values;
+                std::vector<ScalarInfo> scalars;
                 uint32_t first_scalar = get_bf16_pool_scalar(
                     pool_type,
                     kernel_size_h,
@@ -418,21 +416,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                     pad_h,
                     pad_w,
                     num_of_ele,
-                    &sync_indices,
-                    &scalar_values);
+                    &scalars);
 
-                uint32_t scalar_cnt = scalar_values.size();
+                uint32_t scalar_cnt = scalars.size();
                 std::vector<uint32_t> runtime_args_reader = {scalar_cnt};
+                std::vector<uint32_t> runtime_args_compute = {scalar_cnt};
                 for (int j = 0; j < scalar_cnt; j++) {
-                    runtime_args_reader.push_back(sync_indices[j]);
-                    runtime_args_reader.push_back(scalar_values[j] << 16);
+                    runtime_args_reader.push_back(scalars[j].start);
+                    runtime_args_reader.push_back(scalars[j].value);
+                    runtime_args_compute.push_back(scalars[j].start);
                 }
 
-                uint32_t sync_steps = sync_indices.size();
-                std::vector<uint32_t> runtime_args_compute = {scalar_cnt};
-                for (int j = 0; j < sync_steps; j++) {
-                    runtime_args_compute.push_back(sync_indices[j]);
-                }
                 tt::tt_metal::SetRuntimeArgs(program, compute_kernel, *iterator, runtime_args_compute);
                 tt::tt_metal::SetRuntimeArgs(program, reader0_kernel, *iterator, runtime_args_reader);
                 tt::tt_metal::SetRuntimeArgs(program, reader1_kernel, *iterator, runtime_args_reader);

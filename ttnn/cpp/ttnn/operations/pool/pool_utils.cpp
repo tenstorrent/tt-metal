@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_utils.hpp"
@@ -41,7 +40,7 @@ uint32_t get_bf16_pool_scalar(
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D:
             value = 1.;
-            packed_first_value = bfloat16(value).to_packed();
+            packed_first_value = bfloat16(value).to_packed() << 16;
 
             if (scalars != nullptr) {
                 scalars->push_back({0, packed_first_value, out_nhw_per_core.value_or(0) - 1});
@@ -50,7 +49,7 @@ uint32_t get_bf16_pool_scalar(
         case Pool2DType::AVG_POOL2D:
             if (divisor_override.has_value()) {
                 value = 1. / (float)divisor_override.value();
-                packed_first_value = bfloat16(value).to_packed();
+                packed_first_value = bfloat16(value).to_packed() << 16;
                 if (scalars != nullptr) {
                     scalars->push_back({0, packed_first_value, out_nhw_per_core.value_or(0) - 1});
                 }
@@ -79,11 +78,11 @@ uint32_t get_bf16_pool_scalar(
                     // Add new scalar if padding config changes
                     if (first_scalar || (uint32_t)pool_area != last_pool_area) {
                         if (first_scalar) {
-                            packed_first_value = bfloat16(value).to_packed();
+                            packed_first_value = bfloat16(value).to_packed() << 16;
                         }
                         if (scalars != nullptr) {
                             scalars->back().end = i - 1;
-                            scalars->push_back({i, bfloat16(value).to_packed(), i});
+                            scalars->push_back({i, bfloat16(value).to_packed() << 16, i});
                         }
                         first_scalar = false;
                     }
@@ -96,7 +95,7 @@ uint32_t get_bf16_pool_scalar(
                 }
             } else {
                 value = 1. / (float)(kernel_h * kernel_w);
-                packed_first_value = bfloat16(value).to_packed();
+                packed_first_value = bfloat16(value).to_packed() << 16;
                 if (scalars != nullptr) {
                     scalars->push_back({0, packed_first_value, out_nhw_per_core.value_or(0) - 1});
                 }
