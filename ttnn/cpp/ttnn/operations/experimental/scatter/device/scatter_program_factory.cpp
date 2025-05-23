@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -115,18 +115,41 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
          total_number_of_cores,
          compute_with_storage_grid_size.x}};
 
-    auto reader_kernel = create_kernel(
-        program,
-        reader_kernel_path,
-        CoreRangeSet{core},
-        ReaderDataMovementConfig{compile_time_args},
-        compile_time_args);
-    auto writer_kernel = create_kernel(
-        program,
-        writer_kernel_path,
-        CoreRangeSet{core},
-        WriterDataMovementConfig{compile_time_args},
-        compile_time_args);
+    auto reader_kernel =
+        create_kernel(program, reader_kernel_path, all_cores, ReaderDataMovementConfig{compile_time_args});
+    auto writer_kernel =
+        create_kernel(program, writer_kernel_path, all_cores, WriterDataMovementConfig{compile_time_args});
+
+    // /////////////////////////////////
+    const uint32_t& num_cores_y = compute_with_storage_grid_size.y;
+    for (uint32_t i{0}, tile_offset = 0; i < num_cores; ++i) {
+        CoreCoord core{i / num_cores_y, i % num_cores_y};
+
+        uint32_t ht_per_core;
+        if (core_group_1.contains(core)) {
+            ht_per_core = num_cols_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            ht_per_core = num_cols_per_core_group_2;
+        } else {
+            TT_THROW("Core not in any predefined core range.");
+        }
+
+        SetRuntimeArgs(program, reader_kernel, core, {tile_offset, ht_per_core});
+
+        SetRuntimeArgs(program, writer_kernel, core, {tile_offset, ht_per_core});
+
+        // if (core_group_1.contains(core)) {
+        //     SetRuntimeArgs(program, cumprod_compute_sc_kernel_id, core, {num_tiles_per_core, tiles_per_row});
+        // } else if (core_group_2.contains(core)) {
+        //     TT_ASSERT(compute_kernel_2_id.has_value());
+        //     SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_tiles_per_core, tiles_per_row});
+        // } else {
+        //     TT_THROW("Core not in any predefined core range.");
+        // }
+
+        tile_offset += ht_per_core;
+    }
+    // /////////////////////////////////
 
     return {std::move(program), {reader_kernel, writer_kernel, compute_with_storage_grid_size}};
 }
@@ -162,7 +185,9 @@ KernelHandle ScatterProgramFactory::create_kernel(
     const std::vector<uint32_t>& runtime_args) {
     auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
 
-    SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
+    if (!runtime_args.empty()) {
+        SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
+    }
 
     return kernel_id;
 }

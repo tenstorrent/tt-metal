@@ -20,11 +20,4 @@ ttnn::Tensor transform_to_4d_tensor(const ttnn::Tensor& input_tensor, const bool
                          : ttnn::operations::data_movement::squeeze_from_ND_to_4D(input_tensor);
 }
 
-// ttnn::Tensor recover_input_tensor(const ttnn::Tensor& output_tensor, const bool& rank_below_4, const uint32_t&) {
-//     // TODO(jbbieniekTT): copy code contents from other source
-//     ttnn::Tensor recovered_tensor{};
-
-//     return recovered_tensor;
-// }
-
 }  // namespace reduction_common

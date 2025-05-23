@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,10 +28,10 @@ void kernel_main() {
     const auto output_addr_gtor{
         make_addr_gtor<ctas.output_tensor_is_dram>(ctas.output_tensor_cb, ctas.output_tensor_addr)};
 
-    // // TODO(jbbieniekTT): multi-core
-    const uint32_t ht_offset = 0;
+    const uint32_t tile_offset = get_arg_val<uint32_t>(0);
+    const uint32_t start_ht_id = get_arg_val<uint32_t>(1);
 
-    for (uint32_t h = 0; h < ctas.Ht; ++h) {
+    for (uint32_t h = start_ht_id; h < start_ht_id + tile_offset; ++h) {
         // simply read the output_tensor_cb and write to the NoC
         write_wt_tiles(output_addr_gtor, ctas.output_tensor_cb, ctas.Wt_input, h);
     }
