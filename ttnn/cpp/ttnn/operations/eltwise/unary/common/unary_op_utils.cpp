@@ -360,7 +360,7 @@ std::pair<string, string> get_op_init_and_func_default(
         case UnaryOpType::EQZ:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype.value() == DataType::INT32) {
+            if (input_dtype.value() == DataType::INT32 || input_dtype.value() == DataType::UINT16) {
                 op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile_int32({});", idst)};
             } else {
                 op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)};

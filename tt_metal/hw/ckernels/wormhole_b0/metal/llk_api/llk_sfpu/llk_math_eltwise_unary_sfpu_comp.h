@@ -27,7 +27,7 @@ inline void llk_math_eltwise_unary_sfpu_eqz_int32(uint dst_index, int vector_mod
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_eqz_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::equal_zero, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::equal_zero, APPROXIMATE>(sfpu::comp_init<APPROXIMATE>);
 }
 
 // NEZ
