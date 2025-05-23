@@ -43,6 +43,8 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
+    uint32_t row_size = a.get_padded_shape()[-1];
+
     std::optional<ShardSpec> shard_spec = std::nullopt;
     std::optional<TensorMemoryLayout> sharded_layout = std::nullopt;
     bool src0_sharded = a.memory_config().is_sharded();
@@ -86,7 +88,8 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         }
     }
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
+    // TODO: Rename to num_partitions (which is either the number of tiles for TILES or number of rows for ROW_MAJOR)
+    uint32_t num_tiles = a.volume() / a.get_padded_shape()[-1];
 
     uint32_t num_cores, num_tiles_per_core_group_1, num_tiles_per_core_group_2, num_cores_total;
     if (zero_start_grid) {
@@ -161,12 +164,12 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     std::vector<std::vector<uint32_t>> eltwise_binary_args;
     std::vector<std::vector<uint32_t>> unary_writer_args;
     if constexpr (initialize_args) {
-        binary_reader_args = {cores.size(), std::vector<uint32_t>(7)};
-        eltwise_binary_args = {cores.size(), std::vector<uint32_t>(2)};
+        binary_reader_args = {cores.size(), std::vector<uint32_t>(8)};
+        eltwise_binary_args = {cores.size(), std::vector<uint32_t>(3)};
         if (block_or_width_sharded and not out_sharded) {
             unary_writer_args = {cores.size(), std::vector<uint32_t>(7)};
         } else {
-            unary_writer_args = {cores.size(), std::vector<uint32_t>(3)};
+            unary_writer_args = {cores.size(), std::vector<uint32_t>(4)};
         }
     }
 
@@ -230,8 +233,9 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
                 block_height,
                 block_width,
                 num_shards_per_width,
-                num_shards_per_width};
-            eltwise_binary_args[i] = {block_cnt_per_core, block_size_per_core};
+		row_size,
+	    };
+            eltwise_binary_args[i] = {block_cnt_per_core, block_size_per_core, row_size};
         } else {
             auto& reader_args = cached_reader_args.at(core.x).at(core.y);
             reader_args[0] = src_buffer_a->address();
@@ -241,9 +245,11 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
             reader_args[4] = block_height;
             reader_args[5] = block_width;
             reader_args[6] = num_shards_per_width;
+	    reader_args[7] = row_size;
             auto& eltwise_args = cached_eltwise_args.at(core.x).at(core.y);
             eltwise_args[0] = block_cnt_per_core;
             eltwise_args[1] = block_size_per_core;
+	    eltwise_args[2] = row_size;
         }
         if (block_or_width_sharded and not out_sharded) {
             uint32_t unpadded_block_height = block_height;
@@ -290,12 +296,13 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
             }
         } else {
             if constexpr (initialize_args) {
-                unary_writer_args[i] = {dst_buffer->address(), num_tiles_per_core, num_tiles_read};
+                unary_writer_args[i] = {dst_buffer->address(), num_tiles_per_core, num_tiles_read, row_size};
             } else {
                 auto& writer_args = cached_writer_args.at(core.x).at(core.y);
                 writer_args[0] = dst_buffer->address();
                 writer_args[1] = num_tiles_per_core;
                 writer_args[2] = num_tiles_read;
+		writer_args[3] = row_size;
             }
         }
         num_tiles_read += num_tiles_per_core;

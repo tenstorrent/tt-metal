@@ -10,10 +10,16 @@
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
+constexpr uint32_t TILE_SIZE = 1024;
+
 namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
+    uint32_t row_size = get_arg_val<uint32_t>(2);
+
+    const uint32_t num_tiles_per_row = (row_size + TILE_SIZE - 1) / TILE_SIZE;
+    per_core_block_cnt *= num_tiles_per_row;
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;

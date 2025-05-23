@@ -222,17 +222,8 @@ inline auto invoke_binary_ng(
 
     // RM is never BFLOAT8 or BFLOAT4 so we can assume it goes in here.
     if (not typecast_a and not typecast_b) {
-        const auto input_a_rm = detail::is_layout(lhs, Layout::ROW_MAJOR);
-        const auto input_b_rm = detail::is_layout(rhs, Layout::ROW_MAJOR);
-        const auto input_a = detail::to_layout(lhs, Layout::TILE);
-        const auto input_b = detail::to_layout(rhs, Layout::TILE);
-
-        if (input_a_rm and input_b_rm) {
-            // we don't support to_layout with optional output tensor
-            TT_FATAL(
-                !output_preallocated,
-                "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
-        }
+        const auto input_a = lhs;
+        const auto input_b = rhs;
 
         auto result = ttnn::prim::binary_ng(
             queue_id,
@@ -245,13 +236,6 @@ inline auto invoke_binary_ng(
             lhs_activations,
             rhs_activations,
             post_activations);
-
-        // if both inputs are in row major, convert the output to row major
-        // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
-        // since it leads to better perf
-        if (input_a_rm and input_b_rm) {
-            return detail::to_layout(result, Layout::ROW_MAJOR);
-        }
 
         return result;
     } else {

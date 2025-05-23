@@ -49,7 +49,7 @@ set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "libboost-dev (>= 1.78) | libboost
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
     ${PROJECT_BINARY_DIR}/tt-metalium-config-version.cmake
-    VERSION ${PROJECT_VERSION}
+    VERSION "0.58.0-dev"
     COMPATIBILITY SameMajorVersion
 )
 configure_package_config_file(

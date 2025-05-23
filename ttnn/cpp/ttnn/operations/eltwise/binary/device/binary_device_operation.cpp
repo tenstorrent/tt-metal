@@ -121,8 +121,6 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
 
     BinaryDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Input to eltwise binary must be tilized");
-
     bool tensor_b_sharded = false;
 
     if (input_tensor_b.has_value()) {
@@ -132,7 +130,6 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_a.device() == input_tensor_b->device(),
                 "Operands to eltwise binary need to be on the same device!");
         }
-        TT_FATAL(input_tensor_b->get_layout() == Layout::TILE, "Inputs to eltwise binary must be tilized");
     }
 
     if (input_tensor_a.memory_config().is_sharded()) {
@@ -273,7 +270,7 @@ BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output
             return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), memory_config));
         }
     }
-    return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
+    return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.memory_config));
 }
 
 BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(
