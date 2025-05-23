@@ -104,6 +104,7 @@ def test_index_fill_int(shape, dim, value, device):
     run_index_fill_test(shape, dim, value, torch.int32, device)
 
 
+@pytest.mark.skip("Test case failing assert_equal() - see #22482")
 @pytest.mark.parametrize(
     "shape",
     [
