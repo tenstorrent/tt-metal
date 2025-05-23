@@ -160,8 +160,6 @@ void ControlPlane::validate_mesh_connections(mesh_id_t mesh_id) const {
             chip_id_t physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_chip_id];
             chip_id_t physical_chip_id_next =
                 logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_chip_id + 1];
-            chip_id_t physical_chip_id_next_row =
-                logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_chip_id + mesh_ew_size];
 
             const auto& eth_links = get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
             auto eth_links_to_next = eth_links.find(physical_chip_id_next);
@@ -178,6 +176,8 @@ void ControlPlane::validate_mesh_connections(mesh_id_t mesh_id) const {
                 eth_links.at(physical_chip_id_next).size(),
                 num_ports_per_side);
             if (i != mesh_ns_size - 1) {
+                chip_id_t physical_chip_id_next_row =
+                    logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_chip_id + mesh_ew_size];
                 auto eth_links_to_next_row = eth_links.find(physical_chip_id_next_row);
                 TT_FATAL(
                     eth_links_to_next_row != eth_links.end(),
@@ -197,7 +197,7 @@ void ControlPlane::validate_mesh_connections(mesh_id_t mesh_id) const {
 }
 
 void ControlPlane::validate_mesh_connections() const {
-    for (int i = 0; i < this->logical_mesh_chip_id_to_physical_chip_id_mapping_.size(); i++) {
+    for (uint32_t i = 0; i < this->logical_mesh_chip_id_to_physical_chip_id_mapping_.size(); i++) {
         this->validate_mesh_connections(i);
     }
 }
