@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@ import math
 from dataclasses import dataclass
 
 import torch
-import os
 import ttnn
 from models.experimental.stable_diffusion_35_large.tt.linear import TtLinear, TtLinearParameters
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-FileCopyrightText: Copyright 2024 Stability AI and The HuggingFace Team. All rights reserved.
 
 # SPDX-License-Identifier: Apache-2.0
@@ -268,9 +268,10 @@ class TtStableDiffusion3Pipeline:
         batch_size = len(prompt_1)
         num_images_per_prompt = self._prepared_num_images_per_prompt
 
-        assert batch_size * num_images_per_prompt == 1, (
-            "generating multiple images is not yet supported as it requires another mesh sharding stategy"
-        )
+        assert (
+            batch_size * num_images_per_prompt == 1
+            ), "generating multiple images is not yet supported as it requires another mesh sharding stategy"
+
 
         width = self._prepared_width
         height = self._prepared_height

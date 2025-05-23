@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -70,9 +70,7 @@ class TtPatchEmbeddingConv2dParameters:
 
 
 class TtPatchEmbeddingConv2d:
-    def __init__(
-        self, parameters: TtPatchEmbeddingConv2dParameters, device
-    ) -> None:
+    def __init__(self, parameters: TtPatchEmbeddingConv2dParameters, device) -> None:
         self._weight = parameters.weight
         self._bias = parameters.bias
         self._unfold = torch.nn.Unfold(kernel_size=parameters.kernel_size, stride=parameters.kernel_size)
