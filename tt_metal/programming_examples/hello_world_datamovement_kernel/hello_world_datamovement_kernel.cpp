@@ -4,16 +4,27 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include "tt-metalium/dispatch_core_common.hpp"
+#include "tt-metalium/fabric_types.hpp"
 
 int main() {
     using namespace tt;
     using namespace tt::tt_metal;
 
     // Initialize Program and Device
+    tt::tt_metal::detail::InitializeFabricConfig(FabricConfig::FABRIC_1D);
 
     constexpr CoreCoord core = {0, 0};
     int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
+    auto devices = tt::tt_metal::detail::CreateDevices(
+        {0, 1},
+        2,
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        tt_metal::DispatchCoreConfig{DispatchCoreType::ETH});
+    IDevice* device = devices[0];
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
 
@@ -42,7 +53,7 @@ int main() {
 
     Finish(cq);
     printf("Thank you, Core {0, 0} on Device 0, for the completed task.\n");
-    CloseDevice(device);
+    tt::tt_metal::detail::CloseDevices(devices);
 
     return 0;
 }

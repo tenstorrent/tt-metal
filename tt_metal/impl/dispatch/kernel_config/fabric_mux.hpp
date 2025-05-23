@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <optional>
+#include "fabric_edm_packet_header.hpp"
 #include "fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_mux_config.hpp"
@@ -69,6 +70,14 @@ public:
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
     void ConfigureCore() override;
+    std::optional<tt::tt_metal::TerminationInfo> GetTerminationInfo() const override {
+        return tt::tt_metal::TerminationInfo{
+            .logical_core = logical_core_,
+            .core_type = GetCoreType(),
+            .address = this->mux_kernel_config_->get_termination_signal_address(),
+            .val = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE,
+        };
+    }
 
     const fabric_mux_static_config& GetStaticConfig() const { return static_config_; }
 

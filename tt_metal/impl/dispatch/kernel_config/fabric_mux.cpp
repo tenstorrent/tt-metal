@@ -64,7 +64,8 @@ void FabricMux::GenerateStaticConfigs() {
         k_NumSlotsPerChannel,
         k_NumSlotsPerChannel,
         static_config_.buffer_size_bytes.value(),
-        static_config_.buffer_base_address.value());
+        static_config_.buffer_base_address.value(),
+        programmable_core_type_index);
     mux_ct_args = mux_kernel_config_->get_fabric_mux_compile_time_args();
 
     log_info(
