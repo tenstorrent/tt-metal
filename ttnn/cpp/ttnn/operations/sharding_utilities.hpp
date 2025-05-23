@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal {
 
@@ -87,5 +88,19 @@ ShardingConfig get_specs_for_sharding_partition(
     uint32_t window_w,
     uint32_t pad_h,
     uint32_t pad_w);
+
+namespace sharded_accessor_utils {
+
+struct ShardedAccessorArgs {
+    size_t rank;
+    size_t num_banks;
+    std::vector<uint32_t> shapes_and_bank_coords;
+};
+ShardedAccessorArgs get_sharded_accessor_args(
+    const distributed::MeshDevice& mesh_device,
+    const BufferDistributionSpec& buffer_distribution_spec,
+    const CoreType& bank_type);
+
+}  // namespace sharded_accessor_utils
 
 }  // namespace tt::tt_metal

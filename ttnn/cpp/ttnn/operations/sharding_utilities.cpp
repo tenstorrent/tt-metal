@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -749,5 +749,31 @@ ShardingConfig get_specs_for_sharding_partition(
         .skip_after_first_partial_image_row = skip_after_first_partial_image_row,
         .skip_after_full_image = skip_after_full_image};
 }
+
+namespace sharded_accessor_utils {
+ShardedAccessorArgs get_sharded_accessor_args(
+    const distributed::MeshDevice& mesh_device,
+    const BufferDistributionSpec& buffer_distribution_spec,
+    const CoreType& bank_type) {
+    const auto& tensor_shape = buffer_distribution_spec.get_tensor_shape_in_pages();
+    const auto& shard_shape = buffer_distribution_spec.get_shard_shape_in_pages();
+    const auto& bank_coords = buffer_distribution_spec.get_cores();
+
+    std::vector<uint32_t> shapes_and_bank_coords;
+    shapes_and_bank_coords.reserve(tensor_shape.size() + shard_shape.size() + bank_coords.size());
+    shapes_and_bank_coords.insert(shapes_and_bank_coords.end(), tensor_shape.cbegin(), tensor_shape.cend());
+    shapes_and_bank_coords.insert(shapes_and_bank_coords.end(), shard_shape.cbegin(), shard_shape.cend());
+
+    // Pack each virtual coordinate as a 32-bit value with 16 bits for x and 16 bits for y
+    for (const auto& bank_coord : bank_coords) {
+        const auto virtual_coord = mesh_device.virtual_core_from_logical_core(bank_coord, bank_type);
+        shapes_and_bank_coords.push_back((virtual_coord.x << 16) | (virtual_coord.y & 0xFFFF));
+    }
+
+    return {
+        .rank = tensor_shape.size(), .num_banks = bank_coords.size(), .shapes_and_bank_coords = shapes_and_bank_coords};
+}
+
+}  // namespace sharded_accessor_utils
 
 }  // namespace tt::tt_metal
