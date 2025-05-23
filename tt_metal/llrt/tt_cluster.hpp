@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -115,6 +115,8 @@ public:
         return this->cluster_desc_->get_chip_unique_ids();
     }
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
+
+    chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
 
     ARCH arch() const { return this->arch_; }
 
@@ -296,6 +298,12 @@ public:
     }
 
     tt::tt_fabric::ControlPlane* get_control_plane();
+
+    void set_custom_control_plane_mesh_graph(
+        const std::string& mesh_graph_desc_file,
+        const std::vector<std::vector<chip_id_t>>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+
+    void set_default_control_plane_mesh_graph();
 
     void initialize_fabric_config(tt_metal::FabricConfig fabric_config);
 

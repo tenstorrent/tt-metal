@@ -18,8 +18,10 @@ class FabricContext;
 class ControlPlane {
 public:
     explicit ControlPlane(const std::string& mesh_graph_desc_yaml_file);
+    explicit ControlPlane(
+        const std::string& mesh_graph_desc_yaml_file,
+        const std::vector<std::vector<chip_id_t>>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     ~ControlPlane();
-    void initialize_from_mesh_graph_desc_file(const std::string& mesh_graph_desc_file);
 
     void write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chip_id) const;
     void write_routing_tables_to_all_chips() const;
@@ -106,6 +108,9 @@ private:
     routing_plane_id_t get_routing_plane_id(
         chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
 
+    std::vector<std::vector<chip_id_t>> get_physical_chip_mapping_from_mesh_graph_desc_file(
+        const std::string& mesh_graph_desc_file);
+
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates
     chan_id_t get_downstream_eth_chan_id(
@@ -113,7 +118,11 @@ private:
 
     chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
 
+    void load_physical_chip_mapping(
+        const std::vector<std::vector<chip_id_t>>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+
     void validate_mesh_connections(mesh_id_t mesh_id) const;
+    void validate_mesh_connections() const;
 
     std::vector<chip_id_t> get_mesh_physical_chip_ids(
         std::uint32_t mesh_ns_size, std::uint32_t mesh_ew_size, chip_id_t nw_chip_physical_chip_id) const;
