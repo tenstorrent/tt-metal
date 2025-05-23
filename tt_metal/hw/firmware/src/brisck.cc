@@ -62,6 +62,7 @@ uint32_t kernel_launch(uint32_t kernel_base_addr) {
             WAYPOINT("NKFD");
         }
     }
+    EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif
     return measure_stack_usage();
 }

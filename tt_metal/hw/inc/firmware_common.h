@@ -123,11 +123,11 @@ bool is_message_go() {
 }
 
 #define EARLY_RETURN_FOR_DEBUG \
-    if (is_message_go()) {     \
-        return;                \
-    }
+    if (is_message_go()) { goto early_debug_exit; }
+#define EARLY_RETURN_FOR_DEBUG_EXIT early_debug_exit:
 #else
 #define EARLY_RETURN_FOR_DEBUG
+#define EARLY_RETURN_FOR_DEBUG_EXIT
 #endif
 
 inline __attribute__((always_inline)) void disable_gathering() {
