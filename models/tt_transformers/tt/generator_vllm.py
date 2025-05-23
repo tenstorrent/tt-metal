@@ -15,8 +15,7 @@ from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN, MLLAMA_IMAGE_T
 
 import ttnn
 from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
-from models.tt_transformers.tt.common import create_submeshes
-from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 from models.utility_functions import nearest_32

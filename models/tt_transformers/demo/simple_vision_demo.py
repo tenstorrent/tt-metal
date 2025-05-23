@@ -13,7 +13,7 @@ from loguru import logger
 from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
 
-from models.tt_transformers.tt.common import create_submeshes
+from models.tt_transformers.tt.generator import create_submeshes
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
