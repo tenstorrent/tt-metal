@@ -771,10 +771,12 @@ def test_conv_dram(
     [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
-    "activations_dtype",
-    [ttnn.bfloat16],
+    "activations_dtype, output_layout",
+    [
+        [ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.bfloat8_b, ttnn.TILE_LAYOUT],
+    ],
 )
-@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_conv_ws(
     device,
     torch_tensor_map,
@@ -789,11 +791,11 @@ def test_conv_ws(
     pad_h,
     pad_w,
     act_block_w_div,
+    output_layout,
     stride,
     has_bias,
     weights_dtype,
     activations_dtype,
-    auto_shard,
 ):
     run_conv(
         device,
@@ -814,10 +816,11 @@ def test_conv_ws(
         config_override={
             "act_block_h": 32,
         },
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_layout=output_layout,
+        output_layout=output_layout,
         has_bias=True,
         packer_l1_acc=False,
-        auto_shard=auto_shard,
+        auto_shard=False,
         shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
     )
 
