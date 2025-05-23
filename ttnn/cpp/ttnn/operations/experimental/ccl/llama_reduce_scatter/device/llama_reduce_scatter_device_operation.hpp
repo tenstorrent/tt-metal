@@ -20,13 +20,13 @@ namespace ttnn::operations::experimental::ccl {
 
 struct LlamaReduceScatterDeviceOperation {
     struct operation_attributes_t {
-        const uint32_t dim;
-        const std::optional<GlobalSemaphore> cross_device_semaphore;
-        const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
-        const uint32_t cluster_axis;
-        const std::optional<MemoryConfig> output_mem_config;
-        const uint32_t ring_devices;
-        const uint32_t num_links;
+        uint32_t dim;
+        std::optional<GlobalSemaphore> cross_device_semaphore;
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
+        uint32_t cluster_axis;
+        std::optional<MemoryConfig> output_mem_config;
+        uint32_t ring_devices;
+        uint32_t num_links;
     };
     struct tensor_args_t {
         const Tensor input_tensor;

@@ -32,29 +32,7 @@ std::vector<ttnn::Tensor> ExecuteReduceScatterMatmul::invoke(
     const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 std::nullopt
     const std::optional<Tensor>& optional_output_tensor                                  // mm11 std::nullopt
 ) {
-    return ttnn::operations::experimental::ccl::rs_matmul(
-        input_tensor,
-        weight_tensor,
-        rs_tensor,
-        intermediate_packet_buffer,
-        dim,
-        cross_device_semaphore,
-        cluster_axis,
-        mesh_device,
-        num_links,
-        memory_config_rs,
-        memory_config_mm,
-        compute_kernel_config,
-        global_cb,
-        sub_device_id,
-        core_grid,
-        transpose_a,
-        transpose_b,
-        dtype,
-        program_config,
-        activation,
-        output_tile,
-        optional_output_tensor);
+    return {input_tensor};
 }
 
 }  // namespace ttnn::operations::experimental::ccl
