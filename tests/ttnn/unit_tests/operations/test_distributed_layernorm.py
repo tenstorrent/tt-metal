@@ -106,8 +106,10 @@ def run_distributed_layernorm(
     if not has_weights:
         gamma = None
         beta = None
-        tt_gamma = [None] * n_devices
-        tt_beta = [None] * n_devices
+        tt_gamma = None
+        tt_beta = None
+        # tt_gamma = [None] * n_devices
+        # tt_beta = [None] * n_devices
 
     for i in range(iterations):
         tt_out = tt_distributed_layernorm(
@@ -142,7 +144,7 @@ rms_norm_parametrization_ids = ["rmsnorm", "layernorm"]
 
 
 def run_test_distributed_layernorm_with_program_cache_and_checks(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, use_program_cache, iterations, has_weights
+    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, use_program_cache, iterations, has_weights=True
 ):
     if mesh_device.get_num_devices() < n_devices:
         pytest.skip("Not T3000!")
