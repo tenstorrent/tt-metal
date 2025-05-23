@@ -62,7 +62,8 @@ MemoryConfig::MemoryConfig(
 MemoryConfig::MemoryConfig(BufferType buffer_type, NdShardSpec nd_shard_spec) :
     memory_layout_(TensorMemoryLayout::BLOCK_SHARDED),
     buffer_type_(buffer_type),
-    nd_shard_spec_(std::move(nd_shard_spec)) {}
+    nd_shard_spec_(std::move(nd_shard_spec)),
+    created_with_nd_shard_spec_(true) {}
 
 bool MemoryConfig::is_sharded() const {
     switch (this->memory_layout_) {

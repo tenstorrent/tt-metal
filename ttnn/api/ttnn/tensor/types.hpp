@@ -121,8 +121,12 @@ public:
     bool is_l1() const;
     bool is_dram() const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("memory_layout", "buffer_type", "shard_spec", "nd_shard_spec");
-    auto attribute_values() const { return std::forward_as_tuple(memory_layout_, buffer_type_, shard_spec_, nd_shard_spec_); }
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "memory_layout", "buffer_type", "shard_spec", "nd_shard_spec", "created_with_nd_shard_spec");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            memory_layout_, buffer_type_, shard_spec_, nd_shard_spec_, created_with_nd_shard_spec_);
+    }
 
     friend std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
@@ -131,6 +135,7 @@ private:
     BufferType buffer_type_ = BufferType::DRAM;                           // Can be either DRAM or L1
     std::optional<ShardSpec> shard_spec_ = std::nullopt;
     std::optional<NdShardSpec> nd_shard_spec_ = std::nullopt;
+    bool created_with_nd_shard_spec_ = false;
 
     friend class TensorSpec;
 };
