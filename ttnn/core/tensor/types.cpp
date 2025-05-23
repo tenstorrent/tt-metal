@@ -65,6 +65,18 @@ MemoryConfig::MemoryConfig(BufferType buffer_type, NdShardSpec nd_shard_spec) :
     nd_shard_spec_(std::move(nd_shard_spec)),
     created_with_nd_shard_spec_(true) {}
 
+MemoryConfig::MemoryConfig(
+    TensorMemoryLayout memory_layout,
+    BufferType buffer_type,
+    std::optional<ShardSpec> shard_spec,
+    std::optional<NdShardSpec> nd_shard_spec,
+    bool created_with_nd_shard_spec) :
+    memory_layout_(memory_layout),
+    buffer_type_(buffer_type),
+    shard_spec_(std::move(shard_spec)),
+    nd_shard_spec_(std::move(nd_shard_spec)),
+    created_with_nd_shard_spec_(created_with_nd_shard_spec) {}
+
 bool MemoryConfig::is_sharded() const {
     switch (this->memory_layout_) {
         case TensorMemoryLayout::HEIGHT_SHARDED:

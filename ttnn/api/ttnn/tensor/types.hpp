@@ -112,6 +112,7 @@ public:
     BufferType buffer_type() const { return buffer_type_; }
     const std::optional<ShardSpec>& shard_spec() const { return shard_spec_; }
     const std::optional<NdShardSpec>& nd_shard_spec() const { return nd_shard_spec_; }
+    bool created_with_nd_shard_spec() const { return created_with_nd_shard_spec_; }
 
     MemoryConfig with_shard_spec(std::optional<ShardSpec> shard_spec) const {
         return MemoryConfig(memory_layout_, buffer_type_, std::move(shard_spec));
@@ -128,6 +129,13 @@ public:
             memory_layout_, buffer_type_, shard_spec_, nd_shard_spec_, created_with_nd_shard_spec_);
     }
 
+    MemoryConfig(
+        TensorMemoryLayout memory_layout,
+        BufferType buffer_type,
+        std::optional<ShardSpec> shard_spec,
+        std::optional<NdShardSpec> nd_shard_spec,
+        bool created_with_nd_shard_spec);
+
     friend std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
 private:
@@ -136,8 +144,6 @@ private:
     std::optional<ShardSpec> shard_spec_ = std::nullopt;
     std::optional<NdShardSpec> nd_shard_spec_ = std::nullopt;
     bool created_with_nd_shard_spec_ = false;
-
-    friend class TensorSpec;
 };
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);

@@ -142,7 +142,7 @@ TensorSpec TensorSpec::with_memory_config(MemoryConfig memory_config) const {
 }
 
 void TensorSpec::populate_sharding_specs() {
-    if (memory_config().created_with_nd_shard_spec_) {
+    if (memory_config().created_with_nd_shard_spec()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
             tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
         }
@@ -166,9 +166,12 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
             .cores = std::nullopt,
             .shard_orientation = ShardOrientation::ROW_MAJOR,
         };
-        auto result = mem_config;
-        result.nd_shard_spec_ = std::move(nd_shard_spec);
-        return result;
+        return MemoryConfig(
+            mem_config.memory_layout(),
+            mem_config.buffer_type(),
+            mem_config.shard_spec(),
+            std::move(nd_shard_spec),
+            mem_config.created_with_nd_shard_spec());
     }
 
     if (!mem_config.shard_spec().has_value()) {
@@ -192,17 +195,23 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
 
     if (mem_layout == TensorMemoryLayout::SINGLE_BANK) {
         nd_shard_spec.shard_shape = padded_shape();
-        auto result = mem_config;
-        result.nd_shard_spec_ = std::move(nd_shard_spec);
-        return result;
+        return MemoryConfig(
+            mem_config.memory_layout(),
+            mem_config.buffer_type(),
+            mem_config.shard_spec(),
+            std::move(nd_shard_spec),
+            mem_config.created_with_nd_shard_spec());
     }
 
     if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         nd_shard_spec.shard_shape = padded_shape();
         nd_shard_spec.shard_shape[-1] = shard_spec.shape[1];
-        auto result = mem_config;
-        result.nd_shard_spec_ = std::move(nd_shard_spec);
-        return result;
+        return MemoryConfig(
+            mem_config.memory_layout(),
+            mem_config.buffer_type(),
+            mem_config.shard_spec(),
+            std::move(nd_shard_spec),
+            mem_config.created_with_nd_shard_spec());
     }
 
     // Checking that sharding doesn't cut across higher dimensions
@@ -233,9 +242,12 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
              orig_cores.start_coord.y + num_shards_along_height - 1}));
     }
 
-    auto result = mem_config;
-    result.nd_shard_spec_ = std::move(nd_shard_spec);
-    return result;
+    return MemoryConfig(
+        mem_config.memory_layout(),
+        mem_config.buffer_type(),
+        mem_config.shard_spec(),
+        std::move(nd_shard_spec),
+        mem_config.created_with_nd_shard_spec());
 }
 
 std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() const {
@@ -255,17 +267,22 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
             return std::nullopt;
         }
 
-        auto result = mem_config;
-        result.memory_layout_ = TensorMemoryLayout::INTERLEAVED;
-        return result;
+        return MemoryConfig(
+            TensorMemoryLayout::INTERLEAVED,
+            mem_config.buffer_type(),
+            std::nullopt,
+            mem_config.nd_shard_spec(),
+            mem_config.created_with_nd_shard_spec());
     }
 
     // Detect single bank case
     if (nd_shard_shape == padded_shape()) {
-        auto result = mem_config;
-        result.memory_layout_ = TensorMemoryLayout::SINGLE_BANK;
-        result.shard_spec_ = ShardSpec(*nd_shard_spec.cores, physical_shape(), nd_shard_spec.shard_orientation);
-        return result;
+        return MemoryConfig(
+            TensorMemoryLayout::SINGLE_BANK,
+            mem_config.buffer_type(),
+            ShardSpec(*nd_shard_spec.cores, physical_shape(), nd_shard_spec.shard_orientation),
+            mem_config.nd_shard_spec(),
+            mem_config.created_with_nd_shard_spec());
     }
 
     ShardSpec shard_spec(
@@ -292,18 +309,22 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     }
 
     if (width_sharded) {
-        auto result = mem_config;
-        result.memory_layout_ = TensorMemoryLayout::WIDTH_SHARDED;
-        result.shard_spec_ = shard_spec;
-        return result;
+        return MemoryConfig(
+            TensorMemoryLayout::WIDTH_SHARDED,
+            mem_config.buffer_type(),
+            std::move(shard_spec),
+            mem_config.nd_shard_spec(),
+            mem_config.created_with_nd_shard_spec());
     }
 
     // Height sharding
     if (shard_spec.shape[1] == padded_shape()[-1]) {
-        auto result = mem_config;
-        result.memory_layout_ = TensorMemoryLayout::HEIGHT_SHARDED;
-        result.shard_spec_ = shard_spec;
-        return result;
+        return MemoryConfig(
+            TensorMemoryLayout::HEIGHT_SHARDED,
+            mem_config.buffer_type(),
+            std::move(shard_spec),
+            mem_config.nd_shard_spec(),
+            mem_config.created_with_nd_shard_spec());
     }
 
     // Block sharding requires a contiguous grid of cores
@@ -318,10 +339,12 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    auto result = mem_config;
-    result.memory_layout_ = TensorMemoryLayout::BLOCK_SHARDED;
-    result.shard_spec_ = std::move(shard_spec);
-    return result;
+    return MemoryConfig(
+        TensorMemoryLayout::BLOCK_SHARDED,
+        mem_config.buffer_type(),
+        std::move(shard_spec),
+        mem_config.nd_shard_spec(),
+        mem_config.created_with_nd_shard_spec());
 }
 
 }  // namespace tt::tt_metal
