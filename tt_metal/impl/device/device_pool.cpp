@@ -497,6 +497,9 @@ void DevicePool::wait_for_fabric_router_sync() const {
     const auto& fabric_context = control_plane->get_fabric_context();
 
     auto wait_for_handshake = [&](IDevice* dev) {
+        if (!dev) {
+            TT_THROW("Fabric router sync on null device. All devices must be opened for Fabric.");
+        }
         if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
             return;
         }
