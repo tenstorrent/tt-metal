@@ -16,28 +16,28 @@ inline void llk_math_eltwise_unary_sfpu_rounding_op_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = false>
 inline void llk_math_eltwise_unary_sfpu_floor(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_floor_<APPROXIMATE, false>, dst_index, vector_mode);
+        ckernel::sfpu::_calculate_floor_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode);
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = true>
 inline void llk_math_eltwise_unary_sfpu_floor_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_floor_<APPROXIMATE, true>, dst_index, vector_mode);
+        ckernel::sfpu::_calculate_floor_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode);
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = false>
 inline void llk_math_eltwise_unary_sfpu_ceil(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_ceil_<APPROXIMATE, false>, dst_index, vector_mode);
+        ckernel::sfpu::_calculate_ceil_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode);
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, int ITERATIONS = 8, bool USE_FP32 = true>
 inline void llk_math_eltwise_unary_sfpu_ceil_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::_calculate_ceil_<APPROXIMATE, true>, dst_index, vector_mode);
+        ckernel::sfpu::_calculate_ceil_<APPROXIMATE, ITERATIONS, USE_FP32>, dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
