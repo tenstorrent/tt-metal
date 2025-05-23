@@ -50,9 +50,8 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
         "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
-        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=NdShardSpec(shard_shape=Shape([1, 1, 32, "
-        "32]),cores=std::nullopt,shard_orientation=ShardOrientation::ROW_MAJOR),created_with_nd_shard_spec=0),"
-        "alignment=Alignment([32, 32]))))");
+        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
+        "Alignment([32, 32]))))");
     EXPECT_EQ(
         operation0.arguments[1],
         "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
@@ -61,9 +60,8 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
         "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
-        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=NdShardSpec(shard_shape=Shape([1, 1, 32, "
-        "32]),cores=std::nullopt,shard_orientation=ShardOrientation::ROW_MAJOR),created_with_nd_shard_spec=0),"
-        "alignment=Alignment([32, 32]))))");
+        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
+        "Alignment([32, 32]))))");
     EXPECT_EQ(operation0.arguments[2], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
     EXPECT_EQ(operation0.arguments[3], "DataType::BFLOAT16");
     EXPECT_EQ(operation0.arguments[4], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
@@ -80,9 +78,8 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
         "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
-        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=NdShardSpec(shard_shape=Shape([1, 1, 32, "
-        "32]),cores=std::nullopt,shard_orientation=ShardOrientation::ROW_MAJOR),created_with_nd_shard_spec=0),"
-        "alignment=Alignment([32, 32]))))");
+        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
+        "Alignment([32, 32]))))");
     EXPECT_EQ(
         operation1.arguments[1],
         "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
@@ -91,9 +88,8 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
         "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
-        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=NdShardSpec(shard_shape=Shape([1, 1, 32, "
-        "32]),cores=std::nullopt,shard_orientation=ShardOrientation::ROW_MAJOR),created_with_nd_shard_spec=0),"
-        "alignment=Alignment([32, 32]))))");
+        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
+        "Alignment([32, 32]))))");
     EXPECT_EQ(operation1.arguments[2], "nullopt");
     EXPECT_EQ(operation1.arguments[3], "DataType::BFLOAT16");
     EXPECT_EQ(operation1.arguments[4], "nullopt");
@@ -122,8 +118,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(
         operation3.arguments[4],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,"
-        "nd_shard_spec=NdShardSpec(shard_shape=Shape([1, 1, 32, "
-        "32]),cores=std::nullopt,shard_orientation=ShardOrientation::ROW_MAJOR),created_with_nd_shard_spec=0)");
+        "nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)");
 }
 
 }  // namespace

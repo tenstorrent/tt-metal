@@ -49,9 +49,8 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
         "512]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig("
         "tile=Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
-        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=NdShardSpec(shard_shape=Shape([1, 1, 1, "
-        "512]),cores=std::nullopt,shard_orientation=ShardOrientation::ROW_MAJOR),created_with_nd_shard_spec=0),"
-        "alignment=Alignment([1]))))");
+        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
+        "Alignment([1]))))");
     EXPECT_EQ(operation0.arguments[1], "1");
     EXPECT_EQ(operation0.arguments[2], "2");
 
@@ -66,15 +65,13 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
         "512]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig("
         "tile=Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
-        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=NdShardSpec(shard_shape=Shape([1, 1, 1, "
-        "512]),cores=std::nullopt,shard_orientation=ShardOrientation::ROW_MAJOR),created_with_nd_shard_spec=0),"
-        "alignment=Alignment([1]))))");
+        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
+        "Alignment([1]))))");
     EXPECT_EQ(operation1.arguments[1], "SmallVector([0, 2, 1, 3])");
     EXPECT_EQ(
         operation1.arguments[2],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,"
-        "nd_shard_spec=NdShardSpec(shard_shape=Shape([1, 1, 1, "
-        "512]),cores=std::nullopt,shard_orientation=ShardOrientation::ROW_MAJOR),created_with_nd_shard_spec=0)");
+        "nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)");
     EXPECT_EQ(operation1.arguments[3], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
     EXPECT_EQ(operation1.arguments[4], "0");
 
@@ -101,8 +98,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(
         operation3.arguments[4],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,"
-        "nd_shard_spec=NdShardSpec(shard_shape=Shape([1, 1, 1, "
-        "512]),cores=std::nullopt,shard_orientation=ShardOrientation::ROW_MAJOR),created_with_nd_shard_spec=0)");
+        "nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)");
 }
 
 }  // namespace
