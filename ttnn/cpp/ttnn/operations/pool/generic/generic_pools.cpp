@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "generic_pools.hpp"
-
+#include "tt-metalium/constants.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -12,12 +12,11 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
-
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include <limits>
 
 namespace ttnn {
 namespace operations::pool {
-
 template <Pool2DType pool_type>
 Tensor Pool2DOp<pool_type>::invoke(
     QueueId queue_id,
@@ -50,7 +49,7 @@ Tensor Pool2DOp<pool_type>::invoke(
     bool is_out_tiled = false;
     bool is_in_tiled = input_tensor.dtype() == DataType::BFLOAT8_B;  // input tiled for bfp8_b
 
-    sliding_window::ParallelConfig parallel_config;
+    std::optional<sliding_window::ParallelConfig> parallel_config;
     MemoryConfig out_memory_config = input_tensor_sharded.memory_config();
     uint32_t num_cores_nhw = 0;
     uint32_t num_cores_c = 0;
@@ -58,30 +57,29 @@ Tensor Pool2DOp<pool_type>::invoke(
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
     if (!out_memory_config.shard_spec().has_value()) {
         // Input is not sharded. Perform sharding.
-        if (applied_shard_scheme.has_value()) {
-            TT_FATAL(
-                (applied_shard_scheme.value() == TensorMemoryLayout::HEIGHT_SHARDED) ||
-                    (applied_shard_scheme.value() == TensorMemoryLayout::WIDTH_SHARDED) ||
-                    (applied_shard_scheme.value() == TensorMemoryLayout::BLOCK_SHARDED),
-                "Only height, width, or block sharding strategies are supported.");
-            shard_layout = applied_shard_scheme.value();
-        }
-        parallel_config = conv::determine_parallel_config(
+        TT_FATAL(
+            (applied_shard_scheme.value() == TensorMemoryLayout::HEIGHT_SHARDED) ||
+                (applied_shard_scheme.value() == TensorMemoryLayout::WIDTH_SHARDED) ||
+                (applied_shard_scheme.value() == TensorMemoryLayout::BLOCK_SHARDED),
+            "Only height, width, or block sharding strategies are supported.");
+        shard_layout = applied_shard_scheme.value();
+        parallel_config = pool::determine_parallel_config(
             shard_layout,
             batch_size,
             channels,
             output_shape[1],
             output_shape[2],
-            channels,
             input_tensor.device()->compute_with_storage_grid_size(),
             ShardOrientation::ROW_MAJOR,
             false,
             false,
             false);
-        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
-        num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
+        TT_FATAL(parallel_config.has_value(), "Could not determine parallel config for pool2d.");
+
+        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(*parallel_config);
+        num_cores_c = conv::get_num_cores_channels_from_parallel_config(*parallel_config);
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
-            input_tensor_sharded.get_padded_shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
+            input_tensor_sharded.get_padded_shape(), *parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
         input_tensor_sharded = ttnn::to_memory_config(
             input_tensor_sharded, sharded_mem_config, std::nullopt);  // this converts interleaved to sharded
         out_memory_config = input_tensor_sharded.memory_config();
@@ -93,11 +91,12 @@ Tensor Pool2DOp<pool_type>::invoke(
         TT_FATAL(
             !applied_shard_scheme.has_value(), "A sharding scheme should not be specified for a sharded input tensor.");
         TT_FATAL(shard_orientation == ShardOrientation::ROW_MAJOR, "Only row major orientation is supported.");
-        parallel_config.grid = shard_grid;
-        parallel_config.shard_scheme = shard_scheme;
-        parallel_config.shard_orientation = shard_orientation;
-        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
-        num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
+        parallel_config = std::make_optional(sliding_window::ParallelConfig{});
+        parallel_config->grid = shard_grid;
+        parallel_config->shard_scheme = shard_scheme;
+        parallel_config->shard_orientation = shard_orientation;
+        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(*parallel_config);
+        num_cores_c = conv::get_num_cores_channels_from_parallel_config(*parallel_config);
     }
 
     // update the shard spec to match the output shape
@@ -132,7 +131,7 @@ Tensor Pool2DOp<pool_type>::invoke(
         .dilation_hw = {dilation.at(0), dilation.at(1)},
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
-        .core_range_set = parallel_config.grid,
+        .core_range_set = parallel_config->grid,
         .snap_to_tile = false,
         .ceil_mode = ceil_mode,
     };
@@ -144,18 +143,22 @@ Tensor Pool2DOp<pool_type>::invoke(
         sliding_window_config,
         get_bf16_pool_init_value(pool_type),  // pad_val
         false,
-        parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+        parallel_config->shard_orientation == ShardOrientation::COL_MAJOR,
         input_tensor_sharded.memory_config(),
         is_out_tiled,
         in_place_halo);
+
+    uint32_t pre_allocate_size = haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
     auto output_tensor = ttnn::prim::pool2d(
         queue_id,
         haloed_tensor,
         sliding_window_config,
         pool_type,
-        DataType::BFLOAT16,  // input_tensor.dtype(), // currently only bfp16 output is supported
-        out_memory_config);
+        DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
+        out_memory_config,
+        pre_allocate_size);
+
 
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
         output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);
