@@ -328,6 +328,90 @@ def test_to_layout_page_error(shape, device):
     assert_with_pcc(torch_output, output_tensor, 0.9999)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])  # ttnn.bfloat8_b
+@pytest.mark.parametrize("use_pack_untilize", [True])  # False
+@pytest.mark.parametrize(
+    "input_memory_layout",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        # ttnn.TensorMemoryLayout.INTERLEAVED,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shard_orientation",
+    [
+        ttnn.ShardOrientation.ROW_MAJOR,
+        # ttnn.ShardOrientation.COL_MAJOR,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_memory_layout",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        # ttnn.TensorMemoryLayout.INTERLEAVED,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_shard_orientation",
+    [
+        ttnn.ShardOrientation.ROW_MAJOR,
+        # ttnn.ShardOrientation.COL_MAJOR,
+    ],
+)
+def test_untilize_single_core(
+    device,
+    dtype,
+    use_pack_untilize,
+    input_memory_layout,
+    input_shard_orientation,
+    output_memory_layout,
+    output_shard_orientation,
+):
+    num_cores_x = 8
+    num_cores_y = 8
+    shard_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))]
+    )
+
+    tensor_shape = [256, 256]
+
+    input_shard_spec_shape = (64, 64)
+    if input_memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        input_shard_spec_shape = (32, 256)
+    elif input_memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        input_shard_spec_shape = (256, 32)
+    elif input_memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        input_shard_spec_shape = (128, 128)
+
+    output_shard_spec_shape = (64, 64)
+    if output_memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        output_shard_spec_shape = (32, 256)
+    elif output_memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        output_shard_spec_shape = (256, 32)
+    elif output_memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        output_shard_spec_shape = (128, 128)
+
+    input_shard_spec = ttnn.ShardSpec(shard_core_grid, input_shard_spec_shape, input_shard_orientation)
+    input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, input_shard_spec)
+
+    input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
+
+    output_shard_spec = ttnn.ShardSpec(shard_core_grid, output_shard_spec_shape, output_shard_orientation)
+    output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
+
+    ttnn_output_tensor = ttnn.untilize(
+        input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False, use_pack_untilize=use_pack_untilize
+    )
+
+    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+
+
 @pytest.mark.parametrize("shape", [[64, 7680]])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
