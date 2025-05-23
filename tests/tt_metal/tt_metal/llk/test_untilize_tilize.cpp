@@ -403,6 +403,7 @@ void run_single_core_tilize_program(
 /**************************************
 Following tests are for Unpack Tilize
 ***************************************/
+
 TEST_F(DeviceFixture, TensixComputeUnpackTilizePerf) {
     const char* rt_dim_s = std::getenv("RT_DIM");
     const char* ct_dim_s = std::getenv("CT_DIM");
@@ -419,33 +420,31 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizePerf) {
             .num_tiles_r = rt_dim,
             .num_tiles_c = ct_dim,
             .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
-            .golden_function = unit_tests::compute::gold_standard_tilize};
+            .golden_function = ::unit_tests::compute::gold_standard_tilize};
         unit_tests::compute::tilize::run_single_core_tilize_program(
             this->devices_.at(0), test_config, this->slow_dispatch_);
     }
 }
 
 TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
-    vector<vector<uint32_t>> num_tiles = {{5, 10}};
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
-        for (bool fp32_dest_acc_en : {false}) {
+        for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
             if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
-            for (bool dst_full_sync_en : {false}) {
-                for (uint8_t counter = 0; counter < 10; counter++) {
-                    unit_tests::compute::tilize::TestConfig test_config = {
-                        .dst_full_sync_en = dst_full_sync_en,
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .input_single_tile_size = 2 * 1024,
-                        .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
-                        .num_tiles_r = num_tile[0],
-                        .num_tiles_c = num_tile[1],
-                        .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
-                        .golden_function = ::unit_tests::compute::gold_standard_tilize};
-                    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
-                }
+            for (bool dst_full_sync_en : {true, false}) {
+                unit_tests::compute::tilize::TestConfig test_config = {
+                    .dst_full_sync_en = dst_full_sync_en,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .input_single_tile_size = 2 * 1024,
+                    .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
+                    .num_tiles_r = num_tile[0],
+                    .num_tiles_c = num_tile[1],
+                    .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+                    .golden_function = ::unit_tests::compute::gold_standard_tilize};
+                unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
             }
         }
     }
@@ -497,6 +496,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeShortInit) {
 /**************************************
 Following tests are for Unpack Untilize
 ***************************************/
+
 TEST_F(DeviceFixture, TensixComputeUnpackUntilizePerf) {
     const char* rt_dim_s = std::getenv("RT_DIM");
     const char* ct_dim_s = std::getenv("CT_DIM");
@@ -513,7 +513,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilizePerf) {
             .num_tiles_r = rt_dim,
             .num_tiles_c = ct_dim,
             .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
-            .golden_function = unit_tests::compute::gold_standard_untilize};
+            .golden_function = ::unit_tests::compute::gold_standard_untilize};
         unit_tests::compute::tilize::run_single_core_tilize_program(
             this->devices_.at(0), test_config, this->slow_dispatch_);
     }
@@ -571,6 +571,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
 /**************************************
 Following tests are for pack untilize
 ***************************************/
+
 TEST_F(DeviceFixture, TensixComputePackUntilizePerf) {
     const char* rt_dim_s = std::getenv("RT_DIM");
     const char* ct_dim_s = std::getenv("CT_DIM");
@@ -587,7 +588,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilizePerf) {
             .num_tiles_r = rt_dim,
             .num_tiles_c = ct_dim,
             .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
-            .golden_function = unit_tests::compute::gold_standard_untilize};
+            .golden_function = ::unit_tests::compute::gold_standard_untilize};
         unit_tests::compute::tilize::run_single_core_tilize_program(
             this->devices_.at(0), test_config, this->slow_dispatch_);
     }
