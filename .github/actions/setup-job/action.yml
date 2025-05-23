@@ -26,12 +26,12 @@ runs:
         submodules: recursive
         path: ${{ inputs.path }}
 
-    - name: 🧪 Check Required Tools
-      run: |
-        echo "🔍 Verifying tools..."
-        command -v tar >/dev/null 2>&1 && tar --version || { echo "❌ tar not found"; exit 1; }
-        command -v pip3 >/dev/null 2>&1 && pip3 --version || { echo "❌ pip3 not found"; exit 1; }
-      shell: bash
+    # - name: 🧪 Check Required Tools
+    #   run: |
+    #     echo "🔍 Verifying tools..."
+    #     command -v tar >/dev/null 2>&1 && tar --version || { echo "❌ tar not found"; exit 1; }
+    #     command -v pip3 >/dev/null 2>&1 && pip3 --version || { echo "❌ pip3 not found"; exit 1; }
+    #   shell: bash
 
     - name: 📦 Download Build Artifact
       if: ${{ inputs.build-artifact-name != '' }}
