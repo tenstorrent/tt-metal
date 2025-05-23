@@ -55,15 +55,18 @@ def set_chip_architecture():
 
 @pytest.fixture(scope="session", autouse=True)
 def download_headers():
+    CHIP_ARCH = set_chip_architecture()
+    if CHIP_ARCH not in [ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE]:
+        sys.exit(f"Unsupported CHIP_ARCH detected: {CHIP_ARCH}")
+
     HEADER_DIR = "../hw_specific/inc"
     STAMP_FILE = os.path.join(HEADER_DIR, ".headers_downloaded")
     if os.path.exists(STAMP_FILE):
         print("Headers already downloaded. Skipping download.")
         return
 
-    CHIP_ARCH = set_chip_architecture()
     BASE_URL = f"https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/{CHIP_ARCH.value}"
-    BASE_URL_WORMHOLE_SPECIFIC = f"https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/{CHIP_ARCH.value}/wormhole_b0_defines"
+    WORMHOLE_SPECIFIC_URL = f"https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/hw/inc/{CHIP_ARCH.value}/wormhole_b0_defines"
     HEADERS = [
         "cfg_defines.h",
         "dev_mem_map.h",
@@ -75,56 +78,36 @@ def download_headers():
     os.makedirs(HEADER_DIR, exist_ok=True)
 
     # Determine the specific URL based on CHIP_ARCH
-    if CHIP_ARCH == ChipArchitecture.WORMHOLE:
-        specific_url = BASE_URL_WORMHOLE_SPECIFIC
-    elif CHIP_ARCH == ChipArchitecture.BLACKHOLE:
-        specific_url = ""
-    else:
-        print(f"Unsupported CHIP_ARCH detected: {CHIP_ARCH}")
-        sys.exit(1)
+    specific_url = (
+        WORMHOLE_SPECIFIC_URL if CHIP_ARCH == ChipArchitecture.WORMHOLE else None
+    )
 
     # Download headers
-    RETRIES = 3
-    RETRY_DELAY = 2  # seconds
-
     def download_with_retries(url, header):
-        delay = RETRY_DELAY
+        RETRIES, RETRY_DELAY = 3, 2
         for attempt in range(1, RETRIES + 1):
             try:
                 print(f"Attempt {attempt}: Downloading {header} from {url}...")
                 response = requests.get(url, timeout=10)
-
-                # Check for HTTP errors (like 404)
                 if response.status_code == 200:
                     with open(os.path.join(HEADER_DIR, header), "wb") as f:
                         f.write(response.content)
                     return True
-                elif response.status_code == 429:
-                    retry_after = response.headers.get("Retry-After")
-                    if retry_after:
-                        wait_time = int(retry_after)
-                        print(
-                            f"Rate limited. Waiting {wait_time} seconds (from Retry-After header)..."
-                        )
-                    else:
-                        wait_time = delay
-                        print(
-                            f"Rate limited. Waiting {wait_time} seconds (exponential backoff)..."
-                        )
-                        delay *= 2
-                        time.sleep(wait_time)
+                elif response.status_code == 429:  # Rate limited
+                    retry_after = int(response.headers.get("Retry-After", RETRY_DELAY))
+                    print(f"Rate limited. Waiting {retry_after} seconds...")
+                    time.sleep(retry_after)
                 else:
                     print(f"HTTP error {response.status_code} for {url}")
-                    return False  # don't retry for non-200 responses
-
+                    return False
             except (ConnectionError, Timeout) as e:
-                print(f"Attempt {attempt} failed due to network issue: {e}")
+                print(f"Network issue on attempt {attempt}: {e}")
                 if attempt < RETRIES:
-                    time.sleep(delay)
-                    delay *= 2
+                    time.sleep(RETRY_DELAY)
+                    RETRY_DELAY *= 2
             except RequestException as e:
                 print(f"Non-retriable error on attempt {attempt}: {e}")
-                return False  # Other errors: don't retry
+                return False
         return False
 
     for header in HEADERS:
