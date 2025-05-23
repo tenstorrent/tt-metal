@@ -8,7 +8,7 @@ from tqdm import tqdm
 from models.demos.llama3_subdevices.tt.generator import Generator
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations, TtModelArgs
-from models.tt_transformers.tt.common import create_submeshes
+from models.tt_transformers.tt.generator import create_submeshes
 from vllm.inputs import INPUT_REGISTRY
 
 
