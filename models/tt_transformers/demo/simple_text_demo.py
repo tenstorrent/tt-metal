@@ -25,6 +25,45 @@ from models.tt_transformers.tt.generator import Generator, SamplingParams
 from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
 
 
+class TokenAccuracy:
+    def __init__(self, input_prompts):
+        self.store_predicted_tokens = []
+        self.store_predicted_top5_tokens = []
+
+        index = input_prompts[0].find("?")
+        self.input_prompt = [input_prompts[0][: index + 1]]
+        self.ref_data = [input_prompts[0][index + 1 :]]
+
+    def split_data(self):
+        return self.input_prompt
+
+    def prepare_ref_tokens(self, tokenizer):
+        encoded_data = tokenizer.encode(self.ref_data[0])
+        self.gt_tokens = encoded_data
+
+    def collect_top1n5_logits(self, logits):
+        _, tt_top5_tokens = torch.topk(logits, k=5, dim=-1)
+        top5_tokens = [tok.item() for tok in tt_top5_tokens.squeeze()]
+        _, tt_top1_token = torch.topk(logits, k=1, dim=-1)
+        self.store_predicted_tokens.append(tt_top1_token.item())
+        self.store_predicted_top5_tokens.append(top5_tokens)
+
+    def compute_accuracy(self):
+        count = 0
+        count_t5 = 0
+        matching_sz = min(len(self.gt_tokens), len(self.store_predicted_tokens))
+        for i in range(matching_sz):
+            if self.gt_tokens[i] == self.store_predicted_tokens[i]:
+                count += 1
+            for j in range(len(self.store_predicted_top5_tokens[i])):
+                if self.gt_tokens[i] == self.store_predicted_top5_tokens[i][j]:
+                    count_t5 += 1
+        accuracy_top1 = count / matching_sz
+        accuracy_top5 = count_t5 / matching_sz
+
+        return accuracy_top1, accuracy_top5
+
+
 def load_and_cache_context(context_url, cache_dir, max_length=None):
     cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
 
@@ -514,6 +553,12 @@ def test_demo_text(
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
+    # test_id='accuracy'
+
+    if "accuracy" in test_id:
+        token_acc = TokenAccuracy(input_prompts)
+        input_prompts = token_acc.split_data()
+
     repeat_batch_prompts = []
     for i in range(repeat_batches):
         repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
@@ -529,10 +574,15 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
     )
+
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
+
+    if "accuracy" in test_id:
+        token_acc.prepare_ref_tokens(tokenizer)
 
     num_tokens_generated_decode = []
 
+    # cannot change max_generated_tokens
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
@@ -627,12 +677,16 @@ def test_demo_text(
         logger.info(f"Starting decode loop...")
 
         # Log total inference (accounting for compile_decode as well)
+        store_generated_tokens = []
         profiler.start(f"inference_decode", iteration=batch_idx)
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
+
+            if "accuracy" in test_id:
+                logits = token_acc.collect_top1n5_logits(logits)
 
             # Run decode forward
             logits = generator.decode_forward_text(
@@ -642,11 +696,13 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
+                argmax_on_device=False,
             )
 
             # Get the next token
             if device_sampling_params is not None:
-                out_tok = logits.unsqueeze(1)
+                _, top1_token = torch.topk(logits, k=1, dim=-1)
+                out_tok = top1_token.squeeze(1)
             else:
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
@@ -730,6 +786,9 @@ def test_demo_text(
                 profiler.end(f"log_saving_file", iteration=batch_idx)
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
+
+        if "accuracy" in test_id:
+            acc = token_acc.compute_accuracy()
 
     profiler.end(f"inference_decode", iteration=batch_idx)
 

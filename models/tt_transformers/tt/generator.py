@@ -205,12 +205,13 @@ class Generator:
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
-        sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
+        sampling_params: SamplingParams = None,
+        argmax_on_device=False,  # Should be None if not greedy decoding / sampling on device.
     ):
         assert (
             sampling_params is None or sampling_params.temperature == 0
         ), "Currently only supporting greedy decoding (temperature=0) on device"
-        argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
+        # argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
 
         B = tokens.shape[0]
         tokens = torch.chunk(tokens, self.data_parallel, 0)
@@ -230,7 +231,7 @@ class Generator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits, B, is_tokens=(sampling_params is not None))
+            to_host = self.read_decode_output(tt_logits, B, is_tokens=argmax_on_device)  # (sampling_params is not None)
             return to_host
         else:
             return tt_logits
