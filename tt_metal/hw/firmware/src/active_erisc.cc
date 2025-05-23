@@ -142,11 +142,11 @@ int main() {
                 // TODO: This currently runs on second risc on active eth cores but with newer drop of syseng FW
                 //  this will run on risc0
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
-                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))(
+                uint32_t (*kernel_address)(uint32_t) = (uint32_t (*)(uint32_t))(
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
                 mark_stack_usage();
-                (*kernel_address)((uint32_t)kernel_address);
-                record_stack_usage(discover_stack_usage());
+                auto stack_free = (*kernel_address)((uint32_t)kernel_address);
+                record_stack_usage(stack_free);
                 WAYPOINT("D");
             }
 

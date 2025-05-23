@@ -17,12 +17,13 @@
 #include "firmware_common.h"
 #include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "remote_circular_buffer_api.h"
 #endif
 
-void kernel_launch(uint32_t kernel_base_addr) {
+uint32_t kernel_launch(uint32_t kernel_base_addr) {
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
 #ifdef KERNEL_RUN_TIME
@@ -61,4 +62,5 @@ void kernel_launch(uint32_t kernel_base_addr) {
         }
     }
 #endif
+    return discover_stack_usage();
 }

@@ -62,7 +62,7 @@ static inline int discover_stack_usage() {
     return stack_free + 1;
 }
 
-//#else // !KERNEL_BUILD
+#else // !KERNEL_BUILD
 
 static inline uint32_t get_dispatch_class() {
 #if defined(COMPILE_FOR_BRISC)

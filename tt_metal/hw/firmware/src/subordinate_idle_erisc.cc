@@ -93,11 +93,11 @@ int main(int argc, char *argv[]) {
 
         WAYPOINT("R");
         int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1);
-        void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
+        uint32_t (*kernel_address)(uint32_t) = (uint32_t (*)(uint32_t))
             (kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
         mark_stack_usage();
-        (*kernel_address)((uint32_t)kernel_address);
-        record_stack_usage(discover_stack_usage());
+        auto stack_free = (*kernel_address)((uint32_t)kernel_address);
+        record_stack_usage(stack_free);
         WAYPOINT("D");
 
         signal_subordinate_idle_erisc_completion();

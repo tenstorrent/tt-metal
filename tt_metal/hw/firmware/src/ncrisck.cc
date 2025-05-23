@@ -23,6 +23,7 @@
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "remote_circular_buffer_api.h"
 #endif
+#include "debug/stack_usage.h"
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -30,7 +31,7 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 uint32_t noc_posted_writes_num_issued[NUM_NOCS];
 
-void kernel_launch(uint32_t kernel_base_addr) {
+uint32_t kernel_launch(uint32_t kernel_base_addr) {
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
@@ -71,4 +72,5 @@ void kernel_launch(uint32_t kernel_base_addr) {
     }
 #endif
 #endif
+    return discover_stack_usage();
 }
