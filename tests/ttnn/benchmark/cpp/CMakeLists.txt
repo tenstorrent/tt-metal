@@ -13,7 +13,7 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
         ${TEST_TARGET}
         PUBLIC
             ttnn
-            test_metal_common_libs
+            test_common_libs
             benchmark::benchmark
     )
     target_include_directories(

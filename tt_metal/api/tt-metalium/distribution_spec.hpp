@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@ public:
     static DistributionSpec from_shard_shape(
         const tt::tt_metal::Shape& tensor_shape, const tt::tt_metal::Shape& shard_shape, size_t num_targets);
 
+    tt::tt_metal::Shape get_tensor_shape() const { return tensor_shape_; }
     tt::tt_metal::Shape get_shard_shape() const { return shard_shape_; }
     size_t get_num_targets() const { return num_targets_; }
     size_t get_max_num_shards_per_target() const { return max_num_shards_per_target_; }

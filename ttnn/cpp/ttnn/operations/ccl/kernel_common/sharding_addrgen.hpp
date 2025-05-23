@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -245,7 +245,7 @@ struct ShardedAddrGen {
     FORCE_INLINE
     void noc_async_read_page(
         const uint32_t id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        noc_async_read(this->get_noc_addr(id, offset), dest_addr, CONSTANT_ARGS.page_size_jump, noc);
+        noc_async_read(this->get_noc_addr(id, offset, noc), dest_addr, CONSTANT_ARGS.page_size_jump, noc);
     }
 };
 }  // namespace experimental
