@@ -64,8 +64,11 @@ void kernel_main() {
                     noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
 
                     // Zero out padded regions for the very last tile
-                    if ((block == num_blocks - 1) && (w == in0_block_w - 1) && (last_ktile_w > 0)) {
-                        pad_last_ktile<in0_data_format>(last_ktile_w, l1_write_addr_in0);
+                    if constexpr (last_ktile_w > 0) {
+                        if ((block == num_blocks - 1) && (w == in0_block_w - 1)) {
+                            noc_async_read_barrier();
+                            pad_last_ktile<in0_data_format>(last_ktile_w, l1_write_addr_in0);
+                        }
                     }
 
                     l1_write_addr_in0 += in0_single_tile_size_bytes;

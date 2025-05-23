@@ -2229,16 +2229,119 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
 
 
+@pytest.mark.parametrize("input_b_value", [2.0])
+@pytest.mark.parametrize("input_a_value", [4.0])
 @pytest.mark.parametrize(
-    "input_a_shape,input_b_shape,input_a_value,input_b_value,input_a_reshape,input_b_reshape",
+    "input_a_shape,input_b_shape,input_a_reshape,input_b_reshape",
     [
-        ((12,), (1, 12, 4, 4), 1.0, 2.0, (12, 1, 1), (12, 1, 16)),
-        ((16,), (1, 16, 2, 2), 1.0, 3.0, (16, 1, 1), (16, 1, 4)),
-        ((8,), (1, 8, 3, 3), 2.0, 1.0, (8, 1, 1), (8, 1, 9)),
+        ((32, 96), (96, 32), (32, 96), (96, 32)),  # No padding introduced
+        ((32, 96), (96, 32), (1, 90), (90, 16)),  # Padding introduced in M,K and N dimensions
     ],
 )
-def test_matmul_with_reshaped_tensors(
-    device, input_a_shape, input_b_shape, input_a_value, input_b_value, input_a_reshape, input_b_reshape
+@pytest.mark.parametrize(
+    "program_config,input_a_memory_config,input_b_memory_config,output_memory_config",
+    [
+        # Uses reader_bmm_tile_layout_in0.cpp
+        (
+            ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(3, 1),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1,
+                per_core_N=1,
+            ),
+            None,
+            None,
+            None,
+        ),
+        # Uses reader_bmm_tile_layout_in0_sender_padding.cpp
+        (
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(3, 1),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1,
+                per_core_N=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            ),
+            None,
+            None,
+            None,
+        ),
+        # Uses reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp
+        (
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(3, 1),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1,
+                per_core_N=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+                    (32, 96),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            None,
+            None,
+        ),
+        # Uses reader_bmm_tile_layout_in0_sender_dram_sharded.cpp
+        (
+            ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=1,
+                per_core_M=1,
+                per_core_N=1,
+                fused_activation=None,
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+                    (32, 32),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.DRAM,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+                    (96, 32),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            ),
+        ),
+    ],
+)
+def test_matmul_padding(
+    device,
+    input_a_shape,
+    input_b_shape,
+    input_a_value,
+    input_b_value,
+    input_a_reshape,
+    input_b_reshape,
+    program_config,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
 ):
     torch.manual_seed(0)
 
@@ -2246,24 +2349,34 @@ def test_matmul_with_reshaped_tensors(
     input_a = torch.full(input_a_shape, input_a_value, dtype=torch.float32)
     input_b = torch.full(input_b_shape, input_b_value, dtype=torch.float32)
 
-    # Reshape tensors for matmul
-    input_a_reshaped = input_a.reshape(input_a_reshape)
-    input_b_reshaped = input_b.reshape(input_b_reshape)
+    # Reshaped tensors for matmul
+    input_a_torch = torch.full(input_a_reshape, input_a_value, dtype=torch.float32)
+    input_b_torch = torch.full(input_b_reshape, input_b_value, dtype=torch.float32)
 
     # Compute golden output
-    golden_output = torch.matmul(input_a_reshaped, input_b_reshaped)
+    golden_output = torch.matmul(input_a_torch, input_b_torch)
 
     # Convert to ttnn tensors
-    input_a_ttnn = ttnn.from_torch(input_a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_b_ttnn = ttnn.from_torch(input_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_a_ttnn = ttnn.from_torch(
+        input_a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_a_memory_config
+    )
+    input_b_ttnn = ttnn.from_torch(
+        input_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_b_memory_config
+    )
 
     # Reshape ttnn tensors
-    input_a_reshaped_ttnn = ttnn.reshape(input_a_ttnn, input_a_reshape, pad_value=0)
-    input_b_reshaped_ttnn = ttnn.reshape(input_b_ttnn, input_b_reshape, pad_value=0)
+    input_a_reshaped_ttnn = ttnn.reshape(input_a_ttnn, input_a_reshape, padded_shape=input_a_shape)
+    input_b_reshaped_ttnn = ttnn.reshape(input_b_ttnn, input_b_reshape, padded_shape=input_b_shape)
 
     # Compute matmul
-    output_ttnn = ttnn.matmul(input_a_reshaped_ttnn, input_b_reshaped_ttnn)
+    for _ in range(11):
+        output_ttnn = ttnn.matmul(
+            input_a_reshaped_ttnn,
+            input_b_reshaped_ttnn,
+            program_config=program_config,
+            memory_config=output_memory_config,
+        )
     output = ttnn.to_torch(output_ttnn)
 
     # Verify values match with high precision
-    assert_with_pcc(golden_output, output, 0.999)
+    assert torch.allclose(golden_output, output, atol=1e-6)
