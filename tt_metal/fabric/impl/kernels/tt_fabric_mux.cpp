@@ -8,10 +8,8 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
-#include "wormhole/core_config.h"
 
 #include <cstddef>
-#include <array>
 // clang-format on
 
 constexpr uint8_t NUM_FULL_SIZE_CHANNELS = get_compile_time_arg_val(0);
@@ -33,6 +31,8 @@ constexpr size_t fabric_router_status_address = get_compile_time_arg_val(12);
 constexpr uint8_t NUM_EDM_BUFFERS = get_compile_time_arg_val(13);
 constexpr size_t NUM_FULL_SIZE_CHANNELS_ITERS = get_compile_time_arg_val(14);
 constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(15);
+
+constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(16));
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
@@ -110,8 +110,7 @@ void kernel_main() {
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
     size_t rt_args_idx = 0;
-    constexpr ProgrammableCoreType programmable_core_type = static_cast<ProgrammableCoreType>(MY_CORE_TYPE);
-    auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<programmable_core_type>(rt_args_idx);
+    auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
         full_size_channels;

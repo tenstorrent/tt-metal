@@ -8,6 +8,7 @@
 #include <vector>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
@@ -81,6 +82,7 @@ struct FabricMuxConfig {
     uint8_t num_buffers_full_size_channel = 0;
     uint8_t num_buffers_header_only_channel = 0;
     size_t buffer_size_bytes_full_size_channel = 0;
+    uint8_t core_type_index = 0;
 
     FabricMuxConfig(
         uint8_t num_full_size_channels,
@@ -88,7 +90,8 @@ struct FabricMuxConfig {
         uint8_t num_buffers_full_size_channel,
         uint8_t num_buffers_header_only_channel,
         size_t buffer_size_bytes_full_size_channel,
-        size_t base_l1_address) :
+        size_t base_l1_address,
+        uint8_t core_type_index) :
         num_full_size_channels(num_full_size_channels),
         num_header_only_channels(num_header_only_channels),
         // set to default number of buffers only for compilation purposes, no functional impact
@@ -96,7 +99,8 @@ struct FabricMuxConfig {
             num_buffers_full_size_channel == 0 ? default_num_buffers : num_buffers_full_size_channel),
         num_buffers_header_only_channel(
             num_buffers_header_only_channel == 0 ? default_num_buffers : num_buffers_header_only_channel),
-        buffer_size_bytes_full_size_channel(buffer_size_bytes_full_size_channel) {
+        buffer_size_bytes_full_size_channel(buffer_size_bytes_full_size_channel),
+        core_type_index(core_type_index) {
         size_t max_buffer_size_bytes_full_size_channel = get_max_buffer_size_bytes_full_size_channel();
         if (buffer_size_bytes_full_size_channel > max_buffer_size_bytes_full_size_channel) {
             TT_THROW(
@@ -170,7 +174,8 @@ struct FabricMuxConfig {
             fabric_router_config.edm_status_address,
             fabric_router_config.sender_channels_num_buffers[0],
             this->num_full_size_channel_iters,
-            this->num_iters_between_teardown_checks};
+            this->num_iters_between_teardown_checks,
+            this->core_type_index};
     }
 
     size_t get_status_address() const { return this->status_address; }

@@ -110,9 +110,6 @@ void create_kernel(
     const std::vector<uint32_t>& ct_args,
     const std::vector<uint32_t>& rt_args,
     const std::vector<std::pair<size_t, size_t>>& addresses_to_clear) {
-    // Default to TENSIX for now
-    const auto programmable_core_type = tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX);
     auto kernel_handle = tt::tt_metal::CreateKernel(
         program_handle,
         kernel_src,
@@ -121,7 +118,6 @@ void create_kernel(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = ct_args,
-            .defines = {{"MY_CORE_TYPE", std::to_string(programmable_core_type)}},
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
     tt::tt_metal::SetRuntimeArgs(program_handle, kernel_handle, logical_core, rt_args);
 
@@ -369,13 +365,18 @@ int main(int argc, char** argv) {
     const uint32_t l1_unreserved_base_address =
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
+    // Default to TENSIX for now
+    const auto programmable_core_type = tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX);
+
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         test_params.num_full_size_channels,
         test_params.num_header_only_channels,
         test_params.num_buffers_full_size_channel,
         test_params.num_buffers_header_only_channel,
         test_params.buffer_size_bytes_full_size_channel,
-        l1_unreserved_base_address);
+        l1_unreserved_base_address,
+        programmable_core_type);
     MuxTestConfig mux_test_config = {
         .mux_kernel_config = &mux_kernel_config,
         .mux_logical_core = mux_logical_core,
@@ -388,7 +389,8 @@ int main(int argc, char** argv) {
         16,                                         /* num_buffers_full_size_channel */
         8,                                          /* num_buffers_header_only_channel */
         sizeof(tt::tt_fabric::PacketHeader) + 4096, /* buffer_size_bytes_full_size_channel (4K packet) */
-        l1_unreserved_base_address);
+        l1_unreserved_base_address,
+        programmable_core_type);
     DrainerTestConfig drainer_test_config = {
         .drainer_kernel_config = &drainer_kernel_config,
         .drainer_logical_core = drainer_logical_core,
