@@ -126,19 +126,28 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     this->routing_table_generator_->print_routing_tables();
 
     // Initialize the control plane routers based on mesh graph
-    this->initialize_from_mesh_graph_desc_file(mesh_graph_desc_file);
+    const auto& logical_mesh_chip_id_to_physical_chip_id_mapping =
+        this->get_physical_chip_mapping_from_mesh_graph_desc_file(mesh_graph_desc_file);
+    this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
 }
 
-chip_id_t ControlPlane::get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const {
-    chip_id_t nw_chip_physical_chip_id = 0;
-    for (const auto& [physical_chip_id, coord] :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_user_chip_ethernet_coordinates()) {
-        if (coord == eth_coord) {
-            return physical_chip_id;
-        }
-    }
-    TT_FATAL(false, "Physical chip id not found for eth coord");
-    return 0;
+ControlPlane::ControlPlane(
+    const std::string& mesh_graph_desc_file,
+    const std::vector<std::vector<chip_id_t>>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+    // Printing, only enabled with log_debug
+    this->routing_table_generator_->print_connectivity();
+    // Printing, only enabled with log_debug
+    this->routing_table_generator_->print_routing_tables();
+
+    // Initialize the control plane routers based on mesh graph
+    this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
+}
+
+void ControlPlane::load_physical_chip_mapping(
+    const std::vector<std::vector<chip_id_t>>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
+    this->validate_mesh_connections();
 }
 
 void ControlPlane::validate_mesh_connections(mesh_id_t mesh_id) const {
@@ -151,8 +160,6 @@ void ControlPlane::validate_mesh_connections(mesh_id_t mesh_id) const {
             chip_id_t physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_chip_id];
             chip_id_t physical_chip_id_next =
                 logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_chip_id + 1];
-            chip_id_t physical_chip_id_next_row =
-                logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_chip_id + mesh_ew_size];
 
             const auto& eth_links = get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
             auto eth_links_to_next = eth_links.find(physical_chip_id_next);
@@ -169,6 +176,8 @@ void ControlPlane::validate_mesh_connections(mesh_id_t mesh_id) const {
                 eth_links.at(physical_chip_id_next).size(),
                 num_ports_per_side);
             if (i != mesh_ns_size - 1) {
+                chip_id_t physical_chip_id_next_row =
+                    logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_chip_id + mesh_ew_size];
                 auto eth_links_to_next_row = eth_links.find(physical_chip_id_next_row);
                 TT_FATAL(
                     eth_links_to_next_row != eth_links.end(),
@@ -184,6 +193,12 @@ void ControlPlane::validate_mesh_connections(mesh_id_t mesh_id) const {
                     num_ports_per_side);
             }
         }
+    }
+}
+
+void ControlPlane::validate_mesh_connections() const {
+    for (uint32_t i = 0; i < this->logical_mesh_chip_id_to_physical_chip_id_mapping_.size(); i++) {
+        this->validate_mesh_connections(i);
     }
 }
 
@@ -332,10 +347,12 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     return physical_chip_ids;
 }
 
-void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_graph_desc_file) {
+std::vector<std::vector<chip_id_t>> ControlPlane::get_physical_chip_mapping_from_mesh_graph_desc_file(
+    const std::string& mesh_graph_desc_file) {
     chip_id_t nw_chip_physical_id;
     std::uint32_t mesh_ns_size, mesh_ew_size;
     std::string mesh_graph_desc_filename = std::filesystem::path(mesh_graph_desc_file).filename().string();
+    std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping;
     if (mesh_graph_desc_filename == "tg_mesh_graph_descriptor.yaml") {
         // Add the N150 MMIO devices
         auto eth_coords_per_chip =
@@ -346,16 +363,18 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
                 eth_coord_y_for_gateway_chips[eth_coord.y] = chip_id;
             }
         }
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({eth_coord_y_for_gateway_chips[3]});
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({eth_coord_y_for_gateway_chips[2]});
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({eth_coord_y_for_gateway_chips[1]});
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({eth_coord_y_for_gateway_chips[0]});
+        logical_mesh_chip_id_to_physical_chip_id_mapping.reserve(5);
+        logical_mesh_chip_id_to_physical_chip_id_mapping.push_back({eth_coord_y_for_gateway_chips[3]});
+        logical_mesh_chip_id_to_physical_chip_id_mapping.push_back({eth_coord_y_for_gateway_chips[2]});
+        logical_mesh_chip_id_to_physical_chip_id_mapping.push_back({eth_coord_y_for_gateway_chips[1]});
+        logical_mesh_chip_id_to_physical_chip_id_mapping.push_back({eth_coord_y_for_gateway_chips[0]});
 
-        nw_chip_physical_id = this->get_physical_chip_id_from_eth_coord({0, 3, 7, 0, 1});
+        nw_chip_physical_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord({0, 3, 7, 0, 1});
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/4);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/4);
         // Main board
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
+        logical_mesh_chip_id_to_physical_chip_id_mapping.push_back(
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
     } else if (
         mesh_graph_desc_filename == "quanta_galaxy_mesh_graph_descriptor.yaml" ||
@@ -369,37 +388,23 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
         // Main board
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
+        logical_mesh_chip_id_to_physical_chip_id_mapping.push_back(
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
-        this->validate_mesh_connections(0);
-    } else if (mesh_graph_desc_filename == "t3k_split_mesh_graph_descriptor.yaml") {
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({
-            this->get_physical_chip_id_from_eth_coord({0, 0, 0, 0, 0}),
-            this->get_physical_chip_id_from_eth_coord({0, 1, 0, 0, 0}),
-            this->get_physical_chip_id_from_eth_coord({0, 0, 1, 0, 0}),
-            this->get_physical_chip_id_from_eth_coord({0, 1, 1, 0, 0}),
-        });
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({
-            this->get_physical_chip_id_from_eth_coord({0, 2, 0, 0, 0}),
-            this->get_physical_chip_id_from_eth_coord({0, 3, 0, 0, 0}),
-            this->get_physical_chip_id_from_eth_coord({0, 2, 1, 0, 0}),
-            this->get_physical_chip_id_from_eth_coord({0, 3, 1, 0, 0}),
-        });
-        this->validate_mesh_connections(0);
-        this->validate_mesh_connections(1);
     } else if (
         mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml") {
-        nw_chip_physical_id = this->get_physical_chip_id_from_eth_coord({0, 0, 0, 0, 0});
+        nw_chip_physical_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord({0, 0, 0, 0, 0});
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
         // Main board
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
+        logical_mesh_chip_id_to_physical_chip_id_mapping.push_back(
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
     } else {
         TT_THROW("Unsupported mesh graph descriptor file {}", mesh_graph_desc_file);
     }
+    return logical_mesh_chip_id_to_physical_chip_id_mapping;
 }
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(

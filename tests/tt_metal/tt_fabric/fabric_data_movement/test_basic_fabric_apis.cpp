@@ -27,6 +27,8 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "fabric_fixture.hpp"
+#include "t3k_mesh_descriptor_chip_mappings.hpp"
+#include "utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -768,6 +770,21 @@ TEST_F(Fabric2DDynamicFixture, TestUnicastRaw) {
         RunTestUnicastRaw(this);
     }
 }
+
+// 2D Dynamic Routing Unicast Tests
+TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestUnicastRaw) {
+    auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
+    CustomMeshGraphFabric2DDynamicFixture::SetUp(
+        mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
+    for (uint32_t i = 0; i < 10; i++) {
+        RunTestUnicastRaw(this);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    T3kCustomMeshGraphFabric2DDynamicTests,
+    T3kCustomMeshGraphFabric2DDynamicFixture,
+    ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
 
 TEST_F(Fabric2DDynamicFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 
