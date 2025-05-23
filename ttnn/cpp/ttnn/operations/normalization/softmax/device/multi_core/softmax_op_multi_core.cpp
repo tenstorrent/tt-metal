@@ -193,6 +193,9 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     if (causal_mask) {
         softmax_defines["CAUSAL_MASK"] = "1";
     }
+    if (numeric_stable) {
+        softmax_defines["NUMERIC_STABLE"] = "1";
+    }
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/"
@@ -212,9 +215,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
     // if wtpc >= Ht then tpc should be a multiple of Ht
 
-    if (numeric_stable) {
-        softmax_defines["NUMERIC_STABLE"] = "1";
-    }
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     auto softmax_kernels_id = CreateKernel(
         program,
