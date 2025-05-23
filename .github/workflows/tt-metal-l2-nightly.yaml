@@ -49,7 +49,7 @@ jobs:
       fail-fast: false
     with:
       arch: ${{ inputs.arch || 'wormhole_b0' }}
-      runner-label: ${{ inputs.runner-label || 'N150' }}
+      runner-label: ${{ inputs.runner-label || 'N300' }}
       timeout: 10
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
