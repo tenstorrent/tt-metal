@@ -65,5 +65,5 @@ uint32_t kernel_launch(uint32_t kernel_base_addr) {
     run_kernel();
     WAYPOINT("KD");
 #endif
-    return discover_stack_usage()
+    return discover_stack_usage();
 }
