@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,17 +36,15 @@ namespace ckernel {
 // clang-format on
 template <bool sign_magnitude_format = false>
 ALWI void add_int32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, sign_magnitude_format, InstrModLoadStore::INT32>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, InstrModLoadStore::INT32, sign_magnitude_format>(idst0, idst1)));
 }
 
-template <bool sign_magnitude_format = false>
 ALWI void add_uint16_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, sign_magnitude_format, InstrModLoadStore::LO16>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, InstrModLoadStore::LO16>(idst0, idst1)));
 }
 
-template <bool sign_magnitude_format = false>
 ALWI void add_uint32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, sign_magnitude_format, InstrModLoadStore::INT32>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, InstrModLoadStore::INT32>(idst0, idst1)));
 }
 
 /**
