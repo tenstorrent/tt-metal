@@ -10,8 +10,6 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "slice_write_op.hpp"
-#include "tt-metalium/assert.hpp"
-#include "tt-metalium/logger.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
