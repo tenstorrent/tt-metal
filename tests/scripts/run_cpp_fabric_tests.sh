@@ -62,5 +62,5 @@ for TEST in "${TESTS[@]}"; do
     read -r TEST_NUMBER TEST_ARGS <<< "$TEST"
     echo "LOG_FABRIC: Test $TEST_NUMBER: $TEST_ARGS"
     # Execute the test command with extracted arguments
-    TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} $TEST_ARGS
+    TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity $TEST_ARGS
 done

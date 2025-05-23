@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,8 +23,6 @@ LOG_FILE_PATH = os.path.join(OUTPUT_FILE_DIR, LOG_FILE_NAME)
 GOLDEN_FILE_DIR = os.path.join(os.environ["TT_METAL_HOME"], "tests/tt_metal/microbenchmarks/ethernet")
 GOLDEN_FILE_NAME = "fabric_mux_bandwidth_golden.csv"
 GOLDEN_FILE_PATH = os.path.join(GOLDEN_FILE_DIR, GOLDEN_FILE_NAME)
-
-ARCH_NAME = os.getenv("ARCH_NAME")
 
 BW_THRESHOLD = 0.1
 
@@ -97,7 +95,7 @@ def run_mux_benchmark_test(
     num_full_size_channel_iters,
     num_iters_between_teardown_checks,
 ):
-    cmd = f"{os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_mux_bandwidth_{ARCH_NAME} \
+    cmd = f"{os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_mux_bandwidth \
             --log_file {LOG_FILE_PATH} \
             --test_name {test_name} \
             --num_full_size_channels {num_full_size_channels} \
