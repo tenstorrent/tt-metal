@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -88,6 +88,10 @@ class Generator:
             assert isinstance(
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
+            assert batch in [1, 32] and batch == page_table.shape[0], (
+                f"We support only batch=1 or batch=32. The page table's 0th dimension must match the batch size. "
+                f"Provided: batch={batch}, page_table.shape[0]={page_table.shape[0]}"
+            )
 
         for user_id in range(batch):
             logger.info(f"Prefilling User {user_id + 1}")
