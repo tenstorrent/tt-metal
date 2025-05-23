@@ -6,11 +6,200 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
+#include <vector>
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::pool {
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
+static Tensor create_config_tensor(
+    IDevice* device,
+    ShardSpec shard_spec,
+    const Pool2DType pool_type,
+    const uint32_t out_nhw_per_core,
+    const uint32_t num_shards_c,
+    const uint32_t in_h,
+    const uint32_t in_w,
+    const uint32_t in_n,
+    const uint32_t out_h,
+    const uint32_t out_w,
+    const uint32_t kernel_size_h,
+    const uint32_t kernel_size_w,
+    const uint32_t stride_h,
+    const uint32_t stride_w,
+    const uint32_t divisor_override,
+    const uint32_t pad_h,
+    const uint32_t pad_w,
+    const bool ceil_mode,
+    const uint32_t ceil_pad_h,
+    const uint32_t ceil_pad_w,
+    CoreRangeSet all_cores) {
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t num_of_ele = out_nhw_per_core;
+    std::vector<uint32_t> total_elems_per_c_shards;
+    for (int i = 0; i < num_shards_c; i++) {
+        total_elems_per_c_shards.push_back(out_h * out_w * in_n);
+    }
+    uint32_t channel = 0;
+    uint32_t batch = 0;
+    for (uint32_t i = 0; i < all_cores.ranges().size(); ++i) {
+        for (auto iterator = all_cores.ranges()[i].begin(); iterator != all_cores.ranges()[i].end(); ++iterator) {
+            if (total_elems_per_c_shards[channel] > out_nhw_per_core) {
+                total_elems_per_c_shards[channel] -= out_nhw_per_core;
+                num_of_ele = out_nhw_per_core;
+            } else {
+                num_of_ele = total_elems_per_c_shards[channel];
+            }
+            std::vector<ScalarInfo> scalars;
+            uint32_t first_scalar = get_bf16_pool_scalar(
+                pool_type,
+                kernel_size_h,
+                kernel_size_w,
+                divisor_override,
+                in_h,
+                in_w,
+                out_h,
+                out_w,
+                stride_h,
+                stride_w,
+                ceil_mode,
+                ceil_pad_h,
+                ceil_pad_w,
+                x,
+                y,
+                pad_h,
+                pad_w,
+                num_of_ele,
+                &scalars);
+
+            uint32_t scalar_cnt = scalars.size();
+            std::vector<uint32_t> runtime_args_reader = {scalar_cnt};
+            std::vector<uint32_t> runtime_args_compute = {scalar_cnt};
+            for (int j = 0; j < scalar_cnt; j++) {
+                runtime_args_reader.push_back(scalars[j].start);
+                runtime_args_reader.push_back(scalars[j].value);
+                runtime_args_reader.push_back(scalars[j].end);
+                runtime_args_compute.push_back(scalars[j].start);
+                runtime_args_compute.push_back(scalars[j].end);
+            }
+
+            tt::tt_metal::SetRuntimeArgs(program, compute_kernel, *iterator, runtime_args_compute);
+            tt::tt_metal::SetRuntimeArgs(program, reader0_kernel, *iterator, runtime_args_reader);
+            tt::tt_metal::SetRuntimeArgs(program, reader1_kernel, *iterator, runtime_args_reader);
+
+            channel++;
+            if (channel % num_shards_c == 0) {
+                channel = 0;
+                uint32_t delta_y = y + num_of_ele;
+                y = delta_y % out_w;
+                if (delta_y / out_w != 0) {
+                    uint32_t delta_x = x + delta_y / out_w;
+                    x = delta_x % out_h;
+                    if (delta_x / out_h != 0) {
+                        batch++;
+                        if (batch % in_n == 0) {
+                            batch = 0;
+                            y = 0;
+                            x = 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::vector<uint16_t> logical_core_to_stick_map;
+    const size_t logical_core_to_stick_map_entry_size = 3;
+    size_t row_size = logical_core_to_stick_map_entry_size * in_w;
+    // Create map of core and respective offsets in input
+    for (uint32_t b = 0; b < batch_size; ++b) {
+        for (uint32_t h = 0; h < in_h; ++h) {
+            for (uint32_t w = 0; w < in_w; ++w, ++stick_offset) {
+                if (stick_offset == input_nsticks_per_core) {
+                    stick_offset = 0, ++core_idx;
+                }
+                if (is_height_sharded) {
+                    logical_core_to_stick_map.push_back(logical_cores[core_idx].x);
+                    logical_core_to_stick_map.push_back(logical_cores[core_idx].y);
+                } else {
+                    logical_core_to_stick_map.push_back(nhw_start_core + core_idx);
+                    logical_core_to_stick_map.push_back(0);
+                }
+                logical_core_to_stick_map.push_back(stick_offset);
+            }
+            for (uint32_t j = 1; j < scale_factor_h; ++j) {
+                logical_core_to_stick_map.insert(
+                    logical_core_to_stick_map.end(),
+                    logical_core_to_stick_map.end() - row_size,
+                    logical_core_to_stick_map.end());
+            }
+        }
+    }
+
+    /* Each entry in config_vector contains 2 elements:
+     * {{core_coords.x, core_coords.y}, stick_offset(in input_cb)}
+     * - core_coords.x: X coordinate of the core
+     * - core_coords.y: Y coordinate of the core
+     * - stick_offset: Offset within the input circular buffer
+     */
+    std::vector<uint16_t> config_vector;
+
+    const uint32_t config_buffer_entry_size = 2;
+    const uint32_t elems_per_core = config_buffer_entry_size * scale_factor_h * input_nsticks_per_core;
+
+    // In case last input shard is not full, fill the rest of the config vector with the last two elements
+    const auto pad_uneven_shards = [elems_per_core, config_buffer_entry_size](
+                                       auto& config_vector, size_t slice_begin = 0) {
+        const uint32_t slice_length = config_vector.size() - slice_begin;
+        const uint32_t remainder = (elems_per_core - (slice_length % elems_per_core)) % elems_per_core;
+        if (remainder != 0) {
+            uint16_t before_last = config_vector[config_vector.size() - 2];
+            uint16_t last = config_vector[config_vector.size() - 1];
+            for (int i = 0; i < remainder / config_buffer_entry_size; i++) {
+                config_vector.push_back(before_last);
+                config_vector.push_back(last);
+            }
+        }
+    };
+
+    // Based on core calculate physical location of cores
+    CoreCoord core_coords;
+    if (is_height_sharded) {
+        for (size_t j = 0; j < logical_core_to_stick_map.size(); j += logical_core_to_stick_map_entry_size) {
+            core_coords = device->worker_core_from_logical_core(
+                CoreCoord(logical_core_to_stick_map[j], logical_core_to_stick_map[j + 1]));
+            // Combine the x and y coordinates of the core into a single 16-bit value.
+            const uint16_t cores = (core_coords.x << 8) + core_coords.y;
+            config_vector.push_back(cores);
+            config_vector.push_back(logical_core_to_stick_map[j + 2]);
+        }
+        pad_uneven_shards(config_vector);
+    } else {
+        for (size_t i = ch_start_core; i <= ch_end_core; i++) {
+            const size_t chan_slice_begin = config_vector.size();
+            for (size_t j = 0; j < logical_core_to_stick_map.size(); j += logical_core_to_stick_map_entry_size) {
+                core_coords = device->worker_core_from_logical_core(CoreCoord(i, logical_core_to_stick_map[j]));
+                // Combine the x and y coordinates of the core into a single 16-bit value.
+                const uint16_t cores = (core_coords.x << 8) + core_coords.y;
+                config_vector.push_back(cores);
+                config_vector.push_back(logical_core_to_stick_map[j + 2]);
+            }
+            pad_uneven_shards(config_vector, chan_slice_begin);
+        }
+    }
+
+    TT_FATAL(
+        config_vector.size() % elems_per_core == 0,
+        "Config vector size {} should be multiple of {}",
+        config_vector.size(),
+        elems_per_core);
+
+    ttnn::Shape config_shape({tt::div_up(config_vector.size(), elems_per_core), elems_per_core});
+    auto config_buffer = HostBuffer(std::move(config_vector));
+    return Tensor(std::move(config_buffer), config_shape, DataType::UINT32, Layout::ROW_MAJOR);
+}
 
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
     Program& program,
@@ -379,78 +568,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
     if (!one_scalar_per_core) {
-        uint32_t x = 0;
-        uint32_t y = 0;
-        uint32_t num_of_ele = out_nhw_per_core;
-        std::vector<uint32_t> total_elems_per_c_shards;
-        for (int i = 0; i < num_shards_c; i++) {
-            total_elems_per_c_shards.push_back(out_h * out_w * in_n);
-        }
-        uint32_t channel = 0;
-        uint32_t batch = 0;
-        for (uint32_t i = 0; i < all_cores.ranges().size(); ++i) {
-            for (auto iterator = all_cores.ranges()[i].begin(); iterator != all_cores.ranges()[i].end(); ++iterator) {
-                if (total_elems_per_c_shards[channel] > out_nhw_per_core) {
-                    total_elems_per_c_shards[channel] -= out_nhw_per_core;
-                    num_of_ele = out_nhw_per_core;
-                } else {
-                    num_of_ele = total_elems_per_c_shards[channel];
-                }
-                std::vector<ScalarInfo> scalars;
-                uint32_t first_scalar = get_bf16_pool_scalar(
-                    pool_type,
-                    kernel_size_h,
-                    kernel_size_w,
-                    divisor_override,
-                    in_h,
-                    in_w,
-                    out_h,
-                    out_w,
-                    stride_h,
-                    stride_w,
-                    ceil_mode,
-                    ceil_pad_h,
-                    ceil_pad_w,
-                    x,
-                    y,
-                    pad_h,
-                    pad_w,
-                    num_of_ele,
-                    &scalars);
-
-                uint32_t scalar_cnt = scalars.size();
-                std::vector<uint32_t> runtime_args_reader = {scalar_cnt};
-                std::vector<uint32_t> runtime_args_compute = {scalar_cnt};
-                for (int j = 0; j < scalar_cnt; j++) {
-                    runtime_args_reader.push_back(scalars[j].start);
-                    runtime_args_reader.push_back(scalars[j].value);
-                    runtime_args_compute.push_back(scalars[j].start);
-                }
-
-                tt::tt_metal::SetRuntimeArgs(program, compute_kernel, *iterator, runtime_args_compute);
-                tt::tt_metal::SetRuntimeArgs(program, reader0_kernel, *iterator, runtime_args_reader);
-                tt::tt_metal::SetRuntimeArgs(program, reader1_kernel, *iterator, runtime_args_reader);
-
-                channel++;
-                if (channel % num_shards_c == 0) {
-                    channel = 0;
-                    uint32_t delta_y = y + num_of_ele;
-                    y = delta_y % out_w;
-                    if (delta_y / out_w != 0) {
-                        uint32_t delta_x = x + delta_y / out_w;
-                        x = delta_x % out_h;
-                        if (delta_x / out_h != 0) {
-                            batch++;
-                            if (batch % in_n == 0) {
-                                batch = 0;
-                                y = 0;
-                                x = 0;
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     // Capture reader_indices_storage to cache this with the program
