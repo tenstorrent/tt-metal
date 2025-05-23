@@ -95,7 +95,7 @@ void kernel_main() {
             uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
 
             // Zero out padded regions for the very last tile
-            if ((i == num_blocks_per_shard - 1) && (in0_last_ktile_w > 0)) {
+            if ((in0_last_ktile_w > 0) && (i == num_blocks_per_shard - 1)) {
                 auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
                 pad_last_ktile<in0_data_format>(in0_last_ktile_w, in0_last_ktile_ptr);
             }
@@ -132,7 +132,7 @@ void kernel_main() {
                 uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
 
                 // Zero out padded regions for the very last tile
-                if ((block == num_blocks - 1) && (in0_last_ktile_w > 0)) {
+                if ((in0_last_ktile_w > 0) && (block == num_blocks - 1)) {
                     auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
                     pad_last_ktile<in0_data_format>(in0_last_ktile_w, in0_last_ktile_ptr);
                 }
