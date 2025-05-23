@@ -1271,14 +1271,21 @@ operation::ProgramWithCallbacks untilize_single_core(
     bool input_is_sharded = a.memory_config().is_sharded();
     bool output_is_sharded = output.memory_config().is_sharded();
 
+    std::map<string, string> reader_compute_defines;
+    if (input_is_sharded) {
+        reader_compute_defines["SHARDED"] = "1";
+    }
+
+    std::map<string, string> writer_compute_defines;
+    if (output_is_sharded) {
+        writer_compute_defines["SHARDED"] = "1";
+    }
+
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};
-
-    std::map<string, string> reader_compute_defines;
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(a, reader_compile_time_args);
-        reader_compute_defines["SHARDED"] = "1";
     }
 
     // Writer compile-time args
@@ -1290,11 +1297,8 @@ operation::ProgramWithCallbacks untilize_single_core(
         (std::uint32_t)stick_size_is_power_of_two,
         (std::uint32_t)log2_stick_size,
     };
-
-    std::map<string, string> writer_compute_defines;
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
-        writer_compute_defines["SHARDED"] = "1";
     }
 
     // Tilized reader
