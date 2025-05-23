@@ -622,7 +622,7 @@ IDevice* DevicePool::get_active_device(chip_id_t device_id) const {
 std::vector<IDevice* > DevicePool::get_all_active_devices() const {
     std::vector<IDevice*> user_devices;
     for (const auto& device : this->devices) {
-        if (device->is_initialized()) {
+        if (device && device->is_initialized()) {
             user_devices.push_back(device.get());
         }
     }
