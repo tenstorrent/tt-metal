@@ -39,12 +39,15 @@ test_id_to_name = {
 # Comments for each test explaining why we get the perf that we do
 test_id_to_comment = {
     0: "Dram read bandwidth saturates at about 37 B/cycle, according to HW experiments. \n\
-        DRAM write bandwidth should saturate at 64 B/cycle",
+        DRAM write bandwidth should saturate at 64 B/cycle, instead of 35 B/c. \n\
+        There may be some configuration problem with the dram controller/phy or this may \n\
+        be the physical limit of the dram.",
     1: "This test appears to be broken. The graph is showing numbers that dont make sense.",
     2: "This test appears to be broken. The graph is showing numbers that dont make sense.",
     3: "This test shows the ideal read and write bandwidth when transfering multiple 8KB packets. \n\
         The read bandwidth is what is expected, however write bandwidth is expected to be 64 \n\
-        B/cycle rather than 35 B/cycle.",
+        B/cycle rather than 35 B/cycle. There may be some configuration problem with the dram \n\
+        controller/phy or this may be the physical limit of the dram.",
     4: "Bandwidth in steady state, with > 2KB packet sizes, is close to theoretical max. \n\
         Under 2KB, the bandwidth is limitted by either the RISC latency or by the NOC sending from L1 latency.",
     5: "Bandwidth in steady state, with > 2KB packet sizes, is close to theoretical max. \n\
