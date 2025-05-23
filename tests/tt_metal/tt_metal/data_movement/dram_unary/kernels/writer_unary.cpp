@@ -25,8 +25,9 @@ void kernel_main() {
     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
     {
         DeviceZoneScopedN("RISCV0");
+        uint64_t dst_base_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, 0);
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_addr);
+            uint64_t dst_noc_addr = dst_base_noc_addr | dst_addr;
 
             noc_async_write(l1_read_addr, dst_noc_addr, transaction_size_bytes);
 
