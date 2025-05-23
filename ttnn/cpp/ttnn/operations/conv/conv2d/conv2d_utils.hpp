@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -170,6 +170,16 @@ shard_or_reshard_tensor_if_required(
     uint32_t out_channels,
     bool is_mm_conv,
     bool auto_shard);
+
+template <typename T>
+ttnn::Tensor fold_tensor(
+    const ttnn::Tensor& tensor,
+    T* device,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 4> padding_n4,
+    std::optional<DataType> dtype,
+    bool is_weight_tensor = false);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 

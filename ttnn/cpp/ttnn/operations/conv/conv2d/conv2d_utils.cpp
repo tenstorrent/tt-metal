@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/fold/fold.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -1271,6 +1273,53 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
     return packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 }
 
+// Common folding operation for both input and weight tensors
+template <typename T>
+ttnn::Tensor fold_tensor(
+    const ttnn::Tensor& tensor,
+    T* device,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 4> padding_n4,
+    std::optional<DataType> dtype,
+    bool is_weight_tensor) {
+    // Validation checks
+    TT_FATAL(
+        stride[0] == kernel_size[0] && stride[1] == kernel_size[1], "Stride must be equal to kernel size for folding");
+    if (is_weight_tensor) {
+        TT_FATAL(!tensor.memory_config().is_l1(), "Weight tensor must not be in L1 memory");
+    } else {
+        TT_FATAL(!tensor.memory_config().is_l1(), "Input tensor must not be in L1 memory for folding");
+    }
+    TT_FATAL(
+        padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0,
+        "Padding must be 0 for folding");
+    if (!dtype.has_value()) {
+        dtype = tensor.get_dtype();
+    }
+    TT_FATAL(dtype.value() != tt_metal::DataType::BFLOAT8_B, "Conv2D DRAM folding currently doesn't support BFLOAT8_B");
+
+    // Move to device if needed
+    ttnn::Tensor tensor_on_device = tensor;
+    if (!tt::tt_metal::is_device_tensor(tensor_on_device)) {
+        tensor_on_device = ttnn::to_device(tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
+    }
+
+    if (is_weight_tensor) {
+        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({0, 2, 3, 1}));
+    }
+
+    // Core folding operation
+    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1]);
+
+    if (is_weight_tensor) {
+        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({1, 2, 3, 0}));
+        tensor_on_device = ttnn::to_layout(tensor_on_device, Layout::TILE, std::nullopt, std::nullopt, device);
+    }
+
+    return tensor_on_device;
+}
+
 template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config<IDevice>(
     IDevice* device,
     const ttnn::Tensor& input_tensor_,
@@ -1321,6 +1370,24 @@ template DeviceComputeKernelConfig get_conv_default_compute_kernel_config<tt::tt
     tt::tt_metal::IDevice* device);
 
 template DeviceComputeKernelConfig get_conv_default_compute_kernel_config<ttnn::MeshDevice>(ttnn::MeshDevice* device);
+
+template ttnn::Tensor fold_tensor<IDevice>(
+    const ttnn::Tensor& tensor,
+    tt::tt_metal::IDevice* device,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 4> padding_n4,
+    std::optional<DataType> dtype,
+    bool is_weight_tensor);
+
+template ttnn::Tensor fold_tensor<MeshDevice>(
+    const ttnn::Tensor& tensor,
+    tt::tt_metal::distributed::MeshDevice* device,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 4> padding_n4,
+    std::optional<DataType> dtype,
+    bool is_weight_tensor);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
     tt::stl::reflection::operator<<(os, config);

@@ -63,16 +63,6 @@ ttnn::Tensor conv_bias_layout_convert(
     bool is_non_tile_mul_width);
 
 template <typename T>
-ttnn::Tensor fold_tensor(
-    const ttnn::Tensor& tensor,
-    T* device,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype,
-    bool is_weight_tensor = false);
-
-template <typename T>
 ttnn::Tensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
