@@ -163,7 +163,7 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/cpack_common.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/cunpack_common.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_abs.h
-            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_add_int32.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_add_int.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
@@ -229,7 +229,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cpack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cunpack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_abs.h
-            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_add_int32.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_add_int.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
