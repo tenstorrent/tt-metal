@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -723,6 +723,17 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
         auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(dev_id);
         tt::llrt::internal_::wait_until_cores_done(dev_id, RUN_MSG_GO, dispatch_cores, 0);
+    }
+
+    // Process registered termination signals from topology
+    for (const auto& dev_id : devices_to_close) {
+        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        const auto& info = tt::tt_metal::get_registered_termination_cores(dev_id);
+        for (const auto& core_to_terminate : info) {
+            std::vector<uint32_t> val{core_to_terminate.val};
+            tt_metal::detail::WriteToDeviceL1(
+                dev, core_to_terminate.logical_core, core_to_terminate.address, val, core_to_terminate.core_type);
+        }
     }
 
     // Terminate fabric routers
