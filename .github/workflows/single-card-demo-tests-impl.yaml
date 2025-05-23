@@ -105,12 +105,12 @@ jobs:
         run: |
           if [ ! -d "/mnt/MLPerf/tt-dnn_models/hf_cache/${{ matrix.test-group.name }}" ]; then
             echo "Model is not in cache, downloading now to save it in cache..."
-            python3 -c "
-from transformers import AutoModel;
-model_name = '${{ matrix.test-group.name }}'; 
-cache_dir = '/mnt/MLPerf/tt-dnn_models/hf_cache';
-AutoModel.from_pretrained(model_name, cache_dir=cache_dir);
-"
+            python3 <<EOF
+from transformers import AutoModel
+model_name = "${{ matrix.test-group.name }}"
+cache_dir = '/mnt/MLPerf/tt-dnn_models/hf_cache'
+AutoModel.from_pretrained(model_name, cache_dir=cache_dir)
+EOF
           else
             echo "Model found in cache"
           fi
