@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
@@ -90,19 +89,9 @@ void MAIN {
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
 
-    uint32_t scalar_cnt = 1;
-    uint32_t diff_index = 0;
-    uint32_t time_for_change = 0;
-    uint32_t runtime_args_before = 1;
-
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
     pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
-
-    if constexpr (!one_scalar_per_core) {
-        scalar_cnt = get_arg_val<uint32_t>(0);
-        time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
-    }
 
     // In case we have <=16 sticks we will use only upper two faces of the tile.
     // In this case we can configure reduce to only process as many rows as needed.
@@ -123,23 +112,14 @@ void MAIN {
             UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                 in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, num_faces_in_tile, face_r_dim, 1)));
         }
-    DPRINT << "scalar cnt " << scalar_cnt << ENDL();
-    DPRINT << "elems cnt " << nsticks_per_core << ENDL();
 
     if (one_scalar_per_core) {
         cb_wait_front(in_scalar_cb_id, 1);
     }
     for (uint32_t i = 0; i < nsticks_per_core; i++) {
         if constexpr (!one_scalar_per_core) {
-            if (i == time_for_change) {
-                cb_wait_front(in_scalar_cb_id, 1);
-                if (diff_index < scalar_cnt - 1) {
-                    diff_index++;
-                    time_for_change = get_arg_val<uint32_t>(runtime_args_before + diff_index);
-                }
-            }
+            cb_wait_front(in_scalar_cb_id, 1);
         }
-        //  perform the reduction over the first N - 1 whole chunks
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
             reduce_h_fused<
                 max_tiles_per_iter,
@@ -156,16 +136,9 @@ void MAIN {
                 in_cb_id_0, in_scalar_cb_id, partial_iter_output_tiles, num_faces_in_tile, face_r_dim, 1)));
         }
         // perform the reduction over the either whole or partial chunk N
-        reduce_h_fused<
-            partial_iter_output_tiles,
-            is_partial_tile,
-            split_reader,
-            face_r_dim,
-            num_faces_in_tile,
-            neginf_srca_maxpool,
-            zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
-            if (!one_scalar_per_core && ((i + 1 == time_for_change) || i + 1 == nsticks_per_core)) {
-            DPRINT << "popped the old num " << ENDL();
+        reduce_h_fused<partial_iter_output_tiles, is_partial_tile, split_reader, face_r_dim, num_faces_in_tile>(
+            in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
+        if constexpr (!one_scalar_per_core) {
             cb_pop_front(in_scalar_cb_id, 1);
         }
     }

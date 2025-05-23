@@ -13,47 +13,51 @@ namespace ttnn::operations::pool {
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
-static Tensor create_config_tensor(
+static Tensor create_scalar_config_tensor(
     IDevice* device,
-    ShardSpec shard_spec,
-    const Pool2DType pool_type,
-    const uint32_t out_nhw_per_core,
-    const uint32_t num_shards_c,
-    const uint32_t in_h,
-    const uint32_t in_w,
-    const uint32_t in_n,
-    const uint32_t out_h,
-    const uint32_t out_w,
-    const uint32_t kernel_size_h,
-    const uint32_t kernel_size_w,
-    const uint32_t stride_h,
-    const uint32_t stride_w,
-    const uint32_t divisor_override,
-    const uint32_t pad_h,
-    const uint32_t pad_w,
-    const bool ceil_mode,
-    const uint32_t ceil_pad_h,
-    const uint32_t ceil_pad_w,
+    const ShardSpec& shard_spec,
+    Pool2DType pool_type,
+    uint32_t in_n,
+    uint32_t in_h,
+    uint32_t in_w,
+    uint32_t out_h,
+    uint32_t out_w,
+    uint32_t kernel_size_h,
+    uint32_t kernel_size_w,
+    std::optional<uint32_t> stride_h,
+    std::optional<uint32_t> stride_w,
+    std::optional<uint32_t> pad_h,
+    std::optional<uint32_t> pad_w,
+    std::optional<uint32_t> divisor_override,
+    bool ceil_mode,
+    uint32_t ceil_pad_h,
+    uint32_t ceil_pad_w,
+    uint32_t out_nhw_per_core,
+    uint32_t num_shards_c,
     CoreRangeSet all_cores) {
+    auto ranges = all_cores.ranges();
+
+    std::vector<uint32_t> total_elems_per_c_shards(num_shards_c, out_h * out_w * in_n);
+
+    std::vector<uint32_t> config_vector;
+
     uint32_t x = 0;
     uint32_t y = 0;
     uint32_t num_of_ele = out_nhw_per_core;
-    std::vector<uint32_t> total_elems_per_c_shards;
-    for (int i = 0; i < num_shards_c; i++) {
-        total_elems_per_c_shards.push_back(out_h * out_w * in_n);
-    }
     uint32_t channel = 0;
     uint32_t batch = 0;
-    for (uint32_t i = 0; i < all_cores.ranges().size(); ++i) {
-        for (auto iterator = all_cores.ranges()[i].begin(); iterator != all_cores.ranges()[i].end(); ++iterator) {
+
+    for (const auto& range : ranges) {
+        for (auto it = range.begin(); it != range.end(); ++it) {
             if (total_elems_per_c_shards[channel] > out_nhw_per_core) {
                 total_elems_per_c_shards[channel] -= out_nhw_per_core;
                 num_of_ele = out_nhw_per_core;
             } else {
                 num_of_ele = total_elems_per_c_shards[channel];
             }
+
             std::vector<ScalarInfo> scalars;
-            uint32_t first_scalar = get_bf16_pool_scalar(
+            get_bf16_pool_scalar(
                 pool_type,
                 kernel_size_h,
                 kernel_size_w,
@@ -74,131 +78,53 @@ static Tensor create_config_tensor(
                 num_of_ele,
                 &scalars);
 
-            uint32_t scalar_cnt = scalars.size();
-            std::vector<uint32_t> runtime_args_reader = {scalar_cnt};
-            std::vector<uint32_t> runtime_args_compute = {scalar_cnt};
-            for (int j = 0; j < scalar_cnt; j++) {
-                runtime_args_reader.push_back(scalars[j].start);
-                runtime_args_reader.push_back(scalars[j].value);
-                runtime_args_reader.push_back(scalars[j].end);
-                runtime_args_compute.push_back(scalars[j].start);
-                runtime_args_compute.push_back(scalars[j].end);
+            for (const auto& scalar : scalars) {
+                config_vector.push_back(scalar.start);
+                config_vector.push_back(scalar.value);
+                config_vector.push_back(scalar.end);
             }
 
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernel, *iterator, runtime_args_compute);
-            tt::tt_metal::SetRuntimeArgs(program, reader0_kernel, *iterator, runtime_args_reader);
-            tt::tt_metal::SetRuntimeArgs(program, reader1_kernel, *iterator, runtime_args_reader);
-
-            channel++;
-            if (channel % num_shards_c == 0) {
-                channel = 0;
+            // Advance core and tensor location tracking
+            channel = (channel + 1) % num_shards_c;
+            if (channel == 0) {
                 uint32_t delta_y = y + num_of_ele;
                 y = delta_y % out_w;
-                if (delta_y / out_w != 0) {
-                    uint32_t delta_x = x + delta_y / out_w;
-                    x = delta_x % out_h;
-                    if (delta_x / out_h != 0) {
-                        batch++;
-                        if (batch % in_n == 0) {
-                            batch = 0;
-                            y = 0;
-                            x = 0;
-                        }
-                    }
+                uint32_t delta_x = x + delta_y / out_w;
+                x = delta_x % out_h;
+                batch += delta_x / out_h;
+                if (batch == in_n) {
+                    batch = 0;
+                    x = y = 0;
                 }
             }
         }
     }
 
-    std::vector<uint16_t> logical_core_to_stick_map;
-    const size_t logical_core_to_stick_map_entry_size = 3;
-    size_t row_size = logical_core_to_stick_map_entry_size * in_w;
-    // Create map of core and respective offsets in input
-    for (uint32_t b = 0; b < batch_size; ++b) {
-        for (uint32_t h = 0; h < in_h; ++h) {
-            for (uint32_t w = 0; w < in_w; ++w, ++stick_offset) {
-                if (stick_offset == input_nsticks_per_core) {
-                    stick_offset = 0, ++core_idx;
-                }
-                if (is_height_sharded) {
-                    logical_core_to_stick_map.push_back(logical_cores[core_idx].x);
-                    logical_core_to_stick_map.push_back(logical_cores[core_idx].y);
-                } else {
-                    logical_core_to_stick_map.push_back(nhw_start_core + core_idx);
-                    logical_core_to_stick_map.push_back(0);
-                }
-                logical_core_to_stick_map.push_back(stick_offset);
-            }
-            for (uint32_t j = 1; j < scale_factor_h; ++j) {
-                logical_core_to_stick_map.insert(
-                    logical_core_to_stick_map.end(),
-                    logical_core_to_stick_map.end() - row_size,
-                    logical_core_to_stick_map.end());
-            }
-        }
-    }
+    const uint32_t entry_size = 3;
+    const uint32_t entries_per_core = entry_size * out_nhw_per_core;
 
-    /* Each entry in config_vector contains 2 elements:
-     * {{core_coords.x, core_coords.y}, stick_offset(in input_cb)}
-     * - core_coords.x: X coordinate of the core
-     * - core_coords.y: Y coordinate of the core
-     * - stick_offset: Offset within the input circular buffer
-     */
-    std::vector<uint16_t> config_vector;
-
-    const uint32_t config_buffer_entry_size = 2;
-    const uint32_t elems_per_core = config_buffer_entry_size * scale_factor_h * input_nsticks_per_core;
-
-    // In case last input shard is not full, fill the rest of the config vector with the last two elements
-    const auto pad_uneven_shards = [elems_per_core, config_buffer_entry_size](
-                                       auto& config_vector, size_t slice_begin = 0) {
-        const uint32_t slice_length = config_vector.size() - slice_begin;
-        const uint32_t remainder = (elems_per_core - (slice_length % elems_per_core)) % elems_per_core;
-        if (remainder != 0) {
-            uint16_t before_last = config_vector[config_vector.size() - 2];
-            uint16_t last = config_vector[config_vector.size() - 1];
-            for (int i = 0; i < remainder / config_buffer_entry_size; i++) {
-                config_vector.push_back(before_last);
-                config_vector.push_back(last);
-            }
-        }
-    };
-
-    // Based on core calculate physical location of cores
-    CoreCoord core_coords;
-    if (is_height_sharded) {
-        for (size_t j = 0; j < logical_core_to_stick_map.size(); j += logical_core_to_stick_map_entry_size) {
-            core_coords = device->worker_core_from_logical_core(
-                CoreCoord(logical_core_to_stick_map[j], logical_core_to_stick_map[j + 1]));
-            // Combine the x and y coordinates of the core into a single 16-bit value.
-            const uint16_t cores = (core_coords.x << 8) + core_coords.y;
-            config_vector.push_back(cores);
-            config_vector.push_back(logical_core_to_stick_map[j + 2]);
-        }
-        pad_uneven_shards(config_vector);
-    } else {
-        for (size_t i = ch_start_core; i <= ch_end_core; i++) {
-            const size_t chan_slice_begin = config_vector.size();
-            for (size_t j = 0; j < logical_core_to_stick_map.size(); j += logical_core_to_stick_map_entry_size) {
-                core_coords = device->worker_core_from_logical_core(CoreCoord(i, logical_core_to_stick_map[j]));
-                // Combine the x and y coordinates of the core into a single 16-bit value.
-                const uint16_t cores = (core_coords.x << 8) + core_coords.y;
-                config_vector.push_back(cores);
-                config_vector.push_back(logical_core_to_stick_map[j + 2]);
-            }
-            pad_uneven_shards(config_vector, chan_slice_begin);
+    // Pad if not full
+    const uint32_t pad = (entries_per_core - (config_vector.size() % entries_per_core)) % entries_per_core;
+    if (pad != 0 && config_vector.size() >= 2) {
+        uint16_t last_core_start = *(config_vector.end() - 3);
+        uint16_t last_scalar = *(config_vector.end() - 2);
+        uint16_t last_core_end = *(config_vector.end() - 1);
+        for (uint32_t i = 0; i < pad / entry_size; ++i) {
+            config_vector.push_back(last_core_start);
+            config_vector.push_back(last_scalar);
+            config_vector.push_back(last_core_end);
         }
     }
 
     TT_FATAL(
-        config_vector.size() % elems_per_core == 0,
-        "Config vector size {} should be multiple of {}",
+        config_vector.size() % entries_per_core == 0,
+        "Config vector size {} should be a multiple of {}",
         config_vector.size(),
-        elems_per_core);
+        entries_per_core);
 
-    ttnn::Shape config_shape({tt::div_up(config_vector.size(), elems_per_core), elems_per_core});
-    auto config_buffer = HostBuffer(std::move(config_vector));
-    return Tensor(std::move(config_buffer), config_shape, DataType::UINT32, Layout::ROW_MAJOR);
+    auto config_shape = ttnn::Shape({tt::div_up(config_vector.size(), entries_per_core), entries_per_core});
+    HostBuffer buffer(std::move(config_vector));
+    return Tensor(std::move(buffer), config_shape, DataType::UINT32, Layout::ROW_MAJOR);
 }
 
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
@@ -301,7 +227,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t next_cb_index = tt::CBIndex::c_0;
     uint32_t in_scalar_cb_id = next_cb_index++;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
-    uint32_t in_scalar_cb_npages = 2;
+    uint32_t in_scalar_cb_npages = 1;
     tt::tt_metal::create_cb(in_scalar_cb_id, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
@@ -472,6 +398,51 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false ||
                                (ceil_pad_h == 0 && ceil_pad_w == 0) || divisor_override.has_value();
 
+    CBHandle config_cb;
+    uint32_t config_cb_id = 32;
+    if (!one_scalar_per_core) {
+        // create config tensor
+        Tensor config_tensor;
+        config_tensor = create_scalar_config_tensor(
+            device,
+            input.shard_spec().value(),
+            pool_type,
+            in_n,
+            in_h,
+            in_w,
+            out_h,
+            out_w,
+            kernel_size_h,
+            kernel_size_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            divisor_override,
+            ceil_mode,
+            ceil_pad_h,
+            ceil_pad_w,
+            out_nhw_per_core,
+            num_shards_c,
+            all_cores);
+
+        auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
+        auto config_tensor_shard_orientation =
+            input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
+                ? ShardOrientation::COL_MAJOR
+                : input.shard_spec().value().orientation;
+        ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
+        MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
+        auto config_tensor_device = config_tensor.to_device(device, memory_config);
+
+        tt::DataFormat config_df = tt::DataFormat::RawUInt32;
+        auto config_storage = config_tensor_device.device_storage();
+        auto config_buffer = config_storage.get_buffer();
+        auto config_buffer_page_size = config_buffer->page_size();
+
+        std::tie(config_cb_id, config_cb) = tt::tt_metal::create_cb(
+            next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
+    }
     std::vector<uint32_t> reader0_ct_args = {
         out_nhw_per_core,
         kernel_size_h,
@@ -499,7 +470,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         clear_value_cb_id,
         is_blackhole,
         (uint32_t)pool_type,
-        one_scalar_per_core};
+        one_scalar_per_core,
+        config_cb_id};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -566,9 +538,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
-
-    if (!one_scalar_per_core) {
-    }
 
     // Capture reader_indices_storage to cache this with the program
     return {

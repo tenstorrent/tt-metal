@@ -82,7 +82,7 @@ uint32_t get_bf16_pool_scalar(
                         }
                         if (scalars != nullptr) {
                             if (!scalars->empty()) {
-                                scalars->back().end = i - 1;
+                                scalars->back().end = i;
                             }
                             scalars->push_back({i, bfloat16(value).to_packed() << 16, i});
                         }
@@ -106,7 +106,7 @@ uint32_t get_bf16_pool_scalar(
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
     if (scalars != nullptr) {
-        scalars->back().end = out_nhw_per_core.value_or(0) - 1;
+        scalars->back().end = out_nhw_per_core.value_or(0);
     }
     return packed_first_value;
 }
