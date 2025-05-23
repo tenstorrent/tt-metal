@@ -18,9 +18,9 @@ constexpr uint32_t DEFAULT_ETH_TXQ = 0;
 
 // STREAM REGISTER ASSIGNMENT
 // senders update this stream
-constexpr uint32_t to_receiver_0_pkts_sent_id = 0;
+constexpr uint32_t to_receiver_0_pkts_sent_id = 23;
 // senders update this stream
-constexpr uint32_t to_receiver_1_pkts_sent_id = 1;
+constexpr uint32_t to_receiver_1_pkts_sent_id = 24;
 // receivers updates the reg on this stream
 constexpr uint32_t to_sender_0_pkts_acked_id = 2;
 // receivers updates the reg on this stream
@@ -56,6 +56,7 @@ constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
 // placeholder until 2D torus is implemented
 constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
 
+// These are the
 // Slot 17 is defined in the edm_fabric_worker_adapter
 constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
 constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;

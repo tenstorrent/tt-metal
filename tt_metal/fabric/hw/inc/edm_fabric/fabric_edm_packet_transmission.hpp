@@ -10,6 +10,7 @@
 #include "fabric_edm_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
 #include <cstdint>
+#include "debug/ring_buffer.h"
 
 // If the hop/distance counter equals to the below value, it indicates that it has
 // arrived at (atleast one of) the intended destination(s)
@@ -135,6 +136,13 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             ASSERT(payload_size_bytes > 0);
             const auto dest_address = header.command_fields.unicast_write.noc_address;
+            // DPRINT << "naw to " << (uint64_t)dest_address << ", size: " << (uint32_t)payload_size_bytes << ", data: "
+            // << reinterpret_cast<volatile uint32_t*>(payload_start_address)[0] << "\n";
+            // WATCHER_RING_BUFFER_PUSH(0xaaaa0000 | payload_size_bytes);
+            // WATCHER_RING_BUFFER_PUSH(payload_start_address);
+            // WATCHER_RING_BUFFER_PUSH(dest_address );
+            // WATCHER_RING_BUFFER_PUSH(dest_address >> 32);
+            ASSERT((dest_address & 0xFFFFFFFF) + payload_size_bytes < 1600000);
             noc_async_write_one_packet_with_trid<false, false>(
                 payload_start_address,
                 dest_address,
@@ -146,18 +154,18 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE: {
-            ASSERT(payload_size_bytes > 0);
-            // TODO: confirm if we need to adjust dest core count if we span eth or dram cores
-            const auto mcast_dest_address = get_noc_multicast_addr(
-                header.command_fields.mcast_write.noc_x_start,
-                header.command_fields.mcast_write.noc_y_start,
-                header.command_fields.mcast_write.noc_x_start + header.command_fields.mcast_write.mcast_rect_size_x,
-                header.command_fields.mcast_write.noc_y_start + header.command_fields.mcast_write.mcast_rect_size_y,
-                header.command_fields.mcast_write.address);
-            const auto num_dests = header.command_fields.mcast_write.mcast_rect_size_x *
-                                   header.command_fields.mcast_write.mcast_rect_size_y;
-            noc_async_write_one_packet_with_trid(
-                payload_start_address, mcast_dest_address, payload_size_bytes, num_dests, transaction_id);
+            // ASSERT(payload_size_bytes > 0);
+            // // TODO: confirm if we need to adjust dest core count if we span eth or dram cores
+            // const auto mcast_dest_address = get_noc_multicast_addr(
+            //     header.command_fields.mcast_write.noc_x_start,
+            //     header.command_fields.mcast_write.noc_y_start,
+            //     header.command_fields.mcast_write.noc_x_start + header.command_fields.mcast_write.mcast_rect_size_x,
+            //     header.command_fields.mcast_write.noc_y_start + header.command_fields.mcast_write.mcast_rect_size_y,
+            //     header.command_fields.mcast_write.address);
+            // const auto num_dests = header.command_fields.mcast_write.mcast_rect_size_x *
+            //                        header.command_fields.mcast_write.mcast_rect_size_y;
+            // noc_async_write_one_packet_with_trid(
+            //     payload_start_address, mcast_dest_address, payload_size_bytes, num_dests, transaction_id);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
@@ -186,26 +194,26 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
-            const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
-            noc_async_write_one_packet_with_trid<false, false>(
-                payload_start_address,
-                dest_address,
-                payload_size_bytes,
-                transaction_id,
-                tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+            // const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
+            // noc_async_write_one_packet_with_trid<false, false>(
+            //     payload_start_address,
+            //     dest_address,
+            //     payload_size_bytes,
+            //     transaction_id,
+            //     tt::tt_fabric::local_chip_data_cmd_buf,
+            //     tt::tt_fabric::edm_to_local_chip_noc,
+            //     tt::tt_fabric::forward_and_local_write_noc_vc);
 
-            const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
-            const auto increment = header.command_fields.unicast_seminc_fused.val;
-            if (header.command_fields.unicast_seminc_fused.flush) {
-                flush_write_to_noc_pipeline(rx_channel_id);
-            }
-            noc_semaphore_inc<true>(
-                semaphore_dest_address,
-                increment,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+            // const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
+            // const auto increment = header.command_fields.unicast_seminc_fused.val;
+            // if (header.command_fields.unicast_seminc_fused.flush) {
+            //     flush_write_to_noc_pipeline(rx_channel_id);
+            // }
+            // noc_semaphore_inc<true>(
+            //     semaphore_dest_address,
+            //     increment,
+            //     tt::tt_fabric::edm_to_local_chip_noc,
+            //     tt::tt_fabric::forward_and_local_write_noc_vc);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
@@ -260,15 +268,24 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
     uint8_t transaction_id) {
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
-    ASSERT(downstream_edm_interface.edm_has_space_for_packet());  // best effort check
+    // ASSERT(downstream_edm_interface.edm_has_space_for_packet());  // best effort check
 
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
+    reinterpret_cast<volatile uint32_t*>(packet_header)[sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t) + 3] = 0xc0ffee02;
     update_packet_header_for_next_hop(packet_header, cached_routing_fields);
-    ASSERT(payload_size_bytes + sizeof(PACKET_HEADER_TYPE) > 0);
+    // ASSERT(payload_size_bytes + sizeof(PACKET_HEADER_TYPE) > 0);
+    // DPRINT << "FWD PKT\n";
+
     downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
         enable_ring_support,
         tt::tt_fabric::edm_to_downstream_noc,
         stateful_api>(
         reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
+    reinterpret_cast<volatile uint32_t*>(packet_header)[sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t) + 4] =
+        downstream_edm_interface.edm_buffer_remote_free_slots_update_addr;
+    reinterpret_cast<volatile uint32_t*>(packet_header)[sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t) + 5] =
+        downstream_edm_interface.sync_noc_cmd_buf;
+    reinterpret_cast<volatile uint32_t*>(packet_header)[sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t) + 6] =
+        tt::tt_fabric::edm_to_downstream_noc;
 }

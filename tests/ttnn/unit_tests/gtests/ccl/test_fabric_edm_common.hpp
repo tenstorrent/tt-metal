@@ -1231,6 +1231,7 @@ void setup_test_with_persistent_fabric(
         log_info(tt::LogTest, "Building EDM kernels");
         line_fabric->build_kernels();
         build_and_enqueue(devices, *fabric_programs);
+        // Sleep for 10 seconds
     }
 }
 
@@ -2873,6 +2874,7 @@ void Run1DFabricPacketSendTest(
                     dest_noc_y_fwd,
                     dest_noc_x_bwd,
                     dest_noc_y_bwd,
+                    device->id(),
                     num_send_types,
                 };
 

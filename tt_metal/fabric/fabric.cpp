@@ -97,7 +97,8 @@ void append_fabric_connection_rt_args(
     const auto& fabric_context = control_plane->get_fabric_context();
     const auto& edm_config = fabric_context.get_fabric_router_config();
     // Worker always connects to channel 0
-    const auto sender_channel = 0;
+    // const auto sender_channel = 0; // snijjar
+    const auto sender_channel = fabric_context.get_fabric_topology() == Topology::Mesh ? router_direction : 0;
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = fabric_router_virtual_core.x,
         .edm_noc_y = fabric_router_virtual_core.y,

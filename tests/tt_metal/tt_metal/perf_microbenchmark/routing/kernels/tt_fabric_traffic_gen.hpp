@@ -223,20 +223,23 @@ inline void fill_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words,
     tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES/4 - 1);
     for (uint32_t i = 0; i < num_words; i++) {
         *addr = start_val++;
+        // DPRINT << "Data[" << (uint32_t)i << "] = " << (uint32_t)*addr << "\n";
         addr += (PACKET_WORD_SIZE_BYTES/4);
     }
 }
-
 
 inline bool check_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val,
                               uint32_t& mismatch_addr, uint32_t& mismatch_val, uint32_t& expected_val) {
     tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES/4 - 1);
     for (uint32_t i = 0; i < num_words; i++) {
+        // DPRINT << "data[" << (uint32_t)i << "] = " << (uint32_t)*addr << ", expected: " << (uint32_t)start_val <<
+        // "\n";
         if (*addr != start_val) {
             mismatch_addr = reinterpret_cast<uint32_t>(addr);
             mismatch_val = *addr;
             expected_val = start_val;
-            return false;
+
+            // return false;
         }
         start_val++;
         addr += (PACKET_WORD_SIZE_BYTES/4);

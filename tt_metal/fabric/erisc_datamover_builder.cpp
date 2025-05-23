@@ -842,7 +842,8 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
 
     // VC 0
     // +1 because forwarded channels start at offset 1. (channel 0 is for local noc traffic)
-    auto ds_edm_send_chan = config.topology == Topology::Mesh ? this->direction + 1 : 1;
+    // snijjar hid the +1
+    auto ds_edm_send_chan = config.topology == Topology::Mesh ? this->direction /* + 1*/ : 1;
     auto adapter_spec = downstream_edm.build_connection_to_fabric_channel(ds_edm_send_chan);
 
     if (config.topology == Topology::Mesh) {

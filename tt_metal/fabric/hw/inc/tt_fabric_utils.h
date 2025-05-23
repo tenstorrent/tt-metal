@@ -54,6 +54,7 @@ FORCE_INLINE void check_worker_connections(
         // In such a case like that, we still want to formally teardown the connection to keep things clean
         uint32_t cached = *local_sender_channel_worker_interface.connection_live_semaphore;
         if (connect_is_requested(cached)) {
+            // DPRINT << "Connecting\n";
             channel_connection_established = true;
 
             ASSERT(get_ptr_val(stream_id) <= static_cast<int32_t>(SENDER_NUM_BUFFERS));

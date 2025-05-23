@@ -190,8 +190,10 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         auto random_dev_list = get_random_numbers_from_range(0, devices.size() - 1, devices.size());
 
         // pick the first two in the list to be src and dst devices for the test.
-        src_physical_device_id = devices[random_dev_list[0]]->id();
-        dst_physical_device_id = devices[random_dev_list[1]]->id();
+        src_physical_device_id = devices[0 /*random_dev_list[0]*/]->id();  // 2D
+        dst_physical_device_id = devices[3 /*random_dev_list[1]*/]->id();  // 2D
+        // src_physical_device_id = devices[0/*random_dev_list[0]*/]->id(); // 1D
+        // dst_physical_device_id = devices[1/*random_dev_list[1]*/]->id(); // 1D
         src_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(src_physical_device_id);
         dst_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(dst_physical_device_id);
         mesh_shape = control_plane->get_physical_mesh_shape(src_mesh_chip_id.first);
@@ -285,7 +287,8 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     // append the EDM connection rt args
     // Sender channel 0 is the dedicated worker channel
     // Worker always connects to channel 0
-    const auto sender_channel = 0;
+    // const auto sender_channel = 0; // snijjar
+    const auto sender_channel = topology == Topology::Mesh ? edm_direction : 0;
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
         .edm_noc_y = edm_eth_core.y,

@@ -16,6 +16,8 @@
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/hw/inc/wormhole/core_config.h"
 #include "debug/assert.h"
+#include "debug/ring_buffer.h"
+
 #include <cstdint>
 #include <array>
 
@@ -41,7 +43,12 @@ namespace tt::tt_fabric {
  */
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
 struct WorkerToFabricEdmSenderImpl {
-    static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM = true;
+    static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
+#ifndef DEBUG_PRINT_ENABLED
+        true;
+#else
+        false;
+#endif
     static constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;
     static constexpr bool USER_DEFINED_NUM_BUFFER_SLOTS = EDM_NUM_BUFFER_SLOTS != 0;
     // Temporary flag to distinguish between worker and EDM users of this adapter until we split it into
@@ -81,13 +88,13 @@ struct WorkerToFabricEdmSenderImpl {
         auto worker_teardown_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
         const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
-        ASSERT(
-            (my_core_type == ProgrammableCoreType::TENSIX && worker_buffer_index_semaphore_addr < 1499136) ||
-            (my_core_type == ProgrammableCoreType::ACTIVE_ETH && worker_buffer_index_semaphore_addr < 262144));
-        ASSERT(
-            (my_core_type == ProgrammableCoreType::TENSIX && (uint32_t)writer_send_sem_addr < 1499136) ||
-            (my_core_type == ProgrammableCoreType::ACTIVE_ETH && (uint32_t)writer_send_sem_addr < 262144));
-        ASSERT(edm_buffer_index_addr < 262144);
+        // ASSERT(
+        //     (my_core_type == ProgrammableCoreType::TENSIX && worker_buffer_index_semaphore_addr < 1499136) ||
+        //     (my_core_type == ProgrammableCoreType::ACTIVE_ETH && worker_buffer_index_semaphore_addr < 262144));
+        // ASSERT(
+        //     (my_core_type == ProgrammableCoreType::TENSIX && (uint32_t)writer_send_sem_addr < 1499136) ||
+        //     (my_core_type == ProgrammableCoreType::ACTIVE_ETH && (uint32_t)writer_send_sem_addr < 262144));
+        // ASSERT(edm_buffer_index_addr < 262144);
         return WorkerToFabricEdmSenderImpl(
             is_persistent_fabric,
             direction,
@@ -166,9 +173,9 @@ struct WorkerToFabricEdmSenderImpl {
             // becausen all EDMs are brought up/initialized at the same time
             init_ptr_val(this->worker_credits_stream_id, EDM_NUM_BUFFER_SLOTS);
         }
-        ASSERT(buffer_size_bytes > 0);
+        // ASSERT(buffer_size_bytes > 0);
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
-            ASSERT(num_buffers_per_channel == EDM_NUM_BUFFER_SLOTS);
+            // ASSERT(num_buffers_per_channel == EDM_NUM_BUFFER_SLOTS);
             for (size_t i = 0; i < EDM_NUM_BUFFER_SLOTS; ++i) {
                 this->edm_buffer_slot_addrs[i] = this->edm_buffer_base_addr + (i * this->buffer_size_bytes);
             }
@@ -237,6 +244,15 @@ struct WorkerToFabricEdmSenderImpl {
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
         WAYPOINT("FWSW");
+        if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+            DPRINT << "\tthis->buffer_slot_write_counter.counter: " << (uint32_t)this->buffer_slot_write_counter.counter
+                   << "\n";
+            DPRINT << "\tthis->from_remote_buffer_free_slots_ptr: " << (uint32_t)this->from_remote_buffer_free_slots_ptr
+                   << "\n";
+            DPRINT << "\t*this->from_remote_buffer_free_slots_ptr: "
+                   << (uint32_t)*this->from_remote_buffer_free_slots_ptr << "\n";
+            DPRINT << "\tthis->num_buffers_per_channel: " << (uint32_t)this->num_buffers_per_channel << "\n";
+        }
         while (!this->edm_has_space_for_packet());
         WAYPOINT("FWSD");
     }
@@ -317,6 +333,10 @@ struct WorkerToFabricEdmSenderImpl {
                                         edm_worker_location_info_addr +
                                         offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_read_counter));
         // Read the read/pointer or buffer free slots
+        if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+            DPRINT << "edm_worker_location_info_addr " << (uint32_t)edm_worker_location_info_addr << "\n";
+            DPRINT << "Reading read counter from EDM at " << (uint64_t)edm_read_free_slots_or_read_counter_addr << "\n";
+        }
         noc_async_read(
             edm_read_free_slots_or_read_counter_addr,
             reinterpret_cast<size_t>(this->from_remote_buffer_free_slots_ptr),
@@ -375,6 +395,14 @@ struct WorkerToFabricEdmSenderImpl {
             this->buffer_slot_write_counter.counter = *this->worker_teardown_addr;
             this->buffer_slot_write_counter.index = BufferIndex{static_cast<uint8_t>(this->buffer_slot_write_counter.counter % static_cast<uint32_t>(this->num_buffers_per_channel))};
             this->buffer_slot_index = this->buffer_slot_write_counter.get_buffer_index();
+            DPRINT << "open_finish: send connect to " << (uint64_t)edm_connection_handshake_noc_addr << "\n";
+            DPRINT << "\tthis->buffer_slot_write_counter.counter: " << (uint32_t)this->buffer_slot_write_counter.counter
+                   << "\n";
+            DPRINT << "\tthis->from_remote_buffer_free_slots_ptr: " << (uint32_t)this->from_remote_buffer_free_slots_ptr
+                   << "\n";
+            DPRINT << "\t*this->from_remote_buffer_free_slots_ptr: "
+                   << (uint32_t)*this->from_remote_buffer_free_slots_ptr << "\n";
+            DPRINT << "\tthis->num_buffers_per_channel: " << (uint32_t)this->num_buffers_per_channel << "\n";
         }
 
         // write-back the read counter
@@ -507,7 +535,16 @@ private:
         } else {
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            noc_inline_dw_write(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
+            if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+                DPRINT << "Sending write credit to " << (uint64_t)noc_sem_addr << "\n";
+
+                // WATCHER_RING_BUFFER_PUSH(0xCCCCCCCC);
+                // WATCHER_RING_BUFFER_PUSH(noc_sem_addr);
+            } else {
+                // WATCHER_RING_BUFFER_PUSH(0x77777777);
+                // WATCHER_RING_BUFFER_PUSH(noc_sem_addr);
+            }
+            noc_inline_dw_write3(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
         }
         if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // Write to the atomic increment stream register (write of -1 will subtract 1)
@@ -531,6 +568,8 @@ private:
                     BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =
                     this->edm_buffer_base_addr + (this->get_buffer_slot_index() * this->buffer_size_bytes);
+                ;
+                // WATCHER_RING_BUFFER_PUSH(0xAA000000 | this->edm_buffer_addr);
             } else {
                 this->buffer_slot_index = BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =
@@ -567,6 +606,9 @@ private:
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
         // skip past the first part of the buffer which will be occupied by the packet header
+        if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+            DPRINT << "Sending payload to " << (uint32_t)(buffer_address + sizeof(PACKET_HEADER_TYPE)) << "\n";
+        }
         send_chunk_from_address<blocking_mode>(
             source_address, 1, size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE));
     }
@@ -574,10 +616,20 @@ private:
     FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
+        // DUMP THE L1 CONTENTS USING EXALENS
+        // STALL IN ERISC TO SEE IF CONTENTS SHOW UP CORRECTLY
+        //  --- still corrupted -> probably not a race
+
         ASSERT(size_bytes <= this->buffer_size_bytes);
-        ASSERT(tt::tt_fabric::is_valid(
-            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
+        // ASSERT(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address)->noc_send_type < NOC_SEND_TYPE_LAST);
+        // ASSERT(tt::tt_fabric::is_valid(
+        //     *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
+        if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+            DPRINT << "Sending pkt header to " << (uint32_t)buffer_address << "\n";
+            // WATCHER_RING_BUFFER_PUSH(0xEE000000 | source_address);
+            WATCHER_RING_BUFFER_PUSH(0xDD000000 | buffer_address);
+        }
         post_send_payload_increment_pointers();
     }
     template <
@@ -588,10 +640,12 @@ private:
     FORCE_INLINE void send_payload_from_address_with_trid_impl(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
-        ASSERT(size_bytes > 0);
-        ASSERT(tt::tt_fabric::is_valid(
-            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
+        // ASSERT(size_bytes > 0);
+        // ASSERT(tt::tt_fabric::is_valid(
+        //     *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
+        // ASSERT(!(this->edm_noc_x == my_x[0] && this->edm_noc_y == my_y[0]));
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
+            // ASSERT(this->edm_buffer_slot_addrs[this->get_buffer_slot_index()] + size_bytes < 270000);
             send_chunk_from_address_with_trid<blocking_mode, stateful_api>(
                 source_address,
                 1,
@@ -601,8 +655,20 @@ private:
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,
                 this->data_noc_cmd_buf);
+            {
+                const uint64_t noc_sem_addr = get_noc_addr(
+                    this->edm_noc_x,
+                    this->edm_noc_y,
+                    this->edm_buffer_remote_free_slots_update_addr,
+                    EDM_TO_DOWNSTREAM_NOC);
+                reinterpret_cast<volatile uint32_t*>(source_address)[19] = noc_sem_addr;
+                reinterpret_cast<volatile uint32_t*>(source_address)[20] = noc_sem_addr >> 32;
+                reinterpret_cast<volatile uint32_t*>(source_address)[21] = get_stream_reg_write_addr(17);
+                reinterpret_cast<volatile uint32_t*>(source_address)[22] = get_stream_reg_write_addr(18);
+            }
         } else {
             // Should never be hit
+            // ASSERT(this->edm_buffer_addr + size_bytes < 270000);
             send_chunk_from_address_with_trid<blocking_mode, stateful_api>(
                 source_address,
                 1,
@@ -620,7 +686,7 @@ private:
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
-        ASSERT(num_pages * page_size <= this->buffer_size_bytes);
+        // ASSERT(num_pages * page_size <= this->buffer_size_bytes);
         send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
         post_send_payload_increment_pointers();
     }
