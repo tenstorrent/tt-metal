@@ -6,20 +6,20 @@ import ttnn
 
 
 def register_ttnn_cpp_unary_function(unary_function):
-    import torch
-
-    def torch_cbrt(x, *args, **kwargs):
-        return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
-
-    def torch_multigammaln(x, *args, **kwargs):
-        result = torch.lgamma(x)
-        result += torch.lgamma(x - 0.5)
-        result += torch.lgamma(x - 1.0)
-        result += torch.lgamma(x - 1.5)
-        result += 3.434189657547
-        return result
-
     def _golden_function(input_tensor: ttnn.Tensor, **_):
+        import torch
+
+        def torch_cbrt(x, *args, **kwargs):
+            return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
+
+        def torch_multigammaln(x, *args, **kwargs):
+            result = torch.lgamma(x)
+            result += torch.lgamma(x - 0.5)
+            result += torch.lgamma(x - 1.0)
+            result += torch.lgamma(x - 1.5)
+            result += 3.434189657547
+            return result
+
         name_to_golden_function = {
             "abs": torch.abs,
             "atan": torch.atan,
