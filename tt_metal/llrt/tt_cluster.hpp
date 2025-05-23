@@ -155,6 +155,16 @@ public:
         uint64_t addr,
         bool small_access = false) const;
 
+    void dma_read_dram_vec(
+        std::vector<uint32_t>& vec,
+        uint32_t size_in_bytes,
+        chip_id_t device_id,
+        int dram_view,
+        uint64_t addr,
+        bool small_access = false) const;
+    void dma_write_dram_vec(
+        std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access = false) const;
+
     // Accepts physical noc coordinates
     void write_core(
         const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
@@ -166,6 +176,11 @@ public:
         tt_cxy_pair core,
         uint64_t addr,
         bool small_access = false) const;
+
+    // DMA reads and writes only supported on MMIO devices
+    void dma_write_core(const void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void dma_read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void dma_read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
@@ -364,6 +379,18 @@ private:
 
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
+
+    void read_dram_vec(
+        std::vector<uint32_t>& vec,
+        uint32_t size_in_bytes,
+        chip_id_t device_id,
+        int dram_view,
+        uint64_t addr,
+        bool small_access,
+        bool use_dma) const;
+    void write_dram_vec(
+        std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access, bool use_dma)
+        const;
 
     ARCH arch_;
     TargetDevice target_type_;

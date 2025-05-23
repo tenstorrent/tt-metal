@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -258,6 +258,8 @@ public:
     // Update sync info for this device
     void setSyncInfo(const std::tuple<double, double, double>& sync_info);
 };
+
+bool supports_dma_operations(const IDevice* device);
 
 void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data);
 
