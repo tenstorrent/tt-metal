@@ -29,7 +29,7 @@
                 "files": [
                     "accuracy_results/results/exp-bfloat16-[1].csv",
                     "accuracy_results/results/exp_approx-bfloat16-[1].csv",
-                    "accuracy_results/results/exp_alt-bfloat16-[1].csv",
+                    "accuracy_results/results/exp_cond-bfloat16-[1].csv",
                     "accuracy_results/results/exp_approx_21f-bfloat16-[1].csv"
                 ],
                 "plot_params": {
@@ -334,8 +334,9 @@
                     "accuracy_results/results/rsqrt_approx-bfloat16-[1].csv"
                 ],
                 "plot_params": {
-                    "yscale": "asinh",
-                    "xlim": [-0.1, 1e12]
+                    "yscale": "linear",
+                    "ylim": [0, 20],
+                    "xlim": [-0.1, 1e9]
                 }
             },
             {
@@ -418,8 +419,8 @@
                     "files": [
                         "accuracy_results/results/exp-bfloat16-[32].csv",
                         "accuracy_results/results/exp_approx-bfloat16-[32].csv",
-                        "accuracy_results/results/exp_alt-bfloat16-[32].csv",
-                        "accuracy_results/results/exp_hybrid-bfloat16-[32].csv"
+                        "accuracy_results/results/exp_cond-bfloat16-[32].csv",
+                        "accuracy_results/results/exp_approx_21f-bfloat16-[32].csv"
                     ],
                     "plot_params": {
                         "xlim": [-100, 100],
@@ -825,8 +826,8 @@
                     "files": [
                         "accuracy_results/results/exp-bfloat16-[1].csv",
                         "accuracy_results/results/exp_approx-bfloat16-[1].csv",
-                        "accuracy_results/results/exp_alt-bfloat16-[1].csv",
-                        "accuracy_results/results/exp_hybrid-bfloat16-[1].csv"
+                        "accuracy_results/results/exp_cond-bfloat16-[1].csv",
+                        "accuracy_results/results/exp_approx_21f-bfloat16-[1].csv"
                     ],
 
                     "plot_params": {
