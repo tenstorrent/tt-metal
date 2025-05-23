@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import math
@@ -59,8 +58,14 @@ def preprocess_inputs_prefill(
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
     # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
-    if max_prefill_len == 128 * 1024:
-        max_prefill_len = 128 * 1024 - max_generated_tokens
+
+    for m_args in model_args:
+        if max_prefill_len >= m_args.max_context_len:
+            max_prefill_len -= max_generated_tokens
+            # all model_args should have the same max_context_len as
+            # it's assumed that all models are the same. break out of the loop once we find the first one
+            # with the max_prefill_len >= max_context_len
+            break
 
     encoded_prompts = [
         model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
@@ -90,10 +95,15 @@ def preprocess_inputs_prefill(
                 for idx, prompt in enumerate(input_prompts)
             ]
             overhead = [len(e) - len(r) for e, r in zip(encoded_prompts, raw_prompts)]
-            shortened = [
-                tokenizer[idx % len(model_args)].decode(e[-(max_prefill_len - o) :])
-                for idx, e, o in enumerate(zip(raw_prompts, overhead))
-            ]
+
+            shortened = []
+            for idx, (e, o) in enumerate(zip(raw_prompts, overhead)):
+                if isinstance(tokenizer, list):
+                    sp = tokenizer[idx % len(model_args)].decode(e[-(max_prefill_len - o) :])
+                else:
+                    sp = tokenizer.decode(e[-(max_prefill_len - o) :])
+                shortened.append(sp)
+
             encoded_prompts = [
                 model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
                 for idx, prompt in enumerate(shortened)
