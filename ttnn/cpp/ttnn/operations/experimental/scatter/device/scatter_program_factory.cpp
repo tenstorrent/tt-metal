@@ -122,7 +122,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
 
     // /////////////////////////////////
     const uint32_t& num_cores_y = compute_with_storage_grid_size.y;
-    for (uint32_t i{0}, tile_offset = 0; i < num_cores; ++i) {
+    uint32_t tile_offset = 0;
+    for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core{i / num_cores_y, i % num_cores_y};
 
         uint32_t ht_per_core;
