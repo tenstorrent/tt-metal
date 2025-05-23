@@ -154,7 +154,6 @@ private:
     NOCAddrFunc noc_ucast_addr_x_func_;
     NOCAddrFunc noc_ucast_addr_y_func_;
     NOCAddrFunc noc_local_addr_func_;
-    StackSizeFunc stack_size_func_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -250,8 +249,6 @@ public:
     uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }
 
     uint32_t valid_reg_addr(uint32_t addr) const { return valid_reg_addr_func_(addr); }
-
-    uint32_t get_stack_size(uint32_t type) const { return stack_size_func_(type); }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
