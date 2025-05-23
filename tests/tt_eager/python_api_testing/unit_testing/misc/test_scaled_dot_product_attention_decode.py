@@ -849,6 +849,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     sharded_out=True,
     start_core=ttnn.CoreCoord(0, 0),
     sub_core_grids=None,
+    q_layout=ttnn.TILE_LAYOUT,
 ):
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -928,8 +929,16 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         )
 
     shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
-
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    if q_layout == ttnn.ROW_MAJOR_LAYOUT:
+        shard_spec_rm = ttnn.ShardSpec(shard_grid, (nh, d), ttnn.ShardOrientation.ROW_MAJOR)
+        Q_height_sharded_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec_rm
+        )
+    else:
+        Q_height_sharded_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
+        )
 
     tt_K = ttnn.as_tensor(
         paged_k_shuffled, device=device, dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
@@ -958,10 +967,9 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         Q[:, :, :nh],
         device=device,
         dtype=q_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
+        layout=q_layout,
+        memory_config=Q_height_sharded_memcfg if sharded_in else dram_memcfg,
     )
-
     start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
 
     tt_back = ttnn.transformer.paged_scaled_dot_product_attention_decode(
