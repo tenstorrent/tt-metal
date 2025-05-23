@@ -718,7 +718,7 @@ class TtModelArgs:
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                         per_core_M=max(
-                            1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
+                            1, 8 if seq_len >= 2048 else seq_len // TILE_SIZE // 8  # 8 rows
                         ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                         per_core_N=math.ceil(28672 / 8 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
@@ -726,38 +726,41 @@ class TtModelArgs:
                         fuse_batch=seq_len <= 2048,
                     )
 
-                per_core_M = math.ceil(seq_len / self.tile_size / 7)
-                add_one_if_prime = (
-                    lambda n: n + 1 if n > 1 and all(n % i != 0 for i in range(2, int(n**0.5) + 1)) else n
-                )
-                # Would like for per_core_M to not be prime as it will give us more options for out_block_h
-                per_core_M = add_one_if_prime(per_core_M)
+                if seq_len % 4096 == 0:
+                    per_core_M = 20 * seq_len // 4096
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=4,
+                        out_subblock_h=1,
+                        out_subblock_w=8,
+                        out_block_h=10,
+                        out_block_w=16,
+                        per_core_M=per_core_M,
+                        per_core_N=16,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=False,
+                    )
+                elif seq_len % 2048 == 0:
+                    per_core_M = 10 * seq_len // 2048
 
-                if per_core_M < 20:
-                    out_block_h = per_core_M
-                elif all(per_core_M % i != 0 for i in range(10, 20)):
-                    per_core_M = (per_core_M + 15) & ~15
-                    out_block_h = 16
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=4,
+                        out_subblock_h=1,
+                        out_subblock_w=8,
+                        out_block_h=10,
+                        out_block_w=16,
+                        per_core_M=per_core_M,
+                        per_core_N=16,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=False,
+                    )
                 else:
-                    divisors = []
-                    for i in range(10, 20):
-                        if per_core_M % i == 0:
-                            divisors.append(i)
-                    out_block_h = min(divisors, key=lambda x: abs(x - 16))
-
-                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(7, 7),
-                    in0_block_w=4,
-                    out_subblock_h=1,
-                    out_subblock_w=8,
-                    out_block_h=out_block_h,
-                    out_block_w=16,
-                    per_core_M=per_core_M,
-                    per_core_N=16,
-                    transpose_mcast=False,
-                    fused_activation=None,
-                    fuse_batch=False,
-                )
+                    raise NotImplementedError(
+                        f"W1 Program config generation for sequence length {seq_len} not implemented"
+                    )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = w1_w3_prg_config
 
