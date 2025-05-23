@@ -229,8 +229,8 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
         auto orig_cores = shard_spec.grid.ranges()[0];
         nd_shard_spec.cores = CoreRangeSet(CoreRange(
             orig_cores.start_coord,
-            {orig_cores.start_coord.x + num_shards_along_height - 1,
-             orig_cores.start_coord.y + num_shards_along_width - 1}));
+            {orig_cores.start_coord.x + num_shards_along_width - 1,
+             orig_cores.start_coord.y + num_shards_along_height - 1}));
     }
 
     auto result = mem_config;
@@ -304,9 +304,10 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    // Check that the number of shards along height and width fits onto the grid
+    // To match the shard distribution, the number of shards along the width must match to the grid exactly,
+    // and the number of shards along the height must fit into the grid.
     CoreCoord shard_grid = shard_spec.grid.ranges()[0].grid_size();
-    if (num_shards_along_height > shard_grid.x || num_shards_along_width > shard_grid.y) {
+    if (num_shards_along_width != shard_grid.x || num_shards_along_height > shard_grid.y) {
         return std::nullopt;
     }
 
