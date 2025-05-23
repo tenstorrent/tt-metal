@@ -116,7 +116,9 @@ else   # Reuse existing environment setup
         deactivate
     fi
     echo "Reusing existing virtual environment setup..."
-    source .venv/bin/activate
 fi
+
+# Activate the virtual environment
+source .venv/bin/activate
 
 echo "Setup completed successfully!"
