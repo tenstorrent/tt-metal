@@ -284,6 +284,40 @@ inline void llk_matmul_pack(
 }
 
 /*************************************************************************
+ * LLK PACK FAST TILIZE
+ *************************************************************************/
+
+template <bool is_fp32_dest_acc_en = false>
+inline void llk_pack_fast_tilize_hw_configure(const llk_pack_params_t* pack_params) {
+    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
+
+    _llk_pack_fast_tilize_hw_configure_<is_fp32_dest_acc_en>(pack_src_format[output_id], pack_dst_format[output_id]);
+}
+
+template <bool is_fp32_dest_acc_en = false>
+inline void llk_pack_fast_tilize_hw_configure_disaggregated(const std::uint32_t pack_output) {
+    const llk_pack_params_t llk_pack_params = {.pack_output = pack_output};
+
+    llk_pack_fast_tilize_hw_configure<is_fp32_dest_acc_en>(&llk_pack_params);
+}
+
+inline void llk_pack_fast_tilize_init() { _llk_pack_fast_tilize_init_(); }
+
+inline void llk_pack_fast_tilize_uninit() { _llk_pack_fast_tilize_uninit_(); }
+
+inline void llk_pack_fast_tilize_block(
+    const std::uint32_t tile_index,
+    const std::uint32_t output,
+    const std::uint32_t output_tile_index,
+    const std::uint32_t block_dim) {
+    const std::uint8_t output_id = get_output_id(output);
+
+    const std::uint32_t pack_tile_addr = get_output_tile_address<true, false>(output_id, output_tile_index);
+
+    _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, block_dim);
+}
+
+/*************************************************************************
  * LLK PACK COMMON
  *************************************************************************/
 

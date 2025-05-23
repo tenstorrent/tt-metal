@@ -134,7 +134,6 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
 
     std::shared_ptr<tt_metal::Buffer> src1_dram_buffer;
     uint32_t dram_buffer_src1_addr{};
-    CoreCoord dram_src1_noc_xy{};
 
     if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
         src1_dram_buffer = CreateBuffer(input_dram_config);
@@ -320,11 +319,14 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
 
     if (not pass) {
         std::cout << "GOLDEN " << std::endl;
-        print_vector(unpack_vector<bfloat16, uint32_t>(golden));
+        print_vector_fixed_numel_per_row(
+            unpack_vector<bfloat16, uint32_t>(golden),
+            test_config.tilize_type.has_value() ? 16 : 32 * test_config.num_tiles_c);
         std::cout << "RESULTS " << std::endl;
-        print_vector(unpack_vector<bfloat16, uint32_t>(result_vec));
+        print_vector_fixed_numel_per_row(
+            unpack_vector<bfloat16, uint32_t>(result_vec),
+            test_config.tilize_type.has_value() ? 16 : 32 * test_config.num_tiles_c);
     }
-    ASSERT_TRUE(pass);
     log_info(
         tt::LogTest,
         "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, DstSyncFull = {}, pass = {}",
@@ -333,6 +335,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         test_config.fp32_dest_acc_en,
         test_config.dst_full_sync_en,
         pass);
+    ASSERT_TRUE(pass);
 }
 
 }  // namespace unit_tests::compute::tilize
@@ -379,6 +382,31 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeA_B) {
             .num_tiles_c = 8,
             .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A_B,
             .golden_function = ::unit_tests::compute::gold_standard_tilize_w_elwadd};
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+    }
+}
+
+TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmark) {
+    vector<vector<uint32_t>> num_tiles = {{128, 1}, {64, 2}, {32, 4}, {16, 8}, {8, 16}, {4, 32}, {2, 64}, {1, 128}};
+    // vector<vector<uint32_t>> num_tiles = {{1, 12}};
+    for (auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .short_init = false,
+            .dst_full_sync_en = false,
+            .fp32_dest_acc_en = false,
+
+            .input_single_tile_size = 16 * 16 * 4 * 2,
+            .output_single_tile_size = 16 * 16 * 4 * 2,
+
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .num_faces_per_tile = 4,
+            .face_r_dim = 16,
+
+            .untilize_type = std::nullopt,
+            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+
+            .golden_function = ::unit_tests::compute::gold_standard_tilize};
         unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
     }
 }

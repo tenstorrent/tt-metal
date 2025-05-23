@@ -53,3 +53,21 @@ inline void llk_math_eltwise_unary_datacopy_init(
     _llk_math_eltwise_unary_datacopy_init_<type, src_b_bcast_type, is_fp32_dest_acc_en, is_int_fpu_en>(
         transpose_of_faces, within_face_16x16_transpose, num_faces, dst_format);
 }
+
+/*************************************************************************
+ * LLK FAST ELTWISE UNARY DATACOPY
+ *************************************************************************/
+
+inline void llk_math_fast_eltwise_unary_datacopy_hw_configure_disaggregated(
+    const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
+    const std::uint32_t srca_operand_id = get_operand_id(srca_operand);
+    const std::uint32_t srcb_operand_id = get_operand_id(srcb_operand);
+
+    _llk_math_hw_configure_(unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
+}
+
+inline void llk_math_fast_eltwise_unary_datacopy_init() { _llk_math_fast_eltwise_unary_datacopy_init_(); }
+
+inline void llk_math_fast_eltwise_unary_datacopy_block(const std::uint32_t dst_index, const std::uint32_t block_dim) {
+    _llk_math_fast_eltwise_unary_datacopy_block_(dst_index, block_dim);
+}

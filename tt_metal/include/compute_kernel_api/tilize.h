@@ -137,8 +137,9 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
 /**
  * Perform tilize operation on a block. This simply loops over the provided blocks.
  */
-ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb) {
-    UNPACK((llk_unpack_tilize_block(icb, block)));
+ALWI void tilize_block(
+    uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
+    UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
         // Acquire dst
@@ -148,7 +149,7 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb) {
         // Datacopy
         MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(
             0 /*dst index*/)));
-        PACK((llk_pack<false, false>(0 /*tile index*/, ocb)));
+        PACK((llk_pack<true, false>(0 /*tile index*/, ocb, t + output_tile_index)));
 
         // Release dest
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
@@ -217,6 +218,75 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init(ocb)));
 #endif
+}
+
+ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+    UNPACK((llk_unpack_fast_tilize_hw_configure_disaggregated<DST_ACCUM_MODE>(icb)));
+    UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
+
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_fast_eltwise_unary_datacopy_hw_configure_disaggregated(icb, icb)));
+    MATH((llk_math_fast_eltwise_unary_datacopy_init()));
+
+    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_fast_tilize_hw_configure_disaggregated<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_fast_tilize_init()));
+}
+
+ALWI void fast_tilize_uninit() {
+    UNPACK((llk_unpack_fast_tilize_uninit()));
+    PACK((llk_pack_fast_tilize_uninit()));
+}
+
+ALWI void fast_tilize_init_short(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+    UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
+    MATH((llk_math_fast_eltwise_unary_datacopy_init()));
+    PACK((llk_pack_fast_tilize_init()));
+}
+
+ALWI void fast_tilize_init_short_with_dt(
+    uint32_t old_icb, uint32_t new_icb, uint32_t block_dim, uint32_t full_dim, uint32_t ocb) {
+    UNPACK((llk_unpack_reconfig_data_format_srca(old_icb, new_icb)));
+    MATH((llk_math_reconfig_data_format_srca(old_icb, new_icb)));
+
+    fast_tilize_init_short(new_icb, full_dim, ocb);
+}
+
+ALWI void fast_tilize_block(
+    uint32_t icb,
+    uint32_t block_dim,
+    uint32_t full_dim,
+    uint32_t ocb,
+    uint32_t input_tile_index = 0,
+    uint32_t output_tile_index = 0) {
+    // Not sure if input_tile_index can be arbitrary but it works for moving across rows of files,
+    // i.e. input_tile_index % full_dim == 0
+    input_tile_index = input_tile_index % full_dim + (input_tile_index / full_dim) * full_dim * TILE_R_DIM;
+    uint32_t full_dim_divisible = (full_dim / block_dim) * block_dim;
+    uint32_t last_block = full_dim % block_dim;
+
+    for (uint32_t t = 0; t < full_dim_divisible; t += block_dim) {
+        MATH((llk_math_wait_for_dest_available()));
+        PACK((llk_packer_wait_for_math_done()));
+
+        UNPACK((llk_unpack_fast_tilize_block(icb, t + input_tile_index, block_dim)));
+        MATH((llk_math_fast_eltwise_unary_datacopy_block(0, block_dim)));
+        PACK((llk_pack_fast_tilize_block(0, ocb, t + output_tile_index, block_dim)));
+
+        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+    }
+    if (last_block > 0) {
+        MATH((llk_math_wait_for_dest_available()));
+        PACK((llk_packer_wait_for_math_done()));
+
+        UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index + full_dim_divisible, last_block)));
+        MATH((llk_math_fast_eltwise_unary_datacopy_block(0, last_block)));
+        PACK((llk_pack_fast_tilize_block(0, ocb, output_tile_index + full_dim_divisible, last_block)));
+
+        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+    }
 }
 
 }  // namespace ckernel
