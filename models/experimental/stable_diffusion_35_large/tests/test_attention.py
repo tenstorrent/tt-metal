@@ -23,7 +23,7 @@ TILE_SIZE = 32
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -63,7 +63,7 @@ def test_attention(
     num_devices = mesh_device.get_num_devices()
     ## heads padding for T3K TP
     pad_embedding_dim = False
-    if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
+    if os.environ["MESH_DEVICE"] == "T3K" and embedding_dim == 2432:
         pad_embedding_dim = True
         hidden_dim_padding = (
             ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE
