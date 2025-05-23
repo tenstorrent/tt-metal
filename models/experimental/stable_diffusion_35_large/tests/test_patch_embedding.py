@@ -88,13 +88,10 @@ def test_patch_embedding(
         layout=ttnn.TILE_LAYOUT,
         dtype=dtype,
     )
-    
 
     tt_output = tt_model(tt_input_tensor)
 
-    tt_output = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
-    )
+    tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
     tt_output = tt_output[:, :, :embedding_dim]
 
     assert_quality(torch_output, tt_output, pcc=0.999_990, shard_dim=-1)
