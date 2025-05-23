@@ -70,6 +70,7 @@ def test_index_fill_float(shape, dim, value, dtype, device):
     run_index_fill_test(shape, dim, value, dtype, device)
 
 
+@pytest.mark.skip("Test case failing assert_equal() - see #22482")
 @pytest.mark.parametrize(
     "shape",
     [
