@@ -66,6 +66,7 @@ foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
     set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
     set(HW_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/runtime/hw/toolchain/${ARCH}")
+    string(TOUPPER ${ARCH} ARCH_DEFINE)
 
     if("${ARCH}" STREQUAL "wormhole")
         foreach(SCRIPT_TYPE IN LISTS WH_LD_SCRIPTS)
@@ -112,8 +113,8 @@ foreach(ARCH IN LISTS ARCHS)
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
                 COMMAND
-                    ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -I${HW_INCLUDES} -E -P -x c
-                    -o ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
+                    ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -DARCH_${ARCH_DEFINE}
+                    -I${HW_INCLUDES} -E -P -x c -o ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                 DEPENDS
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                     ${DEV_MEM_MAP}
