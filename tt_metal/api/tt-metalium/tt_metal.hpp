@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -122,6 +122,8 @@ void ReadFromBufferUsingDMA(Buffer& buffer, uint8_t* host_buffer, bool shard_ord
 
 template <typename DType>
 void ReadFromBufferUsingDMA(Buffer& buffer, std::vector<DType>& host_buffer, bool shard_order = false) {
+    TT_FATAL(buffer.size() % sizeof(DType) == 0, "Buffer size is not divisible by dtype size");
+    host_buffer.resize(buffer.size() / sizeof(DType));
     ReadFromBufferUsingDMA(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), shard_order);
 }
 
