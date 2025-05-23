@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -102,14 +102,6 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
             index_dtype == DataType::UINT32,
         "index_dtype is not integer, it is {}.",
         magic_enum::enum_name(index_dtype));
-
-    TT_FATAL(
-        index_shape[dim] <= input_shape[dim],
-        "Index tensor's scatter axis (dimension no {}) bigger than input tensor's (input_shape[scatter_axis]: {}, "
-        "index_shape[scatter_axis]: {})",
-        static_cast<int32_t>(args.dim),
-        input_shape[dim],
-        index_shape[dim]);
 
     for (uint32_t probe_dim = 0; probe_dim < input_shape.rank(); ++probe_dim) {
         if (probe_dim != dim) {

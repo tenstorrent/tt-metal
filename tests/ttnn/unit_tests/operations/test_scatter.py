@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -52,21 +52,21 @@ def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, d
     assert torch_result_from_ttnn.dtype == torch_result.dtype
     torch.testing.assert_close(torch_result_from_ttnn, torch_result)
 
-    # torch_output_preallocated = torch.zeros(torch_input.shape)
-    # ttnn_output_preallocated = ttnn.zeros(
-    #     ttnn_input.shape, dtype=ttnn_input.dtype, device=device, layout=ttnn.Layout.TILE
-    # )
+    torch_output_preallocated = torch.zeros(torch_input.shape, dtype=torch_input.dtype)
+    ttnn_output_preallocated = ttnn.zeros(
+        ttnn_input.shape, dtype=ttnn_input.dtype, device=device, layout=ttnn.Layout.TILE
+    )
 
-    # torch_preallocated_result = torch.scatter(
-    #     torch_input, dim, index=torch_index, src=torch_src, out=torch_output_preallocated
-    # )
-    # ttnn_preallocated_result = ttnn.experimental.scatter_(
-    #     ttnn_input, dim, index=ttnn_index, src=ttnn_src, out=ttnn_output_preallocated
-    # )
+    torch_preallocated_result = torch.scatter(
+        torch_input, dim, index=torch_index, src=torch_src, out=torch_output_preallocated
+    )
+    ttnn_preallocated_result = ttnn.experimental.scatter_(
+        ttnn_input, dim, index=ttnn_index, src=ttnn_src, out=ttnn_output_preallocated
+    )
 
-    # torch_result_from_preallocated_ttnn = ttnn.to_torch(ttnn_preallocated_result)
-    # assert torch_result_from_preallocated_ttnn.shape == torch_preallocated_result.shape
-    # assert torch_result_from_preallocated_ttnn.dtype == torch_preallocated_result.dtype
+    torch_result_from_preallocated_ttnn = ttnn.to_torch(ttnn_preallocated_result)
+    assert torch_result_from_preallocated_ttnn.shape == torch_preallocated_result.shape
+    assert torch_result_from_preallocated_ttnn.dtype == torch_preallocated_result.dtype
     # # assert_with_pcc(torch_preallocated_result, torch_result_from_preallocated_ttnn)
 
 

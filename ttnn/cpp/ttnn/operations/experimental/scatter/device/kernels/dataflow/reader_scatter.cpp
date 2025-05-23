@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -102,7 +102,7 @@ FORCE_INLINE void scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push
     cb_pop_front(source_cb, Wt_index);
 }
 
-// TODO(jbbieniekTT): stream-scatter after sorting
+// TODO(jbbieniekTT): stream-scatter after sorting (pt. 2 of the whole implementation) (issue no #)
 template <typename unsigned_type, typename number_type>
 FORCE_INLINE void scatter_along_whole_axis(
     const uint32_t& Ht,
@@ -118,7 +118,6 @@ FORCE_INLINE void scatter_along_whole_axis(
 void kernel_main() {
     constexpr auto ctas{get_ctas()};
 
-    // TODO(jbbieniekTT): choose type in compile-time, if possible, to be used in all datum-related utility functions.
     const DataFormat input_data_format{get_dataformat(ctas.input_tensor_cb)};
 
     const auto input_addr_gtor{make_addr_gtor<ctas.input_tensor_is_dram>(ctas.input_tensor_cb, ctas.input_tensor_addr)};
@@ -126,24 +125,16 @@ void kernel_main() {
     const auto source_addr_gtor{
         make_addr_gtor<ctas.source_tensor_is_dram>(ctas.source_tensor_cb, ctas.source_tensor_addr)};
 
-    // TODO(jbbieniekTT): multi-core
-    // for (uint32_t core_loop = 0; core_loop < ctas.core_loop_count; core_loop++) {
-    // const uint32_t h = core_loop * total_number_of_cores +
-    //                    get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+    const uint32_t tile_offset = get_arg_val<uint32_t>(0);
+    const uint32_t start_ht_id = get_arg_val<uint32_t>(1);
 
-    // TODO(jbbieniekTT): multi-core
-    // const uint32_t ht_offset = calculate_ht_offset_for_core(core_loop, ctas.total_number_of_cores,
-    // ctas.compute_with_storage_grid_size_x);
-    // const uint32_t ht_offset = 0;
-
-    for (uint32_t h = 0; h < ctas.Ht; ++h) {
+    for (uint32_t h = start_ht_id; h < start_ht_id + tile_offset; ++h) {
         // first phase: read input/index/src
         read_wt_tiles<ctas.input_tensor_is_dram>(input_addr_gtor, ctas.input_tensor_cb, ctas.Wt_input, h);
         read_wt_tiles<ctas.index_tensor_is_dram>(index_addr_gtor, ctas.index_tensor_cb, ctas.Wt_index, h);
         read_wt_tiles<ctas.source_tensor_is_dram>(source_addr_gtor, ctas.source_tensor_cb, ctas.Wt_index, h);
 
         // second phase: copy input to output + scatter src onto output + push output
-        // TODO(jbbieniekTT): infer proper data types
         scatter_Wt_src_tiles_from_src_as_per_index_onto_input_and_push_to_output<uint32_t, float>(
             h,
             ctas.Wt_input,
