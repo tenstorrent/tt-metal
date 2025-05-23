@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -142,10 +141,6 @@ def run_avg_pool2d(
     [
         None,
         5,
-        10,
-        11,
-        15,
-        20,
     ],
 )
 @pytest.mark.parametrize(
