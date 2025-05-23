@@ -852,7 +852,7 @@ int main(int argc, char **argv) {
             trace::end_trace_capture(device, *trace_id, ttnn::DefaultQueueId);
             fmt::println("done tracing");
         }
-        trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/true);
+        trace::execute_trace(device, *trace_id, ttnn::DefaultQueueId, /*blocking=*/false);
     };
 
     // precompile the model and allocate output
@@ -863,28 +863,13 @@ int main(int argc, char **argv) {
         break;
     }
 
-    std::unordered_set<uint32_t> observed_output_addrs{};
-
-    auto get_all_named_param_addrs = [&]() {
-        std::unordered_set<void *> addrs{};
-        for (const auto &[name, param] : model->parameters()) {
-            addrs.insert((void *)param.get());
-        }
-        return addrs;
-    };
-    std::unordered_set<void *> all_named_param_addrs = get_all_named_param_addrs();
-
     const uint32_t num_epochs = config.num_epochs;
     auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
     int steps = 0;
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
             auto start_timer = std::chrono::high_resolution_clock::now();
-            fmt::println("beginning step {}", ++steps);
             full_step(features, masks, target);
-
-            auto output_value = output->get_value();
-            fmt::println("output mean value {}", ttml::core::to_xtensor(ttnn::mean(output_value).cpu())[0]);
 
             float loss_float = get_loss_value(loss);
             scheduler->step();
