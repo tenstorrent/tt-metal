@@ -106,7 +106,10 @@ jobs:
           model_name="${{ matrix.test-group.name }}"  # Set the model name as a variable in Bash
           if [ ! -d "/mnt/MLPerf/tt-dnn_models/hf_cache/$model_name" ]; then
             echo "Model is not in cache, downloading now to save it in cache..."
-            conda install -c huggingface transformers
+            git clone https://github.com/huggingface/transformers.git
+            cd transformers
+            python3 setup.py install
+            cd ..
             python3 .github/scripts/download_model.py
           else
             echo "Model found in cache"
