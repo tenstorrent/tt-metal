@@ -17,7 +17,7 @@ class ParallelConfig(NamedTuple):
 class DiTParallelConfig(NamedTuple):
     cfg_parallel: ParallelConfig
     tensor_parallel: ParallelConfig
-    # sequence_parallel: ParallelConfig
+    sequence_parallel: ParallelConfig
     # ring_parallel: ParallelConfig
     # ulysses_parallel: ParallelConfig
     topology: ttnn.Topology
@@ -28,7 +28,7 @@ def create_dit_parallel_config(
     cfg_parallel: ParallelConfig,
     tensor_parallel: ParallelConfig,
     topology: ttnn.Topology,
-    # sequence_parallel: ParallelConfig,
+    sequence_parallel: ParallelConfig,
     # ring_parallel: ParallelConfig,
     # ulysses_parallel: ParallelConfig
 ) -> DiTParallelConfig:
@@ -38,6 +38,20 @@ def create_dit_parallel_config(
     assert cfg_parallel.mesh_shape[cfg_parallel.mesh_axis] == mesh_shape[cfg_parallel.mesh_axis] // cfg_parallel.factor
     assert cfg_parallel.mesh_shape[1 - cfg_parallel.mesh_axis] == mesh_shape[1 - cfg_parallel.mesh_axis]
 
+    # validate sequence and tensor config
+    assert tensor_parallel.mesh_axis == 1 - sequence_parallel.mesh_axis
+
+    # validate sequence config
+    assert sequence_parallel.mesh_axis in [0, 1]
+    assert (
+        sequence_parallel.mesh_shape[sequence_parallel.mesh_axis]
+        == cfg_parallel.mesh_shape[sequence_parallel.mesh_axis] // sequence_parallel.factor
+    )
+    assert (
+        sequence_parallel.mesh_shape[1 - sequence_parallel.mesh_axis]
+        == cfg_parallel.mesh_shape[1 - sequence_parallel.mesh_axis] // tensor_parallel.factor
+    )
+
     # validate tensor config
     assert tensor_parallel.mesh_axis in [0, 1]
     assert (
@@ -46,7 +60,7 @@ def create_dit_parallel_config(
     )
     assert (
         tensor_parallel.mesh_shape[1 - tensor_parallel.mesh_axis]
-        == cfg_parallel.mesh_shape[1 - tensor_parallel.mesh_axis]
+        == cfg_parallel.mesh_shape[1 - tensor_parallel.mesh_axis] // sequence_parallel.factor
     )
 
     # TODO: Be very careful with validation here.
@@ -54,7 +68,7 @@ def create_dit_parallel_config(
     return DiTParallelConfig(
         cfg_parallel=cfg_parallel,
         tensor_parallel=tensor_parallel,
-        # sequence_parallel=sequence_parallel,
+        sequence_parallel=sequence_parallel,
         # ring_parallel=ring_parallel,
         # ulysses_parallel=ulysses_parallel,
         topology=topology,

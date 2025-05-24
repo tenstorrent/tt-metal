@@ -12,7 +12,6 @@ import ttnn
 from .fun_linear import sd_linear, TtLinearParameters
 from .fun_normalization import sd_rms_norm, TtRmsNormParameters
 from .substate import has_substate, substate
-from .utils import all_gather
 from .parallel_config import DiTParallelConfig
 
 
@@ -22,6 +21,7 @@ class TtAttentionPartParameters:
     norm_q: TtRmsNormParameters
     norm_k: TtRmsNormParameters
     out_proj: TtLinearParameters | None
+    sharding_proj: TTLinearParameters
 
 
 @dataclass
@@ -42,12 +42,11 @@ class TtAttentionParameters:
         device: ttnn.Device,
         parallel_config: DiTParallelConfig,
     ) -> TtAttentionParameters:
-        # TODO: Use parallel_config
         spatial_qkv_proj = _merge_qkv_proj(substate(state, "to_q"), substate(state, "to_k"), substate(state, "to_v"))
         prompt_qkv_proj = _merge_qkv_proj(
             substate(state, "add_q_proj"), substate(state, "add_k_proj"), substate(state, "add_v_proj")
         )
-        n_local_heads = num_heads // device.get_num_devices()
+        n_local_heads = num_heads // parallel_config.tensor_parallel.factor
         return cls(
             spatial=TtAttentionPartParameters(
                 qkv_proj=TtLinearParameters.from_torch_col_parallel(
@@ -57,6 +56,7 @@ class TtAttentionParameters:
                     hidden_dim_padding=hidden_dim_padding,
                     dtype=dtype,
                     device=device,
+                    parallel_config=parallel_config,
                 ),
                 norm_q=TtRmsNormParameters.from_torch(
                     substate(state, "norm_q"), dtype=dtype, device=device, eps=cls.eps
@@ -65,7 +65,15 @@ class TtAttentionParameters:
                     substate(state, "norm_k"), dtype=dtype, device=device, eps=cls.eps
                 ),
                 out_proj=TtLinearParameters.from_torch(
-                    substate(state, "to_out.0"), dtype=dtype, device=device, shard_dim=-1
+                    substate(state, "to_out.0"),
+                    dtype=dtype,
+                    device=device,
+                    shard_dim=-1,
+                    hidden_dim_padding=hidden_dim_padding,
+                    parallel_config=parallel_config,
+                ),
+                sharding_proj=TtLinearParameters.from_torch_sharding_projection(
+                    dict(weight=torch.eye(4096)), dtype=ttnn.bfloat8_b, device=device, shard_dim=-1
                 ),
             ),
             prompt=TtAttentionPartParameters(
@@ -76,6 +84,7 @@ class TtAttentionParameters:
                     hidden_dim_padding=hidden_dim_padding,
                     dtype=dtype,
                     device=device,
+                    parallel_config=parallel_config,
                 ),
                 norm_q=TtRmsNormParameters.from_torch(
                     substate(state, "norm_added_q"), dtype=dtype, device=device, eps=cls.eps
@@ -84,10 +93,16 @@ class TtAttentionParameters:
                     substate(state, "norm_added_k"), dtype=dtype, device=device, eps=cls.eps
                 ),
                 out_proj=TtLinearParameters.from_torch(
-                    substate(state, "to_add_out"), dtype=dtype, device=device, shard_dim=-1
+                    substate(state, "to_add_out"),
+                    dtype=dtype,
+                    device=device,
+                    shard_dim=-1,
+                    hidden_dim_padding=hidden_dim_padding,
+                    parallel_config=parallel_config,
                 )
                 if has_substate(state, "to_add_out")
                 else None,
+                sharding_proj=None,
             )
             if has_substate(state, "add_q_proj")
             else None,
@@ -174,6 +189,7 @@ def sd_joint_attention(
     num_heads: int,  # TODO: should be a model parameter
     N: int,
     L: int,
+    ag_global_semaphore,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
     """
     spatial: N ⊗ S1 ⊗ (H * E1)
@@ -207,6 +223,7 @@ def sd_joint_attention(
     )
 
     if prompt is None:
+        assert True, "This has not been updated for SP + TP changes"
         # operands must be in DRAM
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
@@ -240,6 +257,32 @@ def sd_joint_attention(
         deallocate=deallocate,
     )
 
+    if parallel_config.sequence_parallel.factor > 1:
+        q = ttnn.experimental.all_gather_async(
+            q,
+            dim=2,
+            cluster_axis=parallel_config.sequence_parallel.mesh_axis,
+            mesh_device=device,
+            topology=parallel_config.topology,
+            multi_device_global_semaphore=ag_global_semaphore,
+        )
+        k = ttnn.experimental.all_gather_async(
+            k,
+            dim=2,
+            cluster_axis=parallel_config.sequence_parallel.mesh_axis,
+            mesh_device=device,
+            topology=parallel_config.topology,
+            multi_device_global_semaphore=ag_global_semaphore,
+        )
+        v = ttnn.experimental.all_gather_async(
+            v,
+            dim=2,
+            cluster_axis=parallel_config.sequence_parallel.mesh_axis,
+            mesh_device=device,
+            topology=parallel_config.topology,
+            multi_device_global_semaphore=ag_global_semaphore,
+        )
+
     # TODO: Check that unpadded text seqlen is logical shape of joint tensors.
     spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
         q,
@@ -260,12 +303,31 @@ def sd_joint_attention(
         prompt,
     )
 
+    if parallel_config.sequence_parallel.factor > 1:
+        # Slice out the sequence parallel piece that is actually ours
+        spatial = sd_linear(spatial, parameters.spatial.sharding_proj, transpose_a=True)
+        spatial = ttnn.transpose(spatial, dim1=-2, dim2=-1)
+
     spatial = ttnn.unsqueeze(spatial, 1)
     prompt = ttnn.unsqueeze(prompt, 1)
 
     if parallel_config.tensor_parallel.factor > 1:
-        spatial = all_gather(spatial, dim=-1, topology=parallel_config.topology)
-        prompt = all_gather(prompt, dim=-1, topology=parallel_config.topology)
+        spatial = ttnn.experimental.all_gather_async(
+            spatial,
+            dim=3,
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=device,
+            topology=parallel_config.topology,
+            multi_device_global_semaphore=ag_global_semaphore,
+        )
+        prompt = ttnn.experimental.all_gather_async(
+            prompt,
+            dim=3,
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=device,
+            topology=parallel_config.topology,
+            multi_device_global_semaphore=ag_global_semaphore,
+        )
 
     spatial = sd_attention_out_proj(spatial, parameters.spatial)
     prompt = sd_attention_out_proj(prompt, parameters.prompt)

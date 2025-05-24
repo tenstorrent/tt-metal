@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import torch
 import ttnn
 
-from .utils import from_torch_fast
+from .utils import from_torch_fast, from_torch_fast_2d
 
 
 @dataclass
@@ -28,33 +28,38 @@ class TtLinearParameters:
         device: ttnn.Device,
         shard_dim: int = None,
         unsqueeze_bias: bool = False,
+        hidden_dim_padding: int,
+        parallel_config: DiTParallelConfig,
     ) -> TtLinearParameters:
         if "bias" in state:
             bias = state["bias"].unsqueeze(0)
         else:
             bias = None
         weight = state["weight"]
-        if os.environ["MESH_DEVICE"] == "T3K":
+        if hidden_dim_padding > 0:
             hidden_dim = 2432
-            hidden_dim_pad = 128
-            hidden_dim_new = 2560
+            hidden_dim_new = hidden_dim + hidden_dim_padding
             weight_h, weight_w = weight.shape
             weight_h_mult = weight_h // hidden_dim
             weight_w_mult = weight_w // hidden_dim
             if weight_h % hidden_dim == 0:
                 if weight_h_mult == 1:
-                    weight = torch.nn.functional.pad(weight, pad=(0, 0, 0, hidden_dim_pad), mode="constant", value=0)
+                    weight = torch.nn.functional.pad(
+                        weight, pad=(0, 0, 0, hidden_dim_padding), mode="constant", value=0
+                    )
                 elif weight_h_mult > 1:
                     weight = weight.reshape(weight_h_mult, hidden_dim, weight_w)
-                    weight = torch.nn.functional.pad(weight, pad=(0, 0, 0, hidden_dim_pad), mode="constant", value=0)
+                    weight = torch.nn.functional.pad(
+                        weight, pad=(0, 0, 0, hidden_dim_padding), mode="constant", value=0
+                    )
                     weight = weight.reshape(weight_h_mult * hidden_dim_new, weight_w)
             weight_h, weight_w = weight.shape
             if weight_w % hidden_dim == 0:
                 if weight_w_mult == 1:
-                    weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
+                    weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_padding), mode="constant", value=0)
                 elif weight_w_mult > 1:
                     weight = weight.reshape(weight_h, weight_w_mult, hidden_dim)
-                    weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
+                    weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_padding), mode="constant", value=0)
                     weight = weight.reshape(weight_h, weight_w_mult * hidden_dim_new)
 
             if not bias == None:
@@ -62,10 +67,10 @@ class TtLinearParameters:
                 bias_w_mult = bias_w // hidden_dim
                 if bias_w % hidden_dim == 0:
                     if bias_w_mult == 1:
-                        bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_pad), mode="constant", value=0)
+                        bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_padding), mode="constant", value=0)
                     elif bias_w_mult > 1:
                         bias = bias.reshape(bias_h, bias_w_mult, hidden_dim)
-                        bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_pad), mode="constant", value=0)
+                        bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_padding), mode="constant", value=0)
                         bias = bias.reshape(bias_h, bias_w_mult * hidden_dim_new)
 
         if unsqueeze_bias:
@@ -81,24 +86,27 @@ class TtLinearParameters:
             bias = torch.cat([bias] + [zeros] * (mesh_width - 1), dim=0)
             bias_mm = ttnn.ShardTensor2dMesh(device, mesh_shape=(mesh_height, mesh_width), dims=(None, 0))
         elif shard_dim in [1, -1]:
-            bias_mm = ttnn.ShardTensorToMesh(device, 1)
+            bias_mm = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, 1])
         else:
-            bias_mm = ttnn.ReplicateTensorToMesh(device)
+            bias_mm = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, None])
 
         return cls(
-            weight=from_torch_fast(
+            weight=from_torch_fast_2d(
                 weight.transpose(0, 1),
-                dtype=dtype,
-                device=device,
-                shard_dim=shard_dim,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[None, shard_dim],
                 layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
             ),
-            bias=from_torch_fast(
+            bias=from_torch_fast_2d(
                 bias,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[None, shard_dim],
                 dtype=dtype,
-                device=device,
-                mesh_mapper=bias_mm,
                 layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=bias_mm,
             )
             if bias is not None
             else None,
@@ -114,6 +122,7 @@ class TtLinearParameters:
         hidden_dim_padding: int,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_config: DiTParallelConfig,
     ) -> TtLinearParameters:
         if "bias" in state:
             torch_bias = state["bias"].unsqueeze(0)
@@ -122,10 +131,11 @@ class TtLinearParameters:
 
         weight = state["weight"]
         torch_weight = weight.transpose(0, 1)
-
-        if os.environ["MESH_DEVICE"] == "T3K":
+        if unpadded_num_heads < (n_local_heads * parallel_config.tensor_parallel.factor):
             head_size = torch_weight.shape[1] // 3 // unpadded_num_heads
-            head_padding = device.get_num_devices() - (unpadded_num_heads % device.get_num_devices())
+            head_padding = parallel_config.tensor_parallel.factor - (
+                unpadded_num_heads % parallel_config.tensor_parallel.factor
+            )
             weight_h, weight_w = torch_weight.shape
 
             torch_weight = torch_weight.reshape(weight_h, 3, unpadded_num_heads, head_size)
@@ -143,25 +153,29 @@ class TtLinearParameters:
             # Given torch tensor with output features in the last dimension,
             # shuffle heads to allow for column parallel computation
             in_dim = tensor.shape[0]
-            tensor = tensor.reshape(in_dim, 3, device.get_num_devices(), n_local_heads, -1)  # [ID, 3, ND, NLH, DH]
+            tensor = tensor.reshape(
+                in_dim, 3, parallel_config.tensor_parallel.factor, n_local_heads, -1
+            )  # [ID, 3, ND, NLH, DH]
             tensor = tensor.permute(0, 2, 1, 3, 4)  # [ID, ND, 3, NLH, DH]
             tensor = tensor.reshape(in_dim, -1)  # [ID, ND*3*NLH*DH]
             return tensor
 
         return cls(
-            weight=from_torch_fast(
+            weight=from_torch_fast_2d(
                 shuffle_heads(torch_weight),
-                dtype=dtype,
-                device=device,
-                shard_dim=-1,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[None, -1],
                 layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
             ),
-            bias=from_torch_fast(
+            bias=from_torch_fast_2d(
                 shuffle_heads(torch_bias),
-                dtype=dtype,
-                device=device,
-                shard_dim=-1,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[None, -1],
                 layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
             )
             if torch_bias is not None
             else None,
@@ -242,6 +256,29 @@ class TtLinearParameters:
     def out_channels(self) -> int:
         return self.weight.shape[1]
 
+    @classmethod
+    def from_torch_sharding_projection(
+        cls,
+        state: dict[str, torch.Tensor],
+        *,
+        dtype: ttnn.DataType | None = None,
+        device: ttnn.Device,
+        shard_dim: int,
+    ) -> TtLinearParameters:
+        weight = state["weight"]
+
+        return cls(
+            weight=from_torch_fast_2d(
+                weight,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[shard_dim, None]
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+            ),
+            bias=None,
+        )
+
 
 def sd_linear(
     x: ttnn.Tensor,
@@ -256,9 +293,13 @@ def sd_linear(
     activation: str | None = None,
     deallocate: bool = False,
     prob: bool = False,
+    transpose_a: bool = False,
 ) -> ttnn.Tensor:
     msg = f"last value in input shape {list(x.shape)} should be equal to {parameters.in_channels}"
-    assert x.shape[-1] == parameters.in_channels, msg
+    if not transpose_a:
+        assert x.shape[-1] == parameters.in_channels, msg
+    else:
+        assert x.shape[-2] == parameters.in_channels, msg
 
     weight = parameters.weight
     bias = parameters.bias
@@ -283,6 +324,7 @@ def sd_linear(
         output_tile=output_tile,
         dtype=dtype,
         activation=activation,
+        transpose_a=transpose_a,
     )
 
     if deallocate:
@@ -292,3 +334,31 @@ def sd_linear(
         output = output.reshape([output.shape[0], 1, 1, output.shape[-1]])
 
     return output
+
+
+class _ShardBias(ttnn.TensorToMesh):
+    """A mesh mapper for sharding the bias of a linear operation.
+
+    This mesh mapper is intended for sharding the bias of a linear operation on the first dimension.
+    A single device receive the bias as is, while the other ones receive zero tensors of the same
+    shape so that the bias is not added multiple times after gathering.
+    """
+
+    def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
+        assert True, "MAKE _ShardBias work for 2D mesh"
+        super().__init__(mesh_device)
+
+    def map(self, tensor: torch.Tensor) -> dict[int, ttnn.Tensor]:
+        mesh_height, mesh_width = self.mesh_device.shape
+
+        zeros = torch.zeros_like(tensor)
+        return ([tensor] + [zeros] * (mesh_width - 1)) * mesh_height
+
+    def config(self) -> dict[str, str]:
+        mesh_height, mesh_width = self.mesh_device.shape
+
+        return {
+            "strategy": "shard_2d",
+            "mesh_shape_y": str(mesh_height),
+            "mesh_shape_x": str(mesh_width),
+        }

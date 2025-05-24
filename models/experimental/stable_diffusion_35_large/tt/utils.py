@@ -110,6 +110,30 @@ def from_torch_fast(
     return tensor
 
 
+def from_torch_fast_2d(
+    t: torch.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    mesh_shape: Tuple[int, int],
+    dims: Tuple[Optional[int], Optional[int]],
+    *,
+    layout: ttnn.Layout | None = None,
+    dtype: ttnn.DataType | None = None,
+    mesh_mapper: ttnn.TensorToMesh | None = None,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    if mesh_mapper is None:
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims)
+
+    return ttnn.from_torch(
+        t,
+        device=mesh_device,
+        layout=layout,
+        dtype=dtype,
+        memory_config=memory_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+
 def to_memory_config(
     t: ttnn.Tensor, memory_config: ttnn.MemoryConfig, *, dtype: ttnn.DataType | None = None, deallocate: bool = False
 ) -> ttnn.Tensor:
