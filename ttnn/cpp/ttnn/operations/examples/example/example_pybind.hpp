@@ -4,17 +4,16 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
-#include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/examples/example/example.hpp"
-#include "ttnn/types.hpp"
-
-namespace py = pybind11;
+#include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::examples {
+namespace py = pybind11;
 
+void bind_example_operation(py::module& module);
+
+}  // namespace ttnn::operations::examples
+
+/*
 void bind_example_operation(py::module& module) {
     bind_registered_operation(
         module,
@@ -45,5 +44,4 @@ void bind_example_operation(py::module& module) {
             },
             py::arg("input_tensor")});
 }
-
-}  // namespace ttnn::operations::examples
+*/

@@ -4,6 +4,9 @@
 
 #include "cpp/ttnn/operations/ccl/ccl_pybind.hpp"
 
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
 #include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"

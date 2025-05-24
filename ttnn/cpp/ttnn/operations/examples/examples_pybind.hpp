@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
+#include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace py = pybind11;
 namespace ttnn::operations::examples {
+namespace py = pybind11;
 
 void py_module(py::module& module);
 
