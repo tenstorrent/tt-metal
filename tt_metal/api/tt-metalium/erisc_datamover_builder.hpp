@@ -51,6 +51,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
     static constexpr std::size_t eth_word_l1_alignment = 16;
+    static constexpr uint32_t default_iterations_between_ctx_switch_and_teardown_checks = 32;
     static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
     static constexpr bool enable_fabric_counters = false;
     static constexpr bool enable_fabric_pkt_header_recording = false;
@@ -83,6 +84,8 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, num_sender_channels> senders_completed_packet_header_cb_address;
 
     // ----------- Sender Channels
+    std::vector<std::array<bool, num_sender_channels>> is_sender_channel_serviced;
+
     std::array<std::size_t, num_sender_channels> sender_channels_buffer_index_address;
     // Connection info layout:
     // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
@@ -100,6 +103,8 @@ struct FabricEriscDatamoverConfig {
     static_assert(sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
 
     // ----------- Receiver Channels
+    std::vector<std::array<bool, num_receiver_channels>> is_receiver_channel_serviced;
+
     std::array<std::size_t, max_downstream_edms> receiver_channels_local_buffer_index_address;
     // persistent mode field
     std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_flow_control_semaphore_address;
@@ -127,8 +132,16 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_used_sender_channels = 0;
     std::size_t num_used_receiver_channels = 0;
     std::size_t num_fwd_paths = 0;
+    std::size_t sender_txq_id;
+    std::size_t receiver_txq_id;
+    std::size_t num_riscv_cores = 0;
 
     Topology topology = Topology::Linear;
+
+    std::vector<bool> enable_handshake;
+    std::vector<bool> enable_context_switch;
+    std::vector<bool> enable_interrupts;
+    std::vector<size_t> iterations_between_ctx_switch_and_teardown_checks;
 
     // add the noc-usage and cmd_buf-usage here
     std::array<std::size_t, num_receiver_channels> receiver_channel_forwarding_noc_ids;
@@ -207,7 +220,8 @@ public:
         eth_chan_directions direction,
         bool enable_persistent_mode,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false);
+        bool dateline_connection = false,
+        size_t risc_id = 0);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -219,6 +233,7 @@ public:
         bool enable_persistent_mode,
         bool build_in_worker_connection_mode = false,
         bool dateline_connection = false,
+        size_t risc_id = 0,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
@@ -249,6 +264,7 @@ public:
     //    protected:
     friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
+    size_t risc_id = 0;
     size_t my_noc_x = 0;
     size_t my_noc_y = 0;
 
@@ -266,6 +282,13 @@ public:
     std::array<size_t, FabricEriscDatamoverConfig::num_receiver_channels> local_receiver_channels_buffer_address;
 
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> local_sender_channels_connection_info_addr;
+
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced;
+    std::array<size_t, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced;
+    bool enable_handshake = false;
+    bool enable_context_switch = false;
+    bool enable_interrupts = false;
+    size_t iterations_between_ctx_switch_and_teardown_checks;
 
     size_t termination_signal_ptr = 0;
     size_t edm_local_sync_ptr = 0;

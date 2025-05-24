@@ -271,14 +271,15 @@ FORCE_INLINE void increment_local_update_ptr_val(uint8_t stream_id, int32_t val)
         stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX, REMOTE_DEST_BUF_WORDS_FREE_INC, val);
 }
 
-template <uint32_t stream_id>
+template <uint32_t stream_id, uint32_t txq_id>
 FORCE_INLINE void remote_update_ptr_val(int32_t val) {
     constexpr uint32_t addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
-    internal_::eth_write_remote_reg_no_txq_check(DEFAULT_ETH_TXQ, addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    internal_::eth_write_remote_reg_no_txq_check(txq_id, addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
 }
+template <uint32_t txq_id>
 FORCE_INLINE void remote_update_ptr_val(uint32_t stream_id, int32_t val) {
     const uint32_t addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
-    internal_::eth_write_remote_reg_no_txq_check(DEFAULT_ETH_TXQ, addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    internal_::eth_write_remote_reg_no_txq_check(txq_id, addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
 }
 
 template <uint32_t stream_id>
@@ -380,9 +381,9 @@ FORCE_INLINE void send_next_data(
 
     auto src_addr = (uint32_t)pkt_header;
     auto dest_addr = receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index);
-    while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
+    while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
-    internal_::eth_send_packet_bytes_unsafe(DEFAULT_ETH_TXQ, src_addr, dest_addr, payload_size_bytes);
+    internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
@@ -395,9 +396,9 @@ FORCE_INLINE void send_next_data(
 
     // update the remote reg
     static constexpr uint32_t words_to_forward = 1;
-    while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
+    while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
-    remote_update_ptr_val<to_receiver_pkts_sent_id>(words_to_forward);
+    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(words_to_forward);
 }
 
 /////////////////////////////////////////////
@@ -419,16 +420,16 @@ FORCE_INLINE void receiver_send_received_ack(
     volatile tt_l1_ptr auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
         local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
     const auto src_id = pkt_header->src_ch_id;
-    while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
+    while (internal_::eth_txq_is_busy(receiver_txq_id)) {
     };
-    remote_update_ptr_val(to_sender_packets_acked_streams[src_id], 1);
+    remote_update_ptr_val<receiver_txq_id>(to_sender_packets_acked_streams[src_id], 1);
 }
 
 // MUST CHECK !is_eth_txq_busy() before calling
 FORCE_INLINE void receiver_send_completion_ack(uint8_t src_id) {
-    while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
+    while (internal_::eth_txq_is_busy(receiver_txq_id)) {
     };
-    remote_update_ptr_val(to_sender_packets_completed_streams[src_id], 1);
+    remote_update_ptr_val<receiver_txq_id>(to_sender_packets_completed_streams[src_id], 1);
 }
 
 template <uint8_t SENDER_NUM_BUFFERS>
@@ -1129,138 +1130,154 @@ void run_fabric_edm_main_loop(
             }
         }
         did_something = false;
-        for (size_t i = 0; i < DEFAULT_ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS; i++) {
+        for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
             // Capture these to see if we made progress
 
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
             // so we interoduce this to provide finer grain control over when we disable the automatic switching
-            run_sender_channel_step<
-                enable_packet_header_recording,
-                enable_fabric_counters,
-                RECEIVER_NUM_BUFFERS,
-                SENDER_NUM_BUFFERS,
-                to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                sender_ch_live_check_skip[0]>(
-                local_sender_channels[0],
-                local_sender_channel_worker_interfaces[0],
-                outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                remote_receiver_channels[VC0_RECEIVER_CHANNEL],
-                sender_channel_counters_ptrs[0],
-                sender_channel_packet_recorders[0],
-                channel_connection_established[0],
-                0);
-            if constexpr (!dateline_connection) {
-                run_receiver_channel_step<
+            if constexpr (is_sender_channel_serviced[0]) {
+                run_sender_channel_step<
                     enable_packet_header_recording,
                     enable_fabric_counters,
                     RECEIVER_NUM_BUFFERS,
                     SENDER_NUM_BUFFERS,
-                    NUM_SENDER_CHANNELS,
-                    to_receiver_packets_sent_streams[0],
-                    0>(
-                    local_receiver_channels[0],
-                    remote_sender_channels,
-                    downstream_edm_noc_interfaces,
-                    receiver_channel_counters_ptrs[0],
-                    receiver_channel_pointers[0],
-                    receiver_channel_packet_recorders[0],
-                    receiver_channel_0_trid_tracker,
-                    0,
-                    port_direction_table);
+                    to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
+                    sender_ch_live_check_skip[0]>(
+                    local_sender_channels[0],
+                    local_sender_channel_worker_interfaces[0],
+                    outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
+                    remote_receiver_channels[VC0_RECEIVER_CHANNEL],
+                    sender_channel_counters_ptrs[0],
+                    sender_channel_packet_recorders[0],
+                    channel_connection_established[0],
+                    0);
             }
-            if constexpr (enable_ring_support) {
-                run_receiver_channel_step<
-                    enable_packet_header_recording,
-                    enable_fabric_counters,
-                    RECEIVER_NUM_BUFFERS,
-                    SENDER_NUM_BUFFERS,
-                    NUM_SENDER_CHANNELS,
-                    to_receiver_packets_sent_streams[1],
-                    1>(
-                    local_receiver_channels[1],
-                    remote_sender_channels,
-                    downstream_edm_noc_interfaces,
-                    receiver_channel_counters_ptrs[1],
-                    receiver_channel_pointers[1],
-                    receiver_channel_packet_recorders[1],
-                    receiver_channel_1_trid_tracker,
-                    1,
-                    port_direction_table);
+            if constexpr (is_receiver_channel_serviced[0]) {
+                if constexpr (!dateline_connection) {
+                    run_receiver_channel_step<
+                        enable_packet_header_recording,
+                        enable_fabric_counters,
+                        RECEIVER_NUM_BUFFERS,
+                        SENDER_NUM_BUFFERS,
+                        NUM_SENDER_CHANNELS,
+                        to_receiver_packets_sent_streams[0],
+                        0>(
+                        local_receiver_channels[0],
+                        remote_sender_channels,
+                        downstream_edm_noc_interfaces,
+                        receiver_channel_counters_ptrs[0],
+                        receiver_channel_pointers[0],
+                        receiver_channel_packet_recorders[0],
+                        receiver_channel_0_trid_tracker,
+                        0,
+                        port_direction_table);
+                }
+            }
+            if constexpr (is_receiver_channel_serviced[1]) {
+                if constexpr (enable_ring_support) {
+                    run_receiver_channel_step<
+                        enable_packet_header_recording,
+                        enable_fabric_counters,
+                        RECEIVER_NUM_BUFFERS,
+                        SENDER_NUM_BUFFERS,
+                        NUM_SENDER_CHANNELS,
+                        to_receiver_packets_sent_streams[1],
+                        1>(
+                        local_receiver_channels[1],
+                        remote_sender_channels,
+                        downstream_edm_noc_interfaces,
+                        receiver_channel_counters_ptrs[1],
+                        receiver_channel_pointers[1],
+                        receiver_channel_packet_recorders[1],
+                        receiver_channel_1_trid_tracker,
+                        1,
+                        port_direction_table);
+                }
             }
 
-            run_sender_channel_step<
-                enable_packet_header_recording,
-                enable_fabric_counters,
-                RECEIVER_NUM_BUFFERS,
-                SENDER_NUM_BUFFERS,
-                to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                sender_ch_live_check_skip[1]>(
-                local_sender_channels[1],
-                local_sender_channel_worker_interfaces[1],
-                outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                remote_receiver_channels[VC0_RECEIVER_CHANNEL],
-                sender_channel_counters_ptrs[1],
-                sender_channel_packet_recorders[1],
-                channel_connection_established[1],
-                1);
+            if constexpr (is_sender_channel_serviced[1]) {
+                run_sender_channel_step<
+                    enable_packet_header_recording,
+                    enable_fabric_counters,
+                    RECEIVER_NUM_BUFFERS,
+                    SENDER_NUM_BUFFERS,
+                    to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
+                    sender_ch_live_check_skip[1]>(
+                    local_sender_channels[1],
+                    local_sender_channel_worker_interfaces[1],
+                    outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
+                    remote_receiver_channels[VC0_RECEIVER_CHANNEL],
+                    sender_channel_counters_ptrs[1],
+                    sender_channel_packet_recorders[1],
+                    channel_connection_established[1],
+                    1);
+            }
             if constexpr (is_2d_fabric) {
-                run_sender_channel_step<
-                    enable_packet_header_recording,
-                    enable_fabric_counters,
-                    RECEIVER_NUM_BUFFERS,
-                    SENDER_NUM_BUFFERS,
-                    to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                    sender_ch_live_check_skip[2]>(
-                    local_sender_channels[2],
-                    local_sender_channel_worker_interfaces[2],
-                    outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                    remote_receiver_channels[VC0_RECEIVER_CHANNEL],
-                    sender_channel_counters_ptrs[2],
-                    sender_channel_packet_recorders[2],
-                    channel_connection_established[2],
-                    2);
-                run_sender_channel_step<
-                    enable_packet_header_recording,
-                    enable_fabric_counters,
-                    RECEIVER_NUM_BUFFERS,
-                    SENDER_NUM_BUFFERS,
-                    to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                    sender_ch_live_check_skip[3]>(
-                    local_sender_channels[3],
-                    local_sender_channel_worker_interfaces[3],
-                    outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                    remote_receiver_channels[VC0_RECEIVER_CHANNEL],
-                    sender_channel_counters_ptrs[3],
-                    sender_channel_packet_recorders[3],
-                    channel_connection_established[3],
-                    3);
+                if constexpr (is_sender_channel_serviced[2]) {
+                    run_sender_channel_step<
+                        enable_packet_header_recording,
+                        enable_fabric_counters,
+                        RECEIVER_NUM_BUFFERS,
+                        SENDER_NUM_BUFFERS,
+                        to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
+                        sender_ch_live_check_skip[2]>(
+                        local_sender_channels[2],
+                        local_sender_channel_worker_interfaces[2],
+                        outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
+                        remote_receiver_channels[VC0_RECEIVER_CHANNEL],
+                        sender_channel_counters_ptrs[2],
+                        sender_channel_packet_recorders[2],
+                        channel_connection_established[2],
+                        2);
+                }
+                if constexpr (is_sender_channel_serviced[3]) {
+                    run_sender_channel_step<
+                        enable_packet_header_recording,
+                        enable_fabric_counters,
+                        RECEIVER_NUM_BUFFERS,
+                        SENDER_NUM_BUFFERS,
+                        to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
+                        sender_ch_live_check_skip[3]>(
+                        local_sender_channels[3],
+                        local_sender_channel_worker_interfaces[3],
+                        outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
+                        remote_receiver_channels[VC0_RECEIVER_CHANNEL],
+                        sender_channel_counters_ptrs[3],
+                        sender_channel_packet_recorders[3],
+                        channel_connection_established[3],
+                        3);
+                }
             }
             if constexpr (enable_ring_support && !dateline_connection) {
-                run_sender_channel_step<
-                    enable_packet_header_recording,
-                    enable_fabric_counters,
-                    RECEIVER_NUM_BUFFERS,
-                    SENDER_NUM_BUFFERS,
-                    to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL],
-                    sender_ch_live_check_skip[NUM_SENDER_CHANNELS - 1]>(
-                    local_sender_channels[NUM_SENDER_CHANNELS - 1],
-                    local_sender_channel_worker_interfaces[NUM_SENDER_CHANNELS - 1],
-                    outbound_to_receiver_channel_pointers[VC1_RECEIVER_CHANNEL],
-                    remote_receiver_channels[VC1_RECEIVER_CHANNEL],
-                    sender_channel_counters_ptrs[NUM_SENDER_CHANNELS - 1],
-                    sender_channel_packet_recorders[NUM_SENDER_CHANNELS - 1],
-                    channel_connection_established[NUM_SENDER_CHANNELS - 1],
-                    NUM_SENDER_CHANNELS - 1);
+                if constexpr (is_sender_channel_serviced[NUM_SENDER_CHANNELS - 1]) {
+                    run_sender_channel_step<
+                        enable_packet_header_recording,
+                        enable_fabric_counters,
+                        RECEIVER_NUM_BUFFERS,
+                        SENDER_NUM_BUFFERS,
+                        to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL],
+                        sender_ch_live_check_skip[NUM_SENDER_CHANNELS - 1]>(
+                        local_sender_channels[NUM_SENDER_CHANNELS - 1],
+                        local_sender_channel_worker_interfaces[NUM_SENDER_CHANNELS - 1],
+                        outbound_to_receiver_channel_pointers[VC1_RECEIVER_CHANNEL],
+                        remote_receiver_channels[VC1_RECEIVER_CHANNEL],
+                        sender_channel_counters_ptrs[NUM_SENDER_CHANNELS - 1],
+                        sender_channel_packet_recorders[NUM_SENDER_CHANNELS - 1],
+                        channel_connection_established[NUM_SENDER_CHANNELS - 1],
+                        NUM_SENDER_CHANNELS - 1);
+                }
             }
         }
 
-        if (did_something) {
-            did_nothing_count = 0;
-        } else {
-            if (did_nothing_count++ > SWITCH_INTERVAL) {
+        if constexpr (enable_context_switch) {
+            if (did_something) {
                 did_nothing_count = 0;
-                // shouldn't do noc counter sync since we are not incrementing them
-                run_routing_without_noc_sync();
+            } else {
+                if (did_nothing_count++ > SWITCH_INTERVAL) {
+                    did_nothing_count = 0;
+                    // shouldn't do noc counter sync since we are not incrementing them
+                    run_routing_without_noc_sync();
+                }
             }
         }
     }
@@ -1360,7 +1377,11 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
 }
 
 void kernel_main() {
-    eth_txq_reg_write(DEFAULT_ETH_TXQ, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+    eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+    if constexpr (receiver_txq_id != sender_txq_id) {
+        eth_txq_reg_write(
+            receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+    }
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
@@ -1385,10 +1406,12 @@ void kernel_main() {
         init_ptr_val<to_sender_packets_completed_streams[4]>(0);
     }
 
-    if constexpr (is_handshake_sender) {
-        erisc::datamover::handshake::sender_side_start(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-    } else {
-        erisc::datamover::handshake::receiver_side_start(handshake_addr);
+    if constexpr (enable_ethernet_handshake) {
+        if constexpr (is_handshake_sender) {
+            erisc::datamover::handshake::sender_side_start(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+        } else {
+            erisc::datamover::handshake::receiver_side_start(handshake_addr);
+        }
     }
 
     DPRINT << "SENDER_NUM_BUFFERS: " << (uint32_t)SENDER_NUM_BUFFERS << "\n";
@@ -1701,7 +1724,7 @@ void kernel_main() {
                                                       : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
                                                             local_sem_for_teardown_from_downstream_edm[edm_index]);
                 if constexpr (is_2d_fabric) {
-                    // reset the handshake addresses to 0
+                    // reset the handshake addresses to 0 (this is for router -> router handshake for connections over noc)
                     *reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks) = 0;
                     *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
                 }
@@ -1840,34 +1863,36 @@ void kernel_main() {
         }
     }
 
-    if constexpr (is_handshake_sender) {
-        erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-    } else {
-        erisc::datamover::handshake::receiver_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-    }
-
-    *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
-
-    if constexpr (wait_for_host_signal) {
-        if constexpr (is_local_handshake_master) {
-            wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
-            notify_subordinate_routers(
-                edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
+    if constexpr (enable_ethernet_handshake) {
+        if constexpr (is_handshake_sender) {
+            erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
-            notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
-            wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
+            erisc::datamover::handshake::receiver_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }
 
-        *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
+        *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
 
-        wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+        if constexpr (wait_for_host_signal) {
+            if constexpr (is_local_handshake_master) {
+                wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
+                notify_subordinate_routers(
+                    edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
+            } else {
+                notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
+                wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
+            }
 
-        if constexpr (is_local_handshake_master) {
-            notify_subordinate_routers(
-                edm_channels_mask,
-                local_handshake_master_eth_chan,
-                (uint32_t)edm_status_ptr,
-                tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+            *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
+
+            wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+
+            if constexpr (is_local_handshake_master) {
+                notify_subordinate_routers(
+                    edm_channels_mask,
+                    local_handshake_master_eth_chan,
+                    (uint32_t)edm_status_ptr,
+                    tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+            }
         }
     }
 

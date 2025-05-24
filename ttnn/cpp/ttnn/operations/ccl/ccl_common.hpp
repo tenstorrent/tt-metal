@@ -558,6 +558,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::IDevice const* device,
     tt::tt_fabric::FabricEriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
+    tt::tt_metal::DataMovementProcessor const risc_id,
     tt::tt_metal::NOC noc_id);
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
@@ -565,6 +566,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     IDevice const* device,
     EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
+    tt::tt_metal::DataMovementProcessor const risc_id,
     tt::tt_metal:: NOC noc_id);
 
 void generate_edm_kernels_for_ring_or_linear_topology(

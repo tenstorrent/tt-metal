@@ -170,12 +170,23 @@ constexpr size_t sender_3_completed_packet_header_cb_size_headers =
 constexpr size_t sender_4_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 54);
 constexpr size_t sender_4_completed_packet_header_cb_size_headers =
     get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 55);
-constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 56);
-constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 57);
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced =
+    fill_array_with_next_n_args<bool, MAIN_CT_ARGS_START_IDX + 56, MAX_NUM_SENDER_CHANNELS>();
+constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced =
+    fill_array_with_next_n_args<bool, MAIN_CT_ARGS_START_IDX + 61, MAX_NUM_RECEIVER_CHANNELS>();
 
-constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 58);
+constexpr bool enable_ethernet_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 63) != 0;
+constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 64) != 0;
+constexpr bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 65) != 0;
+constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 66);
+constexpr size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 67);
+constexpr size_t iterations_between_ctx_switch_and_teardown_checks =
+    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 68);
+constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 69);
+constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 70);
+constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 71);
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 59;
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 72;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
@@ -261,7 +272,6 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_3_pkts_completed_id, to_sender_4_pkts_completed_id});
 
 // Miscellaneous configuration
-constexpr uint32_t DEFAULT_ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS = 32;
 constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = 0;
 
 namespace tt::tt_fabric {

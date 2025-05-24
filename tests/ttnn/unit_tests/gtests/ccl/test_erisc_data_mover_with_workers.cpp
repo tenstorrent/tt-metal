@@ -559,11 +559,21 @@ bool RunWriteBWTest(
     // Build EDMs
     ////////////////////////////////////////////////////////////////////////////
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        sender_program, sender_device, local_chip_edm_builder, eth_sender_core, tt_metal::NOC::NOC_0);
+        sender_program,
+        sender_device,
+        local_chip_edm_builder,
+        eth_sender_core,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::NOC_0);
     set_edm_runtime_args(sender_program, local_edm_kernel, local_chip_edm_builder, eth_sender_core);
 
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        receiver_program, receiver_device, remote_chip_edm_builder, eth_receiver_core, tt_metal::NOC::NOC_0);
+        receiver_program,
+        receiver_device,
+        remote_chip_edm_builder,
+        eth_receiver_core,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::NOC_0);
     set_edm_runtime_args(receiver_program, remote_edm_kernel, remote_chip_edm_builder, eth_receiver_core);
 
     ////////////////////////////////////////////////////////////////////////////
