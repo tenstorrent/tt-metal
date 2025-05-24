@@ -18,7 +18,6 @@ from .tt import TtStableDiffusion3Pipeline
 @pytest.mark.parametrize(
     "no_prompt",
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
-    indirect=True,
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -49,7 +48,7 @@ def test_sd3(
     image_h,
     guidance_scale,
     num_inference_steps,
-    no_prompt=False,
+    no_prompt,
 ) -> None:  # , prompt_sequence_length, spatial_sequence_length,) -> None:
     if guidance_scale > 1:
         guidance_cond = 2
@@ -89,7 +88,7 @@ def test_sd3(
             negative_prompt_2=[negative_prompt],
             negative_prompt_3=[negative_prompt],
             num_inference_steps=num_inference_steps,
-            seed=i,
+            seed=0,
         )
         images[0].save(f"sd35_{image_w}_{image_h}.png")
 
@@ -112,7 +111,7 @@ def test_sd3(
                 negative_prompt_2=[negative_prompt],
                 negative_prompt_3=[negative_prompt],
                 num_inference_steps=num_inference_steps,
-                seed=i,
+                seed=0,
             )
 
             images[0].save(f"sd35_{image_w}_{image_h}.png")
