@@ -29,7 +29,7 @@ from .tt import TtStableDiffusion3Pipeline
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "model_name, image_w, image_h, guidance_scale, num_inference_steps",
+    "model_version , image_w, image_h, guidance_scale, num_inference_steps",
     [
         # Commented out options, to be considered later for different variants of the model size and resolution
         #        ("medium", 512, 512, 4.5, 40, 333, 1024),
@@ -43,12 +43,13 @@ from .tt import TtStableDiffusion3Pipeline
 def test_sd3(
     *,
     mesh_device: ttnn.MeshDevice,
-    model_name,
+    model_version,
     image_w,
     image_h,
     guidance_scale,
     num_inference_steps,
     no_prompt,
+    model_location_generator,
 ) -> None:  # , prompt_sequence_length, spatial_sequence_length,) -> None:
     if guidance_scale > 1:
         guidance_cond = 2
@@ -56,11 +57,12 @@ def test_sd3(
         guidance_cond = 1
 
     pipeline = TtStableDiffusion3Pipeline(
-        checkpoint=f"stabilityai/stable-diffusion-3.5-{model_name}",
+        checkpoint_name=f"stabilityai/stable-diffusion-3.5-{model_version }",
         device=mesh_device,
         enable_t5_text_encoder=mesh_device.get_num_devices() >= 4,
         vae_cpu_fallback=True,
         guidance_cond=guidance_cond,
+        model_location_generator=model_location_generator,
     )
 
     pipeline.prepare(

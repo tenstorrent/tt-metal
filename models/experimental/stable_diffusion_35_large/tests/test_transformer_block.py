@@ -29,7 +29,7 @@ TILE_SIZE = 32
     indirect=True,
 )
 @pytest.mark.parametrize(
-    ("model_name", "block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
+    ("model_version", "block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
     [
         ("large", 0, 2, 4096, 333),
         #        ("large", 37, 2, 4096, 333),
@@ -40,7 +40,7 @@ TILE_SIZE = 32
 def test_transformer_block(
     *,
     mesh_device: ttnn.MeshDevice,
-    model_name,
+    model_version,
     block_index: int,
     batch_size: int,
     spatial_sequence_length: int,
@@ -50,7 +50,6 @@ def test_transformer_block(
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
-    model_version = model_name
     model_name = model_location_generator(
         f"stabilityai/stable-diffusion-3.5-{model_version}", model_subdir="StableDiffusion_35_Large"
     )
