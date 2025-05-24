@@ -277,8 +277,11 @@ struct debug_ring_buf_msg_t {
 };
 
 struct debug_stack_usage_t {
-    volatile uint16_t max_usage[DebugNumUniqueRiscs];
-    volatile uint16_t watcher_kernel_id[DebugNumUniqueRiscs];
+    struct usage_t {
+        // min free stack, offset by +1 (0 == unset)
+        volatile uint16_t min_free;
+        volatile uint16_t watcher_kernel_id;
+    } cpu[DebugNumUniqueRiscs];
 };
 
 enum watcher_enable_msg_t {
