@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -200,7 +200,6 @@ Tensor to_weight_tile_layout_block_sharded(
             // width padding for conv output shard padding
             weight_matrix_cols = conv_output_shard_width_padded * num_channel_shards;
         }
-
         auto weight_matrix_rows = w_shape[1] * w_shape[2] * w_shape[3];
         TT_ASSERT(w_shape[1] % num_channel_shards == 0);
         auto conv_input_shard_width = w_shape[1] / num_channel_shards;
@@ -1102,6 +1101,10 @@ ttnn::Tensor prepare_conv_weights(
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
 
+    // if folding is enabled, move the weight tensor to device DRAM, fold it and return the folded weight tensor
+    if (conv_config.enable_kernel_stride_folding) {
+        return fold_tensor(weight_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, true);
+    }
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -99,6 +99,7 @@ def run_conv(
     run_twice=False,
     fast_compare=False,
     slice_config=None,
+    enable_kernel_stride_folding=False,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -202,6 +203,7 @@ def run_conv(
         preprocess_weights_on_device=preprocess_weights_on_device,
         always_preprocess_weights=False,
         in_place=in_place,
+        enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -3548,3 +3550,46 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 
     _, pcc_message = assert_with_pcc(torch_output_tensor, ttnn_output_tensor[0], pcc=0.99)
     print(pcc_message)
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("input_channels", [3, 320])
+@pytest.mark.parametrize("output_channels", [32])
+@pytest.mark.parametrize("input_height,input_width", [(224, 224), (512, 672)])
+@pytest.mark.parametrize("kernel_height,kernel_width", [(16, 16), (32, 32)])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("has_bias", [True, False])
+def test_conv2d_with_fold(
+    device,
+    torch_tensor_map,
+    batch_size,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    kernel_height,
+    kernel_width,
+    input_layout,
+    has_bias,
+):
+    run_conv(
+        device=device,
+        torch_tensor_map=torch_tensor_map,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=kernel_height,
+        filter_width=kernel_width,
+        stride_h=kernel_height,
+        stride_w=kernel_width,
+        padding=(0, 0),
+        config_override=None,
+        input_layout=input_layout,
+        has_bias=has_bias,
+        enable_kernel_stride_folding=True,
+    )

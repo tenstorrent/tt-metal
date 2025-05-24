@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -30,6 +30,7 @@ def prepare_conv_weights_func(
     slice_config=None,
     weights_dtype=None,
     torch_weights_dtype=None,
+    enable_kernel_stride_folding=False,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
@@ -76,6 +77,7 @@ def prepare_conv_weights_func(
         enable_split_reader=False,
         enable_subblock_padding=False,
         preprocess_weights_on_device=on_device,
+        enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
     if config_override and "act_block_h" in config_override:
@@ -476,4 +478,53 @@ def test_conv_dram(
             slice_type=slice_type,
             num_slices=num_slices,
         ),
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, on_device, is_owned",
+    (
+        (1, 1024, 3, 224, 224, 16, 16, 16, 16, True, True),
+        (1, 1024, 3, 224, 224, 32, 32, 32, 32, True, False),
+        (1, 192, 3, 512, 672, 16, 16, 16, 16, False, True),
+        (1, 192, 3, 512, 672, 32, 32, 32, 32, False, False),
+    ),
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
+def test_prepare_conv_weights_with_fold(
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    on_device,
+    is_owned,
+    device,
+):
+    pad_h = 0
+    pad_w = 0
+    groups = 1
+
+    prepare_conv_weights_func(
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        None,
+        on_device,
+        device,
+        groups,
+        is_owned,
+        enable_kernel_stride_folding=True,
     )

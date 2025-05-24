@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -82,6 +82,36 @@ def test_fold_with_permute_reshape_on_host(device, n, c, h, w, pad_h, pad_w, str
         torch_input_tensor, pad_h, pad_w, stride_h, stride_w
     )
     assert_with_pcc(torch_output_tensor, torch_output_tensor_new, 1)
+
+
+@pytest.mark.parametrize("nhw", [(3, 64, 64), (1, 224, 224), (1, 384, 512), (1, 512, 672)])
+@pytest.mark.parametrize("channels", [3, 32, 320])
+@pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, input_layout):
+    batch_size, height, width = nhw
+    stride_h, stride_w = stride
+    torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch.bfloat16)
+    torch_input_tensor_nhwc = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    torch_output_tensor = torch.reshape(
+        torch_input_tensor_nhwc, (batch_size, height // stride_h, stride_h, width // stride_w, stride_w, channels)
+    )
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 1, 3, 2, 4, 5))
+    torch_output_tensor = torch.reshape(
+        torch_output_tensor, (batch_size, height // stride_h, width // stride_w, channels * stride_h * stride_w)
+    )
+    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor_nhwc, layout=input_layout, device=device, memory_config=input_memory_config
+    )
+    tt_output_tensor = ttnn.fold(
+        tt_input_tensor,
+        stride_h,
+        stride_w,
+    )
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    isequal = torch.equal(torch_output_tensor, tt_output_tensor)
+    assert isequal
 
 
 def pad_and_fold_with_permute_and_reshape_on_device(

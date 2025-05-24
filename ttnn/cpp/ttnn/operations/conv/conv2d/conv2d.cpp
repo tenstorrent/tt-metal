@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,7 @@
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/logger.hpp"
 #include "tt-metalium/math.hpp"
+#include "tt-metalium/small_vector.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -25,6 +26,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/data_movement/fold/fold.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write.hpp"
@@ -377,8 +379,8 @@ Result conv2d_DRAM(
 template <typename T>
 Result conv2d_L1(
     QueueId queue_id,
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    const ttnn::Tensor& input_tensor_,
+    const ttnn::Tensor& weight_tensor_,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -390,13 +392,40 @@ Result conv2d_L1(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor_,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
+    auto input_tensor = input_tensor_;
+    auto weight_tensor = weight_tensor_;
+    std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
+    bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
+    if (conv_config.enable_kernel_stride_folding) {
+        TT_FATAL(input_height % stride[0] == 0, "Input height must be divisible by stride for kernel stride folding.");
+        TT_FATAL(input_width % stride[1] == 0, "Input width must be divisible by stride for kernel stride folding.");
+        // Fold the input tensor to reduce spatial dimensions by stride factors, effectively converting
+        // a large kernel convolution into a matmul operation.
+        input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);
+        // If the weight is not preprocessed on device, fold it.
+        if (!tt::tt_metal::is_device_tensor(weight_tensor) || conv_config.always_preprocess_weights) {
+            weight_tensor =
+                fold_tensor(weight_tensor, device, stride, kernel_size, padding_n4, conv_config.weights_dtype, true);
+        }
+        // If the bias is not on device, move it to device.
+        if (bias_tensor.has_value()) {
+            bias_tensor = ttnn::to_device(bias_tensor.value(), device, ttnn::DRAM_MEMORY_CONFIG);
+            bias_tensor = ttnn::to_layout(bias_tensor.value(), Layout::TILE, std::nullopt, std::nullopt, device);
+        }
+        // Update the input height and width to the folded dimensions
+        input_height = input_height / stride[0];
+        input_width = input_width / stride[1];
+        in_channels = in_channels * kernel_size[0] * kernel_size[1];
+        stride = {1, 1};
+        kernel_size = {1, 1};
+        mm_conv = true;
+    }
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
@@ -471,41 +500,46 @@ Result conv2d_L1(
     bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-    if (!weight_is_on_device || conv_config.always_preprocess_weights) {
-        // prepare weights in desired layout and move to device
+    // If kernel stride folding is enabled, we don't need to preprocess weights.
+    if (conv_config.enable_kernel_stride_folding) {
+        // Skip weight preprocessing for kernel stride folding
+    } else {
+        if (!weight_is_on_device || conv_config.always_preprocess_weights) {
+            // prepare weights in desired layout and move to device
 
-        // TODO: Implement heuristic to decide if weights should be preprocessed on device.
-        if (!conv_config.preprocess_weights_on_device) {
-            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
-                weight_tensor,
-                bias_tensor,
-                input_channels_alignment,
-                conv_config.weights_dtype,
-                opt_conv_op_block_config.act_block_w_ntiles,
-                opt_conv_op_block_config.out_subblock_w_ntiles,
-                parallel_config,
-                output_parallel_config,
-                device,
-                groups,
-                opt_conv_op_block_config.act_block_h_ntiles,
-                input_width,
-                bias_tensor.has_value(),
-                true);
-        } else {
-            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
-                weight_tensor,
-                bias_tensor,
-                input_channels_alignment,
-                conv_config.weights_dtype,
-                opt_conv_op_block_config.act_block_w_ntiles,
-                opt_conv_op_block_config.out_subblock_w_ntiles,
-                parallel_config,
-                output_parallel_config,
-                device,
-                groups,
-                opt_conv_op_block_config.act_block_h_ntiles,
-                input_width,
-                bias_tensor.has_value());
+            // TODO: Implement heuristic to decide if weights should be preprocessed on device.
+            if (!conv_config.preprocess_weights_on_device) {
+                tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
+                    weight_tensor,
+                    bias_tensor,
+                    input_channels_alignment,
+                    conv_config.weights_dtype,
+                    opt_conv_op_block_config.act_block_w_ntiles,
+                    opt_conv_op_block_config.out_subblock_w_ntiles,
+                    parallel_config,
+                    output_parallel_config,
+                    device,
+                    groups,
+                    opt_conv_op_block_config.act_block_h_ntiles,
+                    input_width,
+                    bias_tensor.has_value(),
+                    true);
+            } else {
+                tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
+                    weight_tensor,
+                    bias_tensor,
+                    input_channels_alignment,
+                    conv_config.weights_dtype,
+                    opt_conv_op_block_config.act_block_w_ntiles,
+                    opt_conv_op_block_config.out_subblock_w_ntiles,
+                    parallel_config,
+                    output_parallel_config,
+                    device,
+                    groups,
+                    opt_conv_op_block_config.act_block_h_ntiles,
+                    input_width,
+                    bias_tensor.has_value());
+            }
         }
     }
 
