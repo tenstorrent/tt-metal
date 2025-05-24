@@ -101,7 +101,6 @@ def test_transformer_block(
         spatial_padded_4d = torch.nn.functional.pad(
             spatial_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
         )
-    # tt_spatial = from_torch_fast(spatial_padded_4D, dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=None)
     tt_spatial = from_torch_fast(
         spatial_padded_4d, dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
     )
