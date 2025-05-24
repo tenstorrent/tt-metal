@@ -616,9 +616,9 @@ def run_test_sdpa_decode_single_device_priority_tensor(
     max_start_idx = max(start_indices)
 
     # set up priority tensor
-    priority_tensor = torch.zeros(1, 1, b, 1)
+    priority_tensor = torch.zeros(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE)
     priority_tensor_tt = ttnn.as_tensor(
-        priority_tensor, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=dram_memcfg
+        priority_tensor, device=device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
     )
 
     ##########################################
@@ -677,7 +677,7 @@ def run_test_sdpa_decode_single_device_priority_tensor(
     )
     passing = torch.all(lp_distance <= lambda_ * lp_norm_x)
     # set priority tensor to 0 if speculation is correct, 2 otherwise
-    priority_tensor[0, 0, :, 0] = (1 - (lp_distance <= lambda_ * lp_norm_x).to(torch.int32)) * 2
+    priority_tensor[0, 0, : lp_distance.shape[1], 0] = (1 - (lp_distance <= lambda_ * lp_norm_x).to(torch.int32)) * 2
     logger.debug(f"gt speculation passing: {passing}")
 
     ##########################################

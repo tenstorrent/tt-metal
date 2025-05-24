@@ -199,7 +199,7 @@ void MAIN {
     }
     num_cores_to_wait += 1;  // add 1 for speculative compute (specific to this kernel)
 
-    mm_init();
+    mm_init(cb_q_in, cb_k_in, cb_out_final);
     cb_wait_front(cb_q_in, q_chunk_tiles);
 
     if (do_speculative_compute) {

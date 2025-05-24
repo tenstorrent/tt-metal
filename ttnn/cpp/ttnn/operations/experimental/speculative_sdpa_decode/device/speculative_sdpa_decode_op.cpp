@@ -220,12 +220,12 @@ void SpeculativeScaledDotProductAttentionDecode::validate(
         const auto B = q_shape[1];
         const auto& priority_tensor = optional_input_tensors.at(3).value();
         TT_FATAL(
-            priority_tensor.get_dtype() == DataType::UINT32,
+            priority_tensor.get_dtype() == DataType::INT32,
             "Expect priority tensor to be INT32, got {}",
             priority_tensor.get_dtype());
         TT_FATAL(
             priority_tensor.get_layout() == Layout::TILE,
-            "Expect priority tensor to be ROW_MAJOR, got {}",
+            "Expect priority tensor to be TILE_LAYOUT, got {}",
             priority_tensor.get_layout());
         const auto priority_shape = priority_tensor.get_logical_shape();
         ;
@@ -239,12 +239,12 @@ void SpeculativeScaledDotProductAttentionDecode::validate(
         const auto B = q_shape[1];
         const auto& other_priority_tensor = optional_input_tensors.at(4).value();
         TT_FATAL(
-            other_priority_tensor.get_dtype() == DataType::UINT32,
-            "Expect priority tensor to be UINT32, got {}",
+            other_priority_tensor.get_dtype() == DataType::INT32,
+            "Expect priority tensor to be INT32, got {}",
             other_priority_tensor.get_dtype());
         TT_FATAL(
             other_priority_tensor.get_layout() == Layout::TILE,
-            "Expect priority tensor to be ROW_MAJOR, got {}",
+            "Expect priority tensor to be TILE_LAYOUT, got {}",
             other_priority_tensor.get_layout());
         const auto other_priority_shape = other_priority_tensor.get_logical_shape();
         ;
