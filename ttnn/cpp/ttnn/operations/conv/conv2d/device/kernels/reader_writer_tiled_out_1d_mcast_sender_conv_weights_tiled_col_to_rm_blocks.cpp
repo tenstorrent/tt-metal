@@ -232,6 +232,7 @@ void kernel_main() {
                             weights_multicast_data_addr,
                             weights_block_size_bytes,
                             weights_mcast_num_cores,
+                            false,
                             false);
 
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id and
@@ -249,6 +250,7 @@ void kernel_main() {
                             weights_mcast_receiver_semaphore_addr,
                             weights_mcast_receiver_semaphore_noc_addr,
                             weights_mcast_num_cores,
+                            false,
                             false);
 #endif
 
@@ -296,6 +298,7 @@ void kernel_main() {
                     bias_multicast_data_addr,
                     bias_block_size_bytes,
                     weights_mcast_num_cores,
+                    false,
                     false);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc
@@ -313,6 +316,7 @@ void kernel_main() {
                     weights_mcast_receiver_semaphore_addr,
                     weights_mcast_receiver_semaphore_noc_addr,
                     weights_mcast_num_cores,
+                    false,
                     false);
 #endif
 
