@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from . import utils
-from .utils import from_torch_fast
+from .utils import from_torch_fast, from_torch_fast_2d
 
 
 @dataclass
@@ -76,20 +76,24 @@ class TtLayerNormParameters:
             dtype = ttnn.bfloat16
 
         return cls(
-            weight=from_torch_fast(
+            weight=from_torch_fast_2d(
                 weight,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[None, None],
                 layout=layout,
                 dtype=dtype,
-                device=device,
                 mesh_mapper=mesh_mapper,
             )
             if weight is not None
             else None,
-            bias=from_torch_fast(
+            bias=from_torch_fast_2d(
                 bias,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[None, None],
                 layout=layout,
                 dtype=dtype,
-                device=device,
                 mesh_mapper=mesh_mapper,
             )
             if bias is not None
@@ -111,6 +115,8 @@ def sd_rms_norm(x: ttnn.Tensor, parameters: TtRmsNormParameters, deallocate: boo
 def sd_layer_norm(
     x: ttnn.Tensor,
     parameters: TtLayerNormParameters,
+    parallel_config: DiTParallelConfig,
+    ag_global_semaphore,
     memory_config: ttnn.MemoryConfig | None = None,
     program_config: ttnn.ProgramConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
@@ -139,10 +145,14 @@ def sd_layer_norm(
 
     stats = utils.all_gather(
         stats,
-        dim=-1,
+        dim=len(x.shape) - 1,
         mesh_device=x.device(),
+        cluster_axis=parallel_config.sequence_parallel.mesh_axis
+        if parallel_config.sequence_parallel.factor > 1
+        else None,
         # all_gather currently requires linear topology when specifying a cluster axis
-        topology=ttnn.Topology.Linear,
+        topology=parallel_config.topology,
+        multi_device_global_semaphore=ag_global_semaphore,
     )
 
     x = ttnn.layer_norm_post_all_gather(

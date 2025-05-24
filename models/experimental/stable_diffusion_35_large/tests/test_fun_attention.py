@@ -12,19 +12,12 @@ import math
 
 from ..reference import SD3Transformer2DModel
 from ..tt.fun_attention import sd_joint_attention, TtAttentionParameters
-from ..tt.utils import assert_quality, from_torch_fast_2d
-from ..tt.parallel_config import create_dit_parallel_config, ParallelConfig
+from ..tt.utils import assert_quality, from_torch_fast_2d, create_global_semaphores, initialize_sd_parallel_config
 
 if TYPE_CHECKING:
     from ..reference.attention import Attention
 
 TILE_SIZE = 32
-
-
-def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
-    # create global semaphore handles
-    ccl_semaphore_handles = ttnn.create_global_semaphore(mesh_device, cores, initial_value)
-    return ccl_semaphore_handles
 
 
 @pytest.mark.parametrize(
@@ -73,30 +66,8 @@ def test_attention(
     tp_factor: int,
     topology: ttnn.Topology,
 ) -> None:
-    ttnn.visualize_mesh_device(mesh_device)
-    print(f"DEVICE IDS {mesh_device.get_device_ids()}")
-
     mesh_shape = tuple(mesh_device.shape)
-    cfg_parallel = ParallelConfig(
-        mesh_shape=(mesh_shape[0], mesh_shape[1] // cfg_factor), factor=cfg_factor, mesh_axis=1
-    )
-    sequence_parallel = ParallelConfig(
-        mesh_shape=(cfg_parallel.mesh_shape[0] // sp_factor, cfg_parallel.mesh_shape[1] // tp_factor),
-        factor=sp_factor,
-        mesh_axis=0,
-    )
-    tensor_parallel = ParallelConfig(
-        mesh_shape=(cfg_parallel.mesh_shape[0] // sp_factor, cfg_parallel.mesh_shape[1] // tp_factor),
-        factor=tp_factor,
-        mesh_axis=1,
-    )
-    dit_parallel_config = create_dit_parallel_config(
-        mesh_shape=mesh_shape,
-        cfg_parallel=cfg_parallel,
-        sequence_parallel=sequence_parallel,
-        tensor_parallel=tensor_parallel,
-        topology=topology,
-    )
+    dit_parallel_config = initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, topology)
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
@@ -148,6 +119,13 @@ def test_attention(
         spatial_padded_4d = torch.nn.functional.pad(
             spatial_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
         )
+    if spatial_padded_4d.shape[2] % TILE_SIZE:
+        spatial_padded_4d = torch.nn.functional.pad(
+            spatial_padded_4d,
+            pad=(0, 0, 0, TILE_SIZE - (spatial_padded_4d.shape[2] % TILE_SIZE)),
+            mode="constant",
+            value=0,
+        )
     tt_spatial = from_torch_fast_2d(
         spatial_padded_4d,
         mesh_device=mesh_device,
@@ -162,6 +140,13 @@ def test_attention(
         if pad_embedding_dim:
             prompt_padded_4d = torch.nn.functional.pad(
                 prompt_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
+            )
+        if prompt_padded_4d.shape[2] % TILE_SIZE:
+            prompt_padded_4d = torch.nn.functional.pad(
+                prompt_padded_4d,
+                pad=(0, 0, 0, TILE_SIZE - (prompt_padded_4d.shape[2] % TILE_SIZE)),
+                mode="constant",
+                value=0,
             )
         tt_prompt = from_torch_fast_2d(
             prompt_padded_4d,
@@ -196,7 +181,10 @@ def test_attention(
         mesh_composer=ttnn.ConcatMesh2dToTensor(
             mesh_device,
             mesh_shape=tuple(mesh_device.shape),
-            dims=[sequence_parallel.mesh_axis + 2, tensor_parallel.mesh_axis + 2],
+            dims=[
+                dit_parallel_config.sequence_parallel.mesh_axis + 2,
+                dit_parallel_config.tensor_parallel.mesh_axis + 2,
+            ],
         ),
     )
     tt_spatial_output_torch = tt_spatial_output_torch[:, :, 0:spatial_sequence_length, :embedding_dim]
@@ -210,7 +198,10 @@ def test_attention(
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 mesh_shape=tuple(mesh_device.shape),
-                dims=[sequence_parallel.mesh_axis + 2, tensor_parallel.mesh_axis + 2],
+                dims=[
+                    dit_parallel_config.sequence_parallel.mesh_axis + 2,
+                    dit_parallel_config.tensor_parallel.mesh_axis + 2,
+                ],
             ),
         )
         tt_prompt_output_torch = tt_prompt_output_torch[:, :, 0:prompt_sequence_length, :embedding_dim]

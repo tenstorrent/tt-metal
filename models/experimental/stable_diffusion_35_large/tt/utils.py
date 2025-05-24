@@ -9,6 +9,36 @@ import math
 import torch
 import ttnn
 from loguru import logger
+from ..tt.parallel_config import create_dit_parallel_config, ParallelConfig
+
+
+def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
+    # create global semaphore handles
+    ccl_semaphore_handles = ttnn.create_global_semaphore(mesh_device, cores, initial_value)
+    return ccl_semaphore_handles
+
+
+def initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, topology):
+    cfg_parallel = ParallelConfig(
+        mesh_shape=(mesh_shape[0], mesh_shape[1] // cfg_factor), factor=cfg_factor, mesh_axis=1
+    )
+    sequence_parallel = ParallelConfig(
+        mesh_shape=(cfg_parallel.mesh_shape[0] // sp_factor, cfg_parallel.mesh_shape[1] // tp_factor),
+        factor=sp_factor,
+        mesh_axis=0,
+    )
+    tensor_parallel = ParallelConfig(
+        mesh_shape=(cfg_parallel.mesh_shape[0] // sp_factor, cfg_parallel.mesh_shape[1] // tp_factor),
+        factor=tp_factor,
+        mesh_axis=1,
+    )
+    return create_dit_parallel_config(
+        mesh_shape=mesh_shape,
+        cfg_parallel=cfg_parallel,
+        sequence_parallel=sequence_parallel,
+        tensor_parallel=tensor_parallel,
+        topology=topology,
+    )
 
 
 def allocate_tensor_on_device_like(
@@ -121,7 +151,7 @@ def from_torch_fast_2d(
     mesh_mapper: ttnn.TensorToMesh | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
-    if mesh_mapper is None:
+    if mesh_mapper is None and (dims[0] is not None or dims[1] is not None):
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims)
 
     return ttnn.from_torch(
@@ -236,6 +266,7 @@ def all_gather(
     mesh_device: ttnn.MeshDevice | None = None,
     num_links: int = 1,
     memory_config: ttnn.MemoryConfig | None = None,
+    multi_device_global_semaphore,
 ) -> ttnn.Tensor:
     assert cluster_axis is None or mesh_device is not None, "cluster_axis requires mesh_device to be set"
     assert x.shape[dim] == x.padded_shape[dim], f"dimension {dim} of {x.shape} should not be padded"
@@ -247,22 +278,24 @@ def all_gather(
         x = ttnn.reshape(x, x.padded_shape, x.padded_shape)
 
     if cluster_axis is not None:
-        x = ttnn.all_gather(
+        x = ttnn.experimental.all_gather_async(
             x,
-            dim,
-            cluster_axis,
-            mesh_device,
-            num_links=num_links,
+            dim=dim,
+            cluster_axis=cluster_axis,
+            mesh_device=mesh_device,
             topology=topology,
+            multi_device_global_semaphore=multi_device_global_semaphore,
             memory_config=memory_config,
+            num_links=num_links,
         )
 
-    x = ttnn.all_gather(
+    x = ttnn.experimental.all_gather_async(
         x,
         dim,
         num_links=num_links,
         topology=topology,
         memory_config=memory_config,
+        multi_device_global_semaphore=multi_device_global_semaphore,
     )
 
     if reshape:

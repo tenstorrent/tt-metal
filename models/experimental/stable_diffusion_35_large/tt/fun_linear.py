@@ -4,14 +4,13 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 # if TYPE_CHECKING:
 import torch
 import ttnn
 
-from .utils import from_torch_fast, from_torch_fast_2d
+from .utils import from_torch_fast_2d
 
 
 @dataclass
@@ -191,6 +190,7 @@ class TtLinearParameters:
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
         unsqueeze_bias: bool = False,
+        parallel_config: DiTParallelConfig,
     ) -> TtLinearParameters:
         if "bias" in state:
             torch_bias = state["bias"].unsqueeze(0)
@@ -199,7 +199,7 @@ class TtLinearParameters:
         weight = state["weight"]
         torch_weight = weight.transpose(0, 1)
 
-        if os.environ["MESH_DEVICE"] == "T3K":
+        if hidden_dim_padding:
             weight_h, weight_w = torch_weight.shape
             torch_weight = torch_weight.reshape(weight_h, num_chunks, -1)
             torch_weight = torch.nn.functional.pad(
@@ -217,7 +217,7 @@ class TtLinearParameters:
             # Given torch tensor with output features in the last dimension,
             # shuffle heads to allow for column parallel computation
             in_dim = tensor.shape[0]
-            tensor = tensor.reshape(in_dim, num_chunks, device.get_num_devices(), -1)
+            tensor = tensor.reshape(in_dim, num_chunks, parallel_config.tensor_parallel.factor, -1)
             tensor = tensor.permute(0, 2, 1, 3)
             tensor = tensor.reshape(in_dim, -1)
             return tensor
@@ -230,19 +230,21 @@ class TtLinearParameters:
             torch_bias = torch_bias.unsqueeze(0)
 
         return cls(
-            weight=from_torch_fast(
+            weight=from_torch_fast_2d(
                 torch_weight,
-                dtype=dtype,
-                device=device,
-                shard_dim=-1,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[None, -1],
                 layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
             ),
-            bias=from_torch_fast(
+            bias=from_torch_fast_2d(
                 torch_bias,
-                dtype=dtype,
-                device=device,
-                shard_dim=-1,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[None, -1],
                 layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
             )
             if torch_bias is not None
             else None,
@@ -345,7 +347,6 @@ class _ShardBias(ttnn.TensorToMesh):
     """
 
     def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
-        assert True, "MAKE _ShardBias work for 2D mesh"
         super().__init__(mesh_device)
 
     def map(self, tensor: torch.Tensor) -> dict[int, ttnn.Tensor]:

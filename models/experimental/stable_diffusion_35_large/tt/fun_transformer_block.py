@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 import ttnn
 
-from . import utils
 from .fun_attention import sd_joint_attention, TtAttentionParameters
 from .fun_feed_forward import sd_feed_forward, TtFeedForwardParameters
 from .fun_linear import sd_linear, TtLinearParameters
@@ -96,6 +95,7 @@ class TtTransformerBlockParameters:
                 num_chunks=spatial_time_embed_chunks,
                 hidden_dim_padding=hidden_dim_padding,
                 unsqueeze_bias=True,
+                parallel_config=parallel_config,
             ),
             prompt_time_embed=TtLinearParameters.from_torch_time_embed(
                 substate(state, "norm1_context.linear"),
@@ -104,12 +104,21 @@ class TtTransformerBlockParameters:
                 num_chunks=prompt_time_embed_chunks,
                 hidden_dim_padding=hidden_dim_padding,
                 unsqueeze_bias=True,
+                parallel_config=parallel_config,
             ),
             spatial_ff=TtFeedForwardParameters.from_torch(
-                substate(state, "ff"), dtype=dtype, device=device, parallel_config=parallel_config
+                substate(state, "ff"),
+                dtype=dtype,
+                device=device,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             ),
             prompt_ff=TtFeedForwardParameters.from_torch(
-                substate(state, "ff_context"), dtype=dtype, device=device, parallel_config=parallel_config
+                substate(state, "ff_context"),
+                dtype=dtype,
+                device=device,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             )
             if has_ff_context
             else None,
@@ -154,12 +163,30 @@ def sd_dual_attn_block(
     num_heads: int,
     N: int,
     L: int,
+    ag_global_semaphore,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+    device = spatial.device()
+
     spatial_scaled = spatial * (1 + spatial_scale) + spatial_shift
     prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
     if parallel_config.tensor_parallel.factor > 1:
-        spatial_scaled = utils.all_gather(spatial_scaled, dim=-1, topology=parallel_config.topology)
-        prompt_scaled = utils.all_gather(prompt_scaled, dim=-1, topology=parallel_config.topology)
+        spatial_scaled = ttnn.experimental.all_gather_async(
+            spatial_scaled,
+            dim=3,
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=device,
+            topology=parallel_config.topology,
+            multi_device_global_semaphore=ag_global_semaphore,
+        )
+        prompt_scaled = ttnn.experimental.all_gather_async(
+            prompt_scaled,
+            dim=3,
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=device,
+            topology=parallel_config.topology,
+            multi_device_global_semaphore=ag_global_semaphore,
+        )
+
     spatial_attn, prompt_attn = sd_joint_attention(
         spatial=spatial_scaled,
         prompt=prompt_scaled,
@@ -169,6 +196,7 @@ def sd_dual_attn_block(
         N=N,
         L=L,
         parallel_config=parallel_config,
+        ag_global_semaphore=ag_global_semaphore,
     )
     spatial_attn_scaled = spatial_gate * spatial_attn
     prompt_attn_scaled = prompt_gate * prompt_attn if prompt_gate is not None else None
@@ -181,15 +209,33 @@ def sd_gated_ff_block(
     inp: ttnn.Tensor,
     parameters: TtFeedForwardParameters,
     parallel_config: DiTParallelConfig,
+    ag_global_semaphore,
+    rs_from_global_semaphore,
+    rs_to_global_semaphore,
     *,
     gate: ttnn.Tensor,
     scale: ttnn.Tensor,
     shift: ttnn.Tensor,
 ) -> ttnn.Tensor:
+    device = inp.device()
+
     scaled = inp * (1 + scale) + shift
     if parallel_config.tensor_parallel.factor > 1:
-        scaled = utils.all_gather(scaled, dim=-1, topology=parallel_config.topology)
-    result = gate * sd_feed_forward(scaled, parameters, parallel_config=parallel_config)
+        scaled = ttnn.experimental.all_gather_async(
+            scaled,
+            dim=3,
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=device,
+            topology=parallel_config.topology,
+            multi_device_global_semaphore=ag_global_semaphore,
+        )
+    result = gate * sd_feed_forward(
+        scaled,
+        parameters,
+        parallel_config=parallel_config,
+        rs_from_global_semaphore=rs_from_global_semaphore,
+        rs_to_global_semaphore=rs_to_global_semaphore,
+    )
     ttnn.deallocate(scaled)
     return result
 
@@ -204,6 +250,9 @@ def sd_transformer_block(  # noqa: PLR0915
     num_heads: int,
     N: int,
     L: int,
+    ag_global_semaphore,
+    rs_from_global_semaphore,
+    rs_to_global_semaphore,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
     t = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     spatial_time = sd_linear(t, parameters.spatial_time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -258,8 +307,12 @@ def sd_transformer_block(  # noqa: PLR0915
             prompt_gate_ff,
         ] = chunk_time(prompt_time, 6)
 
-    spatial_normed = sd_layer_norm(spatial, parameters.spatial_norm_1)
-    prompt_normed = sd_layer_norm(prompt, parameters.prompt_norm_1)
+    spatial_normed = sd_layer_norm(
+        spatial, parameters.spatial_norm_1, parallel_config=parallel_config, ag_global_semaphore=ag_global_semaphore
+    )
+    prompt_normed = sd_layer_norm(
+        prompt, parameters.prompt_norm_1, parallel_config=parallel_config, ag_global_semaphore=ag_global_semaphore
+    )
     spatial_attn, prompt_attn = sd_dual_attn_block(
         spatial=spatial_normed,
         prompt=prompt_normed,
@@ -274,6 +327,7 @@ def sd_transformer_block(  # noqa: PLR0915
         num_heads=num_heads,
         N=N,
         L=L,
+        ag_global_semaphore=ag_global_semaphore,
     )
     ttnn.deallocate(prompt_normed)
     ttnn.deallocate(spatial_gate_dual_attn)
@@ -306,11 +360,16 @@ def sd_transformer_block(  # noqa: PLR0915
         ttnn.deallocate(spatial_scale_attn)
         ttnn.deallocate(spatial_shift_attn)
 
-    spatial_normed = sd_layer_norm(spatial, parameters.spatial_norm_2)
+    spatial_normed = sd_layer_norm(
+        spatial, parameters.spatial_norm_2, parallel_config=parallel_config, ag_global_semaphore=ag_global_semaphore
+    )
     spatial += sd_gated_ff_block(
         spatial_normed,
         parameters=parameters.spatial_ff,
         parallel_config=parallel_config,
+        ag_global_semaphore=ag_global_semaphore,
+        rs_from_global_semaphore=rs_from_global_semaphore,
+        rs_to_global_semaphore=rs_to_global_semaphore,
         gate=spatial_gate_ff,
         scale=spatial_scale_ff,
         shift=spatial_shift_ff,
@@ -329,11 +388,16 @@ def sd_transformer_block(  # noqa: PLR0915
 
     prompt += prompt_attn
     ttnn.deallocate(prompt_attn)
-    prompt_normed = sd_layer_norm(prompt, parameters.prompt_norm_2)
+    prompt_normed = sd_layer_norm(
+        prompt, parameters.prompt_norm_2, parallel_config=parallel_config, ag_global_semaphore=ag_global_semaphore
+    )
     prompt += sd_gated_ff_block(
         prompt_normed,
         parameters=parameters.prompt_ff,
         parallel_config=parallel_config,
+        ag_global_semaphore=ag_global_semaphore,
+        rs_from_global_semaphore=rs_from_global_semaphore,
+        rs_to_global_semaphore=rs_to_global_semaphore,
         gate=prompt_gate_ff,
         scale=prompt_scale_ff,
         shift=prompt_shift_ff,
