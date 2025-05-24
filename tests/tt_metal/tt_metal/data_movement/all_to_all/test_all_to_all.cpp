@@ -25,6 +25,8 @@ struct AllToAllConfig {
     /* Test ID */
     uint32_t test_id = START_ID;
 
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
+
     /* Grid configurations */
     CoreCoord mst_logical_start_coord = CoreCoord();
     CoreCoord sub_logical_start_coord = CoreCoord();
@@ -61,10 +63,7 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
 
     /* INITIALIZATION */
 
-    const uint32_t page_size_bytes =
-        arch_ == tt::ARCH::BLACKHOLE
-            ? 64
-            : 32;  // =Flit size: 32 bytes for WH, 64 for BH // This could probably go in the common file
+    const uint32_t page_size_bytes = tt::tt_metal::unit_tests::dm::obtain_page_size_bytes(test_config.arch);
 
     // Initialize core sets //
     /*
@@ -403,6 +402,9 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAllMulticast2x2PacketSizes) {
             // Test config
             unit_tests::dm::all_to_all::AllToAllConfig test_config = {
                 .test_id = unit_tests::dm::all_to_all::START_ID + test_case_id,
+
+                .arch = arch_,  // NOTE: For some reason, arch_ is known here where a test is defined but not in the
+                                // main run_dm function
 
                 .mst_logical_start_coord = mst_start_coord,
                 .sub_logical_start_coord = sub_start_coord,
