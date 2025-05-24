@@ -101,10 +101,6 @@ void RunTest(
 }
 
 TEST_F(DPrintFixture, ActiveEthTestPrint) {
-    if (this->arch_ == ARCH::BLACKHOLE) {  // TODO: Re-enable when this is supported on BH
-        log_info(tt::LogTest, "DPrint on BH active eth not yet supported");
-        GTEST_SKIP();
-    }
     for (IDevice* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).size() == 0) {

@@ -12,6 +12,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/utils.hpp>
+#include <tt_memory.h>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -38,6 +39,7 @@ struct HalJitBuildConfig {
     DeviceAddr local_init_addr;
     DeviceAddr fw_launch_addr;
     uint32_t fw_launch_addr_value;
+    ll_api::memory::Loading memory_load;
 };
 
 class Hal;
