@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -194,12 +194,7 @@ void kernel_main() {
 
                     // num_dests must not include source, since we are NOT really doing a local copy!
                     noc_async_write_multicast(
-                        in0_start_address,
-                        in0_multicast_data_addr,
-                        in0_block_size_bytes,
-                        in0_mcast_num_cores,
-                        true,
-                        true);
+                        in0_start_address, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc,
                     // same cmd_buf Also, this only works because we are setting VCs statically (using
