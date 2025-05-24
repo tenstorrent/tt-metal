@@ -297,12 +297,6 @@ void kernel_main() {
     const size_t dest_noc_y_fwd = get_arg_val<uint32_t>(arg_idx++);
     const size_t dest_noc_x_bwd = get_arg_val<uint32_t>(arg_idx++);
     const size_t dest_noc_y_bwd = get_arg_val<uint32_t>(arg_idx++);
-    const size_t chip_id = get_arg_val<uint32_t>(arg_idx++);
-
-    ASSERT(chip_id <= 3);
-    // if (chip_id == 2 || chip_id == 3 || chip_id == 1) {
-    //     return;
-    // }
 
     const size_t num_send_types = get_arg_val<uint32_t>(arg_idx++);
     size_t* send_types_int = reinterpret_cast<size_t*>(get_arg_addr(arg_idx));
@@ -355,14 +349,13 @@ void kernel_main() {
 
     fabric_connection.open();
 
+    WAYPOINT("CHK_");
     cb_reserve_back(source_l1_cb_index, 1);
+    WAYPOINT("CHK0");
     cb_reserve_back(packet_header_cb, packet_header_size_in_headers);
+    WAYPOINT("CHK1");
     const auto source_l1_buffer_address = get_write_ptr(source_l1_cb_index);
     const auto packet_header_buffer_address = get_write_ptr(packet_header_cb);
-    for (size_t i = 0; i < (4 * 1088) / sizeof(uint32_t); i++) {
-        reinterpret_cast<volatile uint32_t*>(packet_header_buffer_address)[i] = i & 0xF;
-        i++;
-    }
 
     auto* fwd_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     auto* bwd_packet_header =
@@ -372,6 +365,8 @@ void kernel_main() {
     auto* sync_bwd_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE) * 3);
 
+    WAYPOINT("PKTD");
+
     if (enable_any_synchronization) {
         sync_fwd_packet_header->to_chip_multicast(
             MulticastRoutingCommandHeader{1, static_cast<uint8_t>(sync_mcast_fwd_hops)});
@@ -380,6 +375,7 @@ void kernel_main() {
     }
 
     if (enable_start_synchronization) {
+        WAYPOINT("SYNC");
         line_sync(
             fabric_connection,
             sync_fwd,
@@ -403,6 +399,7 @@ void kernel_main() {
             sync_noc_y,
             2 * start_sync_val);
         WATCHER_RING_BUFFER_PUSH(0xbabababa);
+        WAYPOINT("sync");
     }
 
     {
@@ -432,16 +429,14 @@ void kernel_main() {
                         send_packets<NocSendType::NOC_UNICAST_WRITE>(
                             fabric_connection, fwd_packet_header, bwd_packet_header, params, source_l1_buffer_address);
                         break;
-                    // case NocSendType::NOC_UNICAST_ATOMIC_INC:
-                    //     send_packets<NocSendType::NOC_UNICAST_ATOMIC_INC>(
-                    //         fabric_connection, fwd_packet_header, bwd_packet_header, params,
-                    //         source_l1_buffer_address);
-                    //     break;
-                    // case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC:
-                    //     send_packets<NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
-                    //         fabric_connection, fwd_packet_header, bwd_packet_header, params,
-                    //         source_l1_buffer_address);
-                    //     break;
+                    case NocSendType::NOC_UNICAST_ATOMIC_INC:
+                        send_packets<NocSendType::NOC_UNICAST_ATOMIC_INC>(
+                            fabric_connection, fwd_packet_header, bwd_packet_header, params, source_l1_buffer_address);
+                        break;
+                    case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC:
+                        send_packets<NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
+                            fabric_connection, fwd_packet_header, bwd_packet_header, params, source_l1_buffer_address);
+                        break;
                     default: ASSERT(false); break;
                 }
             }

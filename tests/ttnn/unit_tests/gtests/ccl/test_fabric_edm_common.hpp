@@ -2874,7 +2874,6 @@ void Run1DFabricPacketSendTest(
                     dest_noc_y_fwd,
                     dest_noc_x_bwd,
                     dest_noc_y_bwd,
-                    device->id(),
                     num_send_types,
                 };
 

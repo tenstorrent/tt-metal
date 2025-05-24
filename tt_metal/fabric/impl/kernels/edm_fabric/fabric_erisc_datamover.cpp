@@ -558,12 +558,12 @@ FORCE_INLINE void receiver_forward_packet(
     tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>& downstream_edm_interface,
     uint8_t transaction_id,
     uint8_t rx_channel_id) {
-    constexpr bool ENABLE_STATEFUL_NOC_APIS = false;
-    // #ifndef DEBUG_PRINT_ENABLED
-    //     true;
-    // #else
-    //     false;
-    // #endif
+    constexpr bool ENABLE_STATEFUL_NOC_APIS =
+#ifndef DEBUG_PRINT_ENABLED
+        true;
+#else
+        false;
+#endif
     if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
         // If the packet is a terminal packet, then we can just deliver it locally
         bool start_distance_is_terminal_value =
@@ -582,9 +582,6 @@ FORCE_INLINE void receiver_forward_packet(
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         uint32_t routing = cached_routing_fields.value & tt::tt_fabric::LowLatencyRoutingFields::FIELD_MASK;
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
-        // WATCHER_RING_BUFFER_PUSH(cached_routing_fields.value);
-        // WATCHER_RING_BUFFER_PUSH(routing);
-        // WATCHER_RING_BUFFER_PUSH(payload_size_bytes);
         switch (routing) {
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_ONLY:
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
@@ -596,11 +593,10 @@ FORCE_INLINE void receiver_forward_packet(
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
                 forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
-                WAYPOINT("Lwrt");
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
             default: {
-                ASSERT(false);  // 591
+                ASSERT(false);
             }
         }
     }
@@ -750,8 +746,6 @@ void run_sender_channel_step(
         bool sender_backpressured_from_sender_side = free_slots == 0;
         can_send = can_send && !sender_backpressured_from_sender_side;
     }
-    // DPRINT << "s ch | free slots = " << (uint32_t)((sender_channel_index << 24) |
-    // (sender_channel_free_slots_stream_id << 16) | free_slots) << "\n";
     if (can_send) {
         did_something = true;
         if constexpr (enable_packet_header_recording) {
@@ -760,8 +754,7 @@ void run_sender_channel_step(
             tt::tt_fabric::validate(*packet_header);
             packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
         }
-        // WATCHER_RING_BUFFER_PUSH(0x55555500 | sender_channel_index);
-        WATCHER_RING_BUFFER_PUSH(0x44444400 | free_slots);
+        // WATCHER_RING_BUFFER_PUSH(0x44444400 | free_slots);
         send_next_data<SENDER_NUM_BUFFERS, RECEIVER_NUM_BUFFERS, to_receiver_pkts_sent_id,SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
@@ -778,7 +771,7 @@ void run_sender_channel_step(
         increment_local_update_ptr_val(
             to_sender_packets_completed_streams[sender_channel_index], -completions_since_last_check);
         if constexpr (!enable_first_level_ack) {
-            WATCHER_RING_BUFFER_PUSH(0xc5c5c5c5);
+            // WATCHER_RING_BUFFER_PUSH(0xc5c5c5c5);
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface.template update_persistent_connection_copy_of_free_slots<enable_ring_support>(
                     completions_since_last_check);
@@ -836,11 +829,6 @@ void run_sender_channel_step(
         auto check_connection_status =
             !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
         if (check_connection_status) {
-            // if (sender_channel_index == 0 && !channel_connection_established) {
-            //     DPRINT << "Send Ch 0 not connected. Checking addr: " <<
-            //     (uint32_t)local_sender_channel_worker_interface.connection_live_semaphore << "\n"; DPRINT << "worker
-            //     sem addr: " << (uint32_t)get_stream_reg_write_addr(sender_channel_free_slots_stream_id) << "\n";
-            // }
             check_worker_connections(
                 local_sender_channel_worker_interface,
                 channel_connection_established,
@@ -888,8 +876,6 @@ void run_receiver_channel_step(
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     bool unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
     if (unwritten_packets) {
-        // DPRINT << "ack_counter " << (uint32_t)ack_counter.counter << "\n";
-        // DPRINT << "wr_sent_counter " << (uint32_t)wr_sent_counter.counter << "\n";
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
             local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
@@ -924,7 +910,7 @@ void run_receiver_channel_step(
         }
         bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         if (can_send_to_all_local_chip_receivers && trid_flushed) {
-            WATCHER_RING_BUFFER_PUSH(0x12340000 | to_receiver_pkts_sent_id);
+            // WATCHER_RING_BUFFER_PUSH(0x12340000 | to_receiver_pkts_sent_id);
             // WATCHER_RING_BUFFER_PUSH(reinterpret_cast<uint32_t>(local_receiver_channel.template
             // get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index)));
             // WATCHER_RING_BUFFER_PUSH(local_receiver_channel.template
@@ -985,7 +971,6 @@ void run_receiver_channel_step(
         }
         if (can_send_completion) {
             DPRINT << "RX completion\n";
-            WATCHER_RING_BUFFER_PUSH(0xc11ccccc);
             receiver_send_completion_ack(receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             completion_counter.increment();
@@ -1673,12 +1658,8 @@ void kernel_main() {
             local_sender_connection_info_addresses[i]);
         connection_worker_info_ptr->edm_read_counter = 0;
         WATCHER_RING_BUFFER_PUSH((uint32_t)connection_worker_info_ptr);
-        DPRINT << "&connection_worker_info_ptr = " << (uint32_t)connection_worker_info_ptr << "\n";
-        // DPRINT << "\t&edm_read_counter = " << (uint32_t)&connection_worker_info_ptr->edm_read_counter << "\n";
         ch_check_skip_word |= ((sender_ch_live_check_skip[i] & 0x1) << i);
     }
-    DPRINT << "dir__sender_ch_live_check_skip: " << HEX() << (uint32_t)(ch_check_skip_word | (my_direction << 8))
-           << "\n";
 
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>
         downstream_edm_noc_interfaces;
@@ -1796,6 +1777,7 @@ void kernel_main() {
             has_downstream_edm >>= 1;
         }
     }
+    static_assert(!enable_ring_support || !is_2d_fabric, "2D mode does not yet support ring/torus");
     if constexpr (enable_ring_support) {
         if (has_downstream_edm_vc1_buffer_connection) {
             const auto local_sem_address_for_acks =
@@ -1812,8 +1794,9 @@ void kernel_main() {
                 *reinterpret_cast<volatile uint32_t* const>(teardown_sem_address) = 0;
             }
 
-            sender_channel_free_slots_stream_ids_ordered[NUM_USED_RECEIVER_CHANNELS - 1] =
-                sender_channel_free_slots_stream_ids[next_available_sender_channel_free_slots_stream_index];
+            auto downstream_sender_channel_credit_stream_id =
+                is_2d_fabric ? StreamId{sender_channel_free_slots_stream_ids[my_direction]}
+                             : StreamId{sender_channel_free_slots_stream_ids_ordered[2]};
             new (&downstream_edm_noc_interfaces[NUM_USED_RECEIVER_CHANNELS - 1])
                 tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
                     // persistent_mode -> hardcode to false because for EDM -> EDM
@@ -1836,7 +1819,11 @@ void kernel_main() {
                     reinterpret_cast<volatile uint32_t* const>(local_sem_address_for_acks),
                     reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc1_noc_interface_buffer_index_local_addr,
-                    sender_channel_free_slots_stream_ids[next_available_sender_channel_free_slots_stream_index],
+
+                    // remote (downstream) sender channel credits stream ID
+                    downstream_sender_channel_credit_stream_id,
+                    // This is our local stream register for the copy of the downstream router's
+                    // free slots
                     StreamId{receiver_channel_1_free_slots_from_downstream_stream_id},
                     receiver_channel_forwarding_data_cmd_buf_ids[1],
                     receiver_channel_forwarding_sync_cmd_buf_ids[1]);
@@ -1910,7 +1897,6 @@ void kernel_main() {
             0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
             i);
     }
-    WATCHER_RING_BUFFER_PUSH(0x99999999);
     init_local_sender_channel_worker_interfaces(
         local_sender_connection_live_semaphore_addresses,
         local_sender_connection_info_addresses,

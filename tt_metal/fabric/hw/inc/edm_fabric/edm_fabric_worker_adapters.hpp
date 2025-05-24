@@ -537,12 +537,6 @@ private:
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
             if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
                 DPRINT << "Sending write credit to " << (uint64_t)noc_sem_addr << "\n";
-
-                // WATCHER_RING_BUFFER_PUSH(0xCCCCCCCC);
-                // WATCHER_RING_BUFFER_PUSH(noc_sem_addr);
-            } else {
-                // WATCHER_RING_BUFFER_PUSH(0x77777777);
-                // WATCHER_RING_BUFFER_PUSH(noc_sem_addr);
             }
             noc_inline_dw_write3(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
         }
@@ -569,7 +563,6 @@ private:
                 this->edm_buffer_addr =
                     this->edm_buffer_base_addr + (this->get_buffer_slot_index() * this->buffer_size_bytes);
                 ;
-                // WATCHER_RING_BUFFER_PUSH(0xAA000000 | this->edm_buffer_addr);
             } else {
                 this->buffer_slot_index = BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =
@@ -615,19 +608,12 @@ private:
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
-
-        // DUMP THE L1 CONTENTS USING EXALENS
-        // STALL IN ERISC TO SEE IF CONTENTS SHOW UP CORRECTLY
-        //  --- still corrupted -> probably not a race
-
         ASSERT(size_bytes <= this->buffer_size_bytes);
-        // ASSERT(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address)->noc_send_type < NOC_SEND_TYPE_LAST);
-        // ASSERT(tt::tt_fabric::is_valid(
-        //     *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
+        ASSERT(tt::tt_fabric::is_valid(
+            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             DPRINT << "Sending pkt header to " << (uint32_t)buffer_address << "\n";
-            // WATCHER_RING_BUFFER_PUSH(0xEE000000 | source_address);
             WATCHER_RING_BUFFER_PUSH(0xDD000000 | buffer_address);
         }
         post_send_payload_increment_pointers();
@@ -643,9 +629,7 @@ private:
         // ASSERT(size_bytes > 0);
         // ASSERT(tt::tt_fabric::is_valid(
         //     *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
-        // ASSERT(!(this->edm_noc_x == my_x[0] && this->edm_noc_y == my_y[0]));
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
-            // ASSERT(this->edm_buffer_slot_addrs[this->get_buffer_slot_index()] + size_bytes < 270000);
             send_chunk_from_address_with_trid<blocking_mode, stateful_api>(
                 source_address,
                 1,
@@ -655,20 +639,7 @@ private:
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,
                 this->data_noc_cmd_buf);
-            {
-                const uint64_t noc_sem_addr = get_noc_addr(
-                    this->edm_noc_x,
-                    this->edm_noc_y,
-                    this->edm_buffer_remote_free_slots_update_addr,
-                    EDM_TO_DOWNSTREAM_NOC);
-                reinterpret_cast<volatile uint32_t*>(source_address)[19] = noc_sem_addr;
-                reinterpret_cast<volatile uint32_t*>(source_address)[20] = noc_sem_addr >> 32;
-                reinterpret_cast<volatile uint32_t*>(source_address)[21] = get_stream_reg_write_addr(17);
-                reinterpret_cast<volatile uint32_t*>(source_address)[22] = get_stream_reg_write_addr(18);
-            }
         } else {
-            // Should never be hit
-            // ASSERT(this->edm_buffer_addr + size_bytes < 270000);
             send_chunk_from_address_with_trid<blocking_mode, stateful_api>(
                 source_address,
                 1,
