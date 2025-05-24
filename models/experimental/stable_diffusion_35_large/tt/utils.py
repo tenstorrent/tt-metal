@@ -267,6 +267,7 @@ def all_gather(
     num_links: int = 1,
     memory_config: ttnn.MemoryConfig | None = None,
     multi_device_global_semaphore,
+    parallel_config: DiTParallelConfig,
 ) -> ttnn.Tensor:
     assert cluster_axis is None or mesh_device is not None, "cluster_axis requires mesh_device to be set"
     assert x.shape[dim] == x.padded_shape[dim], f"dimension {dim} of {x.shape} should not be padded"
@@ -292,10 +293,12 @@ def all_gather(
     x = ttnn.experimental.all_gather_async(
         x,
         dim,
-        num_links=num_links,
+        cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+        mesh_device=mesh_device,
         topology=topology,
-        memory_config=memory_config,
         multi_device_global_semaphore=multi_device_global_semaphore,
+        memory_config=memory_config,
+        num_links=num_links,
     )
 
     if reshape:

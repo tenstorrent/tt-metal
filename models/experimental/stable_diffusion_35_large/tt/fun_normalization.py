@@ -153,6 +153,7 @@ def sd_layer_norm(
         # all_gather currently requires linear topology when specifying a cluster axis
         topology=parallel_config.topology,
         multi_device_global_semaphore=ag_global_semaphore,
+        parallel_config=parallel_config,
     )
 
     x = ttnn.layer_norm_post_all_gather(
