@@ -65,7 +65,7 @@ runs:
           tests/sweep_framework/requirements-sweeps.txt
           pyproject.toml
           create_venv.sh
-          install-cmd: ./create_venv.sh
+        install-cmd: ./create_venv.sh
 
     - name: 💿 Install Wheel
       if: ${{ inputs.wheel-artifact-name != '' }}
