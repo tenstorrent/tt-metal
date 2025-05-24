@@ -107,10 +107,8 @@ public:
     void set_firmware_context_switch_interval(size_t interval);
 
     // Device ID -> EDM Builders for each eth core for each Risc core
-    std::unordered_map<size_t, std::vector<std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>>>
-        edm_builders_forward_direction;
-    std::unordered_map<size_t, std::vector<std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>>>
-        edm_builders_backward_direction;
+    std::unordered_map<size_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>> edm_builders_forward_direction;
+    std::unordered_map<size_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>> edm_builders_backward_direction;
 
 private:
     // Device ID -> link index
