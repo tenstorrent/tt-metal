@@ -357,7 +357,7 @@ run_t3000_sd35large_tests() {
 
   echo "LOG_METAL: Running run_t3000_sd35large_tests"
 
-  # Run test_model (decode and prefill) for llama3 70B
+  # Run test_model for sd35 large
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   mesh_device=T3K
   sd35large=/mnt/MLPerf/tt_dnn-models/StableDiffusion_35_Large/

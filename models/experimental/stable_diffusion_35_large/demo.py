@@ -16,6 +16,11 @@ from .tt import TtStableDiffusion3Pipeline
 
 
 @pytest.mark.parametrize(
+    "no_prompt",
+    [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -37,7 +42,14 @@ from .tt import TtStableDiffusion3Pipeline
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024, "trace_region_size": 15210496}], indirect=True)
 @pytest.mark.usefixtures("use_program_cache")
 def test_sd3(
-    *, mesh_device: ttnn.MeshDevice, model_name, image_w, image_h, guidance_scale, num_inference_steps
+    *,
+    mesh_device: ttnn.MeshDevice,
+    model_name,
+    image_w,
+    image_h,
+    guidance_scale,
+    num_inference_steps,
+    no_prompt=False,
 ) -> None:  # , prompt_sequence_length, spatial_sequence_length,) -> None:
     if guidance_scale > 1:
         guidance_cond = 2
@@ -67,15 +79,8 @@ def test_sd3(
         "atmospheric, wide-angle scene with deep cinematic depth and warmth."
     )
 
-    for i in itertools.count():
-        new_prompt = input("Enter the input prompt, or q to exit:")
-        if new_prompt:
-            prompt = new_prompt
-        if prompt[0] == "q":
-            break
-
+    if no_prompt:
         negative_prompt = ""
-
         images = pipeline(
             prompt_1=[prompt],
             prompt_2=[prompt],
@@ -86,5 +91,28 @@ def test_sd3(
             num_inference_steps=num_inference_steps,
             seed=i,
         )
-
         images[0].save(f"sd35_{image_w}_{image_h}.png")
+
+    else:
+        ## interactive demo
+        for i in itertools.count():
+            new_prompt = input("Enter the input prompt, or q to exit:")
+            if new_prompt:
+                prompt = new_prompt
+            if prompt[0] == "q":
+                break
+
+            negative_prompt = ""
+
+            images = pipeline(
+                prompt_1=[prompt],
+                prompt_2=[prompt],
+                prompt_3=[prompt],
+                negative_prompt_1=[negative_prompt],
+                negative_prompt_2=[negative_prompt],
+                negative_prompt_3=[negative_prompt],
+                num_inference_steps=num_inference_steps,
+                seed=i,
+            )
+
+            images[0].save(f"sd35_{image_w}_{image_h}.png")
