@@ -69,6 +69,9 @@ struct prefetch_dependent_config_t {
 
     std::optional<uint32_t> downstream_dispatch_s_cb_sem_id;
 
+    std::optional<uint32_t> upstream_num_hops;
+    std::optional<uint32_t> downstream_num_hops;
+
     tt::tt_metal::fabric_mux_client_config fabric_mux_client_config;
 };
 

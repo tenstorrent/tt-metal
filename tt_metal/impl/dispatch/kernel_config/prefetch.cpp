@@ -419,6 +419,9 @@ void PrefetchKernel::CreateKernel() {
         edm_connection_attributes_.worker_teardown_sem,
         edm_connection_attributes_.worker_buffer_index_sem,
 
+        dependent_config_.upstream_num_hops.value(),
+        dependent_config_.downstream_num_hops.value(),
+
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <map>
