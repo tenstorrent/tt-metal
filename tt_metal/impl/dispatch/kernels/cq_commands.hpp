@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -229,6 +229,7 @@ enum CQDispatchCmdPackedWriteType {
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH = 0x2 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS = 0x3 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_EVENT = 0x4 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
+    CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_GO_MSG_INDEX = 0x5 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
 };
 
 struct CQDispatchWritePackedCmd {
@@ -326,9 +327,12 @@ struct CQDispatchSetUnicastOnlyCoresCmd {
     uint32_t num_unicast_only_cores;
 } __attribute__((packed));
 
+constexpr uint8_t CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET = 0xff;
+
 struct CQDispatchGoSignalMcastCmd {
     uint32_t go_signal;
-    uint8_t num_mcast_txns;
+    uint8_t multicast_go_offset;  // Index of the multicast go to write to. CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET - no
+                                  // multicast gos.
     uint8_t num_unicast_txns;
     uint8_t noc_data_start_index;
     uint32_t wait_count;

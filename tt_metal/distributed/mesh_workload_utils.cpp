@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -76,9 +76,10 @@ void write_go_signal(
         expected_num_workers_completed,
         *reinterpret_cast<uint32_t*>(&run_program_go_signal),
         MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
-        send_mcast ? device->num_noc_mcast_txns(sub_device_id) : 0,
+        (send_mcast && device->has_noc_mcast_txns(sub_device_id)) ? *sub_device_id
+                                                                  : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
         send_unicasts ? device->num_virtual_eth_cores(sub_device_id) : 0,
-        device->noc_data_start_index(sub_device_id, send_mcast, send_unicasts), /* noc_data_start_idx */
+        device->noc_data_start_index(sub_device_id, send_unicasts), /* noc_data_start_idx */
         dispatcher_for_go_signal);
 
     TT_ASSERT(go_signal_cmd_sequence.size_bytes() == go_signal_cmd_sequence.write_offset_bytes());
