@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -703,7 +703,10 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
 }
 
 void FDMeshCommandQueue::reset_worker_state(
-    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
+    bool reset_launch_msg_state,
+    uint32_t num_sub_devices,
+    const vector_aligned<uint32_t>& go_signal_noc_data,
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) {
     in_use_ = true;
     for (auto device : mesh_device_->get_devices()) {
         program_dispatch::reset_worker_dispatch_state_on_device(
@@ -716,6 +719,10 @@ void FDMeshCommandQueue::reset_worker_state(
         program_dispatch::set_num_worker_sems_on_dispatch(mesh_device_, device->sysmem_manager(), id_, num_sub_devices);
         program_dispatch::set_go_signal_noc_data_on_dispatch(
             mesh_device_, go_signal_noc_data, device->sysmem_manager(), id_);
+        if (reset_launch_msg_state) {
+            program_dispatch::set_core_go_message_mapping_on_device(
+                device, core_go_message_mapping, device->sysmem_manager(), id_);
+        }
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         config_buffer_mgr_,
