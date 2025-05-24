@@ -85,8 +85,6 @@ MemoryConfig
 Examples of converting between PyTorch Tensor and TT Tensor
 ===========================================================
 
-Remember that TT Tensors must have rank 4.
-
 Converting a PyTorch Tensor to a TT Tensor
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
