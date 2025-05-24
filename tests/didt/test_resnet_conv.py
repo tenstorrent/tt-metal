@@ -165,7 +165,11 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
     filter_width = 4
     input_height = 35
     input_width = 83
-    compute_with_storage_grid_size = (13, 10) if is_blackhole() else (8, 8)
+    compute_with_storage_grid_size = (8, 8)
+    if is_blackhole():
+        compute_grid = get_blackhole_grid_size(mesh_device)
+        compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
+    logger.info(f"Running on {compute_with_storage_grid_size} cores")
     # scale batch_size with num cores to keep sub_block dims
     batch_size = compute_with_storage_grid_size[0] * compute_with_storage_grid_size[1]
 

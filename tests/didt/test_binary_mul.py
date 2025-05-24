@@ -87,16 +87,17 @@ def test_binary_mul(
     didt_workload_iterations,
     determinism_check_interval,
     use_program_cache,
-    grid_size=(13, 10),
+    grid_size=(8, 8),
 ):
     if is_blackhole() and mesh_device.get_num_devices() > 1:
         pytest.skip("Multi-chip Blackhole has not been tested")
 
     # Initialize input configurations
     if is_blackhole():
-        compute_grid = get_blackhole_grid_size()
+        compute_grid = get_blackhole_grid_size(mesh_device)
     else:
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+    logger.info(f"Running on {compute_grid} cores")
 
     in0_shape = [1, 1, 640 * compute_grid.y, 576 * compute_grid.x]
     in1_shape = in0_shape
