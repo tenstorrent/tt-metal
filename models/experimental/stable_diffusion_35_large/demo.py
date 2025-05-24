@@ -25,8 +25,9 @@ from .tt import TtStableDiffusion3Pipeline
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "model_name, image_w, image_h, guidance_scale, num_inference_steps",  # "prompt_sequence_length", "spatial_sequence_length",
+    "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
+        # Commented out options, to be considered later for different variants of the model size and resolution
         #        ("medium", 512, 512, 4.5, 40, 333, 1024),
         #        ("medium", 1024, 1024, 4.5, 40, 333, 4096),
         #        ("large", 512, 512, 3.5, 28, 333, 1024),

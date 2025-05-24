@@ -142,25 +142,6 @@ def test_transformer(
         N=spatial_sequence_length,
         L=prompt_sequence_length,
     )
-    # num_measurement_iterations=1
-    # profiler.clear()
-    # profiler.start(f"run")
-    # for i in range(num_measurement_iterations):
-    #     tt_output = tt_model(
-    #         spatial=tt_spatial,
-    #         prompt=tt_prompt,
-    #         pooled_projection=tt_pooled_projection,
-    #         timestep=tt_timestep,
-    #         N=spatial_sequence_length,
-    #         L=prompt_sequence_length,
-    #     )
-    # profiler.end(f"run")
-    # devices = mesh_device.get_devices()
-    # ttnn.DumpDeviceProfiler(devices[0])
-    # total_time = profiler.get("run")
-    # avg_time = total_time / num_measurement_iterations
-    # print(f" TOTAL TIME: {total_time} AVG TIME: {avg_time}\n")
 
     torch_output = torch.unsqueeze(torch_output, 1)
-    print(f"tt_output shape {tt_output.shape} torch_output {torch_output.shape}")
     assert_quality(torch_output, tt_output, pcc=0.997, mse=0.06, shard_dim=0, num_devices=mesh_device.get_num_devices())
