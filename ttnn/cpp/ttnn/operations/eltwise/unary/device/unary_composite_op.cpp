@@ -36,13 +36,6 @@ Tensor _rad2deg(const Tensor& input_tensor, const std::optional<MemoryConfig>& o
         input_tensor, (float)(180.0 / M_PI), std::nullopt, output_mem_config.value_or(input_tensor.memory_config()));
 }
 
-// // tanhshrink(x) = x - tanh(x)
-Tensor _tanhshrink(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor tan_x = ttnn::tanh(x, output_mem_config);
-    Tensor result = ttnn::subtract(x, tan_x, std::nullopt, output_mem_config);
-    return result;
-}
-
 // acosh(x) = log(x + sqrt(x^2 - 1))
 Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(input_a.storage_type() == StorageType::DEVICE, "Unary operation requires input to be on Device.");

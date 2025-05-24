@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -1763,6 +1763,12 @@ void py_module(py::module& module) {
 
     detail::bind_unary_operation(
         module,
+        ttnn::tanhshrink,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|tanhshrink|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation(
+        module,
         ttnn::floor,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc",
         "",
@@ -1797,7 +1803,6 @@ void py_module(py::module& module) {
         R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-
     detail::bind_unary_operation(
         module,
         ttnn::i0,
@@ -2098,12 +2103,6 @@ void py_module(py::module& module) {
         module,
         ttnn::rad2deg,
         R"doc(Performs rad2deg function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_composite(
-        module,
-        ttnn::tanhshrink,
-        R"doc(Performs tanhshrink function on :attr:`input_tensor`.)doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_composite(
