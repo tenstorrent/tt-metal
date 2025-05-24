@@ -104,17 +104,6 @@ def test_attention(
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ccl_sub_device_crs,
-        ]
-    )
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
     num_devices = mesh_device.get_num_devices()
@@ -200,9 +189,7 @@ def test_attention(
         ag_global_semaphore=ccl_semaphore_handle,
     )
 
-    ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-    mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
+    ttnn.synchronize_device(mesh_device)
 
     tt_spatial_output_torch = ttnn.to_torch(
         tt_spatial_output,
