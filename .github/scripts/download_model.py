@@ -12,4 +12,7 @@ config = FalconConfig.from_pretrained(model_id, cache_dir=cache_dir)
 # Download model weights
 model = FalconForCausalLM.from_pretrained(model_id, config=config, cache_dir=cache_dir).eval()
 
+# Save model weights to the specified cache directory
+model.save_pretrained(cache_dir)
+
 print(f"Model {model_id} successfully downloaded to {cache_dir}")
