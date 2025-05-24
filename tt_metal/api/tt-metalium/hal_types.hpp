@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +35,7 @@ enum class HalL1MemAddrType : uint8_t {
     CORE_INFO,
     GO_MSG,
     LAUNCH_MSG_BUFFER_RD_PTR,
+    GO_MSG_INDEX,
     LOCAL,
     BANK_TO_NOC_SCRATCH,
     APP_SYNC_INFO,

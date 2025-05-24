@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -87,22 +87,22 @@ int main() {
         noc_local_state_init(n);
     }
 
-    mailboxes->go_message.signal = RUN_MSG_DONE;
+    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
     while (1) {
         // Wait...
         WAYPOINT("GW");
 
         uint8_t go_message_signal = RUN_MSG_DONE;
-        while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
+        while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
-                mailboxes->go_message.signal = RUN_MSG_DONE;
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
+                mailboxes->go_messages[0].signal = RUN_MSG_DONE;
                 // Notify dispatcher that this has been done
                 internal_::notify_dispatch_core_done(dispatch_addr);
             }
@@ -149,12 +149,12 @@ int main() {
                 WAYPOINT("D");
             }
 
-            mailboxes->go_message.signal = RUN_MSG_DONE;
+            mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 internal_::notify_dispatch_core_done(dispatch_addr);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
