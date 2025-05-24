@@ -53,6 +53,7 @@ struct dispatch_core_placement_t {
     std::optional<tt_cxy_pair> mux_d = std::nullopt;       // Mux
     std::optional<tt_cxy_pair> demux_d = std::nullopt;     // Demux
     std::optional<tt_cxy_pair> tunneler_d = std::nullopt;  // ethernet tunneler
+    std::optional<tt_cxy_pair> fabric_mux = std::nullopt;  // Fabric Mux
 };
 
 class dispatch_core_manager {
@@ -176,6 +177,16 @@ public:
     const tt_cxy_pair& dispatcher_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
 
     const tt_cxy_pair& dispatcher_s_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+
+    /// @brief Gets the location of the kernel designated to relay fast dispatch commands to worker cores from a
+    /// particular command queue
+    /// @param device_id ID of the device that this core is on
+    /// @param channel assigned to the command queue where commands are enqueued
+    /// @param cq_id ID of the command queue within the channel
+    /// @return tt_cxy_pair logical location (chip + core coordinate) of the fabric mux core
+    const tt_cxy_pair& fabric_mux_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+
+    bool is_fabric_mux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
 
     CoreType get_dispatch_core_type();
 

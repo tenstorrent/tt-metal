@@ -864,30 +864,8 @@ void Device::clear_dram_state() {
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
-    if (this->is_mmio_capable()) {
-        auto command_queue_program_ptr = create_and_compile_cq_program(this);
-        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
-        // Since devices could be set up in any order, on mmio device do a pass and populate cores for tunnelers.
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_mmio_device_tunnel_count(this->id_) > 0) {
-            tunnels_from_mmio_ =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(this->id_);
-            for (auto& tunnel : tunnels_from_mmio_) {
-                for (uint32_t tunnel_stop = 0; tunnel_stop < tunnel.size() - 1; tunnel_stop++) {
-                    chip_id_t device_id = tunnel[tunnel_stop];
-                    chip_id_t ds_device_id = tunnel[tunnel_stop + 1];
-                    uint16_t channel =
-                        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-                            ds_device_id);
-                    // Only one tunneler per connection, use CQ ID 0
-                    MetalContext::instance().get_dispatch_core_manager().tunneler_core(
-                        device_id, ds_device_id, channel, 0);
-                }
-            }
-        }
-    } else {
-        auto command_queue_program_ptr = create_and_compile_cq_program(this);
-        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
-    }
+    auto command_queue_program_ptr = create_and_compile_cq_program(this);
+    this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
 }
 
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch cores
@@ -1101,23 +1079,15 @@ bool Device::close() {
     DprintServerDetach(this->id());
     watcher_detach(this->id());
 
-    // Assert worker cores only for this device
-    auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(this->id());
-    auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(this->id());
-
     CoreCoord grid_size = this->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
-            if (!dispatch_cores.contains(worker_core) && !routing_cores.contains(worker_core)) {
-                if (!this->storage_only_cores_.contains(logical_core)) {
-                    tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
-                        tt_cxy_pair(this->id(), worker_core));
-                }
-            } else {
-                log_debug(tt::LogMetal, "{} will not be Reset when closing Device {}", worker_core.str(), this->id());
+            if (!this->storage_only_cores_.contains(logical_core)) {
+                tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
+                    tt_cxy_pair(this->id(), worker_core));
             }
         }
     }
