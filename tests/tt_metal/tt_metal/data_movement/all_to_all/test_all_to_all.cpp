@@ -26,11 +26,11 @@ struct AllToAllConfig {
     uint32_t test_id = START_ID;
 
     /* Grid configurations */
-    CoreCoord mst_logical_start_coord =
-        CoreCoord();  // Commenting out for now. For now, the assumed master and subordinate starting coordiantes are
-                      // both assumed to be (0,0). Maybe if we do 2x2 and 5x5, we can have different starting
-                      // coordinates for each (or both).
+    CoreCoord mst_logical_start_coord = CoreCoord();
     CoreCoord sub_logical_start_coord = CoreCoord();
+    // For now, the assumed master and subordinate starting coordiantes are
+    // both assumed to be (0,0). Maybe if we do 2x2 and 5x5, we can have different starting
+    // coordinates for each (or both).
     CoreCoord mst_grid_size = CoreCoord();
     CoreCoord sub_grid_size = CoreCoord();
 
@@ -55,9 +55,9 @@ struct AllToAllConfig {
 /// @param device The device on which the test is executed.
 /// @param test_config Configuration of the test, defined by a specific struct.
 /// @return Status of the test execution (e.g., success or failure).
-bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
+bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
     // Program
-    Program program = CreateProgram();
+    Program program = CreateProgram();  // QUESTION: What exactly is a Program?
 
     /* INITIALIZATION */
 
@@ -76,7 +76,8 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
         and provides functionality for operations like merging, subtracting, and finding intersections between ranges.
 
         - If `loopback` is disabled in the test configuration, the subordinate cores are adjusted to exclude any
-        overlap with the master cores by subtracting `mst_core_set` from `sub_core_set`.
+        overlap with the master cores by subtracting `mst_core_set` from `sub_core_set`. So far, loopback is always
+       assumed to be enabled.
     */
 
     // Logical Coordinate Ranges
@@ -96,11 +97,12 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     CoreRangeSet sub_logical_core_set({CoreRange(sub_logical_start_coord, sub_logical_end_coord)});
 
     // Subordinate CoreRangeSet must not contain any subset of master cores
-    // IDEA: Consider performing this check in the kernel itself instead of here. It would have to be performed per
-    // master core
+    // IDEA:    Consider performing this check in the kernel itself instead of here.
+    //          It would have to be performed per master core
     if (!test_config.loopback) {
         sub_logical_core_set = sub_logical_core_set.subtract(mst_logical_core_set);
     }
+    /////
 
     // Keep track of the number of master and subordinate cores
     uint32_t num_masters = mst_logical_core_set.num_cores();
@@ -108,12 +110,14 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     // -------------------- //
 
-    // Determine total size of the sender and receiver buffers // REVISIT: This may have to be modified since we have
-    // multiple senders now
+    // Determine total size of the sender and receiver buffers
     const uint32_t transaction_size_pages = test_config.transaction_size_pages;
     const uint32_t transaction_size_bytes = transaction_size_pages * page_size_bytes;
-    const uint32_t total_sender_size_pages = transaction_size_pages * num_subordinates;
-    const uint32_t total_sender_size_bytes = transaction_size_bytes * num_subordinates;
+
+    const uint32_t mst_sender_size_bytes = transaction_size_bytes;  // Size of the master sender buffer
+    const uint32_t sub_sender_size_bytes =
+        transaction_size_bytes * num_subordinates;  // Size of the subordinate sender buffer
+    // QUESTION: Why are we calling it "sender"?
 
     // Initialize shard parameters and buffers
 
@@ -128,7 +132,8 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
         std::array<uint32_t, 2>& shard_shape_:
             The logical shape of the shard in terms of rows and columns. This determines
-    *       how the data is logically divided across the cores.
+            how the data is logically divided across the cores.
+            QUESTION: What are the units? the data unit or pages?
 
         ShardOrientation& shard_orientation_:
             The layout order of cores in the shard grid. For example, this could be
@@ -142,20 +147,29 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             The shape of the entire 2D tensor in terms of pages. This defines the overall
             size of the data being distributed across the cores.
 
+        NOTES:
+            - Shard shape refers to the "portions/slices" of the tensor2d_shape_in_pages -> Buffer PORTION // WAIT This
+       might be wrong
+
     */
 
+    // QUESTION: Why are we dividing by 2? Is each data element 2 bytes big?
     auto mst_shard_parameters = ShardSpecBuffer(
-        mst_core_set,
+        mst_logical_core_set,
         {1, transaction_size_bytes / 2},
         ShardOrientation::ROW_MAJOR,
         {1, page_size_bytes / 2},
-        {1, transaction_size_pages});
+        {num_masters, transaction_size_pages});  // Dedicating a row per core involved
     auto sub_shard_parameters = ShardSpecBuffer(
-        sub_core_set,
+        sub_logical_core_set,
         {1, transaction_size_bytes / 2},
         ShardOrientation::ROW_MAJOR,
         {1, page_size_bytes / 2},
-        {1, total_sender_size_pages});
+        {num_subordinates, transaction_size_pages});
+    // QUESTION: If I'm not mistaken, L1 capacity is still the same regardless of increased page size in BH. Shouldn't
+    // that be taken into account?
+    //           Should we be dividing transaction_size_pages by 2 for BH?
+    // ANOTHER QUESTION: Are we still using this for multicast as well?
 
     // Buffers
     /*
@@ -183,62 +197,63 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     auto mst_l1_buffer = CreateBuffer(ShardedBufferConfig{
         .device = device,
-        .size = transaction_size_bytes,
+        .size = mst_sender_size_bytes,
         .page_size = page_size_bytes,
         .buffer_type = BufferType::L1,
         .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = std::move(master_shard_parameters),
+        .shard_parameters = std::move(mst_shard_parameters),
     });
     auto sub_l1_buffer = CreateBuffer(ShardedBufferConfig{
         .device = device,
-        .size = total_sender_size_bytes,
+        .size = sub_sender_size_bytes,
         .page_size = page_size_bytes,
         .buffer_type = BufferType::L1,
         .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = std::move(subordinate_shard_parameters),
+        .shard_parameters = std::move(sub_shard_parameters),
     });
+    // QUESTION: When it creates a buffer, is something actually happening?
+    // Or is it just a placeholder for the buffer that will be created later? Is it just a way to define the buffer's
+    // properties?
 
     // Get byte addresses
     uint32_t mst_l1_byte_address = mst_l1_buffer->address();
     uint32_t sub_l1_byte_address = sub_l1_buffer->address();
 
     // Semaphores
-    CoreRangeSet sem_core_set = sub_core_set.merge<CoreRangeSet>(mst_core_set);
+    CoreRangeSet sem_core_set = sub_logical_core_set.merge<CoreRangeSet>(mst_logical_core_set);
     const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
 
     // QUESTION: Is there a single semaphore per ID per core? Or is it a single semaphore for all cores?
 
-    // Physical Sub Coordinates, Needed for passing in the coordintes for the multicast function
-    CoreCoord sub_physical_start_coord = device->worker_core_from_logical_core(sub_logical_start_coord);
-    CoreCoord sub_physical_end_coord = device->worker_core_from_logical_core(sub_logical_end_coord);
-    std::vector<uint32_t> sub_physical_coords = {
-        sub_physical_start_coord.x, sub_physical_start_coord.y, sub_physical_end_coord.x, sub_physical_end_coord.y};
+    // worker Sub Coordinates, Needed for passing in the coordintes for the multicast function
+    CoreCoord sub_worker_start_coord = device->worker_core_from_logical_core(sub_logical_start_coord);
+    CoreCoord sub_worker_end_coord = device->worker_core_from_logical_core(sub_logical_end_coord);
+    std::vector<uint32_t> sub_worker_coords = {
+        sub_worker_start_coord.x, sub_worker_start_coord.y, sub_worker_end_coord.x, sub_worker_end_coord.y};
 
-// Check this part. Do we really need each x and y coordinate to take up 32 bits of space on the runtime arguments?
+    // CHECK this part: Do we really need each x and y coordinate to take up 32 bits of space on the runtime arguments?
+    // I say no, we can do it in 4
 
-// Obtaining every set of physical coordinates for the master and subordinate cores
-// NOTE: very minor but this could technically go in a helper function
+    // Obtaining every set of worker coordinates for the master and subordinate cores
+    // NOTE: very minor but this could technically go in a helper function
 
-// Masters
-std:;
-    vector<uint32_t> mst_coordinates = {};
-
+    // Masters
+    std::vector<uint32_t> mst_coordinates = {};
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-        CoreCoord mst_physical_core = device->worker_core_from_logical_core(mst_logical_core);
+        CoreCoord mst_worker_core = device->worker_core_from_logical_core(mst_logical_core);
         mst_coordinates.push_back(mst_logical_core.x);
         mst_coordinates.push_back(mst_logical_core.y);
-        insert_index += 2;  // Update the index for the next insertion
     }
+
     // Subordinates
     std::vector<uint32_t> sub_coordinates = {};
-
     for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
-        // REVISIT: Loopback check, deal with this later // WE COULD maybe implement this check in the kernel itself
+        // LOOPBACK CHECK, TO BE REVISITED: Loopback check, deal with this later // WE COULD maybe implement this check
+        // in the kernel itself
         /*if (!test_config.loopback &&
             (sub_logical_core.x == test_config.master_core_coord.x && sub_logical_core.y ==
-        test_config.master_core_coord.y)) { continue;
-        }*/ // LOOPBACK CHECK, TO BE REVISITED
-        CoreCoord sub_physical_core = device->worker_core_from_logical_core(sub_logical_core);  // This part namely
+        test_config.master_core_coord.y)) { continue; }*/
+        CoreCoord sub_worker_core = device->worker_core_from_logical_core(sub_logical_core);  // This part namely
         sub_coordinates.push_back(sub_logical_core.x);
         sub_coordinates.push_back(sub_logical_core.y);
     }
@@ -248,45 +263,59 @@ std:;
     // Compile-time arguments for kernels
 
     // Sender Kernel
+
+    size_t mst_coord_offset =
+        20;  // Index of the compile_args_vector at which the master coordiantes start // NOTE: arbitrarily chosen
+    size_t sub_coord_offset = 120;  // NOTE: arbitrarily chosen (100 after the previous index)
+
     std::vector<uint32_t> sender_compile_args = {
-        (uint32_t)mst_l1_byte_address,
-        (uint32_t)sub_l1_byte_address,
-        (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.transaction_size_pages,
-        (uint32_t)test_config.page_size_bytes,
-        (uint32_t)test_config.test_id,
-        (uint32_t)num_subordinates,
-        (uint32_t)total_sender_size_bytes,
-        (uint32_t)test_config.is_linked,
-        (uint32_t)semaphore_id};
-    // Make it so that the contents of sub_coords are appended to sender_compile_args
-    sender_compile_args.insert(sender_compile_args.end(), sub_physical_coords.begin(), sub_physical_coords.end());
-    size_t mst_coord_index =
-        20  // NOTE: arbitrarily chosen
-        sender_compile_args.insert(
-            sender_compile_args.begin() + mst_coord_index, mst_coordinates.begin(), mst_coordinates.end());
-    size_t sub_coord_index =
-        120  // OR have this be the halfway point betewen 5 and 256
-        sender_compile_args.insert(
-            sender_compile_args.begin() + sub_coord_index, sub_coordinates.begin(), sub_coordinates.end());
+
+        (uint32_t)test_config.test_id,  // test_id
+
+        (uint32_t)mst_l1_byte_address,  // src_addr
+        (uint32_t)sub_l1_byte_address,  // dst_addr
+
+        (uint32_t)test_config.num_of_transactions,     // num_of_transactions
+        (uint32_t)test_config.transaction_size_pages,  // transaction_num_pages
+        (uint32_t)page_size_bytes,                     // page_size_bytes
+        (uint32_t)transaction_size_bytes,              // total_transaction_size_bytes
+
+        (uint32_t)test_config.is_linked,  // linked
+        (uint32_t)sem_id,                 // semaphore_id
+
+        (uint32_t)num_masters,       // num_masters
+        (uint32_t)num_subordinates,  // num_subordinates
+        (uint32_t)mst_coord_offset,  // mst_coords_offset
+        (uint32_t)sub_coord_offset,  // sub_coords_offset
+    };
+
+    // Make it so that the contents of sub_coords are appended to sender_compile_args (indices 13 - 16)
+    sender_compile_args.insert(sender_compile_args.end(), sub_worker_coords.begin(), sub_worker_coords.end());
+    sender_compile_args.insert(
+        sender_compile_args.begin() + mst_coord_index, mst_coordinates.begin(), mst_coordinates.end());
+    sender_compile_args.insert(
+        sender_compile_args.begin() + sub_coord_index, sub_coordinates.begin(), sub_coordinates.end());
 
     // Create kernels // QUESTION: Is this the point of compilation of the kernel?
+    //  // Defining the base directory in one string and
+    // appending to it in another? Is that possible? (for kernel path listing)
     auto sender_kernel = CreateKernel(
         program,
-        test_config.is_multicast ? "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/"
-                                   "sender_all_multicast.cpp"  // Defining the base directory in one string and
-                                                               // appending to it in another? Is that possible?
+        test_config.is_multicast ? "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/sender_all_multicast.cpp"
                                  : "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/sender_all.cpp",
-        master_core_set,
+        mst_logical_core_set,  // REVISIT THIS: maybe it really only creates one kernel per master core
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = test_config.noc_id,
             .compile_args = sender_compile_args});
 
+    // Run-time arguments for kernels (hoping this won't be necessary)
+    /*
     // Define runtime arguments for the kernels
 
     // Assign runtime arguments to the kernels
     SetRuntimeArgs(program, sender_kernel, master_core_set, master_run_args);
+    */
 
     /* RUNNING THE TEST PROGRAM */
 
@@ -295,25 +324,29 @@ std:;
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Input
-    vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+    std::vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f,
         100.0f,
         transaction_size_bytes / bfloat16::SIZEOF,
         chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
-    vector<uint32_t> packed_golden = packed_input;
-    for (uint32_t i = 1; i < num_subordinates; i++) {
+    // REVISIT: If we're going to do it like this, the output vector may have to have master cores * subordinate cores
+    // number of copies of the packed input
+    size_t total_size = packed_input.size() * num_subordinates;
+    std::vector<uint32_t> packed_golden;
+    packed_golden.reserve(total_size);
+    for (uint32_t i = 0; i < num_subordinates; i++) {
         packed_golden.insert(packed_golden.end(), packed_input.begin(), packed_input.end());
     }
 
     // Launch program and record outputs
-    detail::WriteToBuffer(master_l1_buffer, packed_input);
+    detail::WriteToBuffer(mst_l1_buffer, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     detail::LaunchProgram(device, program);
 
-    vector<uint32_t> packed_output;
-    detail::ReadFromBuffer(subordinate_l1_buffer, packed_output);
+    std::vector<uint32_t> packed_output;
+    detail::ReadFromBuffer(sub_l1_buffer, packed_output);
 
     // Results comparison
     bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
@@ -339,22 +372,24 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAll) {}
 
 /* ======== Multicast ========= */
 /* ======== 2x2 to 2x2 ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllToAllMulticast11x10PacketSizes) {
+TEST_F(DeviceFixture, TensixDataMovementAllToAllMulticast2x2PacketSizes) {
     uint32_t test_case_id = 1;
 
     /* Parameters */
 
-    uint32_t max_transactions = 256;
+    // uint32_t max_transactions = 256;
+    uint32_t max_transactions = 64;  // REVISIT: This is a bit low, but it works for now
     uint32_t max_transaction_size_pages = 64;
 
     // IDEA: Implement a for loop that shuffles through several of each of these coordinates to test grids of different
     // locations
     CoreCoord mst_start_coord = {0, 0};
-    CoreCorrd sub_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
 
     CoreCoord mst_grid_size = {2, 2};
     CoreCoord sub_grid_size = {2, 2};
 
+    bool loopback = true;
     NOC noc_id = NOC::NOC_0;
     bool is_linked = false;
 
@@ -378,7 +413,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAllMulticast11x10PacketSizes) {
                 .transaction_size_pages = transaction_size_pages,
 
                 .l1_data_format = DataFormat::Float16_b,
-                .loopback = true,
+                .loopback = loopback,
                 .noc_id = noc_id,
                 .is_multicast = true,
                 .is_linked = is_linked,
