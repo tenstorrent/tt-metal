@@ -12,7 +12,6 @@
 #include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include <trace.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
@@ -48,6 +47,7 @@
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
+#include "trace/trace.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dprint_server.hpp"
@@ -63,7 +63,7 @@
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
-#include "trace_buffer.hpp"
+#include "trace/trace_buffer.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"

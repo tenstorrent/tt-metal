@@ -16,7 +16,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/trace.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "tools/profiler/op_profiler.hpp"
 

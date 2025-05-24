@@ -17,7 +17,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/trace_buffer.hpp>
+#include "trace/trace_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
