@@ -1,3 +1,4 @@
+import transformers
 from transformers import FalconConfig
 from transformers.models.falcon.modeling_falcon import FalconForCausalLM
 
