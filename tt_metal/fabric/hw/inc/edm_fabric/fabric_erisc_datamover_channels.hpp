@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "debug/dprint.h"
 #include "dataflow_api.h"
 #if defined(COMPILE_FOR_ERISC)
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
@@ -19,7 +18,6 @@
 #include "fabric_edm_types.hpp"
 #include "edm_fabric_worker_adapters.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
-#include "debug/ring_buffer.h"
 
 // !!! TODO: delete this once push/pull 2D tests/code is deprecated !!!
 #if (ROUTING_MODE & ROUTING_MODE_PULL) || (ROUTING_MODE & ROUTING_MODE_PUSH)
@@ -62,8 +60,6 @@ public:
         buffer_size_in_bytes(buffer_size_bytes),
         max_eth_payload_size_in_bytes(buffer_size_in_bytes),
         channel_id(channel_id) {
-        // WATCHER_RING_BUFFER_PUSH(0x67676767);
-        // WATCHER_RING_BUFFER_PUSH(channel_base_address);
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
             for (size_t j = 0; j < this->max_eth_payload_size_in_bytes; j++) {
@@ -181,13 +177,6 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE void notify_worker_of_read_counter_update() {
-        // This is the last inline write before assertion
-        // WATCHER_RING_BUFFER_PUSH(0xabcdABCD);
-        // WATCHER_RING_BUFFER_PUSH(this->cached_worker_semaphore_address);
-        // WATCHER_RING_BUFFER_PUSH(this->cached_worker_semaphore_address >> 32);
-        // WATCHER_RING_BUFFER_PUSH(local_read_counter.counter);
-        // DPRINT << "ack to " << (uint64_t)cached_worker_semaphore_address << "\n";// counter " <<
-        // (uint32_t)local_read_counter.counter << "\n";
         noc_inline_dw_write5<false, true>(
             this->cached_worker_semaphore_address,
             local_read_counter.counter,
