@@ -1084,8 +1084,7 @@ bool check_dateline(
 void build_tt_fabric_program(
     IDevice* device,
     Program* fabric_program_ptr,
-    std::unordered_map<tt::tt_fabric::chan_id_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>>&
-        edm_builders) {
+    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder>& edm_builders) {
     using namespace tt_fabric;
     const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     std::pair<mesh_id_t, chip_id_t> mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
@@ -1093,8 +1092,6 @@ void build_tt_fabric_program(
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const auto& fabric_context = control_plane->get_fabric_context();
     const auto& edm_config = fabric_context.get_fabric_router_config();
-    const auto risc_core_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
     if (is_TG && device->is_mmio_capable()) {
         auto router_chans_and_direction =
@@ -1104,23 +1101,18 @@ void build_tt_fabric_program(
             // for now treat the mmio chips as the handshake master
             auto remote_chip_id = device->id() + 1;
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
-            std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders_for_cores;
-
-            for (size_t risc_id = 0; risc_id < risc_core_count; risc_id++) {
-                auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-                    device,
-                    *fabric_program_ptr,
-                    eth_logical_core,
-                    device->id(),
-                    remote_chip_id,
-                    edm_config,
-                    true,  /* enable_persistent_mode */
-                    false, /* build_in_worker_connection_mode */
-                    false, /* is_dateline */
-                    eth_direction);
-                edm_builders_for_cores.push_back(edm_builder);
-            }
-            edm_builders.insert({eth_chan, edm_builders_for_cores});
+            auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
+                device,
+                *fabric_program_ptr,
+                eth_logical_core,
+                device->id(),
+                remote_chip_id,
+                edm_config,
+                true,  /* enable_persistent_mode */
+                false, /* build_in_worker_connection_mode */
+                false, /* is_dateline */
+                eth_direction);
+            edm_builders.insert({eth_chan, edm_builder});
         }
 
         return;
@@ -1190,23 +1182,18 @@ void build_tt_fabric_program(
 
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
-            std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders_for_cores;
-            for (size_t risc_id = 0; risc_id < risc_core_count; risc_id++) {
-                auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-                    device,
-                    *fabric_program_ptr,
-                    eth_logical_core,
-                    device->id(),
-                    remote_physical_chip_id,
-                    curr_edm_config,
-                    true,  /* enable_persistent_mode */
-                    false, /* build_in_worker_connection_mode */
-                    is_dateline,
-                    risc_id,
-                    control_plane->routing_direction_to_eth_direction(direction));
-                edm_builders_for_cores.push_back(edm_builder);
-            }
-            edm_builders.insert({eth_chan, edm_builders_for_cores});
+            auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
+                device,
+                *fabric_program_ptr,
+                eth_logical_core,
+                device->id(),
+                remote_physical_chip_id,
+                curr_edm_config,
+                true,  /* enable_persistent_mode */
+                false, /* build_in_worker_connection_mode */
+                is_dateline,
+                control_plane->routing_direction_to_eth_direction(direction));
+            edm_builders.insert({eth_chan, edm_builder});
         }
     }
 
@@ -1233,23 +1220,18 @@ void build_tt_fabric_program(
 
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
-                // TODO: update from vector<vector> to specified struct/class
-                //       Conceptually this method (connect_to_downstream_edm) call
-                //       is for each connection. not for each risc.
-                for (size_t risc_id = 0; risc_id < risc_core_count; risc_id++) {
-                    edm_builder1[risc_id].connect_to_downstream_edm(edm_builder2[risc_id]);
-                    edm_builder2[risc_id].connect_to_downstream_edm(edm_builder1[risc_id]);
+                edm_builder1.connect_to_downstream_edm(edm_builder2);
+                edm_builder2.connect_to_downstream_edm(edm_builder1);
 
-                    // select VC based on the current link
-                    auto edm_noc_vc = link & edm_builder1[risc_id].config.MAX_EDM_NOC_VC;
-                    edm_builder1[risc_id].config.edm_noc_vc = edm_noc_vc;
-                    edm_builder2[risc_id].config.edm_noc_vc = edm_noc_vc;
-
-                    if (is_galaxy) {
-                        get_optimal_noc_for_edm(edm_builder1[risc_id], edm_builder2[risc_id], num_links, topology);
-                    }
-                }
+                // select VC based on the current link
+                auto edm_noc_vc = link & edm_builder1.config.MAX_EDM_NOC_VC;
+                edm_builder1.config.edm_noc_vc = edm_noc_vc;
+                edm_builder2.config.edm_noc_vc = edm_noc_vc;
                 link++;
+
+                if (is_galaxy) {
+                    get_optimal_noc_for_edm(edm_builder1, edm_builder2, num_links, topology);
+                }
 
                 eth_chans_dir1_it++;
                 eth_chans_dir2_it++;
@@ -1283,7 +1265,7 @@ void build_tt_fabric_program(
 
 std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     std::unique_ptr<Program> fabric_program_ptr = std::make_unique<Program>();
-    std::unordered_map<tt::tt_fabric::chan_id_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>> edm_builders;
+    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
 
     const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     auto& fabric_context = control_plane->get_fabric_context();
@@ -1310,11 +1292,13 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     }
 
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    for (auto& [eth_chan, edm_builder_for_cores] : edm_builders) {
-        for (auto& edm_builder : edm_builder_for_cores) {
-            edm_builder.set_wait_for_host_signal(true);
-            const std::vector<uint32_t> rt_args = edm_builder.get_runtime_args();
-            std::vector<uint32_t> ct_args = edm_builder.get_compile_time_args();
+    const auto num_risc_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    for (auto& [eth_chan, edm_builder] : edm_builders) {
+        edm_builder.set_wait_for_host_signal(true);
+        const std::vector<uint32_t> rt_args = edm_builder.get_runtime_args();
+        for (uint32_t risc_id = 0; risc_id < num_risc_cores; risc_id++) {
+            std::vector<uint32_t> ct_args = edm_builder.get_compile_time_args(risc_id);
 
             ct_args.push_back(eth_chan == master_router_chan);
             ct_args.push_back(master_router_chan);

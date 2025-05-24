@@ -1211,19 +1211,14 @@ void setup_test_with_persistent_fabric(
         devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, topology, is_galaxy);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
     if (loopback_on_last_device) {
-        for (auto& edm_builders_per_conn : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
+        for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
             log_trace(
                 tt::LogTest,
                 "Implementing loopback on device {} by connecting 1D fabric endpoint to itself at x={}, y={}",
                 devices.back()->id(),
-                edm_builders_per_conn.begin()->my_noc_x,
-                edm_builders_per_conn.begin()->my_noc_y);
-            // TODO: update from vector<vector> to specified struct/class
-            //       Conceptually this method (connect_to_downstream_edm) call
-            //       is for each connection. not for each risc.
-            for (auto& edm_per_risc : edm_builders_per_conn) {
-                edm_per_risc.connect_to_downstream_edm(edm_per_risc);
-            }
+                edm_builder.my_noc_x,
+                edm_builder.my_noc_y);
+            edm_builder.connect_to_downstream_edm(edm_builder);
         }
     }
 

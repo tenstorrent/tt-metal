@@ -49,6 +49,16 @@ namespace tt::tt_fabric {
 //                         ------------------
 //
 
+FabricRiscConfig::FabricRiscConfig() :
+    enable_handshake(true),
+    enable_context_switch(true),
+    enable_interrupts(true),
+    iterations_between_ctx_switch_and_teardown_checks(
+        FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks) {
+    this->is_sender_channel_serviced.fill(true);
+    this->is_receiver_channel_serviced.fill(true);
+}
+
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->topology = topology;
     uint32_t num_sender_channels = get_sender_channel_count(topology);
@@ -65,12 +75,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     uint32_t buffer_address = edm_status_address + field_size;
     this->num_riscv_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    is_sender_channel_serviced.resize(this->num_riscv_cores, {});
-    is_receiver_channel_serviced.resize(this->num_riscv_cores, {});
-    enable_handshake.resize(this->num_riscv_cores, false);
-    enable_context_switch.resize(this->num_riscv_cores, false);
-    enable_interrupts.resize(this->num_riscv_cores, false);
-    iterations_between_ctx_switch_and_teardown_checks.resize(this->num_riscv_cores, 0);
+    this->risc_configs.resize(this->num_riscv_cores);
 
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
         this->receiver_channels_counters_address[i] = buffer_address;
@@ -151,21 +156,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
         this->num_fwd_paths -= 1;
-    }
-
-    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
-        // TODO: update appropriately for each RISC-V core
-        this->enable_context_switch[risc_id] = true;
-        this->enable_handshake[risc_id] = true;
-        this->enable_interrupts[risc_id] = true;
-        this->iterations_between_ctx_switch_and_teardown_checks[risc_id] =
-            FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks;
-        for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
-            this->is_sender_channel_serviced[risc_id][i] = true;
-        }
-        for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
-            this->is_receiver_channel_serviced[risc_id][i] = true;
-        }
     }
 
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
@@ -509,11 +499,6 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     local_sender_channels_buffer_address(config.sender_channels_base_address),
     local_sender_channels_connection_info_addr(config.sender_channels_worker_conn_info_base_address),
     local_receiver_channels_buffer_address(config.receiver_channels_base_address),
-    enable_handshake(config.enable_handshake[risc_id]),
-    enable_context_switch(config.enable_context_switch[risc_id]),
-    enable_interrupts(config.enable_interrupts[risc_id]),
-    iterations_between_ctx_switch_and_teardown_checks(
-        config.iterations_between_ctx_switch_and_teardown_checks[risc_id]),
 
     termination_signal_ptr(config.termination_signal_address),
     edm_local_sync_ptr(config.edm_local_sync_address),
@@ -526,17 +511,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
         false);
-    std::copy(
-        config.is_sender_channel_serviced[risc_id].begin(),
-        config.is_sender_channel_serviced[risc_id].end(),
-        is_sender_channel_serviced.begin());
-    std::copy(
-        config.is_receiver_channel_serviced[risc_id].begin(),
-        config.is_receiver_channel_serviced[risc_id].end(),
-        is_receiver_channel_serviced.begin());
 }
 
-std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const {
+std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_t risc_id) const {
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
     TT_ASSERT(this->my_chip_id != this->peer_chip_id);
     TT_ASSERT(
@@ -636,19 +613,19 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.senders_completed_packet_header_cb_address[4],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        this->is_sender_channel_serviced[0],
-        this->is_sender_channel_serviced[1],
-        this->is_sender_channel_serviced[2],
-        this->is_sender_channel_serviced[3],
-        this->is_sender_channel_serviced[4],
-        this->is_receiver_channel_serviced[0],
-        this->is_receiver_channel_serviced[1],
-        this->enable_handshake,
-        this->enable_context_switch,
-        this->enable_interrupts,
+        config.risc_configs[risc_id].is_sender_channel_serviced[0],
+        config.risc_configs[risc_id].is_sender_channel_serviced[1],
+        config.risc_configs[risc_id].is_sender_channel_serviced[2],
+        config.risc_configs[risc_id].is_sender_channel_serviced[3],
+        config.risc_configs[risc_id].is_sender_channel_serviced[4],
+        config.risc_configs[risc_id].is_receiver_channel_serviced[0],
+        config.risc_configs[risc_id].is_receiver_channel_serviced[1],
+        config.risc_configs[risc_id].enable_handshake,
+        config.risc_configs[risc_id].enable_context_switch,
+        config.risc_configs[risc_id].enable_interrupts,
         config.sender_txq_id,
         config.receiver_txq_id,
-        this->iterations_between_ctx_switch_and_teardown_checks,
+        config.risc_configs[risc_id].iterations_between_ctx_switch_and_teardown_checks,
         config.topology == Topology::Mesh,
         this->direction,
         soc_desc.get_num_eth_channels(),

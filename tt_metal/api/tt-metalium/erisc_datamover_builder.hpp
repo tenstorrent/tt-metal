@@ -23,6 +23,8 @@
 
 namespace tt::tt_fabric {
 
+class FabricRiscConfig;
+
 struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
     static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
@@ -83,6 +85,7 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, num_receiver_channels> receivers_completed_packet_header_cb_address;
     std::array<std::size_t, num_sender_channels> senders_completed_packet_header_cb_address;
 
+    std::vector<FabricRiscConfig> risc_configs;
     // ----------- Sender Channels
     std::vector<std::array<bool, num_sender_channels>> is_sender_channel_serviced;
 
@@ -158,6 +161,17 @@ struct FabricEriscDatamoverConfig {
 
 private:
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
+};
+
+class FabricRiscConfig {
+public:
+    FabricRiscConfig();
+    bool enable_handshake;
+    bool enable_context_switch;
+    bool enable_interrupts;
+    size_t iterations_between_ctx_switch_and_teardown_checks;
+    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced;
+    std::array<bool, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced;
 };
 
 struct SenderWorkerAdapterSpec {
@@ -239,7 +253,7 @@ public:
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);
 
-    [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
+    [[nodiscard]] std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
@@ -285,10 +299,6 @@ public:
 
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced;
     std::array<size_t, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced;
-    bool enable_handshake = false;
-    bool enable_context_switch = false;
-    bool enable_interrupts = false;
-    size_t iterations_between_ctx_switch_and_teardown_checks;
 
     size_t termination_signal_ptr = 0;
     size_t edm_local_sync_ptr = 0;
