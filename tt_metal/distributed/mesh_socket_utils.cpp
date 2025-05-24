@@ -70,9 +70,9 @@ uint32_t get_sender_receiver_chip_fabric_encoding(
         // 2D/Mesh Fabric requires looking up "logical" encodings from the control plane
         auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         if (is_sender) {
-            return control_plane->get_mesh_chip_id_from_physical_chip_id(recv_physical_device_id).second;
+            return control_plane->get_fabric_node_id_from_physical_chip_id(recv_physical_device_id).chip_id;
         } else {
-            return control_plane->get_mesh_chip_id_from_physical_chip_id(sender_physical_device_id).second;
+            return control_plane->get_fabric_node_id_from_physical_chip_id(sender_physical_device_id).chip_id;
         }
     }
 }
