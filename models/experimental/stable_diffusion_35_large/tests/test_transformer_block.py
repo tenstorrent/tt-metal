@@ -112,7 +112,6 @@ def test_transformer_block(
         prompt_padded_4d = torch.nn.functional.pad(
             prompt_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
         )
-    # tt_prompt =from_torch_fast(prompt_padded_4D, dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=None)
     tt_prompt = from_torch_fast(
         prompt_padded_4d, dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
     )
@@ -134,20 +133,6 @@ def test_transformer_block(
     tt_spatial_output_padded, tt_prompt_output_padded = tt_model(
         spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time, N=spatial_sequence_length, L=prompt_sequence_length
     )
-
-    # num_measurement_iterations=38
-    # profiler.clear()
-    # profiler.start(f"run")
-    # for i in range(num_measurement_iterations):
-    #     tt_spatial_output_padded, tt_prompt_output_padded = tt_model(
-    #         spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time, N=spatial_sequence_length, L=prompt_sequence_length
-    #     )
-    # profiler.end(f"run")
-    # devices = mesh_device.get_devices()
-    # ttnn.DumpDeviceProfiler(devices[0])
-    # total_time = profiler.get("run")
-    # avg_time = total_time / num_measurement_iterations
-    # print(f" TOTAL TIME: {total_time} AVG TIME: {avg_time}\n")
 
     tt_spatial_output_padded = ttnn.to_torch(
         tt_spatial_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
