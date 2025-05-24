@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,10 +47,11 @@ public:
     const SubDevice& sub_device(SubDeviceId sub_device_id) const;
 
     const vector_aligned<uint32_t>& noc_mcast_unicast_data() const;
-    uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const;
+    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
-    uint8_t noc_mcast_data_start_index(SubDeviceId sub_device_id) const;
     uint8_t noc_unicast_data_start_index(SubDeviceId sub_device_id) const;
+
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& get_core_go_message_mapping() const;
 
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const;
     std::unique_ptr<Allocator>& sub_device_allocator(SubDeviceId sub_device_id);
@@ -90,12 +91,12 @@ private:
 
     std::array<uint32_t, NumHalProgrammableCoreTypes> num_cores_{};
 
-    // mcast txn data followed by unicast txn data
     vector_aligned<uint32_t> noc_mcast_unicast_data_;
-    std::vector<uint8_t> num_noc_mcast_txns_;
+    std::vector<bool> has_noc_mcast_txns_;
     std::vector<uint8_t> num_noc_unicast_txns_;
-    std::vector<uint8_t> noc_mcast_data_start_index_;
     std::vector<uint8_t> noc_unicast_data_start_index_;
+
+    std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping_;
 
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -93,7 +93,7 @@ public:
         uint32_t wait_count,
         uint32_t go_signal,
         uint32_t wait_addr,
-        uint8_t num_mcast_txns,
+        uint8_t multicast_go_offset,
         uint8_t num_unicast_txns,
         uint8_t noc_data_start_index,
         DispatcherSelect dispatcher_type);
