@@ -65,7 +65,7 @@ uint32_t element_size_bytes(DataType dtype) {
 std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec) {
     auto buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
     auto page_size_bytes = tensor_spec.compute_page_size_bytes();
-    auto shard_spec_buffer = tensor_spec.compute_shard_spec_buffer();
+    auto shard_spec_buffer = tensor_spec.compute_distribution_spec();
     auto memory_config = tensor_spec.tensor_layout().get_memory_config();
 
     return std::visit(
@@ -105,7 +105,7 @@ std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorS
 std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
     const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
-    auto shard_spec_buffer_variant = tensor_spec.compute_shard_spec_buffer();
+    auto shard_spec_buffer_variant = tensor_spec.compute_distribution_spec();
 
     distributed::DeviceLocalBufferConfig device_local_buffer_config{
         .page_size = tensor_spec.compute_page_size_bytes(),

@@ -170,8 +170,7 @@ void TensorLayout::initialize_alignment() {
     alignment_ = Alignment(std::move(result));
 }
 
-std::variant<std::monostate, ShardSpecBuffer, BufferDistributionSpec> TensorLayout::compute_shard_spec_buffer(
-    const ttnn::Shape& shape) const {
+TensorLayout::BufferDistributionSpecVariant TensorLayout::compute_distribution_spec(const ttnn::Shape& shape) const {
     if (!memory_config_.is_sharded()) {
         return std::monostate{};
     }
@@ -207,7 +206,7 @@ std::variant<std::monostate, ShardSpecBuffer, BufferDistributionSpec> TensorLayo
                     std::array<uint32_t, 2>{physical_shard_shape.height(), physical_shard_shape.width()};
                 break;
             }
-            default: TT_THROW("Unsupported shard mode {} in compute_shard_spec_buffer!", shard_spec->mode);
+            default: TT_THROW("Unsupported shard mode {} in compute_distribution_spec!", shard_spec->mode);
         }
 
         return ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);

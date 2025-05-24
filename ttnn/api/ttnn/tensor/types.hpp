@@ -129,7 +129,7 @@ public:
             memory_layout_, buffer_type_, shard_spec_, nd_shard_spec_, created_with_nd_shard_spec_);
     }
 
-    MemoryConfig(
+    static MemoryConfig create_with_prepopulated_shard_specs(
         TensorMemoryLayout memory_layout,
         BufferType buffer_type,
         std::optional<ShardSpec> shard_spec,
@@ -139,6 +139,13 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
 private:
+    MemoryConfig(
+        TensorMemoryLayout memory_layout,
+        BufferType buffer_type,
+        std::optional<ShardSpec> shard_spec,
+        std::optional<NdShardSpec> nd_shard_spec,
+        bool created_with_nd_shard_spec);
+
     TensorMemoryLayout memory_layout_ = TensorMemoryLayout::INTERLEAVED;  // Interleave the data across multiple banks
     BufferType buffer_type_ = BufferType::DRAM;                           // Can be either DRAM or L1
     std::optional<ShardSpec> shard_spec_ = std::nullopt;

@@ -182,7 +182,7 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
 
     if (mem_layout == TensorMemoryLayout::SINGLE_BANK) {
         nd_shard_spec.shard_shape = padded_shape();
-        return MemoryConfig(
+        return MemoryConfig::create_with_prepopulated_shard_specs(
             mem_config.memory_layout(),
             mem_config.buffer_type(),
             mem_config.shard_spec(),
@@ -193,7 +193,7 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
     if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         nd_shard_spec.shard_shape = padded_shape();
         nd_shard_spec.shard_shape[-1] = shard_spec.shape[1];
-        return MemoryConfig(
+        return MemoryConfig::create_with_prepopulated_shard_specs(
             mem_config.memory_layout(),
             mem_config.buffer_type(),
             mem_config.shard_spec(),
@@ -229,7 +229,7 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
              orig_cores.start_coord.y + num_shards_along_height - 1}));
     }
 
-    return MemoryConfig(
+    return MemoryConfig::create_with_prepopulated_shard_specs(
         mem_config.memory_layout(),
         mem_config.buffer_type(),
         mem_config.shard_spec(),
@@ -248,7 +248,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
 
     // Detect single bank case
     if (nd_shard_shape == padded_shape()) {
-        return MemoryConfig(
+        return MemoryConfig::create_with_prepopulated_shard_specs(
             TensorMemoryLayout::SINGLE_BANK,
             mem_config.buffer_type(),
             ShardSpec(nd_shard_spec.cores, physical_shape(), nd_shard_spec.shard_orientation),
@@ -280,7 +280,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     }
 
     if (width_sharded) {
-        return MemoryConfig(
+        return MemoryConfig::create_with_prepopulated_shard_specs(
             TensorMemoryLayout::WIDTH_SHARDED,
             mem_config.buffer_type(),
             std::move(shard_spec),
@@ -290,7 +290,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
 
     // Height sharding
     if (shard_spec.shape[1] == padded_shape()[-1]) {
-        return MemoryConfig(
+        return MemoryConfig::create_with_prepopulated_shard_specs(
             TensorMemoryLayout::HEIGHT_SHARDED,
             mem_config.buffer_type(),
             std::move(shard_spec),
@@ -310,7 +310,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    return MemoryConfig(
+    return MemoryConfig::create_with_prepopulated_shard_specs(
         TensorMemoryLayout::BLOCK_SHARDED,
         mem_config.buffer_type(),
         std::move(shard_spec),
