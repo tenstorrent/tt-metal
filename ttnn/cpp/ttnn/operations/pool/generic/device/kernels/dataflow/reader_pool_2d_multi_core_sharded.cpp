@@ -122,36 +122,53 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
+    constexpr uint32_t is_wide_reduction = in_c > MAX_TILES_PER_REDUCTION * TILE_WIDTH;
 
     constexpr uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
     while (counter < reader_nindices) {
-        const uint16_t top_left_local_index = reader_indices_ptr[counter++];
-        for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
+        if constexpr (is_wide_reduction) {
+            const uint16_t top_left_local_index = reader_indices_ptr[counter++];
+            for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
+                cb_reserve_back(in_cb_id, npages_to_reserve);
+                uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
+
+                uint32_t read_bytes = MAX_BYTES_PER_REDUCTION;
+                if constexpr (!full_dest_width) {
+                    if (c_i == in_nblocks_c - 1) {
+                        read_bytes = in_nbytes_leftover;
+                        clear_out_tiles<clear_value_cb_id, leftover_num_tiles>(out_l1_write_addr, clear_value_addr);
+                    }
+                }
+
+                for (uint32_t h = 0; h < window_h; ++h) {
+                    for (uint32_t w = 0; w < window_w; ++w) {
+                        const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
+                        const uint32_t read_offset =
+                            in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
+                        noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
+                        out_l1_write_addr += read_bytes;
+                    }
+                }
+                noc_async_read_barrier();  // At this line, read is complete.
+
+                cb_push_back(in_cb_id, npages_to_reserve);
+            }
+        } else {
             cb_reserve_back(in_cb_id, npages_to_reserve);
             uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
-
-            uint32_t read_bytes = MAX_BYTES_PER_REDUCTION;
-            if constexpr (!full_dest_width) {
-                if (c_i == in_nblocks_c - 1) {
-                    read_bytes = in_nbytes_leftover;
-                    clear_out_tiles<clear_value_cb_id, leftover_num_tiles>(out_l1_write_addr, clear_value_addr);
-                }
+            uint16_t top_left_local_index = reader_indices_ptr[counter++];
+            uint32_t h_multiples = 0;
+            for (uint32_t h = 0; h < window_h; ++h, h_multiples += in_w_padded) {
+                const uint32_t stick_offset = top_left_local_index + h_multiples;
+                const uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c);
+                noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
+                out_l1_write_addr += in_nbytes_c * window_w;
             }
-
-            for (uint32_t h = 0; h < window_h; ++h) {
-                for (uint32_t w = 0; w < window_w; ++w) {
-                    const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
-                    const uint32_t read_offset =
-                        in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
-                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
-                    out_l1_write_addr += read_bytes;
-                }
-            }
-            noc_async_read_barrier();  // At this line, read is complete.
-
+            noc_async_read_barrier();
             cb_push_back(in_cb_id, npages_to_reserve);
         }
+
         if constexpr (split_reader) {
             counter++;  // interleave the indices
         }

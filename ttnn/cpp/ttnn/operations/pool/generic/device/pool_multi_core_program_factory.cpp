@@ -338,14 +338,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         reader_kernel_fname =
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
             "reader_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
-    } else if (is_wide_reduction) {
-        reader_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_pool_2d_multi_core_sharded_with_halo_wide.cpp";
     } else {
         reader_kernel_fname =
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_pool_2d_multi_core_sharded_with_halo_v2.cpp";
+            "reader_pool_2d_multi_core_sharded.cpp";
     }
 
     auto reader0_config = tt::tt_metal::DataMovementConfig{
