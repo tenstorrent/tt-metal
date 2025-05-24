@@ -16,39 +16,49 @@
 FORCE_INLINE void setup_local_cb_read_write_interfaces(
     uint32_t tt_l1_ptr* cb_l1_base,
     uint32_t start_cb_index,
-    uint32_t max_cb_index,
+    uint32_t local_cb_mask,
     bool read,
     bool write,
     bool init_wr_tile_ptr) {
     volatile tt_l1_ptr uint32_t* circular_buffer_config_addr =
         cb_l1_base + start_cb_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
 
-    for (uint32_t cb_id = start_cb_index; cb_id < max_cb_index; cb_id++) {
-        // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
-        uint32_t fifo_addr = circular_buffer_config_addr[0] >> cb_addr_shift;
-        uint32_t fifo_size = circular_buffer_config_addr[1] >> cb_addr_shift;
-        uint32_t fifo_num_pages = circular_buffer_config_addr[2];
-        uint32_t fifo_page_size = circular_buffer_config_addr[3] >> cb_addr_shift;
-        uint32_t fifo_limit = fifo_addr + fifo_size;
+    local_cb_mask >>= start_cb_index;
+    uint32_t cb_id = start_cb_index;
+    while (local_cb_mask) {
+        // We could attempt to find the next set bit instead of iterating through all bits, but the circular buffers are
+        // often pretty tightly packed and computing the next set bit is somewhat expensive without specialized
+        // instructions.
+        // TODO: Blackhole supports zbb, so use __builtin_ctz there.
+        if (local_cb_mask & 1) {
+            // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
+            uint32_t fifo_addr = circular_buffer_config_addr[0] >> cb_addr_shift;
+            uint32_t fifo_size = circular_buffer_config_addr[1] >> cb_addr_shift;
+            uint32_t fifo_num_pages = circular_buffer_config_addr[2];
+            uint32_t fifo_page_size = circular_buffer_config_addr[3] >> cb_addr_shift;
+            uint32_t fifo_limit = fifo_addr + fifo_size;
 
-        LocalCBInterface& local_interface = get_local_cb_interface(cb_id);
-        local_interface.fifo_limit = fifo_limit;  // to check if we need to wrap
-        if (write) {
-            local_interface.fifo_wr_ptr = fifo_addr;
-        }
-        if (read) {
-            local_interface.fifo_rd_ptr = fifo_addr;
-        }
-        local_interface.fifo_size = fifo_size;
-        local_interface.tiles_acked_received_init = 0;
-        if (write) {
-            local_interface.fifo_num_pages = fifo_num_pages;
-        }
-        local_interface.fifo_page_size = fifo_page_size;
+            LocalCBInterface& local_interface = get_local_cb_interface(cb_id);
+            local_interface.fifo_limit = fifo_limit;  // to check if we need to wrap
+            if (write) {
+                local_interface.fifo_wr_ptr = fifo_addr;
+            }
+            if (read) {
+                local_interface.fifo_rd_ptr = fifo_addr;
+            }
+            local_interface.fifo_size = fifo_size;
+            local_interface.tiles_acked_received_init = 0;
+            if (write) {
+                local_interface.fifo_num_pages = fifo_num_pages;
+            }
+            local_interface.fifo_page_size = fifo_page_size;
 
-        if (init_wr_tile_ptr) {
-            local_interface.fifo_wr_tile_ptr = 0;
+            if (init_wr_tile_ptr) {
+                local_interface.fifo_wr_tile_ptr = 0;
+            }
         }
+        local_cb_mask >>= 1;
+        cb_id++;
 
         circular_buffer_config_addr += UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
     }
