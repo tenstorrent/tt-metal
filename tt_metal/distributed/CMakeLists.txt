@@ -24,7 +24,6 @@ set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
 set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
 
 add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
-
 set_target_properties(
     OpenMPI::MPI
     PROPERTIES
@@ -32,14 +31,31 @@ set_target_properties(
             TRUE
 )
 
-set_target_properties(
-    OpenMPI::MPI
-    PROPERTIES
-        IMPORTED_LOCATION
-            ${ULFM_LIB}
-        INTERFACE_INCLUDE_DIRECTORIES
-            ${ULFM_PREFIX}/include
-)
+if(EXISTS "${ULFM_LIB}")
+    message(STATUS "Using openmpi-ulfm ${ULFM_PREFIX}")
+
+    set_target_properties(
+        OpenMPI::MPI
+        PROPERTIES
+            IMPORTED_LOCATION
+                ${ULFM_LIB}
+            INTERFACE_INCLUDE_DIRECTORIES
+                ${ULFM_PREFIX}/include
+    )
+else()
+    message(STATUS "${ULFM_LIB} not found. Using fallback find_package(MPI).")
+
+    find_package(MPI REQUIRED)
+
+    set_target_properties(
+        OpenMPI::MPI
+        PROPERTIES
+            IMPORTED_LOCATION
+                ${MPI_CXX_LIBRARIES}
+            INTERFACE_INCLUDE_DIRECTORIES
+                ${MPI_CXX_INCLUDE_DIRS}
+    )
+endif()
 
 target_link_libraries(
     distributed
