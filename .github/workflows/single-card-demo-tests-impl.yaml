@@ -112,7 +112,7 @@ jobs:
             # cd ..
             # python3 ./models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py
             source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
-            pip install transformers
+            conda install -c huggingface transformers
             python3 .github/scripts/download_model.py
           else
             echo "Model found in cache"
