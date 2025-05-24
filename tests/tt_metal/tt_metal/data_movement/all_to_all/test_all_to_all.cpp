@@ -292,9 +292,9 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
     // Make it so that the contents of sub_coords are appended to sender_compile_args (indices 13 - 16)
     sender_compile_args.insert(sender_compile_args.end(), sub_worker_coords.begin(), sub_worker_coords.end());
     sender_compile_args.insert(
-        sender_compile_args.begin() + mst_coord_index, mst_coordinates.begin(), mst_coordinates.end());
+        sender_compile_args.begin() + mst_coord_offset, mst_coordinates.begin(), mst_coordinates.end());
     sender_compile_args.insert(
-        sender_compile_args.begin() + sub_coord_index, sub_coordinates.begin(), sub_coordinates.end());
+        sender_compile_args.begin() + sub_coord_offset, sub_coordinates.begin(), sub_coordinates.end());
 
     // Create kernels // QUESTION: Is this the point of compilation of the kernel?
     //  // Defining the base directory in one string and
@@ -401,11 +401,11 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAllMulticast2x2PacketSizes) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
             // Test config
-            unit_tests::dm::core_to_all::AllToAllConfig test_config = {
+            unit_tests::dm::all_to_all::AllToAllConfig test_config = {
                 .test_id = unit_tests::dm::all_to_all::START_ID + test_case_id,
 
-                .mst_start_coord = mst_start_coord,
-                .sub_start_coord = sub_start_coord,
+                .mst_logical_start_coord = mst_start_coord,
+                .sub_logical_start_coord = sub_start_coord,
                 .mst_grid_size = mst_grid_size,
                 .sub_grid_size = sub_grid_size,
 
@@ -464,7 +464,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAllMulticast11x10PacketSizes) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
             // Test config
-            unit_tests::dm::core_to_all::AllToAllConfig test_config = {
+            unit_tests::dm::all_to_all::AllToAllConfig test_config = {
                 .test_id = unit_tests::dm::all_to_all::START_ID + test_case_id,
 
                 // .master_core_coord = master_core_coord,
