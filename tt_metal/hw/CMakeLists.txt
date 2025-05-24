@@ -151,7 +151,7 @@ set(GPP_FLAGS_blackhole -mcpu=tt-bh)
 # Define common flags for all architectures
 set(GPP_FLAGS_common
     -std=c++17
-    -flto
+    -flto=auto
     -ffast-math
     -fno-use-cxa-atexit
     -fno-exceptions
