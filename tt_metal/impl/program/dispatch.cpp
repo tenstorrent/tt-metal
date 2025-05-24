@@ -2476,7 +2476,6 @@ void set_core_go_message_mapping_on_device(
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
 
-
 template uint32_t program_base_addr_on_core<ProgramImpl, IDevice*>(ProgramImpl&, IDevice*, HalProgrammableCoreType);
 template uint32_t program_base_addr_on_core<distributed::MeshWorkloadImpl, distributed::MeshDevice*>(
     distributed::MeshWorkloadImpl&, distributed::MeshDevice*, HalProgrammableCoreType);
