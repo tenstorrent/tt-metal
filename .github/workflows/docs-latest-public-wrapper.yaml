@@ -9,17 +9,36 @@ permissions:
   contents: write
 
 jobs:
+  extract-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+    steps:
+      - name: Extract version from branch
+        id: get-version
+        run: |
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          if [[ "$BRANCH_NAME" == "main" ]]; then
+            VERSION="latest"
+          elif [[ "$BRANCH_NAME" =~ ^releases/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            VERSION=${BRANCH_NAME#releases/}
+          else
+            echo "Error: Branch name must be 'main' or follow pattern 'releases/vX.Y.Z' (e.g., releases/v0.58.0)"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
       build-wheel: true
+
   build-docs:
-    needs: build-artifact
+    needs: [build-artifact, extract-version]
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
     with:
-      version: latest
+      version: ${{ needs.extract-version.outputs.version }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

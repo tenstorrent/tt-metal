@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@ from models.utility_functions import (
     is_wormhole_b0,
     is_grayskull,
     is_blackhole,
-    skip_for_blackhole,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -149,13 +148,15 @@ def test_ttnn_linear(
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
 
-@skip_for_blackhole("Does not work on BH P100a. Issue #22271")
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [8192])
 @pytest.mark.parametrize("n_size", [1024])
 def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
     torch.manual_seed(0)
 
+    dram_grid_size = device.dram_grid_size().x
+    if dram_grid_size < 8:
+        pytest.skip(f"Minimum dram grid size needs to be 8 and is {dram_grid_size}.")
     grid_size = ttnn.CoreGrid(y=1, x=8)
 
     torch_input_tensor_in0 = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)

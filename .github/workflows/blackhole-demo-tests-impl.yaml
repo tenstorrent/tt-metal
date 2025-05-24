@@ -32,8 +32,14 @@ jobs:
           {
             name: "Llama3-8B_performance",
             arch: blackhole,
-            cmd: LLAMA_DIR=/proj_sw/user_dev/hf_data/Llama3/Llama3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1,
+            cmd:  HF_HOME=/localdev/blackhole_demos/huggingface_data TT_CACHE_PATH=/localdev/blackhole_demos/tt_cache HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1",
             owner_id: U03PUAKE719 # Miguel Tairum
+          },
+          { # This should be moved to a BH perf regression pipeline in the future
+            name: "unet_shallow_performance",
+            arch: blackhole,
+            cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device",
+            owner_id: U06ECNVR0EN # Evan Smal
           }
         ]
     name: ${{ matrix.test-group.name }}
@@ -71,8 +77,14 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e HF_TOKEN=${{ secrets.HUGGINGFACE_TOKEN }}
+            -v /localdev/blackhole_demos:/localdev/blackhole_demos
           install_wheel: true
-          run_args: ${{ matrix.test-group.cmd }}
+          run_args: |
+            if [[ "${{ matrix.test-group.name }}" == *"Llama"* ]]; then
+              pip install -r ${{ github.workspace }}/models/tt_transformers/requirements.txt
+            fi
+            ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

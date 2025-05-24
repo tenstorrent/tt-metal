@@ -115,6 +115,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     TT_ASSERT(
         (shard_spec.shape[0] % TILE_HEIGHT == 0) && (shard_spec.shape[0] % TILE_WIDTH == 0),
         "Shard shapes must be multiple of TILE_HEIGHT ");
+    TT_FATAL(ncores_x >= bN, "Batch size {} exceeds number of cores along x-axis {}", bN, ncores_x);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t aligned_input_tile_nbytes =

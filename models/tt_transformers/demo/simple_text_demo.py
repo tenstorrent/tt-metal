@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
@@ -226,6 +226,20 @@ def prepare_generator_args(
             False,  # ci_only
             1,  # data_parallel
         ),
+        (  # Long-context 32k run - Single user, long prompt (may vary based on the model's tokenizer)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+        ),
         (  # Long-context 16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
@@ -355,11 +369,26 @@ def prepare_generator_args(
             True,  # ci_only
             8,  # data_parallel
         ),
+        (  # CI stress test batch-1 run - Runs a short prefill (128) and exhaust the KV cache (128K), by running 50000 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            50000,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+        ),
     ],
     ids=[
         "batch-1",  # latency
         "batch-32",  # throughput
         "long-context-64k",  # 64k context, max_seq_len=128k
+        "long-context-32k",  # 32k context, max_seq_len=32k
         "long-context-16k",  # 16k context, max_seq_len=32k
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
@@ -369,6 +398,7 @@ def prepare_generator_args(
         "DP-4-b32",  # DP 4 throughput
         "ci-b1-DP-4",  # CI DP 4 batch 1
         "ci-b1-DP-8",  # CI DP 8 batch 1
+        "ci-stress-1",  # CI Stress test batch-1
     ],
 )
 @pytest.mark.parametrize(
@@ -437,6 +467,8 @@ def test_demo_text(
     data_parallel = request.config.getoption("--data_parallel") or data_parallel
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
+    if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
+        page_params = json.loads(page_params)
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
     json_config_file = request.config.getoption("--decoder_config_file")
 
@@ -512,6 +544,13 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
     )
+
+    for m_args in model_args:
+        if m_args.max_context_len < max_seq_len:
+            pytest.skip(
+                f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
+            )
+
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
@@ -527,11 +566,7 @@ def test_demo_text(
             decoding_pos,
             prefill_lens,
         ) = preprocess_inputs_prefill(
-            input_prompts,
-            tokenizer,
-            model_args,
-            instruct,
-            max_generated_tokens,
+            input_prompts, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
         )
 
         max_encoded_prompt_len = max(len(p) for p in encoded_prompts)

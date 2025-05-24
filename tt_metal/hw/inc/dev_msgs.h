@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -132,9 +132,8 @@ struct kernel_config_msg_t {
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
-    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
-
     volatile uint8_t pad1[2];
+    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
 
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
@@ -142,7 +141,6 @@ struct kernel_config_msg_t {
     volatile uint8_t max_local_cb_end_index;
     volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
-    volatile uint8_t enables;
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     // 32 bit program/launch_msg_id used by the performance profiler
@@ -150,11 +148,22 @@ struct kernel_config_msg_t {
     // [30:10]: program id
     // [31:31]: 0 (specifies that this id corresponds to a program running on device)
     volatile uint32_t host_assigned_id;
+    volatile uint8_t enables;
 
     volatile uint8_t pad2[2];
 
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
+
+// Baby riscs don't natively support unaligned accesses, so ensure data alignment to prevent slow compiler workarounds.
+static_assert(offsetof(kernel_config_msg_t, kernel_config_base) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, sem_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
 struct go_msg_t {
     union {
@@ -352,12 +361,17 @@ struct core_info_msg_t {
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;
+// Equal to the maximum number of subdevices + 1. This allows all workers that aren't assigned to a subdevice to receive
+// a dummy entry.
+constexpr uint32_t go_message_num_entries = 9;
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct subordinate_sync_msg_t subordinate_sync;
     uint32_t launch_msg_rd_ptr;
     struct launch_msg_t launch[launch_msg_buffer_num_entries];
-    volatile struct go_msg_t go_message;
+    volatile struct go_msg_t go_messages[go_message_num_entries];
+    uint32_t pads_1[3];
+    volatile uint32_t go_message_index;  // Index into go_messages to use. Always 0 on unicast cores.
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
     struct core_info_msg_t core_info;

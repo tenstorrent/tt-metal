@@ -132,7 +132,7 @@ def test_perf(device, use_pretrained_weight, use_program_cache):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 69.27],
+        [1, 71.2],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

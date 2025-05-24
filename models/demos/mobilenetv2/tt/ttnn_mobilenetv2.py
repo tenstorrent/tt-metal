@@ -18,6 +18,8 @@ class TtMobileNetV2:
             device,
             batchsize,
             deallocate_activation=True,
+            # enable_split_reader = True
+            reshard_if_not_optimal=False,
         )
         self.conv2 = TtMobileNetV2Conv2D(
             [3, 1, 1, 32],

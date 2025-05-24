@@ -32,11 +32,6 @@ pytest --disable-warnings models/demos/yolov9c/demo/demo.py
 ### Model performant running
 
 #### For 640x640:
-- end-2-end perf is 1.67 FPS
-  ```bash
-  pytest models/demos/yolov9c/tests/perf/test_perf.py::test_perf[True-device_params0]
-  ```
-
 - end-2-end perf with Trace+2CQ is 74 FPS
 
   ```bash

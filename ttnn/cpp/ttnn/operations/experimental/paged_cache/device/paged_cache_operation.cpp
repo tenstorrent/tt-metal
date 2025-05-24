@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,7 +30,7 @@ void PagedUpdateCacheDeviceOperation::validate(
         }
     };
 
-    const auto validateTensorBasics = [](const Tensor& cache_tensor, const Tensor& input_tensor) {
+    const auto validateTensorBasics = [this](const Tensor& cache_tensor, const Tensor& input_tensor) {
         // Device and storage validation
         TT_FATAL(
             input_tensor.storage_type() == StorageType::DEVICE && cache_tensor.storage_type() == StorageType::DEVICE,
@@ -42,9 +42,11 @@ void PagedUpdateCacheDeviceOperation::validate(
             "Operands to update_cache need to be allocated in buffers on device!");
 
         // Layout and data type validation
-        TT_FATAL(
-            (input_tensor.get_layout() == Layout::TILE && cache_tensor.get_layout() == Layout::TILE),
-            "Inputs to update_cache must be tilized");
+        if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
+            TT_FATAL(
+                input_tensor.get_layout() == Layout::TILE, "Input tensor in non-fused update_cache must be tilized");
+        }
+        TT_FATAL(cache_tensor.get_layout() == Layout::TILE, "Cache tensor in update_cache must be tilized");
         TT_FATAL(
             cache_tensor.get_dtype() == DataType::FLOAT32 || cache_tensor.get_dtype() == DataType::BFLOAT16 ||
                 cache_tensor.get_dtype() == DataType::BFLOAT8_B || cache_tensor.get_dtype() == DataType::BFLOAT4_B,
@@ -174,6 +176,19 @@ void PagedUpdateCacheDeviceOperation::validate(
     };
 
     const auto validateFusedUpdateTensors = [](const Tensor& input_tensor1, const Tensor& input_tensor2) {
+        // Validate either both should be tiled or row-major
+        bool is_tiled = input_tensor1.get_layout() == Layout::TILE && input_tensor2.get_layout() == Layout::TILE;
+        bool is_row_major =
+            input_tensor1.get_layout() == Layout::ROW_MAJOR && input_tensor2.get_layout() == Layout::ROW_MAJOR;
+
+        TT_FATAL(
+            is_tiled || is_row_major, "input_tensor1 and input_tensor2 must be either both tiled or both row-major");
+        if (is_row_major) {
+            TT_FATAL(
+                input_tensor1.get_padded_shape()[-1] == 128 && input_tensor2.get_padded_shape()[-2] == 8,
+                "when input_tensor1 and input_tensor2 are row major, only Llama70b tensor shapes are supported");
+        }
+
         CoreRangeSet input1_cores = input_tensor1.shard_spec().value().grid;
         CoreRangeSet input2_cores = input_tensor2.shard_spec().value().grid;
 

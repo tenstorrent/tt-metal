@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -148,6 +148,54 @@ void write_control_buffer_to_core(
             device->id(), core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
     }
 }
+HalProgrammableCoreType get_core_type(chip_id_t device_id, const CoreCoord& core) {
+    ZoneScoped;
+
+    HalProgrammableCoreType CoreType;
+
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(core, device_id)) {
+        CoreType = HalProgrammableCoreType::TENSIX;
+    } else {
+        auto active_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        bool is_active_eth_core =
+            active_eth_cores.find(
+                tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+                    device_id, core)) != active_eth_cores.end();
+
+        CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+                                      : tt_metal::HalProgrammableCoreType::IDLE_ETH;
+    }
+
+    return CoreType;
+}
+
+void DeviceProfiler::readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state) {
+    ZoneScoped;
+    chip_id_t device_id = device->id();
+
+    HalProgrammableCoreType CoreType = get_core_type(device_id, worker_core);
+
+    std::vector<uint32_t> control_buffer = read_control_buffer_from_core(device, worker_core, CoreType, state);
+    core_control_buffers[worker_core] = control_buffer;
+}
+
+void DeviceProfiler::resetControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state) {
+    ZoneScoped;
+
+    chip_id_t device_id = device->id();
+    HalProgrammableCoreType CoreType = get_core_type(device_id, worker_core);
+
+    std::vector<uint32_t> control_buffer = core_control_buffers.at(worker_core);
+    std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+
+    control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] =
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
+    control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
+    control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
+
+    write_control_buffer_to_core(device, worker_core, CoreType, state, control_buffer_reset);
+}
 
 void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
@@ -159,27 +207,14 @@ void DeviceProfiler::readRiscProfilerResults(
     ZoneScoped;
     chip_id_t device_id = device->id();
 
-    HalProgrammableCoreType CoreType;
-    int riscCount;
+    HalProgrammableCoreType CoreType = get_core_type(device_id, worker_core);
+    int riscCount = 1;
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(worker_core, device_id)) {
-        CoreType = HalProgrammableCoreType::TENSIX;
+    if (CoreType == HalProgrammableCoreType::TENSIX) {
         riscCount = 5;
-    } else {
-        auto active_eth_cores =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
-        bool is_active_eth_core =
-            active_eth_cores.find(
-                tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
-                    device_id, worker_core)) != active_eth_cores.end();
-
-        CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
-                                      : tt_metal::HalProgrammableCoreType::IDLE_ETH;
-
-        riscCount = 1;
     }
 
-    std::vector<uint32_t> control_buffer = read_control_buffer_from_core(device, worker_core, CoreType, state);
+    std::vector<uint32_t> control_buffer = core_control_buffers.at(worker_core);
 
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
@@ -361,14 +396,6 @@ void DeviceProfiler::readRiscProfilerResults(
         }
         riscNum++;
     }
-
-    std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] =
-        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
-    control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
-    control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
-
-    write_control_buffer_to_core(device, worker_core, CoreType, state, control_buffer_reset);
 }
 
 void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
@@ -863,6 +890,9 @@ void DeviceProfiler::dumpResults(
         output_dram_buffer_ptr = output_dram_buffer.get_buffer();
     }
     if (output_dram_buffer_ptr != nullptr) {
+        for (const auto& worker_core : worker_cores) {
+            readControlBuffers(device, worker_core, state);
+        }
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE || state == ProfilerDumpState::FORCE_UMD_READ) {
@@ -876,6 +906,9 @@ void DeviceProfiler::dumpResults(
             if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
             }
+        }
+        for (const auto& worker_core : worker_cores) {
+            resetControlBuffers(device, worker_core, state);
         }
 
         if (rtoptions.get_profiler_noc_events_enabled()) {

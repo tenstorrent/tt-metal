@@ -6,7 +6,7 @@
 
 #include "dispatch_fixture.hpp"
 #include "env_lib.hpp"
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>

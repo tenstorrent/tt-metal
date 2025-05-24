@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,12 @@ void set_routing_mode(Topology topology, tt::tt_metal::FabricConfig fabric_confi
 
 FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::ClusterType cluster_type);
 
-std::vector<chan_id_t> get_ordered_fabric_eth_chans(chip_id_t chip_id, const std::set<chan_id_t>& eth_chans);
+std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+    chip_id_t src_chip_id, chip_id_t dst_chip_id, RoutingDirection direction);
+
+// returns which links on a given src chip are avaialable for forwarding the data to a dst chip
+// these link indices can then be used to establish connection with the fabric routers
+std::vector<uint32_t> get_forwarding_link_indices(chip_id_t src_chip_id, chip_id_t dst_chip_id);
 
 void get_optimal_noc_for_edm(
     FabricEriscDatamoverBuilder& edm_builder1,

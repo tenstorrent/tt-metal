@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -83,6 +83,8 @@ enum SfpuType {
     unary_eq,
     unary_gt,
     unary_lt,
+    unary_ge,
+    unary_le,
     unary_max,
     unary_min,
     softplus,

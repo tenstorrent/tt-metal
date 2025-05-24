@@ -90,6 +90,7 @@ def initialize_vllm_text_transformer(
             weight_cache_path=model_args[i].weight_cache_path(dtype),
             use_paged_kv_cache=True,
             mode="prefill",
+            enable_prefetcher_performance_mode=True,
         )
         tt_model.append(tt_model_i)
 

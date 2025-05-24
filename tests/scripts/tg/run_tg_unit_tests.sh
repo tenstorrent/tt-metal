@@ -72,39 +72,37 @@ run_tg_tests() {
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     # TODO: Fix bug and enable Push mode https://github.com/tenstorrent/tt-metal/issues/19999
     #       TG + push mode + fast dispatch has bug at tt::tt_metal::detail::CreateDevices(ids)
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DPullFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricMuxFixture.*"
     TESTS=(
         # Unicast tests
         "1 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
         "2 --fabric_command 64 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
         "3 --fabric_command 65 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
-        "4 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1"
         # Unicast tests for push router
-        "5 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --push_router"
-        "6 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --push_router"
-        "7 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --push_router"
+        "4 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --push_router"
+        "5 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --push_router"
+        "6 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --push_router"
         # Line Mcast tests
-        "8 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 7"
-        "9 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --w_depth 7"
-        "10 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --n_depth 3"
-        "11 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --s_depth 3"
-        "12 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --n_depth 3 --metal_fabric_init_level 1"
+        "7 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 7"
+        "8 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --w_depth 7"
+        "9 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --n_depth 3"
+        "10 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --s_depth 3"
         # Line Mcast tests for push router - Async Write
-        "13 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --e_depth 7 --push_router"
-        "14 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --w_depth 7 --push_router"
-        "15 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --n_depth 3 --push_router"
-        "16 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --s_depth 3 --push_router"
+        "11 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --e_depth 7 --push_router"
+        "12 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --w_depth 7 --push_router"
+        "13 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --n_depth 3 --push_router"
+        "14 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --s_depth 3 --push_router"
         # Line Mcast tests for push router Atomic Increment
-        "17 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --e_depth 7 --push_router"
-        "18 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --w_depth 7 --push_router"
-        "19 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --n_depth 3 --push_router"
-        "20 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --s_depth 3 --push_router"
+        "15 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --e_depth 7 --push_router"
+        "16 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --w_depth 7 --push_router"
+        "17 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --n_depth 3 --push_router"
+        "18 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --s_depth 3 --push_router"
         # Line Mcast tests for push router Async Write + Atomic Increment
-        "21 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --e_depth 7 --push_router"
-        "22 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --w_depth 7 --push_router"
-        "23 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --n_depth 3 --push_router"
-        "24 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --s_depth 3 --push_router"
+        "19 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --e_depth 7 --push_router"
+        "20 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --w_depth 7 --push_router"
+        "21 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --n_depth 3 --push_router"
+        "22 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --s_depth 3 --push_router"
 
     )
     for TEST in "${TESTS[@]}"; do
@@ -125,7 +123,7 @@ run_tg_tests() {
     run_tg_distributed_op_tests
 
   elif [[ "$1" == "distributed-runtime" ]]; then
-    ./build/test/tt_metal/distributed/distributed_unit_tests_wormhole_b0
+    ./build/test/tt_metal/distributed/distributed_unit_tests
 
   else
     echo "LOG_METAL: Unknown model type: $1"

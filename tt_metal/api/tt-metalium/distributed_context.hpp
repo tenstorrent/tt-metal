@@ -9,6 +9,7 @@
 #include <tt_stl/span.hpp>
 #include <optional>
 #include <cstddef>
+#include <cstdint>
 #include <complex>
 
 namespace tt::tt_metal::distributed::multihost {

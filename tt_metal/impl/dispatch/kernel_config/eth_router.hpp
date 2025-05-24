@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -8,6 +8,9 @@
 
 #include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "fd_kernel.hpp"
+
+namespace tt {
+namespace tt_metal {
 
 struct eth_router_static_config_t {
     std::optional<uint32_t> vc_count;                   // Set from arch level
@@ -77,3 +80,6 @@ private:
     int placement_cq_id_;  // TODO: remove channel hard-coding for dispatch core manager
     bool as_mux_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt

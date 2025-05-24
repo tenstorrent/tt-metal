@@ -35,13 +35,13 @@ jobs:
             timeout: 30,
             owner_id: U053W15B6JF
           }, # Djordje Ivanovic
-          # { See GH Issue #22164
-          #   name: "Llama Galaxy Demo Long Generation Test",
-          #   arch: wormhole_b0,
-          #   cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/demo/demo_decode.py  -k mini-stress-test",
-          #   timeout: 40,
-          #   owner_id: U044T8U8DEF
-          # }, # Johanna Rock
+          {
+            name: "Llama Galaxy Long Stress Test",
+            arch: wormhole_b0,
+            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/demo/demo_decode.py  -k 'stress-test and not mini-stress-test'",
+            timeout: 240,
+            owner_id: U053W15B6JF
+          }, # Djordje Ivanovic
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:

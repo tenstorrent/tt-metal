@@ -203,8 +203,7 @@ void kernel_main() {
                 concat_semaphore_send_addr,
                 concat_sem_rcv_addr,
                 mcast_dest_num,
-                false,  // linked = false
-                true);  // multicast_path_reserve = true
+                false);  // linked = false
 
             const uint64_t concat_sem_rcv_addr2 = get_noc_multicast_addr(
                 mcast_dest_noc_start_x[i],
@@ -217,8 +216,7 @@ void kernel_main() {
                 concat_semaphore_send_addr2,
                 concat_sem_rcv_addr2,
                 mcast_dest_num,
-                false,  // linked = false
-                true);  // multicast_path_reserve = true
+                false);  // linked = false
         }
     }
 

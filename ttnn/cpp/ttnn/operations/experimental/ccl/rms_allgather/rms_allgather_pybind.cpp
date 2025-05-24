@@ -46,7 +46,6 @@ void bind_fused_rms_1_1_32_8192(py::module& module) {
             // on post only
             py::arg("epsilon") = 1e-12,  // constant 1e-12 on pre, value only affects post
             py::arg("weight") = std::nullopt,
-            py::arg("stats") = std::nullopt,
-            py::arg("is_pre") = true});
+            py::arg("stats") = std::nullopt});
 }
 }  // namespace ttnn::operations::experimental::ccl

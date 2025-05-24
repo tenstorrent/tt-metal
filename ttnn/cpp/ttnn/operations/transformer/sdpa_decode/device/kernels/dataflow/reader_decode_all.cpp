@@ -35,7 +35,7 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(17) == 1;
     constexpr bool use_attention_mask = get_compile_time_arg_val(18) == 1;
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(19);
-
+    constexpr bool tilize_q = get_compile_time_arg_val(20) == 1;
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t k_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -110,6 +110,7 @@ void kernel_main() {
     constexpr bool is_dram = true;
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
@@ -133,13 +134,19 @@ void kernel_main() {
 
     if constexpr (is_q_sharded) {
         uint64_t q_read_addr;
+        uint32_t q_write_ptr;
         if (is_output_core) {
             q_read_addr = get_noc_addr(q_addr);
         } else {
             q_read_addr = get_noc_addr(output_core_noc_x, output_core_noc_y, q_addr);
         }
-        cb_reserve_back(cb_q_in, q_chunk_tiles);
-        uint32_t q_write_ptr = get_write_ptr(cb_q_in);
+        if constexpr (tilize_q) {
+            cb_reserve_back(cb_q_rm, q_chunk_tiles);
+            q_write_ptr = get_write_ptr(cb_q_rm);
+        } else {
+            cb_reserve_back(cb_q_in, q_chunk_tiles);
+            q_write_ptr = get_write_ptr(cb_q_in);
+        }
         if constexpr (q_tile_bytes == 1024) {
             // q_addr represents 32x32 tiles; read them as 16x32 tiles
             for (uint8_t tile = 0; tile < q_chunk_tiles; tile++) {
@@ -151,7 +158,11 @@ void kernel_main() {
             noc_async_read(q_read_addr, q_write_ptr, q_chunk_tiles_bytes);
         }
         noc_async_read_barrier();
-        cb_push_back(cb_q_in, q_chunk_tiles);
+        if constexpr (tilize_q) {
+            cb_push_back(cb_q_rm, q_chunk_tiles);
+        } else {
+            cb_push_back(cb_q_in, q_chunk_tiles);
+        }
     } else {
         const InterleavedAddrGenFast<is_dram> q_reader = {
             .bank_base_address = q_addr, .page_size = q_tile_bytes, .data_format = q_data_format};

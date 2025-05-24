@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "fabric_fixture.hpp"
+#include "t3k_mesh_descriptor_chip_mappings.hpp"
+#include "utils.hpp"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
@@ -54,6 +56,7 @@ TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 3);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(0, 0, 4, 31, chan);
+        EXPECT_EQ(path.size() > 0, true);
     }
 }
 
@@ -81,51 +84,65 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 0);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(0, 0, 0, 7, chan);
+        EXPECT_EQ(path.size() > 0, true);
     }
     valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 1);
     for (auto chan : valid_chans) {
         auto path = control_plane->get_fabric_route(0, 0, 0, 7, chan);
+        EXPECT_EQ(path.size() > 0, true);
     }
 }
 
-TEST_F(ControlPlaneFixture, TestT3kSplitMeshGraphInit) {
+class T3kCustomMeshGraphControlPlaneFixture
+    : public ControlPlaneFixture,
+      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>> {};
+
+TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kMeshGraphInit) {
+    auto [mesh_graph_desc_path, _] = GetParam();
     const std::filesystem::path t3k_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/t3k_split_mesh_graph_descriptor.yaml";
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
     auto mesh_graph_desc = std::make_unique<MeshGraph>(t3k_mesh_graph_desc_path.string());
 }
 
-TEST_F(ControlPlaneFixture, TestT3kSplitMeshControlPlaneInit) {
+TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
+    auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     const std::filesystem::path t3k_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/t3k_split_mesh_graph_descriptor.yaml";
-    auto control_plane = std::make_unique<ControlPlane>(t3k_mesh_graph_desc_path.string());
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
+    auto control_plane = std::make_unique<ControlPlane>(
+        t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 }
 
-TEST_F(ControlPlaneFixture, TestT3kSplitMeshFabricRoutes) {
+TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
+    auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     const std::filesystem::path t3k_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/t3k_split_mesh_graph_descriptor.yaml";
-    auto control_plane = std::make_unique<ControlPlane>(t3k_mesh_graph_desc_path.string());
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
+    auto control_plane = std::make_unique<ControlPlane>(
+        t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
-    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 0);
-    for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(0, 0, 0, 3, chan);
-    }
-    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 1, 1);
-    for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(0, 1, 1, 2, chan);
-    }
-    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 0);
-    for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(0, 0, 1, 3, chan);
-    }
-    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(1, 2, 1);
-    for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(1, 2, 0, 2, chan);
+    // TODO: Query this
+    constexpr uint32_t num_routing_planes = 2;
+    for (const auto& src_mesh : control_plane->get_user_physical_mesh_ids()) {
+        for (const auto& dst_mesh : control_plane->get_user_physical_mesh_ids()) {
+            auto src_mesh_shape = control_plane->get_physical_mesh_shape(src_mesh);
+            auto src_mesh_size = src_mesh_shape[0] * src_mesh_shape[1];
+            auto dst_mesh_shape = control_plane->get_physical_mesh_shape(dst_mesh);
+            auto dst_mesh_size = dst_mesh_shape[0] * dst_mesh_shape[1];
+            auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(
+                src_mesh, std::rand() % src_mesh_size, std::rand() % num_routing_planes);
+            for (auto chan : valid_chans) {
+                auto path = control_plane->get_fabric_route(
+                    src_mesh, std::rand() % src_mesh_size, dst_mesh, std::rand() % dst_mesh_size, chan);
+                EXPECT_EQ(path.size() > 0, true);
+            }
+        }
     }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    T3kCustomMeshGraphControlPlaneTests,
+    T3kCustomMeshGraphControlPlaneFixture,
+    ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
 
 TEST_F(ControlPlaneFixture, TestQuantaGalaxyControlPlaneInit) {
     const std::filesystem::path quanta_galaxy_mesh_graph_desc_path =

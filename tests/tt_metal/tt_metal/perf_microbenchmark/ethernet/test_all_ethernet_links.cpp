@@ -13,7 +13,7 @@
 
 #include "umd/device/types/arch.h"
 #include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/core_coord.hpp>

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -527,11 +527,13 @@ struct fvc_inbound_push_state_t {
         uint32_t dst_mesh_id = packet_header->routing.dst_mesh_id;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             remote_wrptr_direction = port_direction_table[next_port];
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t dst_device_id = packet_header->routing.dst_dev_id;
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             remote_wrptr_direction = port_direction_table[next_port];
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
@@ -541,9 +543,11 @@ struct fvc_inbound_push_state_t {
     uint32_t get_next_hop_router_noc_xy(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_dev_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }
@@ -553,8 +557,10 @@ struct fvc_inbound_push_state_t {
         uint32_t direction = 0;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
         } else {
             next_port = routing_table->intra_mesh_table.dest_entry[dst_dev_id];
+            ASSERT(next_port != INVALID_DIRECTION);
         }
 
         if (routing_table->port_direction.directions[eth_chan_directions::EAST] == next_port) {
@@ -1367,10 +1373,12 @@ struct fvc_inbound_pull_state_t {
         uint32_t dst_mesh_id = current_packet_header.routing.dst_mesh_id;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t dst_device_id = current_packet_header.routing.dst_dev_id;
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }
@@ -1978,10 +1986,12 @@ struct fvcc_inbound_state_t {
         uint32_t dst_mesh_id = current_packet_header->routing.dst_mesh_id;
         if (dst_mesh_id != routing_table->my_mesh_id) {
             uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         } else {
             uint32_t dst_device_id = current_packet_header->routing.dst_dev_id;
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            ASSERT(next_port != INVALID_DIRECTION);
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <core_descriptor.hpp>
@@ -748,14 +748,6 @@ void InitDeviceProfiler(IDevice* device) {
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer_ptr->address();
         setControlBuffer(device, control_buffer);
-
-        std::vector<uint32_t> inputs_DRAM(output_dram_buffer_ptr->size() / sizeof(uint32_t), 0);
-
-        if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-            issue_fd_write_to_profiler_buffer(profiler.output_dram_buffer, device, inputs_DRAM);
-        } else {
-            tt_metal::detail::WriteToBuffer(*(profiler.output_dram_buffer.get_buffer()), inputs_DRAM);
-        }
     }
 #endif
 }
@@ -892,8 +884,6 @@ void DumpDeviceProfileResults(
                 // last owner. Sync program also contains a buffer so it is safter to release it here
                 tt_metal_device_profiler_map.at(device_id).output_dram_buffer = {};
                 tt_metal_device_profiler_map.at(device_id).sync_program.reset();
-            } else {
-                InitDeviceProfiler(device);
             }
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
                 tt_metal_device_profiler_map.at(device_id).pushTracyDeviceResults();

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -138,6 +138,15 @@ private:
     CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const;
 
     ZoneDetails getZoneDetails(uint16_t timer_id) const;
+
+    // Storage for all core's control buffers
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
+
+    // Read all control buffers
+    void readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state);
+
+    // reset control buffers
+    void resetControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state);
 
     // Dumping profile result to file
     void logPacketData(

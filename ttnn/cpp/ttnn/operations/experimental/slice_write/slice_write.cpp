@@ -25,6 +25,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     const std::array<uint32_t, 4>& begins,
     const std::array<uint32_t, 4>& ends,
     const std::array<uint32_t, 4>& step) {
+    const auto& logical_input_shape = input_tensor.get_logical_shape();
     const auto& padded_input_shape = input_tensor.get_padded_shape();
     const auto& padded_output_shape = output_tensor.get_padded_shape();
 
@@ -81,17 +82,30 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
         return output_tensor;
     }
 
-    for (int i = 0; i < 4; i++) {
+    // Sharding is only 2D.
+    if (input.is_sharded() && logical_input_shape[0] == 1 && logical_input_shape[1] == 1) {
+        uint32_t input_nhw_volume = padded_input_shape[0] * padded_input_shape[1] * padded_input_shape[2];
+        uint32_t calc_nhw_volume = actual_shape[0] * actual_shape[1] * actual_shape[2];
+
+        // TODO: Account for padding along NHW dimensions.
         TT_FATAL(
-            actual_shape[i] == input.get_logical_shape()[i],
-            "Size of the slice being written {} should match the size of the input tensor {} at dim {}. Got {}, "
-            "expected {} , {}",
-            actual_shape[i],
-            input.get_logical_shape()[i],
-            i,
-            actual_shape,
-            input.get_logical_shape(),
-            padded_shape);
+            input_nhw_volume == calc_nhw_volume,
+            "Input tensor size {} does not match the size of the slice being written {}",
+            input_nhw_volume,
+            calc_nhw_volume);
+    } else {
+        for (int i = 0; i < 4; i++) {
+            TT_FATAL(
+                actual_shape[i] == input.get_logical_shape()[i],
+                "Size of the slice being written {} should match the size of the input tensor {} at dim {}. Got {}, "
+                "expected {} , {}",
+                actual_shape[i],
+                input.get_logical_shape()[i],
+                i,
+                actual_shape,
+                input.get_logical_shape(),
+                padded_shape);
+        }
     }
 
     if (on_device) {

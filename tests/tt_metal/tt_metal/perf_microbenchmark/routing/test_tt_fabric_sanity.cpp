@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -80,11 +80,6 @@ bool benchmark_mode;
 
 // push/pull buffer model
 bool push_mode;
-
-// Metal fabric initialization level
-// 0: No fabric initialization
-// 1: Initialize metal fabric with default settings
-uint32_t metal_fabric_init_level;
 
 uint32_t tx_signal_address;
 uint32_t host_signal_address;
@@ -174,19 +169,11 @@ struct test_board_t {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        if (metal_fabric_init_level == 0) {
-            tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
-        } else if (metal_fabric_init_level == 1) {
-            tt::tt_metal::detail::InitializeFabricConfig(
-                push_mode ? tt::tt_metal::FabricConfig::FABRIC_2D_PUSH : tt::tt_metal::FabricConfig::FABRIC_2D);
-        }
+        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
+
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
-        if (metal_fabric_init_level == 0) {
-            control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-            control_plane->write_routing_tables_to_all_chips();
-        } else {
-            control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-        }
+        control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+        control_plane->write_routing_tables_to_all_chips();
 
         if (num_chips_to_use != available_chip_ids.size()) {
             // initialize partial board to get the set of physical chip IDs for fabric kernels
@@ -495,8 +482,9 @@ struct test_board_t {
         return control_plane->get_intra_chip_neighbors(src_mesh_id, src_chip_id, routing_direction);
     }
 
-    inline routing_plane_id_t get_routing_plane_from_chan(chan_id_t eth_chan) {
-        return control_plane->get_routing_plane_id(eth_chan);
+    inline routing_plane_id_t get_routing_plane_from_chan(chip_id_t physical_chip_id, chan_id_t eth_chan) {
+        const auto mesh_chip_id = this->get_mesh_chip_id(physical_chip_id);
+        return control_plane->get_routing_plane_id(mesh_chip_id.first, mesh_chip_id.second, eth_chan);
     }
 
     inline eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t eth_chan) {
@@ -676,9 +664,8 @@ struct test_device_t {
             std::set<chip_id_t> chips_in_route;
             chan_id_t src_eth_chan = soc_desc.logical_eth_core_to_chan_map.at(router_logical_cores[i]);
             chips_in_route.insert(physical_chip_id);
-            try {
-                route = _get_route_to_chip(rx_device->mesh_id, rx_device->logical_chip_id, src_eth_chan);
-            } catch (const std::exception& e) {
+            route = _get_route_to_chip(rx_device->mesh_id, rx_device->logical_chip_id, src_eth_chan);
+            if (route.empty()) {
                 continue;
             }
 
@@ -989,7 +976,8 @@ struct test_traffic_t {
             tx_core = std::get<2>(tx_workers[i]);
             rx_core = std::get<2>(rx_workers[tx_to_rx_map[i]]);
 
-            auto routing_plane = tx_device->board_handle->get_routing_plane_from_chan(eth_chan);
+            auto routing_plane =
+                tx_device->board_handle->get_routing_plane_from_chan(tx_device->physical_chip_id, eth_chan);
 
             // setup runtime args
             std::vector<uint32_t> runtime_args = {
@@ -1441,8 +1429,6 @@ int main(int argc, char **argv) {
         log_info(
             LogTest, "  --device_id_r: DDevice on which the test will be run, default = {}", default_test_device_id_r);
 
-        log_info(
-            LogTest, "  --metal_fabric_init_level: use Metal runtime to load fabric, 0 is disable, 1 is enable", 0);
         return 0;
     }
 
@@ -1548,7 +1534,6 @@ int main(int argc, char **argv) {
     if (mcast && bidirectional_traffic) {
         throw std::runtime_error("Bidirectional traffic is not supported for mcast");
     }
-    metal_fabric_init_level = test_args::get_command_option_uint32(input_args, "--metal_fabric_init_level", 0);
 
     bool pass = true;
     uint32_t num_available_devices, num_allocated_devices = 0;
@@ -1692,18 +1677,16 @@ int main(int argc, char **argv) {
         uint32_t worker_unreserved_base_addr =
             test_devices.begin()->second->device_handle->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
-        if (metal_fabric_init_level == 0) {
-            // manual init fabric
-            // create router kernels
-            std::vector<uint32_t> router_compile_args = {
-                (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
-                tunneler_test_results_addr,        // 1: test_results_addr
-                tunneler_test_results_size,        // 2: test_results_size
-                0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
-            };
-            for (auto& [chip_id, test_device] : test_devices) {
-                test_device->create_router_kernels(router_compile_args, defines);
-            }
+        // manual init fabric
+        // create router kernels
+        std::vector<uint32_t> router_compile_args = {
+            (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+            tunneler_test_results_addr,        // 1: test_results_addr
+            tunneler_test_results_size,        // 2: test_results_size
+            0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+        };
+        for (auto& [chip_id, test_device] : test_devices) {
+            test_device->create_router_kernels(router_compile_args, defines);
         }
         if (!disable_txrx_timeout) {
             defines["CHECK_TIMEOUT"] = "";
@@ -1778,11 +1761,9 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Programs launched, waiting for router sync");
 
-        if (metal_fabric_init_level == 0) {
-            // wait for all routers to handshake with master router
-            for (auto& [chip_id, test_device] : test_devices) {
-                test_device->wait_for_router_sync();
-            }
+        // wait for all routers to handshake with master router
+        for (auto& [chip_id, test_device] : test_devices) {
+            test_device->wait_for_router_sync();
         }
 
         log_info(LogTest, "Routers sync done, notifying tx controllers");
@@ -1809,10 +1790,8 @@ int main(int argc, char **argv) {
         log_info(LogTest, "RX workers done, terminating routers");
 
         // terminate fabric routers if control plane is not managed by DevicePool
-        if (metal_fabric_init_level == 0) {
-            for (auto& [chip_id, test_device] : test_devices) {
-                test_device->terminate_router_kernels();
-            }
+        for (auto& [chip_id, test_device] : test_devices) {
+            test_device->terminate_router_kernels();
         }
 
         log_info(LogTest, "Terminated routers, waiting for program done");

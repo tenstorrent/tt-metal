@@ -1045,7 +1045,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
     }
 
-    tt::log_info("Weights Dtype : {}, conv_config weights dtype : {}", weight_tensor_.get_dtype(), weights_bias_dtype);
     if (bias_tensor.has_value()) {
         bias_tensor_ = bias_tensor.value();
         bool is_bias_tensor_is_on_device = tt::tt_metal::is_device_tensor(bias_tensor_);

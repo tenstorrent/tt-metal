@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -8,6 +8,9 @@
 
 #include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "fd_kernel.hpp"
+
+namespace tt {
+namespace tt_metal {
 
 struct mux_static_config_t {
     std::optional<uint32_t> reserved;
@@ -57,3 +60,6 @@ private:
     mux_static_config_t static_config_;
     mux_dependent_config_t dependent_config_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt

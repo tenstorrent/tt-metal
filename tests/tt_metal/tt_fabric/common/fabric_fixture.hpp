@@ -1,6 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#pragma once
 
 #include "gtest/gtest.h"
 #include <tt-metalium/device_pool.hpp>
@@ -88,16 +90,41 @@ class Fabric1DFixture : public BaseFabricFixture {
     void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_1D); }
 };
 
-class Fabric2DPullFixture : public BaseFabricFixture {
+class Fabric2DFixture : public BaseFabricFixture {
     void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D); }
-};
-
-class Fabric2DPushFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_PUSH); }
 };
 
 class Fabric2DDynamicFixture : public BaseFabricFixture {
     void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
+};
+
+class CustomMeshGraphFabric2DDynamicFixture : public BaseFabricFixture {
+public:
+    void SetUp(
+        const std::string& mesh_graph_desc_file,
+        const std::vector<std::vector<chip_id_t>>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        tt::tt_metal::MetalContext::instance().get_cluster().set_custom_control_plane_mesh_graph(
+            mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
+        this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
+    }
+
+private:
+    void SetUp() override {}
+
+    void TearDown() override {
+        BaseFabricFixture::TearDown();
+        tt::tt_metal::MetalContext::instance().get_cluster().set_default_control_plane_mesh_graph();
+    }
+};
+
+class T3kCustomMeshGraphFabric2DDynamicFixture
+    : public CustomMeshGraphFabric2DDynamicFixture,
+      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>> {
+    void SetUp() override {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::T3K) {
+            GTEST_SKIP();
+        }
+    }
 };
 
 struct McastRoutingInfo {
@@ -111,6 +138,8 @@ void RunTestUnicastRaw(
 void RunTestUnicastConnAPI(
     BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
 
+void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture);
+
 void RunTestMCastConnAPI(
     BaseFabricFixture* fixture,
     RoutingDirection fwd_dir = RoutingDirection::W,
@@ -120,23 +149,6 @@ void RunTestMCastConnAPI(
 
 void RunTestLineMcast(
     BaseFabricFixture* fixture, RoutingDirection unicast_dir, const std::vector<McastRoutingInfo>& mcast_routing_info);
-
-bool find_device_with_neighbor_in_multi_direction(
-    BaseFabricFixture* fixture,
-    std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
-    std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>>& dst_mesh_chip_ids_by_dir,
-    chip_id_t& src_physical_device_id,
-    std::unordered_map<RoutingDirection, std::vector<chip_id_t>>& dst_physical_device_ids_by_dir,
-    const std::unordered_map<RoutingDirection, uint32_t>& mcast_hops,
-    std::optional<RoutingDirection> incoming_direction = std::nullopt);
-
-bool find_device_with_neighbor_in_direction(
-    BaseFabricFixture* fixture,
-    std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
-    std::pair<mesh_id_t, chip_id_t>& dst_mesh_chip_id,
-    chip_id_t& src_physical_device_id,
-    chip_id_t& dst_physical_device_id,
-    RoutingDirection direction);
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

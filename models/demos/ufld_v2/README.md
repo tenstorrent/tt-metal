@@ -24,7 +24,7 @@ Use the following command to run the model :
 
 `pytest tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py::test_ufld_v2_model`
 
-Use the following command to run the e2e perf(5.3 FPS):
+Use the following command to run the e2e perf:
 
 `pytest models/demos/ufld_v2/tests/test_ufld_v2_perf.py::test_ufld_v2_perf`
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -8,6 +8,9 @@
 #include "fd_kernel.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_xy_pair.h>
+
+namespace tt {
+namespace tt_metal {
 
 struct dispatch_s_static_config_t {
     std::optional<uint32_t> cb_base;
@@ -51,3 +54,6 @@ private:
     dispatch_s_static_config_t static_config_;
     dispatch_s_dependent_config_t dependent_config_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt

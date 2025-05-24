@@ -188,7 +188,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-for-loop-analysis>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-mismatched-tags>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-missing-braces>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-local-typedef>"
@@ -239,7 +238,6 @@ target_sources(metal_common_pch PRIVATE metal_common_pch.cpp)
 target_precompile_headers(
     metal_common_pch
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
         <fmt/core.h>
         <fmt/format.h>
         <nlohmann/json.hpp>

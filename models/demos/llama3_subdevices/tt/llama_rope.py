@@ -31,6 +31,7 @@ class TtLlamaRotarySetup(LightweightModule):
 
         self.batch_size = batch_size
         self.head_dim = head_dim
+        self.n_kv_heads = 8
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
@@ -168,6 +169,34 @@ class TtLlamaRotarySetup(LightweightModule):
 
         return rot_idxs
 
+    def get_rm_rot_idxs(self, position_idxs, on_host=False):
+        assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
+        assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
+        assert position_idxs.shape[0] == 32, "position idxs must be a [32] tensor"
+        position_idxs = position_idxs.view(-1, 8)  # [4, 8]
+        position_idxs = position_idxs.repeat(1, 2)  # [4, 16]
+        position_idxs = position_idxs.view(-1, 1)  # [64, 1]
+        position_idxs = position_idxs.repeat(1, self.n_kv_heads)  # [64, 8]
+
+        batch = position_idxs.shape[0]
+
+        rot_idxs = ttnn.as_tensor(
+            position_idxs,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None if on_host else self.device,
+            memory_config=None if on_host else ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ShardTensor2dMesh(
+                self.device,
+                dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
+                mesh_shape=list(self.device.shape),
+            )
+            if self.is_mesh_device
+            else None,
+        )
+
+        return rot_idxs
+
     def get_rot_mats(self, position_idxs, return_rot_idxs=False):
         device = self.device
 
@@ -223,6 +252,42 @@ class TtLlamaRotarySetup(LightweightModule):
 
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
+
+        if return_rot_idxs:
+            return [cos, sin], rot_idxs
+        return [cos, sin]
+
+    def get_rm_rot_mats(self, position_idxs, return_rot_idxs=False):
+        device = self.device
+
+        # If position_idxs is a torch tensor, get the TTNN version of it
+        if isinstance(position_idxs, torch.Tensor):
+            rot_idxs = self.get_rm_rot_idxs(position_idxs)
+        else:
+            rot_idxs = position_idxs
+
+        # Send the idxs to device
+        if rot_idxs.device != device:
+            rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=(self.n_kv_heads, self.head_dim),
+            core_grid=self.core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        embedding_layout = ttnn.ROW_MAJOR_LAYOUT
+        cos = ttnn.embedding(
+            rot_idxs, self.cos_matrix, layout=embedding_layout, memory_config=mem_config
+        )  # [batch, n_kv_heads, head_dim]
+        sin = ttnn.embedding(
+            rot_idxs, self.sin_matrix, layout=embedding_layout, memory_config=mem_config
+        )  # [batch, n_kv_heads, head_dim]
+
+        cos = ttnn.unsqueeze_to_4D(cos)  # [1, batch, n_kv_heads, head_dim]
+        sin = ttnn.unsqueeze_to_4D(sin)  # [1, batch, n_kv_heads, head_dim]
 
         if return_rot_idxs:
             return [cos, sin], rot_idxs

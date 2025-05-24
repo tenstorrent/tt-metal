@@ -6,6 +6,8 @@ import pytest
 
 from loguru import logger
 
+from ttnn.device import is_wormhole_b0
+
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from models.utility_functions import (
@@ -71,6 +73,12 @@ def test_unet_trace_perf(
     use_program_cache,
     reset_seeds,
 ):
+    if (
+        not is_wormhole_b0(device)
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
+    ):
+        pytest.skip(f"shallow unet only support 110 cores on bh (was {device.compute_with_storage_grid_size()})")
+
     from models.experimental.functional_unet.tests.test_unet_trace import (
         test_unet_trace_2cq_same_io,
     )

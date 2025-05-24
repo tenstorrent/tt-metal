@@ -9,7 +9,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt_stl/reflection.hpp>
 

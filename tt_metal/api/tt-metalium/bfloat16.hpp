@@ -1,15 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <tt-metalium/tile.hpp>
-#include <tt_stl/span.hpp>
 #include <cstdint>
 #include <cstring>
 #include <functional>
-#include <optional>
 #include <ostream>
 #include <string>
 #include <utility>

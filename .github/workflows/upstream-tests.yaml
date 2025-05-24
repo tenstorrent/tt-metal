@@ -92,7 +92,7 @@ jobs:
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
             image-base-name: ${{ needs.get-image-tags.outputs.bh-base-image-name }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
-            test-command: tests/scripts/single_card/run_bh_upstream_tests.sh
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh blackhole
             build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}

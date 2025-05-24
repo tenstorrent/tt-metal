@@ -6,7 +6,6 @@
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
 #include "dev_msgs.h"
-#include <device_impl.hpp>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
@@ -36,6 +35,7 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "device/device_impl.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
