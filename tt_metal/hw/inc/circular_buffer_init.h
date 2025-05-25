@@ -25,7 +25,7 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
 
     local_cb_mask >>= start_cb_index;
     uint32_t cb_id = start_cb_index;
-    while (local_cb_mask) {
+    while (true) {
         // We could attempt to find the next set bit instead of iterating through all bits, but the circular buffers are
         // often pretty tightly packed and computing the next set bit is somewhat expensive without specialized
         // instructions.
@@ -56,6 +56,9 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
             if (init_wr_tile_ptr) {
                 local_interface.fifo_wr_tile_ptr = 0;
             }
+        } else if (local_cb_mask == 0) {
+            // No more circular buffers to set up
+            break;
         }
         local_cb_mask >>= 1;
         cb_id++;
