@@ -180,38 +180,6 @@ function(build_library LIBRARY_NAME ALIAS)
 endfunction()
 
 ##################################################
-# Define auxiliar functions
-##################################################
-function(use_precompiled_header TARGET)
-    if("${PRECOMPILED_HEADER_TARGET}" STREQUAL "")
-        set(PRECOMPILED_HEADER_TARGET "${TARGET}" PARENT_SCOPE)
-        target_precompile_headers(${TARGET} PUBLIC ${TTNN_PRECOMPILED_HEADERS})
-    else()
-        target_precompile_headers(${TARGET} REUSE_FROM ${PRECOMPILED_HEADER_TARGET})
-    endif()
-endfunction()
-
-function(add_ttnn_sublibrary SUBLIBRARY_NAME)
-    add_library(
-        ${SUBLIBRARY_NAME}
-        ${LIB_TYPE}
-        ${ARGN}
-    )
-    install(TARGETS ${SUBLIBRARY_NAME} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-
-    TT_ENABLE_UNITY_BUILD(${SUBLIBRARY_NAME})
-    target_include_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
-    target_link_libraries(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
-    target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
-    use_precompiled_header(${SUBLIBRARY_NAME})
-    set(PRECOMPILED_HEADER_TARGET "${PRECOMPILED_HEADER_TARGET}" PARENT_SCOPE)
-
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_compile_definitions(${SUBLIBRARY_NAME} PRIVATE DISABLE_NAMESPACE_STATIC_ASSERT)
-    endif()
-endfunction()
-
-##################################################
 # Collect all the files and folders that TTNNCPP will use
 ##################################################
 set(TTNN_PUBLIC_INCLUDE_DIRS
@@ -263,8 +231,6 @@ list(
     ${TTNN_OP_SRCS}
     ${TENSOR_SRC}
 )
-
-set(TTNN_SUBLIBRARIES ttnn/operations/experimental/experimental_${PY_BINDING})
 
 set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
@@ -469,25 +435,6 @@ list(
 set(TTNN_PUBLIC_INCLUDE_DIRS_PYBIND ${Python3_INCLUDE_DIRS})
 
 ##################################################
-# Handle sublibraries
-##################################################
-foreach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
-    set(SUBLIBRARY_SRCS ${TTNN_SRC})
-    list(FILTER SUBLIBRARY_SRCS INCLUDE REGEX "${SUBLIBRARY_PATH}")
-    list(FILTER TTNN_SRC EXCLUDE REGEX "${SUBLIBRARY_PATH}")
-
-    if(SUBLIBRARY_SRCS)
-        string(REPLACE "/" "_" SUBLIBRARY_NAME ${SUBLIBRARY_PATH})
-
-        add_ttnn_sublibrary(${SUBLIBRARY_NAME} ${SUBLIBRARY_SRCS})
-        list(APPEND ALL_TTNN_SUBLIBRARIES ${SUBLIBRARY_NAME})
-    endif()
-endforeach(
-    SUBLIBRARY_PATH
-    ${TTNN_SUBLIBRARIES}
-)
-
-##################################################
 # Prepare the variables to define the library to be built
 ##################################################
 set(SOURCES_PYBIND
@@ -509,10 +456,7 @@ set(TARGET_LINK_LIBRARIES_PYBIND
     pybind11::module
 )
 
-set(TARGET_LINK_LIBRARIES_CPP
-    ${TTNN_PUBLIC_LINK_LIBRARIES}
-    ${ALL_TTNN_SUBLIBRARIES}
-)
+set(TARGET_LINK_LIBRARIES_CPP ${TTNN_PUBLIC_LINK_LIBRARIES})
 
 list(APPEND TTNN_PUBLIC_INCLUDE_DIRS_PYBIND ${TTNN_PUBLIC_INCLUDE_DIRS})
 
