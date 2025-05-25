@@ -286,9 +286,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/index_fill/index_fill.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/index_fill/device/index_fill_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/index_fill/device/index_fill_multi_core_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/device/dropout_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/device/dropout_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reshape/view.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/gelu_backward_device_operation.cpp
@@ -315,7 +312,6 @@ list(
 set(TTNN_SUBLIBRARIES
     ttnn/operations/examples
     ttnn/operations/experimental/experimental_${PY_BINDING}
-    ttnn/operations/experimental/dropout
     ttnn/operations/experimental/bcast_to
     ttnn/operations/experimental/reshape
     ttnn/operations/experimental/unary_backward
@@ -636,6 +632,7 @@ build_library(
         TT::NN::Ops::Experimental::CNN
         TT::NN::Ops::Experimental::Conv3d
         TT::NN::Ops::Experimental::Copy
+        TT::NN::Ops::Experimental::Dropout
         TT::NN::Ops::Experimental::Matmul
         TT::NN::Ops::Experimental::PagedCache
         TT::NN::Ops::Experimental::PlusOne
@@ -726,6 +723,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
+add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
