@@ -228,12 +228,9 @@ set(TTNN_BASE_SRCS
 )
 
 set(TTNN_OP_SRCS
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/device/conv3d_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/core/core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/core/to_layout/to_layout_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/device/update_cache_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/kv_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/device/update_cache_op_multi_core.cpp
@@ -739,7 +736,6 @@ list(
 )
 
 set(TTNN_SUBLIBRARIES
-    ttnn/operations/core
     ttnn/operations/data_movement
     ttnn/operations/eltwise/binary
     ttnn/operations/eltwise/binary_backward
@@ -805,6 +801,7 @@ set(FixmeOpIncDirs
 )
 add_subdirectory(cpp/ttnn/operations/ccl)
 add_subdirectory(cpp/ttnn/operations/conv)
+add_subdirectory(cpp/ttnn/operations/core)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 
 ##################################################
@@ -1080,6 +1077,7 @@ build_library(
         TT::NN::Ops::CCL
         TT::NN::Ops::Experimental::CCL
         TT::NN::Ops::Conv
+        TT::NN::Ops::Core
 )
 
 if(WITH_PYTHON_BINDINGS)
