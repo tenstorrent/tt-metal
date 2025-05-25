@@ -140,7 +140,16 @@ def test_llama_demo(
     )
 
 
-def merge_device_rows(df):
+def merge_device_rows(df, selection_column="DEVICE KERNEL DURATION [ns]"):
+    """
+    Merges rows in the DataFrame that have the same operation name across different devices.
+    For collective operations, it averages the durations across devices.
+    For non-collective operations, it takes the row with the maximum duration.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing device operation data.
+        selection_column (str): The column to use for selecting the duration of the operation.
+    """
     block_by_device = defaultdict(list)
 
     for _, row in df.iterrows():
@@ -189,9 +198,7 @@ def merge_device_rows(df):
         if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" in op_name:
             # For collective ops, take the average duration over all rows within a block
             device_kernel_durations = [
-                d["DEVICE KERNEL DURATION [ns]"]
-                for _, d in blocks
-                if "DEVICE KERNEL DURATION [ns]" in d and not math.isnan(d["DEVICE KERNEL DURATION [ns]"])
+                d[selection_column] for _, d in blocks if selection_column in d and not math.isnan(d[selection_column])
             ]
 
             average_duration = (
@@ -199,11 +206,11 @@ def merge_device_rows(df):
             )
             # Use the first block's data but update its duration with the average
             base_block = blocks[0][1].copy()
-            base_block["DEVICE KERNEL DURATION [ns]"] = average_duration
+            base_block[selection_column] = average_duration
             merged_blocks.append(base_block)
         else:
             # For non-collective ops, take the row with maximum duration
-            max_duration_block = max(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
+            max_duration_block = max(blocks, key=lambda x: x[1][selection_column])
             merged_blocks.append(max_duration_block[1])
 
         global_index += 1
@@ -277,43 +284,20 @@ def is_collective_op(op_code):
     return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce"))
 
 
-def process_measurements(df, num_layers):
+def process_measurements(df, num_layers, measurements=[ "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]", "DEVICE KERNEL FIRST TO LAST START [ns]"]):
     raw_dict = df[
-        ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]", "DEVICE KERNEL FIRST TO LAST START [ns]"]
+        ["OP CODE"] + measurements
     ].to_dict(orient="records")
 
-    # Kernel duration
-    kernel_duration_dict = build_duration_dict(raw_dict, "DEVICE KERNEL DURATION [ns]")
-    kernel_duration_per_instance_dict = build_duration_per_instance_dict(kernel_duration_dict, num_layers)
-    kernel_duration_per_instance_averaged_dict = average_per_instance_dict(kernel_duration_per_instance_dict)
-    kernel_duration_per_instance_min_dict = min_per_instance_dict(kernel_duration_per_instance_dict)
-    kernel_duration_per_instance_max_dict = max_per_instance_dict(kernel_duration_per_instance_dict)
+    results = []
+    for measurement in measurements:
+        duration_dict = build_duration_dict(raw_dict, measurement)
+        duration_per_instance_dict = build_duration_per_instance_dict(duration_dict, num_layers)
+        results.append(average_per_instance_dict(duration_per_instance_dict))
+        results.append(min_per_instance_dict(duration_per_instance_dict))
+        results.append(max_per_instance_dict(duration_per_instance_dict))
 
-    # Dispatch duration
-    dispatch_duration_dict = build_duration_dict(raw_dict, "OP TO OP LATENCY [ns]")
-    dispatch_duration_per_instance_dict = build_duration_per_instance_dict(dispatch_duration_dict, num_layers)
-    dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
-    dispatch_duration_per_instance_min_dict = min_per_instance_dict(dispatch_duration_per_instance_dict)
-    dispatch_duration_per_instance_max_dict = max_per_instance_dict(dispatch_duration_per_instance_dict)
-
-    # First to last start
-    first_to_last_start_dict = build_duration_dict(raw_dict, "DEVICE KERNEL FIRST TO LAST START [ns]")
-    first_to_last_start_per_instance_dict = build_duration_per_instance_dict(first_to_last_start_dict, num_layers)
-    first_to_last_start_per_instance_averaged_dict = average_per_instance_dict(first_to_last_start_per_instance_dict)
-    first_to_last_start_per_instance_min_dict = min_per_instance_dict(first_to_last_start_per_instance_dict)
-    first_to_last_start_per_instance_max_dict = max_per_instance_dict(first_to_last_start_per_instance_dict)
-
-    return (
-        kernel_duration_per_instance_averaged_dict,
-        kernel_duration_per_instance_min_dict,
-        kernel_duration_per_instance_max_dict,
-        dispatch_duration_per_instance_averaged_dict,
-        dispatch_duration_per_instance_min_dict,
-        dispatch_duration_per_instance_max_dict,
-        first_to_last_start_per_instance_averaged_dict,
-        first_to_last_start_per_instance_min_dict,
-        first_to_last_start_per_instance_max_dict,
-    )
+    return results
 
 
 def verify_value_within_margin(value, target, margin, op_code_with_id, perf_type):
@@ -793,7 +777,11 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
-    df = merge_device_rows(df)
+    # Add kernel duration of an op to the dispatch time for the next op (on the same device)
+    df["TOTAL DISPATCH TIME [ns]"] = df["OP TO OP LATENCY [ns]"] + df.groupby("DEVICE ID")[
+        "DEVICE KERNEL DURATION [ns]"
+    ].shift(1, fill_value=0)
+    df = merge_device_rows(df, "TOTAL DISPATCH TIME [ns]")
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
 
@@ -803,32 +791,20 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     df_model_tail = df_model[DECODER_OP_END_INDEX:]
 
-    all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
-        orient="records"
-    )
+    all_layers_raw_dict = df_layers[
+        ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]", "TOTAL DISPATCH TIME [ns]", "TOTAL DISPATCH TIME [ns]"]
+    ].to_dict(orient="records")
 
     (
-        _,
-        _,
-        _,
         avg_dispatch_duration_mid_layers,
         min_dispatch_duration_mid_layers,
         max_dispatch_duration_mid_layers,
-        _,
-        _,
-        _,
-    ) = process_measurements(df_layers, num_layers - 1)
+    ) = process_measurements(df_layers, num_layers - 1, ["TOTAL DISPATCH TIME [ns]"])
     (
-        _,
-        _,
-        _,
         avg_dispatch_duration_model_tail,
         min_dispatch_duration_model_tail,
         max_dispatch_duration_model_tail,
-        _,
-        _,
-        _,
-    ) = process_measurements(df_model_tail, 1)
+    ) = process_measurements(df_model_tail, 1, ["TOTAL DISPATCH TIME [ns]"])
 
     if len(avg_dispatch_duration_mid_layers) != len(perf_targets["decoder"]):
         print_dict(perf_targets["decoder"], "perf_targets['decoder']")
