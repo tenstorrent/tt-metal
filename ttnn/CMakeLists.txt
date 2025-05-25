@@ -112,7 +112,7 @@ function(build_library LIBRARY_NAME ALIAS)
     set(SOURCES "${BUILD_LIB_SOURCES}")
     set(TARGET_LINK_LIBRARIES "${BUILD_LIB_TARGET_LINK_LIBRARIES}")
     set(LINK_DIRECTORIES "${BUILD_LIB_LINK_DIRECTORIES}")
-    set(INCLUDE_DIRS "${BUILD_LIB_INCLUDE_DIRS}")
+    set(INCLUDE_DIRS "${BUILD_LIB_INCLUDE_DIRECTORIES}")
 
     ##################################################
     # Declare and define the library
