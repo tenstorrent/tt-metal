@@ -228,9 +228,6 @@ set(TTNN_BASE_SRCS
 )
 
 set(TTNN_OP_SRCS
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/device/update_cache_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/kv_cache.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/device/update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/generic_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
@@ -295,7 +292,6 @@ list(
 set(TTNN_SUBLIBRARIES
     ttnn/operations/examples
     ttnn/operations/experimental/experimental_${PY_BINDING}
-    ttnn/operations/kv_cache
     ttnn/operations/loss
     ttnn/operations/matmul
     ttnn/operations/prefetcher
@@ -622,6 +618,7 @@ build_library(
         TT::NN::Ops::Full
         TT::NN::Ops::FullLike
         TT::NN::Ops::IndexFill
+        TT::NN::Ops::KvCache
         TT::NN::Ops::Moreh
         TT::NN::Ops::Reduction
         TT::NN::Ops::Transformer
@@ -719,6 +716,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)
+add_subdirectory(cpp/ttnn/operations/kv_cache)
 add_subdirectory(cpp/ttnn/operations/moreh)
 add_subdirectory(cpp/ttnn/operations/reduction)
 add_subdirectory(cpp/ttnn/operations/transformer)
