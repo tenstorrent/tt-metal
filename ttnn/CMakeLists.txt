@@ -478,9 +478,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/uniform.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/device/uniform_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/device/uniform_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/bernoulli/bernoulli.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/bernoulli/device/bernoulli_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_abs_pow/device/moreh_abs_pow_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_abs_pow/device/moreh_abs_pow_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow.cpp
@@ -641,7 +638,6 @@ list(
 set(TTNN_SUBLIBRARIES
     ttnn/operations/eltwise/binary
     ttnn/operations/eltwise/binary_backward
-    ttnn/operations/bernoulli
     ttnn/operations/eltwise/complex
     ttnn/operations/eltwise/complex_binary
     ttnn/operations/eltwise/complex_unary
@@ -967,6 +963,7 @@ build_library(
         "${TTNN_PUBLIC_INCLUDE_DIRS}"
     TARGET_LINK_LIBRARIES
         "${TARGET_LINK_LIBRARIES_CPP}"
+        TT::NN::Ops::Bernoulli
         TT::NN::Ops::CCL
         TT::NN::Ops::Experimental::CCL
         TT::NN::Ops::Conv
@@ -1032,3 +1029,4 @@ add_subdirectory(cpp/ttnn/operations/conv)
 add_subdirectory(cpp/ttnn/operations/core)
 add_subdirectory(cpp/ttnn/operations/data_movement)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
+add_subdirectory(cpp/ttnn/operations/bernoulli)
