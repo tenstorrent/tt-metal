@@ -231,7 +231,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/device/update_cache_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/kv_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/device/update_cache_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/generic_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
@@ -338,7 +337,6 @@ list(
 
 set(TTNN_SUBLIBRARIES
     ttnn/operations/examples
-    ttnn/operations/experimental/copy
     ttnn/operations/experimental/experimental_${PY_BINDING}
     ttnn/operations/experimental/matmul
     ttnn/operations/experimental/paged_cache
@@ -664,6 +662,7 @@ build_library(
         TT::NN::Ops::Experimental::CCL
         TT::NN::Ops::Experimental::CNN
         TT::NN::Ops::Experimental::Conv3d
+        TT::NN::Ops::Experimental::Copy
         TT::NN::Ops::Experimental::Reduction
         TT::NN::Ops::Experimental::Transformer
         TT::NN::Ops::Moreh
@@ -749,6 +748,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/auto_format)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
+add_subdirectory(cpp/ttnn/operations/experimental/copy)
 add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/moreh)
