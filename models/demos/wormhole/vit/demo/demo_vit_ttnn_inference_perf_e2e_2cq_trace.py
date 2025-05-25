@@ -128,8 +128,8 @@ def test_vit(device, use_program_cache):
 
     ttnn.synchronize_device(device)
 
-    num_warmup_iterations = 5
-    num_measurement_iterations = 15
+    num_warmup_iterations = 100
+    num_measurement_iterations = 1000
 
     run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations)
 
