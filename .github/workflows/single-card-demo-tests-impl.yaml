@@ -112,7 +112,7 @@ jobs:
             # cd ..
             # python3 ./models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py
             source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
-            sudo apt install python3-pip
+            DEBIAN_FRONTEND=noninteractive sudo apt-get install -y sudo apt install python3-pip
             pip install transformers
             python3 .github/scripts/download_model.py
           else
