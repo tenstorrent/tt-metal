@@ -231,12 +231,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/generic_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example/device/example_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example/device/multi_core_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example/device/single_core_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example_multiple_return/device/example_multiple_return_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example_multiple_return/device/single_core_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example_multiple_return/example_multiple_return.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/padded_slice/padded_slice.cpp
@@ -270,10 +264,7 @@ list(
     ${TENSOR_SRC}
 )
 
-set(TTNN_SUBLIBRARIES
-    ttnn/operations/examples
-    ttnn/operations/experimental/experimental_${PY_BINDING}
-)
+set(TTNN_SUBLIBRARIES ttnn/operations/experimental/experimental_${PY_BINDING})
 
 set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
@@ -576,6 +567,7 @@ build_library(
         TT::NN::Ops::Eltwise::Unary::Backward
         TT::NN::Ops::Embedding
         TT::NN::Ops::Embedding::Backward
+        TT::NN::Ops::Examples
         TT::NN::Ops::Experimental::AutoFormat
         TT::NN::Ops::Experimental::BcastTo
         TT::NN::Ops::Experimental::CCL
@@ -679,6 +671,7 @@ add_subdirectory(cpp/ttnn/operations/eltwise/unary)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
+add_subdirectory(cpp/ttnn/operations/examples)
 add_subdirectory(cpp/ttnn/operations/experimental/auto_format)
 add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
