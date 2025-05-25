@@ -239,8 +239,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/unary/device/unary_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/unary/device/unary_sharded_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/ternary/ternary_composite_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/ternary/where.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/generic_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
@@ -423,7 +421,6 @@ list(
 )
 
 set(TTNN_SUBLIBRARIES
-    ttnn/operations/eltwise/ternary
     ttnn/operations/eltwise/ternary_backward
     ttnn/operations/eltwise/unary
     ttnn/operations/eltwise/unary_backward
@@ -751,6 +748,7 @@ build_library(
         TT::NN::Ops::Eltwise::Complex::Unary
         TT::NN::Ops::Eltwise::Complex::Unary::Backward
         TT::NN::Ops::Eltwise::Quantization
+        TT::NN::Ops::Eltwise::Ternary
         TT::NN::Ops::Experimental::CCL
         TT::NN::Ops::Moreh
         TT::NN::Ops::Reduction
@@ -826,6 +824,7 @@ add_subdirectory(cpp/ttnn/operations/eltwise/complex_binary)
 add_subdirectory(cpp/ttnn/operations/eltwise/complex_unary)
 add_subdirectory(cpp/ttnn/operations/eltwise/complex_unary_backward)
 add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
+add_subdirectory(cpp/ttnn/operations/eltwise/ternary)
 add_subdirectory(cpp/ttnn/operations/moreh)
 add_subdirectory(cpp/ttnn/operations/reduction)
 add_subdirectory(cpp/ttnn/operations/transformer)
