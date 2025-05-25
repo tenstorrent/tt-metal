@@ -403,28 +403,28 @@ Result conv2d_L1(
     std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     if (conv_config.enable_kernel_stride_folding) {
-        TT_FATAL(input_height % stride[0] == 0, "Input height must be divisible by stride for kernel stride folding.");
-        TT_FATAL(input_width % stride[1] == 0, "Input width must be divisible by stride for kernel stride folding.");
-        // Fold the input tensor to reduce spatial dimensions by stride factors, effectively converting
-        // a large kernel convolution into a matmul operation.
-        input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);
-        // If the weight is not preprocessed on device, fold it.
-        if (!tt::tt_metal::is_device_tensor(weight_tensor) || conv_config.always_preprocess_weights) {
-            weight_tensor =
-                fold_tensor(weight_tensor, device, stride, kernel_size, padding_n4, conv_config.weights_dtype, true);
-        }
-        // If the bias is not on device, move it to device.
-        if (bias_tensor.has_value()) {
-            bias_tensor = ttnn::to_device(bias_tensor.value(), device, ttnn::DRAM_MEMORY_CONFIG);
-            bias_tensor = ttnn::to_layout(bias_tensor.value(), Layout::TILE, std::nullopt, std::nullopt, device);
-        }
-        // Update the input height and width to the folded dimensions
-        input_height = input_height / stride[0];
-        input_width = input_width / stride[1];
-        in_channels = in_channels * kernel_size[0] * kernel_size[1];
-        stride = {1, 1};
-        kernel_size = {1, 1};
-        mm_conv = true;
+        auto folding_result = apply_kernel_stride_folding(
+            input_tensor,
+            weight_tensor,
+            bias_tensor,
+            device,
+            input_height,
+            input_width,
+            in_channels,
+            kernel_size,
+            stride,
+            padding_n4,
+            conv_config);
+
+        input_tensor = folding_result.input_tensor;
+        weight_tensor = folding_result.weight_tensor;
+        bias_tensor = folding_result.bias_tensor;
+        input_height = folding_result.input_height;
+        input_width = folding_result.input_width;
+        in_channels = folding_result.in_channels;
+        stride = folding_result.stride;
+        kernel_size = folding_result.kernel_size;
+        mm_conv = folding_result.mm_conv;
     }
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);

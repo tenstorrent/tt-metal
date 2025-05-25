@@ -15,8 +15,8 @@ void kernel_main() {
     uint32_t start_block_id = get_arg_val<uint32_t>(1);
     uint32_t num_blocks = get_arg_val<uint32_t>(2);
 
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat data_format = get_dataformat(cb_id_in0);
+    constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    constexpr DataFormat data_format = get_dataformat(cb_id_in0);
 
     // Initialize interleaved address generator for DRAM access
     const InterleavedAddrGenFast<true> s = {
