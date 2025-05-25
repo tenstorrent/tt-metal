@@ -239,7 +239,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary_backward/binary_backward.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex/complex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_binary/device/complex_binary_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_unary/device/complex_unary_op.cpp
@@ -625,7 +624,6 @@ list(
 )
 
 set(TTNN_SUBLIBRARIES
-    ttnn/operations/eltwise/binary_backward
     ttnn/operations/eltwise/complex
     ttnn/operations/eltwise/complex_binary
     ttnn/operations/eltwise/complex_unary
@@ -957,6 +955,7 @@ build_library(
         TT::NN::Ops::Core
         TT::NN::Ops::DataMovement
         TT::NN::Ops::Eltwise::Binary
+        TT::NN::Ops::Eltwise::Binary::Backward
         TT::NN::Ops::Experimental::CCL
 )
 
@@ -1020,3 +1019,4 @@ add_subdirectory(cpp/ttnn/operations/core)
 add_subdirectory(cpp/ttnn/operations/data_movement)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
+add_subdirectory(cpp/ttnn/operations/eltwise/binary_backward)
