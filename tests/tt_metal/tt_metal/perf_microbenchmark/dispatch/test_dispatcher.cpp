@@ -634,6 +634,12 @@ int main(int argc, char** argv) {
         if (fire_once_g) {
             prefetch_defines.insert(std::pair<string, string>("FIRE_ONCE", std::to_string(1)));
         }
+        std::map<std::string, std::string> dispatch_defines = {
+            {"DISPATCH_SHARED_REGION",
+             std::to_string(MetalContext::instance()
+                                .dispatch_mem_map(CoreType::WORKER)
+                                .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_SHARED_REGION))},
+        };
 
         auto sp1 = tt_metal::CreateKernel(
             program,
@@ -662,7 +668,8 @@ int main(int argc, char** argv) {
             device,
             my_noc_index,
             dispatch_upstream_noc_index,
-            my_noc_index);
+            my_noc_index,
+            dispatch_defines);
 
         switch (test_type_g) {
             case 0: log_info(LogTest, "Running linear unicast test"); break;

@@ -20,9 +20,11 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     // Max of 2 CQs. COMPLETION_Q*_LAST_EVENT_PTR track the last completed event in the respective CQs
     COMPLETION_Q0_LAST_EVENT = 4,
     COMPLETION_Q1_LAST_EVENT = 5,
-    DISPATCH_S_SYNC_SEM = 6,
-    FABRIC_INTERFACE = 7,
-    UNRESERVED = 8
+    // Region shared between dispatch_s and dispatch_d if they're on the same core.
+    DISPATCH_SHARED_REGION = 6,
+    DISPATCH_S_SYNC_SEM = 7,
+    FABRIC_INTERFACE = 8,
+    UNRESERVED = 9
 };
 
 // likely only used in impl

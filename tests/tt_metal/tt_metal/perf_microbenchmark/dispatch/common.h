@@ -542,7 +542,8 @@ void configure_kernel_variant(
     IDevice* device,
     NOC my_noc_index,
     NOC upstream_noc_index,
-    NOC downstream_noc_index) {
+    NOC downstream_noc_index,
+    const std::map<string, string>& incoming_defines = {}) {
     auto my_virtual_noc_coords = device->virtual_noc0_coordinate(my_noc_index, phys_my_core);
     auto upstream_virtual_noc_coords = device->virtual_noc0_coordinate(upstream_noc_index, phys_upstream_core);
     auto downstream_virtual_noc_coords = device->virtual_noc0_coordinate(downstream_noc_index, phys_downstream_core);
@@ -560,6 +561,7 @@ void configure_kernel_variant(
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
         {"FD_CORE_TYPE", std::to_string(0)},               // todo, support dispatch on eth
     };
+    defines.insert(incoming_defines.begin(), incoming_defines.end());
     compile_args.push_back(is_dram_variant);
     compile_args.push_back(is_host_variant);
     tt::tt_metal::CreateKernel(

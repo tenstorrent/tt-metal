@@ -121,6 +121,28 @@ enum CQNocSend {
 
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
+#if defined(ARCH_WORMHOLE)
+constexpr uint32_t dispatch_lock_index = 0;
+constexpr uint32_t dispatch_s_lock_index = 1;
+// TODO: Use real atomics on blackhole. Making these implementation work there wouldn't be efficient.
+FORCE_INLINE void lock_no_atomic(volatile tt_l1_ptr uint32_t* addr, uint32_t i) {
+    auto byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(addr);
+    // Peterson's lock implementation.
+    uint32_t j = 1 - i;
+    byte_ptr[i] = 1;
+    auto turn = byte_ptr + 2;
+    *turn = j;  // Let the other one go first.
+    while (byte_ptr[j] && *turn == j) {
+        // Wait until it's my turn or the other one isn't trying to lock.
+    }
+}
+
+FORCE_INLINE void unlock_no_atomic(volatile tt_l1_ptr uint32_t* addr, uint32_t i) {
+    auto byte_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(addr);
+    byte_ptr[i] = 0;
+}
+#endif
+
 template <
     enum CQNocFlags flags,
     enum CQNocWait wait = CQ_NOC_WAIT,
@@ -420,10 +442,22 @@ FORCE_INLINE void move_rd_to_next_block(uint32_t& rd_block_idx) {
     rd_block_idx &= cb_blocks - 1;
 }
 
-template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id, uint32_t cb_pages_per_block, uint32_t cb_blocks>
+template <
+    uint8_t noc_idx,
+    uint32_t noc_xy,
+    uint32_t sem_id,
+    uint32_t cb_pages_per_block,
+    uint32_t cb_blocks,
+    typename LockCallbackType = void>
 FORCE_INLINE void move_rd_to_next_block_and_release_pages(
     uint32_t& block_noc_writes_to_clear, uint32_t& rd_block_idx, uint8_t noc = noc_index) {
+    if constexpr (!std::is_void_v<LockCallbackType>) {
+        LockCallbackType::lock();
+    }
     cb_block_release_pages<noc_idx, noc_xy, sem_id, cb_pages_per_block>(block_noc_writes_to_clear, noc);
+    if constexpr (!std::is_void_v<LockCallbackType>) {
+        LockCallbackType::unlock();
+    }
     move_rd_to_next_block<cb_blocks>(rd_block_idx);
 }
 
@@ -435,7 +469,8 @@ template <
     uint8_t upstream_noc_idx,
     uint32_t upstream_noc_xy,
     uint32_t upstream_cb_sem,
-    uint32_t cb_pages_per_block>
+    uint32_t cb_pages_per_block,
+    typename LockCallbackType = void>
 FORCE_INLINE uint32_t get_cb_page_and_release_pages(
     uint32_t& cmd_ptr,
     uint32_t& cb_fence,
@@ -455,7 +490,8 @@ FORCE_INLINE uint32_t get_cb_page_and_release_pages(
             upstream_noc_xy,
             upstream_cb_sem,
             cb_pages_per_block,
-            cb_blocks>(block_noc_writes_to_clear, rd_block_idx, noc);
+            cb_blocks,
+            LockCallbackType>(block_noc_writes_to_clear, rd_block_idx, noc);
     }
 
     // Wait for dispatcher to supply a page
