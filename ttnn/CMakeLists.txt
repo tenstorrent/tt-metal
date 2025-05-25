@@ -254,9 +254,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full/device/full_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full/device/full_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full/full.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full_like/full_like.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full_like/device/full_like_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full_like/device/full_like_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/loss/loss.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/matmul/device/matmul_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/matmul/device/matmul_op_multi_core_program_factory.cpp
@@ -304,7 +301,6 @@ list(
 set(TTNN_SUBLIBRARIES
     ttnn/operations/examples
     ttnn/operations/experimental/experimental_${PY_BINDING}
-    ttnn/operations/full_like
     ttnn/operations/full
     ttnn/operations/index_fill
     ttnn/operations/kv_cache
@@ -631,6 +627,7 @@ build_library(
         TT::NN::Ops::Experimental::SSM
         TT::NN::Ops::Experimental::Transformer
         TT::NN::Ops::Experimental::UnaryBackward
+        TT::NN::Ops::FullLike
         TT::NN::Ops::Moreh
         TT::NN::Ops::Reduction
         TT::NN::Ops::Transformer
@@ -725,6 +722,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/reshape)
 add_subdirectory(cpp/ttnn/operations/experimental/ssm)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
+add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/moreh)
 add_subdirectory(cpp/ttnn/operations/reduction)
 add_subdirectory(cpp/ttnn/operations/transformer)
