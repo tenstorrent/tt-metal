@@ -241,9 +241,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/embedding/device/embedding_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/embedding/embedding.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/embedding_backward/embedding_backward.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/embedding_backward/device/embedding_backward_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/embedding_backward/device/embedding_backward_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example/device/example_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example/device/multi_core_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example/device/single_core_program_factory.cpp
@@ -409,7 +406,6 @@ list(
 )
 
 set(TTNN_SUBLIBRARIES
-    ttnn/operations/embedding_backward
     ttnn/operations/embedding
     ttnn/operations/examples
     ttnn/operations/experimental/auto_format
@@ -737,6 +733,7 @@ build_library(
         TT::NN::Ops::Eltwise::Ternary::Backward
         TT::NN::Ops::Eltwise::Unary
         TT::NN::Ops::Eltwise::Unary::Backward
+        TT::NN::Ops::Embedding::Backward
         TT::NN::Ops::Experimental::CCL
         TT::NN::Ops::Moreh
         TT::NN::Ops::Reduction
@@ -816,6 +813,7 @@ add_subdirectory(cpp/ttnn/operations/eltwise/ternary)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary_backward)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
+add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/moreh)
 add_subdirectory(cpp/ttnn/operations/reduction)
 add_subdirectory(cpp/ttnn/operations/transformer)
