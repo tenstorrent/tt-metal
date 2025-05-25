@@ -245,9 +245,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example_multiple_return/device/example_multiple_return_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example_multiple_return/device/single_core_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/examples/example_multiple_return/example_multiple_return.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/convert_to_chw_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/convert_to_chw_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/attn_matmul_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/attn_matmul_program_factory.cpp
@@ -344,7 +341,6 @@ list(
 
 set(TTNN_SUBLIBRARIES
     ttnn/operations/examples
-    ttnn/operations/experimental/cnn
     ttnn/operations/experimental/conv3d
     ttnn/operations/experimental/copy
     ttnn/operations/experimental/experimental_${PY_BINDING}
@@ -670,6 +666,7 @@ build_library(
         TT::NN::Ops::Embedding::Backward
         TT::NN::Ops::Experimental::AutoFormat
         TT::NN::Ops::Experimental::CCL
+        TT::NN::Ops::Experimental::CNN
         TT::NN::Ops::Experimental::Reduction
         TT::NN::Ops::Experimental::Transformer
         TT::NN::Ops::Moreh
@@ -738,7 +735,6 @@ add_subdirectory(cpp/ttnn/operations/conv)
 add_subdirectory(cpp/ttnn/operations/core)
 add_subdirectory(cpp/ttnn/operations/data_movement)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary)
-add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary_backward)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary_ng)
 add_subdirectory(cpp/ttnn/operations/eltwise/complex)
@@ -753,6 +749,8 @@ add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/experimental/auto_format)
+add_subdirectory(cpp/ttnn/operations/experimental/ccl)
+add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/moreh)
