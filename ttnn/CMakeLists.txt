@@ -236,7 +236,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/kv_cache/device/update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_binary/device/complex_binary_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_unary/device/complex_unary_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/complex_unary_backward/device/complex_unary_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/quantization/quantization.cpp
@@ -620,7 +619,6 @@ list(
 )
 
 set(TTNN_SUBLIBRARIES
-    ttnn/operations/eltwise/complex_binary
     ttnn/operations/eltwise/complex_unary
     ttnn/operations/eltwise/complex_unary_backward
     ttnn/operations/eltwise/quantization
@@ -953,6 +951,7 @@ build_library(
         TT::NN::Ops::Eltwise::Binary::Backward
         TT::NN::Ops::Eltwise::Binary::NG
         TT::NN::Ops::Eltwise::Complex
+        TT::NN::Ops::Eltwise::Complex::Binary
         TT::NN::Ops::Experimental::CCL
 )
 
@@ -1019,3 +1018,4 @@ add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary_backward)
 add_subdirectory(cpp/ttnn/operations/eltwise/binary_ng)
 add_subdirectory(cpp/ttnn/operations/eltwise/complex)
+add_subdirectory(cpp/ttnn/operations/eltwise/complex_binary)
