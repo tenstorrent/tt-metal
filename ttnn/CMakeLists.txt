@@ -228,7 +228,6 @@ set(TTNN_BASE_SRCS
 )
 
 set(TTNN_OP_SRCS
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/generic_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
@@ -256,9 +255,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/softmax/softmax.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/softmax/device/multi_core/softmax_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/softmax/device/softmax_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/halo/halo.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/halo/device/halo_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/sliding_window.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/uniform.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/device/uniform_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/device/uniform_program_factory.cpp
@@ -280,7 +276,6 @@ list(
 set(TTNN_SUBLIBRARIES
     ttnn/operations/examples
     ttnn/operations/experimental/experimental_${PY_BINDING}
-    ttnn/operations/sliding_window
     ttnn/operations/uniform
 )
 
@@ -609,6 +604,7 @@ build_library(
         TT::NN::Ops::Moreh
         TT::NN::Ops::Prefetcher
         TT::NN::Ops::Reduction
+        TT::NN::Ops::SlidingWindow
         TT::NN::Ops::Transformer
         TT::NN::Ops::Pool
         TT::NN::Ops::Normalization
@@ -710,6 +706,7 @@ add_subdirectory(cpp/ttnn/operations/matmul)
 add_subdirectory(cpp/ttnn/operations/moreh)
 add_subdirectory(cpp/ttnn/operations/prefetcher)
 add_subdirectory(cpp/ttnn/operations/reduction)
+add_subdirectory(cpp/ttnn/operations/sliding_window)
 add_subdirectory(cpp/ttnn/operations/transformer)
 add_subdirectory(cpp/ttnn/operations/pool)
 add_subdirectory(cpp/ttnn/operations/normalization)
