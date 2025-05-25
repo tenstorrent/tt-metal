@@ -277,7 +277,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/device/plusone_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/plusone.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/device/plusone_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/auto_format/auto_format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/gather.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/device/gather_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/device/gather_program_factory.cpp
@@ -345,7 +344,6 @@ list(
 
 set(TTNN_SUBLIBRARIES
     ttnn/operations/examples
-    ttnn/operations/experimental/auto_format
     ttnn/operations/experimental/cnn
     ttnn/operations/experimental/conv3d
     ttnn/operations/experimental/copy
@@ -670,6 +668,7 @@ build_library(
         TT::NN::Ops::Eltwise::Unary::Backward
         TT::NN::Ops::Embedding
         TT::NN::Ops::Embedding::Backward
+        TT::NN::Ops::Experimental::AutoFormat
         TT::NN::Ops::Experimental::CCL
         TT::NN::Ops::Experimental::Reduction
         TT::NN::Ops::Experimental::Transformer
@@ -753,6 +752,7 @@ add_subdirectory(cpp/ttnn/operations/eltwise/unary)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
+add_subdirectory(cpp/ttnn/operations/experimental/auto_format)
 add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/moreh)
