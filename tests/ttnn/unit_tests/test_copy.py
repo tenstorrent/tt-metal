@@ -18,7 +18,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize("shape", [[1, 1, 32, 256], [64, 64], [9, 32, 768], [128]])
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32])
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
-def test_copy(shape, dtype, layout, device):
+def test_copy(shape, layout, dtype, device):
     torch.manual_seed(2005)
     torch_dtype = torch.int32
 
@@ -35,7 +35,6 @@ def test_copy(shape, dtype, layout, device):
 
 # Test for block sharding
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
-@pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 @pytest.mark.parametrize("shape", [[128, 64]])
 @pytest.mark.parametrize(
     "shard_scheme",
@@ -43,28 +42,26 @@ def test_copy(shape, dtype, layout, device):
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-def test_copy_block_sharded(device, layout, shape, shard_scheme, dtype):
+def test_copy_block_sharded(device, shape, shard_scheme, dtype):
     torch.manual_seed(1234)
     if dtype == ttnn.uint32:
         input_torch = torch.randint(1, 100, shape, dtype=torch.int32)
     else:
         input_torch = torch.randn(shape)
     output_torch = torch.zeros(shape)
-    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=layout)
-    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=layout)
+    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=ttnn.Layout.TILE)
+    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=ttnn.Layout.TILE)
 
-    num_cores_x = 4
-    num_cores_y = 1
+    num_cores_x = 2
+    num_cores_y = 2
     num_cores = num_cores_x * num_cores_y
-    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
 
     dims_b4_last_dim = 1
     for i in range(len(shape) - 1):
         dims_b4_last_dim *= shape[i]
-
     tile_widths_per_core = math.ceil(dims_b4_last_dim / num_cores_x)
-    shard_shape = (32 * tile_widths_per_core, 32 * math.ceil((shape[-1] / 32 / num_cores_y)))
-
+    shard_shape = (tile_widths_per_core, 32 * math.ceil((shape[-1] / 32 / num_cores_y)))
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(
         shard_scheme,
@@ -91,7 +88,6 @@ def test_copy_block_sharded(device, layout, shape, shard_scheme, dtype):
 
 # Test for width sharding
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
-@pytest.mark.parametrize("layout", [ttnn.Layout.TILE])
 @pytest.mark.parametrize("shape", [[1, 2, 96, 128]])
 @pytest.mark.parametrize(
     "shard_scheme",
@@ -99,28 +95,31 @@ def test_copy_block_sharded(device, layout, shape, shard_scheme, dtype):
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
     ],
 )
-def test_copy_width_sharded(device, layout, shape, shard_scheme, dtype):
+def test_copy_width_sharded(device, shape, shard_scheme, dtype):
     torch.manual_seed(1234)
     if dtype == ttnn.uint32:
         input_torch = torch.randint(1, 100, shape, dtype=torch.int32)
     else:
         input_torch = torch.randn(shape)
     output_torch = torch.zeros(shape)
-    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=layout)
-    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=layout)
+    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=ttnn.Layout.TILE)
+    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=ttnn.Layout.TILE)
 
-    num_cores_x = 2
-    num_cores_y = 1
-    num_cores = num_cores_x * num_cores_y
-    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    num_cores = 2
+    shard_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 4)),
+        ]
+    )
 
     dims_b4_last_dim = 1
     for i in range(len(shape) - 1):
         dims_b4_last_dim *= shape[i]
 
     shard_shape = (dims_b4_last_dim, 32 * math.ceil((math.ceil(shape[-1] / 32) / num_cores)))
-
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+
     output_mem_config = ttnn.MemoryConfig(
         shard_scheme,
         ttnn.BufferType.L1,
@@ -146,7 +145,6 @@ def test_copy_width_sharded(device, layout, shape, shard_scheme, dtype):
 
 # Test for height sharding
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
-@pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 @pytest.mark.parametrize("shape", [[512, 64]])
 @pytest.mark.parametrize(
     "shard_scheme",
@@ -154,27 +152,30 @@ def test_copy_width_sharded(device, layout, shape, shard_scheme, dtype):
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ],
 )
-def test_copy_height_sharded(device, layout, shape, shard_scheme, dtype):
+def test_copy_height_sharded(device, shape, shard_scheme, dtype):
     torch.manual_seed(1234)
     if dtype == ttnn.uint32:
         input_torch = torch.randint(1, 100, shape, dtype=torch.int32)
     else:
         input_torch = torch.randn(shape)
     output_torch = torch.zeros(shape)
-    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=layout)
-    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=layout)
+    ttnn_input = ttnn.from_torch(input_torch, dtype=dtype, layout=ttnn.Layout.TILE)
+    ttnn_output = ttnn.from_torch(output_torch, dtype=dtype, layout=ttnn.Layout.TILE)
 
-    num_cores_x = 8
-    num_cores_y = 1
-    num_cores = num_cores_x * num_cores_y
-    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    num_cores = 8
+    shard_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
+            ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 1)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 5)),
+        ]
+    )
 
     dims_b4_last_dim = 1
     for i in range(len(shape) - 1):
         dims_b4_last_dim *= shape[i]
-
     tile_widths_per_core = math.ceil(dims_b4_last_dim / num_cores)
-    shard_shape = (32 * tile_widths_per_core, shape[-1])
+    shard_shape = (tile_widths_per_core, shape[-1])
 
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(
