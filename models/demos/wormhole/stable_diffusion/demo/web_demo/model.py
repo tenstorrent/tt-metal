@@ -56,8 +56,6 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
     disable_persistent_kernel_cache()
     device.enable_program_cache()
 
-    # Until di/dt issues are resolved
-    os.environ["SLOW_MATMULS"] = "1"
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"

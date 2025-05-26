@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 
 import torch
 
@@ -288,10 +287,6 @@ class cross_attention:
 
             out_subblock_h = 1
             out_subblock_w = 8
-            self.slow_mm = os.environ.get("SLOW_MATMULS", "0") == "1"
-            if self.slow_mm:
-                out_subblock_h = 1
-                out_subblock_w = 1
             self.program_configs["tsa_qkt"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=self.tsa_grid_size,
                 in0_block_w=self.key_len // 32,
@@ -312,9 +307,6 @@ class cross_attention:
             )
             out_subblock_h = tiles_per_shard
             out_subblock_w = self.key_len // 32
-            if self.slow_mm:
-                out_subblock_h = 1
-                out_subblock_w = 1
             self.program_configs["tsa_v"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=self.tsa_grid_size,
                 in0_block_w=seq_len // 32,
@@ -588,10 +580,6 @@ class cross_attention:
 
             out_subblock_h = 1 if hs else self.out_subblock_hs[size]
             out_subblock_w = 2 if hs else 1
-
-            if self.slow_mm:
-                out_subblock_h = 1
-                out_subblock_w = 1
 
             program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=grid_size,
