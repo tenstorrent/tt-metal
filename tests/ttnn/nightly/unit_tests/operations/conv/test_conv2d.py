@@ -3225,7 +3225,7 @@ def test_conv2d_sdxl(
         (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8),
 
         # output_channels 3
-        (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16), #  pcc: 0.0
+        (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16),
 
         # input_channels 4
         (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, None, 1),
