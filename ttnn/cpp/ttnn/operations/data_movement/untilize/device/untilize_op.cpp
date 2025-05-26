@@ -126,19 +126,22 @@ operation::ProgramWithCallbacks Untilize::create_program(
         return detail::untilize_single_core(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
-
-    // don't run multicore block if the input tensor is sub_core_grids is provided
     if (this->sub_core_grids.has_value()) {
-        return detail::untilize_multi_core(
-            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->sub_core_grids);
+        // If sub_core_grids parameter is provided, use custom sub_core_grid implementation instead
+        // of the standard multicore implementation or the block multicore implementation
+        return detail::untilize_multi_core_sub_core_grids(
+            input_tensor_a,
+            output_tensor,
+            this->use_pack_untilize,
+            this->fp32_dest_acc_en,
+            this->sub_core_grids.value());
     }
-
     if (!this->enough_space_height) {
         return detail::untilize_multi_core_block(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
-    return detail::untilize_multi_core(
-        input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->sub_core_grids);
+
+    return detail::untilize_multi_core(input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
 }
 
 }  // namespace ttnn::operations::data_movement

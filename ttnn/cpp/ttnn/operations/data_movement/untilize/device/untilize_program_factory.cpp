@@ -32,7 +32,7 @@ uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint3
     return 1;
 }
 
-operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
+operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     const Tensor& a,
     Tensor& output,
     bool use_pack_untilize,
@@ -738,17 +738,8 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
 }
 
 operation::ProgramWithCallbacks untilize_multi_core(
-    const Tensor& a,
-    Tensor& output,
-    bool use_pack_untilize,
-    bool fp32_dest_acc_en,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
-
-    if (sub_core_grids.has_value()) {
-        return untilize_multi_core_parallelize_column_subgrid(
-            a, output, use_pack_untilize, fp32_dest_acc_en, sub_core_grids.value());
-    }
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
