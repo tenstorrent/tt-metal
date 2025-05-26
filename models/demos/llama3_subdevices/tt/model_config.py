@@ -1449,10 +1449,11 @@ class TtModelArgs:
                 )
             )
 
-            # Note PACKET_WORKER_CRS can NOT use any core in the following ranges:
+            # Note PACKET_WORKER_CRS is 8 cores and it can NOT use any core in the following ranges:
             # {1,6}-{2,7} (Reduce scatter ethernet worker cores),
             # {1,0}-{2,0}, {1,4}-{2,5}, {1,9}-{2,9}, {5,0}-{6,2}, {5,4}-{6,7}, {5,9}-{6,9} (Matmul)
             # {0,0}-{0,9}, {4,0}-{4,9} (Prefetcher)
+            # {3,6} (Matmul hop core)
             PACKET_WORKER_CRS = ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2)),
