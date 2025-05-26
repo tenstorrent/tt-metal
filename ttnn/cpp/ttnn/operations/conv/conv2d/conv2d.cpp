@@ -355,7 +355,11 @@ Result conv2d_DRAM(
             sliced_output_tensor = ttnn::to_memory_config(
                 sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         }
+        // Error in UntilizeWithUnpad.
+        // Reshape to padded_shape makes to_layout call just untilize.
+        // https://github.com/tenstorrent/tt-metal/issues/22580
         sliced_output_tensor = ttnn::reshape(sliced_output_tensor, sliced_output_tensor.get_padded_shape());
+
         if (sliced_output_tensor.layout() != Layout::ROW_MAJOR) {
             sliced_output_tensor =
                 ttnn::to_layout(sliced_output_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
