@@ -81,6 +81,19 @@ def test_falcon_causal_lm(
     model = transformers.models.falcon.modeling_falcon.FalconForCausalLM.from_pretrained(
         model_location_or_version, config=configuration
     ).eval()
+    
+    cache_dir = '/mnt/MLPerf/tt-dnn_models/hf_cache'
+    my_model_id = 'tiiuae/falcon-7b'
+
+    # Download config and modify if needed
+    my_config = FalconConfig.from_pretrained(my_model_id, cache_dir=cache_dir)
+    # Optional: customize layers, etc.
+    # config.num_hidden_layers = 12
+    # Download model weights
+    my_model = FalconForCausalLM.from_pretrained(my_model_id, config=my_config, cache_dir=cache_dir).eval()
+    # Save model weights to the specified cache directory
+    my_model.save_pretrained(cache_dir)
+
     model_config = get_model_config(model_config_str)
     dtype = model_config["DEFAULT_DTYPE"]
     kv_len = seq_len if llm_mode == "prefill" else kv_cache_len + 1
