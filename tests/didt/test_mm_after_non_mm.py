@@ -125,7 +125,7 @@ def test_ff1_matmul(
     determinism_check_interval,
     use_program_cache,
     loop_counts,
-    grid_size=(13, 10),
+    grid_size=(8, 8),
 ):
     if is_blackhole() and mesh_device.get_num_devices() > 1:
         pytest.skip("Multi-chip Blackhole has not been tested")
@@ -135,9 +135,10 @@ def test_ff1_matmul(
 
     # Initialize input configurations
     if is_blackhole():
-        compute_grid = get_blackhole_grid_size()
+        compute_grid = get_blackhole_grid_size(mesh_device)
     else:
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+    logger.info(f"Running on {compute_grid} cores")
 
     # Initialize matmul configurations
     out_subblock_h = 1
