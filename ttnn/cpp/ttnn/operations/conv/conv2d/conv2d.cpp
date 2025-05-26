@@ -214,15 +214,8 @@ Result conv2d_DRAM(
                     BufferType::DRAM,
                 })),
         device);
-    // Tensor dram_output_tensor = ttnn::zeros(     //Kept for debugging. Will remove later.
-    //         ttnn::Shape({batch_size, output_height, output_width, out_channels}),
-    //         conv_config.dtype,
-    //         tt_metal::Layout::ROW_MAJOR,
-    //         std::nullopt);
-    // dram_output_tensor = ttnn::to_device(
-    //     dram_output_tensor, device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
-    bool first_run = true;
 
+    bool first_run = true;
     const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
     const uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
 

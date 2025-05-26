@@ -85,20 +85,15 @@ uint32_t get_input_channels_alignment(
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
             const uint32_t shard_width = input_memory_config->shard_spec()->shape[1];
             if (shard_width % tt::constants::TILE_WIDTH == 0) {
-                tt::log_info("Input Channels Alignment is {}", tt::constants::TILE_WIDTH);
                 return tt::constants::TILE_WIDTH;
             } else if (shard_width % 16 == 0) {
-                tt::log_info("Input Channels Alignment is {}", 16);
                 return 16U;
             } else if (shard_width % 8 == 0) {
-                tt::log_info("Input Channels Alignment is {}", 8);
                 return 8U;
             } else {
                 return tt::constants::TILE_WIDTH;
             }
         } else {
-            tt::log_info("Input Channels Alignment is {}", 8);
-
             // The minimum valid value for input channels alignment is 8.
             // This requirement comes from the L1 alignment, which is 16 bytes.
             // Since the Halo operation outputs data in row-major layout and the smallest data format used is bfloat16
@@ -164,13 +159,6 @@ ParallelConfig determine_parallel_config(
     uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
     CoreRangeSet grid;
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        tt::log_debug(
-            tt::LogOp,
-            "determine_paralle_config for Height Sharded. out_nhw_ntiles: {}, max_num_cores: {}, "
-            "act_block_h_override_ntiles: {}",
-            out_nhw_ntiles,
-            max_num_cores,
-            act_block_h_override_ntiles);
         uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(
             out_nhw_ntiles, max_num_cores, act_block_h_override_ntiles);
         grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
