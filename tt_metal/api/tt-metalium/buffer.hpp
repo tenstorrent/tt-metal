@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -226,11 +226,13 @@ public:
 
     // Returns address of buffer in the first bank
     uint32_t address() const;
+    uint64_t address_u64() const;
 
     DeviceAddr page_size() const;
     void set_page_size(DeviceAddr page_size);
 
     uint32_t num_pages() const;
+    uint64_t num_pages_u64() const;
     uint32_t num_dev_pages() const;
 
     BufferType buffer_type() const { return buffer_type_; }
@@ -248,7 +250,7 @@ public:
 
     bool bottom_up() const { return bottom_up_; }
 
-    DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
+    DeviceAddr page_address(uint64_t bank_id, uint64_t page_index) const;
 
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
