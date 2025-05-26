@@ -305,8 +305,12 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Test cannot run on specified device.");
         }
 
-        auto [dev_l_mesh_id, dev_l_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_l);
-        auto [dev_r_mesh_id, dev_r_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_r);
+        auto dev_l_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(test_device_id_l);
+        auto dev_r_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(test_device_id_r);
+        auto dev_l_mesh_id = dev_l_fabric_node_id.mesh_id;
+        auto dev_l_chip_id = dev_l_fabric_node_id.chip_id;
+        auto dev_r_mesh_id = dev_r_fabric_node_id.mesh_id;
+        auto dev_r_chip_id = dev_r_fabric_node_id.chip_id;
 
         log_info(
             LogTest,
@@ -353,7 +357,7 @@ int main(int argc, char** argv) {
                                             .get_cluster()
                                             .get_soc_desc(test_device_id_l)
                                             .logical_eth_core_to_chan_map.at(router_logical_core);
-                        routing_plane = control_plane->get_routing_plane_id(dev_l_mesh_id, dev_l_chip_id, eth_chan);
+                        routing_plane = control_plane->get_routing_plane_id(dev_l_fabric_node_id, eth_chan);
                         router_core_found = true;
                     }
                     auto connected_logical_cores = device.second->get_ethernet_sockets(neighbor);
