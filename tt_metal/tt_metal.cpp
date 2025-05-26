@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -313,7 +313,7 @@ inline void SetRuntimeArgsImpl(
 
 namespace detail {
 
-bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
+bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint64_t address, std::vector<uint32_t>& host_buffer) {
     bool pass = true;
     TT_FATAL(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
@@ -325,7 +325,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
 }
 
 bool ReadFromDeviceDRAMChannel(
-    IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer) {
+    IDevice* device, int dram_channel, uint64_t address, uint32_t size, std::vector<uint32_t>& host_buffer) {
     bool pass = true;
     tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
     tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
@@ -483,7 +483,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     }
 }
 
-DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint32_t bank_index, uint32_t page_index) {
+DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint64_t bank_index, uint64_t page_index) {
     DeviceAddr addr = 0;
     if (buffer.is_dram()) {
         addr = buffer.bank_local_page_address(bank_index, page_index);
@@ -496,23 +496,23 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
 }
 
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
-    uint32_t host_buffer_size_bytes = host_buffer.size();
+    size_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
         host_buffer_size_bytes,
         buffer.size());
 
-    uint32_t page_size = buffer.page_size();
-    uint32_t num_pages = buffer.num_pages();
+    size_t page_size = buffer.page_size();
+    size_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
-    auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
-    uint32_t bank_index = 0;
-    int data_index = 0;
+    size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+    size_t bank_index = 0;
+    size_t data_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
-    for (int page_index = 0; page_index < num_pages; page_index++) {
+    for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         switch (buffer.buffer_type()) {
@@ -571,17 +571,17 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
 }
 
 void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer) {
-    uint32_t page_size = buffer.page_size();
-    uint32_t num_pages = buffer.num_pages();
+    size_t page_size = buffer.page_size();
+    size_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
-    auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+    size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
 
     size_t host_idx = 0;
-    uint32_t bank_index = 0;
+    size_t bank_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
-    for (int page_index = 0; page_index < num_pages; page_index++) {
+    for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         page.clear();
         switch (buffer.buffer_type()) {

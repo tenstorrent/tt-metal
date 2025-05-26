@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -484,6 +484,13 @@ uint32_t Buffer::address() const {
     return address_;
 }
 
+uint64_t Buffer::address_u64() const {
+    TT_FATAL(
+        allocation_status_ != AllocationStatus::ALLOCATION_REQUESTED,
+        "Can only query the address of a buffer that has been allocated");
+    return address_;
+}
+
 DeviceAddr Buffer::page_size() const { return page_size_; }
 
 void Buffer::set_page_size(DeviceAddr page_size) {
@@ -495,6 +502,7 @@ void Buffer::set_page_size(DeviceAddr page_size) {
 }
 
 uint32_t Buffer::num_pages() const { return page_size() == 0 ? 0 : size() / page_size(); }
+uint64_t Buffer::num_pages_u64() const { return page_size() == 0 ? 0 : size() / page_size(); }
 
 uint32_t Buffer::num_dev_pages() const {
     if (!is_sharded(this->buffer_layout_)) {
@@ -536,29 +544,29 @@ bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
     return this->is_valid_region(region) && (region.offset > 0 || region.size != this->size());
 }
 
-DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
-    uint32_t num_banks = allocator_->get_num_banks(buffer_type_);
+DeviceAddr Buffer::page_address(uint64_t bank_id, uint64_t page_index) const {
+    uint64_t num_banks = static_cast<uint64_t>(allocator_->get_num_banks(buffer_type_));
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
-    int pages_offset_within_bank = (int)page_index / num_banks;
-    auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
+    uint64_t pages_offset_within_bank = page_index / num_banks;
+    auto offset = (round_up(this->page_size(), static_cast<uint64_t>(this->alignment())) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
 
-DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index) const {
-    uint32_t num_banks = allocator_->get_num_banks(buffer_type_);
+DeviceAddr Buffer::bank_local_page_address(uint64_t bank_id, uint64_t page_index) const {
+    uint64_t num_banks = static_cast<uint64_t>(allocator_->get_num_banks(buffer_type_));
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
-    uint32_t offset;
+    DeviceAddr offset;
     if (is_sharded(this->buffer_layout())) {
         // TODO: Revist for ND sharding
         auto shard_spec = this->shard_spec();
         // TODO: This logic assumes only one shard per core
-        uint32_t pages_offset_within_bank = page_index % shard_spec.num_pages();
-        offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
+        DeviceAddr pages_offset_within_bank = page_index % shard_spec.num_pages();
+        offset = (round_up(this->page_size(), static_cast<uint64_t>(this->alignment())) * pages_offset_within_bank);
     } else {
-        uint32_t pages_offset_within_bank = page_index / num_banks;
-        offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
+        DeviceAddr pages_offset_within_bank = page_index / num_banks;
+        offset = (round_up(this->page_size(), static_cast<uint64_t>(this->alignment())) * pages_offset_within_bank);
     }
-    return this->address() + offset;
+    return this->address_u64() + offset;
 }
 
 uint32_t Buffer::alignment() const { return allocator_->get_alignment(this->buffer_type()); }
@@ -671,7 +679,7 @@ std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
 
 DeviceAddr ShardSpecBuffer::num_pages() const {
     auto shape_in_pages_ = this->shape_in_pages();
-    return shape_in_pages_[0] * shape_in_pages_[1];
+    return static_cast<DeviceAddr>(shape_in_pages_[0]) * static_cast<DeviceAddr>(shape_in_pages_[1]);
 }
 
 }  // namespace tt::tt_metal

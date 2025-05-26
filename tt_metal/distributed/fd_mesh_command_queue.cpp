@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -412,7 +412,7 @@ void FDMeshCommandQueue::write_shard_to_device(
                     DeviceMemoryAddress{
                         .device_coord = device_coord,
                         .virtual_core_coord = virtual_core,
-                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
+                        .address = shard_view->address_u64() + chunk_mapping_in_bytes.dst},
                     (char*)src + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
                     /*blocking=*/false,
