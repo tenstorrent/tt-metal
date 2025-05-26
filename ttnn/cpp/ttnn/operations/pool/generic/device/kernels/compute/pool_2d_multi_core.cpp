@@ -122,8 +122,10 @@ void MAIN {
         cb_wait_front(in_scalar_cb_id, 1);
     }
     for (uint32_t i = 0; i < nsticks_per_core; i++) {
+        const uint32_t curr_scalar_cb_id =
+            (split_reader && (i & 0x1) && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         if constexpr (!one_scalar_per_core) {
-            cb_wait_front(in_scalar_cb_id, 1);
+            cb_wait_front(curr_scalar_cb_id, 1);
         }
         //  perform the reduction over the first N - 1 whole chunks
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
