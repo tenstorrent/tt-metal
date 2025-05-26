@@ -27,6 +27,18 @@ test_suite_bh_single_pcie_small_ml_model_tests() {
 }
 
 test_suite_bh_single_pcie_llama_demo_tests() {
+    if [ -z "${LLAMA_DIR}" ]; then
+      echo "Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
+      exit 1
+    fi
+
+    if [ -d "$LLAMA_DIR" ] && [ "$(ls -A $LLAMA_DIR)" ]; then
+      echo "[upstream-tests] Llama weights exist, continuing"
+    else
+      echo "[upstream-tests] Error: Llama weights do not seem to exist in $LLAMA_DIR, exiting" >&2
+      exit 1
+    fi
+
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
     # TODO: remove me , just testing this out
     pip3 install -r models/tt_transformers/requirements.txt
