@@ -35,13 +35,12 @@ void kernel_main() {
     constexpr uint32_t num_masters = get_compile_time_arg_val(9);
     constexpr uint32_t num_subordinates = get_compile_time_arg_val(10);
 
-    constexpr uint32_t mst_coords_offset = get_compile_time_arg_val(11);
-    constexpr uint32_t sub_coords_offset = get_compile_time_arg_val(12);
+    constexpr uint32_t sub_start_x = get_compile_time_arg_val(11);
+    constexpr uint32_t sub_start_y = get_compile_time_arg_val(12);
+    constexpr uint32_t sub_end_x = get_compile_time_arg_val(13);
+    constexpr uint32_t sub_end_y = get_compile_time_arg_val(14);
 
-    constexpr uint32_t sub_start_x = get_compile_time_arg_val(13);
-    constexpr uint32_t sub_start_y = get_compile_time_arg_val(14);
-    constexpr uint32_t sub_end_x = get_compile_time_arg_val(15);
-    constexpr uint32_t sub_end_y = get_compile_time_arg_val(16);
+    constexpr uint32_t sub_coords_offset = get_compile_time_arg_val(15);
 
     /* Initializing derived arguments */
 
@@ -59,31 +58,29 @@ void kernel_main() {
     {
         DeviceZoneScopedN("RISCV0");
         // For all master cores
-        for (uint32_t master = 0; master < num_masters; master++) {
-            // Obtain the NOC address of the current master core
-            uint32_t mst_x = get_compile_time_arg_val(mst_coords_offset + 2 * master);
-            uint32_t mst_y = get_compile_time_arg_val(mst_coords_offset + 2 * master + 1);
-            uint64_t src_noc_addr = get_noc_addr(mst_x, mst_y, src_addr);
 
-            // Send the multicast write transactions
-            for (uint32_t i = 0; i < num_of_transactions - 1; i++) {
-                noc_async_write_multicast_loopback_src(
-                    src_noc_addr, dst_noc_addr_multicast, transaction_size_bytes, num_subordinates, linked);
-            }
-            // Last packet is sent separately to unlink the transaction, so the next one can use the VC and do its own
-            // path reservation
+        // Send the multicast write transactions
+        for (uint32_t i = 0; i < num_of_transactions - 1; i++) {
             noc_async_write_multicast_loopback_src(
-                src_noc_addr, dst_noc_addr_multicast, transaction_size_bytes, num_subordinates, false);
-            noc_async_write_barrier();
+                src_addr, dst_noc_addr_multicast, transaction_size_bytes, num_subordinates, linked);
+        }
+        // Last packet is sent separately to unlink the transaction,
+        // so the next one can use the VC and do its own path reservation
+        noc_async_write_multicast_loopback_src(
+            src_addr, dst_noc_addr_multicast, transaction_size_bytes, num_subordinates, false);
+        noc_async_write_barrier();
 
-            // Increment semaphore for each receiver core. This should result in all semaphores having a value equal to
-            // the number of sender cores
-            for (uint32_t subordinate = 0; subordinate < num_subordinates; subordinate++) {
-                uint32_t sub_x = get_compile_time_arg_val(sub_coords_offset + 2 * subordinate);
-                uint32_t sub_y = get_compile_time_arg_val(sub_coords_offset + 2 * subordinate + 1);
-                uint64_t sem_addr = get_noc_addr(sub_x, sub_y, semaphore);
-                noc_semaphore_inc(sem_addr, 1);
-            }
+        // Increment semaphore for each receiver core. This should result in all semaphores having a value equal to
+        // the number of sender cores
+        for (uint32_t subordinate = 0; subordinate < num_subordinates; subordinate++) {
+            uint32_t sub_x = get_arg_val<uint32_t>(2 * subordinate);
+            // get_compile_time_arg_val(sub_coords_offset + 2 * subordinate);
+
+            uint32_t sub_y = get_arg_val<uint32_t>(2 * subordinate + 1);
+            // get_compile_time_arg_val(sub_coords_offset + 2 * subordinate + 1);
+
+            uint64_t sem_addr = get_noc_addr(sub_x, sub_y, semaphore);
+            noc_semaphore_inc(sem_addr, 1);
         }
     }
 

@@ -30,9 +30,7 @@ struct AllToAllConfig {
     /* Grid configurations */
     CoreCoord mst_logical_start_coord = CoreCoord();
     CoreCoord sub_logical_start_coord = CoreCoord();
-    // For now, the assumed master and subordinate starting coordiantes are
-    // both assumed to be (0,0). Maybe if we do 2x2 and 5x5, we can have different starting
-    // coordinates for each (or both).
+    // REVISIT: For now, the assumed master and subordinate starting coordiantes are both assumed to be (0,0)
     CoreCoord mst_grid_size = CoreCoord();
     CoreCoord sub_grid_size = CoreCoord();
 
@@ -95,7 +93,6 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         sub_logical_start_coord.y + test_config.sub_grid_size.y - 1);
     CoreRangeSet sub_logical_core_set({CoreRange(sub_logical_start_coord, sub_logical_end_coord)});
 
-    // Subordinate CoreRangeSet must not contain any subset of master cores
     // IDEA:    Consider performing this check in the kernel itself instead of here.
     //          It would have to be performed per master core
     if (!test_config.loopback) {
@@ -229,23 +226,20 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
     CoreCoord sub_worker_end_coord = device->worker_core_from_logical_core(sub_logical_end_coord);
     std::vector<uint32_t> sub_worker_coords = {
         sub_worker_start_coord.x, sub_worker_start_coord.y, sub_worker_end_coord.x, sub_worker_end_coord.y};
-
-    // CHECK this part: Do we really need each x and y coordinate to take up 32 bits of space on the runtime arguments?
-    // I say no, we can do it in 4
+    // DEBUG: Print out the sub_worker_coords vector to verify its contents
+    std::cout << "Subordinate Worker Coordinates: (" << sub_worker_start_coord.x << ", " << sub_worker_start_coord.y
+              << "), (" << sub_worker_end_coord.x << ", " << sub_worker_end_coord.y << ")" << std::endl;
+    std::cout << "Contents of sub_worker_coords: ";
+    for (const auto& coord : sub_worker_coords) {
+        std::cout << coord << " ";
+    }
+    std::cout << std::endl;
 
     // Obtaining every set of worker coordinates for the master and subordinate cores
     // NOTE: very minor but this could technically go in a helper function
 
-    // Masters
-    std::vector<uint32_t> mst_coordinates = {};
-    for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-        CoreCoord mst_worker_core = device->worker_core_from_logical_core(mst_logical_core);
-        mst_coordinates.push_back(mst_logical_core.x);
-        mst_coordinates.push_back(mst_logical_core.y);
-    }
-
     // Subordinates
-    std::vector<uint32_t> sub_coordinates = {};
+    std::vector<uint32_t> sub_worker_coordinates = {};
     for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
         // LOOPBACK CHECK, TO BE REVISITED: Loopback check, deal with this later // WE COULD maybe implement this check
         // in the kernel itself
@@ -253,8 +247,8 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
             (sub_logical_core.x == test_config.master_core_coord.x && sub_logical_core.y ==
         test_config.master_core_coord.y)) { continue; }*/
         CoreCoord sub_worker_core = device->worker_core_from_logical_core(sub_logical_core);  // This part namely
-        sub_coordinates.push_back(sub_logical_core.x);
-        sub_coordinates.push_back(sub_logical_core.y);
+        sub_worker_coordinates.push_back(sub_worker_core.x);
+        sub_worker_coordinates.push_back(sub_worker_core.y);
     }
 
     // Kernels
@@ -263,58 +257,68 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
 
     // Sender Kernel
 
-    size_t mst_coord_offset =
-        20;  // Index of the compile_args_vector at which the master coordiantes start // NOTE: arbitrarily chosen
-    size_t sub_coord_offset = 120;  // NOTE: arbitrarily chosen (100 after the previous index)
-
     std::vector<uint32_t> sender_compile_args = {
-
+        //     0: Test ID
         (uint32_t)test_config.test_id,  // test_id
-
+        // 1 - 2: Buffer addresses
         (uint32_t)mst_l1_byte_address,  // src_addr
         (uint32_t)sub_l1_byte_address,  // dst_addr
-
+        // 3 - 6: Transaction parameters
         (uint32_t)test_config.num_of_transactions,     // num_of_transactions
         (uint32_t)test_config.transaction_size_pages,  // transaction_num_pages
         (uint32_t)page_size_bytes,                     // page_size_bytes
         (uint32_t)transaction_size_bytes,              // total_transaction_size_bytes
-
+        // 7 - 8: Other parameters
         (uint32_t)test_config.is_linked,  // linked
         (uint32_t)sem_id,                 // semaphore_id
-
-        (uint32_t)num_masters,       // num_masters
+        // 9 - 10: Master and subordinate counts
+        (uint32_t)num_masters,       // num_masters // NOTE: May be redundant
         (uint32_t)num_subordinates,  // num_subordinates
-        (uint32_t)mst_coord_offset,  // mst_coords_offset
-        (uint32_t)sub_coord_offset,  // sub_coords_offset
     };
 
-    // Make it so that the contents of sub_coords are appended to sender_compile_args (indices 13 - 16)
+    // Make it so that the contents of sub_coords are appended to sender_compile_args (indices 11 - 14)
     sender_compile_args.insert(sender_compile_args.end(), sub_worker_coords.begin(), sub_worker_coords.end());
-    sender_compile_args.insert(
-        sender_compile_args.begin() + mst_coord_offset, mst_coordinates.begin(), mst_coordinates.end());
-    sender_compile_args.insert(
-        sender_compile_args.begin() + sub_coord_offset, sub_coordinates.begin(), sub_coordinates.end());
 
-    // Create kernels // QUESTION: Is this the point of compilation of the kernel?
-    //  // Defining the base directory in one string and
-    // appending to it in another? Is that possible? (for kernel path listing)
+    // Each subordinate core's coordinates are appended to the sender_compile_args vector
+    size_t sub_worker_coord_offset = sender_compile_args.size();
+    sender_compile_args.push_back(sub_worker_coord_offset);  // (15) sub_coords_offset
+    // sender_compile_args.insert(sender_compile_args.end(), sub_worker_coordinates.begin(),
+    // sub_worker_coordinates.end()); COMMENTING THIS OUT FOR NOW
+    //  NOTE: I think the above has to be runtime. Compile-time only has space up to 31, which won't be enough even with
+    //  8 bit per coordaintes representation ALSO: 8 bits per coordinate not 4 bits
+
+    // Create kernels
+    // QUESTION: Is this the point of compilation of the kernel?
+    // ANOTHER QUESTION: Defining the base directory in one string and
+    //                   appending to it in another? Is that possible? (for kernel path listing)
     auto sender_kernel = CreateKernel(
         program,
-        test_config.is_multicast ? "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/sender_all_multicast.cpp"
-                                 : "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/sender_all.cpp",
+        test_config.is_multicast ? "tests/tt_metal/tt_metal/data_movement/all_to_all/kernels/sender_all_multicast.cpp"
+                                 : "tests/tt_metal/tt_metal/data_movement/all_to_all/kernels/sender_all.cpp",
         mst_logical_core_set,  // REVISIT THIS: maybe it really only creates one kernel per master core
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = test_config.noc_id,
             .compile_args = sender_compile_args});
+    std::cout << "3" << std::endl;
+    // NOTE: the test reaches this point at least.
+    // REVISIT: So a kernel is created per core in the passed-in core set, meaning that the whole listing of master
+    // cores is redundant. Previously I made the mistake of assuming that one kernel had to be made to do everything for
+    // all master and subordinate cores.
 
     // Run-time arguments for kernels (hoping this won't be necessary)
-    /*
+
     // Define runtime arguments for the kernels
+    std::vector<uint32_t> runtime_args = {};
+    runtime_args.insert(
+        runtime_args.end(),
+        sub_worker_coordinates.begin(),
+        sub_worker_coordinates.end());  // Subordinate core coordinates
 
     // Assign runtime arguments to the kernels
-    SetRuntimeArgs(program, sender_kernel, master_core_set, master_run_args);
-    */
+    SetRuntimeArgs(program, sender_kernel, mst_logical_core_set, runtime_args);
+
+    std::cout << "4" << std::endl;
 
     /* RUNNING THE TEST PROGRAM */
 
