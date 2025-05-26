@@ -45,6 +45,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}-${{ inputs.build-type || 'default' }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  packages: write
+
 jobs:
   asan-build:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft

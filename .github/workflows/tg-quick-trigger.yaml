@@ -5,6 +5,10 @@ on:
   push:
     branches: ["main"]
 
+permissions:
+  packages: write
+  contents: write
+
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
