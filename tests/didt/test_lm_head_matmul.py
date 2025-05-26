@@ -77,9 +77,10 @@ def test_lm_head_matmul(
 
     # Initialize matmul configurations
     if is_blackhole():
-        compute_grid = get_blackhole_grid_size()
+        compute_grid = get_blackhole_grid_size(mesh_device)
     else:
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+    logger.info(f"Running on {compute_grid} cores")
 
     in1_dtype = ttnn.DataType.BFLOAT8_B
     seq_len = 32
