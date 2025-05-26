@@ -1216,18 +1216,24 @@ operation::ProgramWithCallbacks untilize_single_core(
     uint32_t num_sticks = a.volume() / a.get_padded_shape()[-1];
     uint32_t stick_size = a.get_padded_shape()[-1] * output.element_size();
 
-    uint32_t stick_s = a.get_padded_shape()[-1];
-    uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
-    // Ensure we don't intrude into storage space
+    uint32_t num_tiles_in_row = a.get_padded_shape()[-1] / TILE_WIDTH;
+
+    // Determine how much L1 space we can use for input and output CBs,
+    // ensuring that we don't intrude into other L1 storage space
     uint32_t max_l1_size =
         a.device()->l1_size_per_core() / 2 - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
-    uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
-    // Currently need the number of tiles in a row to be divisible by tiles in a block
+
+    // Determine the max number of tiles that can be in any CB at a given time (1 input CB + 1 output CB = 2 total CBs)
+    uint32_t max_tiles_per_cb = max_l1_size / (input_single_tile_size + output_single_tile_size);
+
+    // Determine how many tiles each block will store.
+    // Currently we require that the number of tiles in a row is divisible by the number of blocks in a row, or
+    // equivalently the number of tiles in a row is divisible by the number of tiles in a block.
     uint32_t num_tiles_per_block = 1;
-    if (num_tiles_in_row <= max_tiles) {
+    if (num_tiles_in_row <= max_tiles_per_cb) {
         num_tiles_per_block = num_tiles_in_row;
     } else {
-        for (uint32_t n_t = max_tiles; n_t > 0; n_t--) {
+        for (uint32_t n_t = max_tiles_per_cb; n_t > 0; n_t--) {
             if (num_tiles_in_row % n_t == 0) {
                 num_tiles_per_block = n_t;
                 break;
@@ -1235,6 +1241,8 @@ operation::ProgramWithCallbacks untilize_single_core(
         }
     }
     uint32_t block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
+
+    // The following three variables are writer runtime args, but not currently used by the kernel itself
     uint32_t num_full_blocks_in_row = num_tiles_in_row / num_tiles_per_block;
     uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;
     uint32_t leftover_width_in_row = num_leftover_tiles * output.element_size();
@@ -1308,12 +1316,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
 
-    std::vector<uint32_t> compute_args = {
-        uint32_t(num_tiles / num_tiles_per_block),  // per_core_block_cnt
-        uint32_t(num_tiles_per_block),              // per_core_block_tile_cnt
-        uint32_t(src0_cb_index),
-        uint32_t(output_cb_index)};
-
+    // Compute file path
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
@@ -1324,11 +1327,19 @@ operation::ProgramWithCallbacks untilize_single_core(
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
 
+    // Compute compile-time args
+    std::vector<uint32_t> compute_compile_time_args = {
+        uint32_t(num_tiles / num_tiles_per_block),  // per_core_block_cnt
+        uint32_t(num_tiles_per_block),              // per_core_block_tile_cnt
+        uint32_t(src0_cb_index),
+        uint32_t(output_cb_index)};
+
+    // Compute kernel
     auto untilize_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel,
         core,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
 
     // Reader run-time args
     std::vector<uint32_t> reader_kernel_args = {src0_buffer->address(), uint32_t(num_tiles), 0};
