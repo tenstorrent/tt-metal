@@ -165,7 +165,7 @@ void MAIN {
         cb_pop_front(in_scalar_cb_id_0, 1);
     }
     if constexpr (one_scalar_per_core) {
-        cb_pop_front(in_scalar_cb_id, 1);
+        cb_pop_front(in_scalar_cb_id_0, 1);
     }
 }
 
