@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <core/ttnn_all_includes.hpp>
+
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::cross_entropy_bw {

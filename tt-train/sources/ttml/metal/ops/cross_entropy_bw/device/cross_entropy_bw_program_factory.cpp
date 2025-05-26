@@ -26,7 +26,6 @@ constexpr auto kComputeKernelPath =
 // reader runtime args
 constexpr uint32_t kInputBufferIdx = 0;
 constexpr uint32_t kTargetBufferIdx = 1U;
-constexpr uint32_t kGradBufferIdx = 2U;
 // writer runtime args
 constexpr uint32_t kOutputBufferIdx = 0;
 
@@ -34,15 +33,13 @@ constexpr auto kInputCbIndex = tt::CBIndex::c_0;
 constexpr auto kTargetCbIndex = tt::CBIndex::c_1;
 constexpr auto kMaskCbIndex = tt::CBIndex::c_2;
 constexpr auto kMaxMaskCbIndex = tt::CBIndex::c_3;
-constexpr auto kScalerCbIndex = tt::CBIndex::c_4;
+constexpr auto KReductionScalerCbIndex = tt::CBIndex::c_4;  // used to reduction
 constexpr auto kMaxValueBeforeReductionCbIndex = tt::CBIndex::c_5;
 constexpr auto kMaxValueAfterReductionCbIndex = tt::CBIndex::c_6;
 constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_7;
 constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_8;
-constexpr auto KReductionScalerCbIndex = tt::CBIndex::c_9;  // used to reduction
-constexpr auto KGradCbIndex = tt::CBIndex::c_10;
-constexpr auto kMatMulCbIndex = tt::CBIndex::c_11;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_12;
+constexpr auto kMatMulCbIndex = tt::CBIndex::c_9;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
 
 constexpr uint32_t kNumTargetIndexesTiles = 2U;
 constexpr uint32_t kNumMaskTiles = 1U;
@@ -51,7 +48,6 @@ constexpr uint32_t kNumMaxValueAfterReductionTiles = 2U;
 constexpr uint32_t kNumExpSumBeforeReductionTiles = 2U;
 constexpr uint32_t kNumExpSumAfterReductionTiles = 2U;
 constexpr uint32_t kNumScalerTiles = 1U;  // used it to reduction
-constexpr uint32_t kNumGradTiles = 1U;
 
 constexpr uint32_t kPageElementsNumber = 32U;
 
@@ -163,7 +159,6 @@ void assign_per_core_runtime_args(
     const CrossEntropyBackwardKernels& kernels,
     const tt::tt_metal::Buffer* input_buffer,
     const tt::tt_metal::Buffer* target_buffer,
-    const tt::tt_metal::Buffer* grad_buffer,
     const tt::tt_metal::Buffer* output_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -189,11 +184,7 @@ void assign_per_core_runtime_args(
             program,
             kernels.reader,
             core,
-            {input_buffer->address(),
-             target_buffer->address(),
-             grad_buffer->address(),
-             num_rows_per_core,
-             num_rows_written});
+            {input_buffer->address(), target_buffer->address(), num_rows_per_core, num_rows_written});
 
         // Writer kernel: (dst_addr, dst_rms_addr number_of_rows, offset_in_rows)
         SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows_per_core, num_rows_written});
@@ -211,7 +202,6 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     // -------------------------------------------------------------------------
     const auto& input = tensor_args.input;
     const auto& target = tensor_args.target;
-    const auto& grad = tensor_args.grad;
 
     auto* device = input.device();
 
@@ -248,10 +238,9 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     // get the number of inner dimension
     uint32_t num_inner = input.get_logical_shape()[-1];  // (N, 1, C, H)
 
-    // mask_w - this mask used to avoid calculation of extra data(data which will be added to create full tile 32x32)??
+    // mask_w - this mask used to avoid calculation of extra data
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;  // width index of first trash value in tile
 
-    uint32_t packed_scaler = pack_two_bfloat16_to_uint32(operation_attributes.scaler);
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
 
     // compile arguments
@@ -271,7 +260,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
     const uint64_t masks_memory = 2U * kNumMaskTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t scalers_memory = (3U * kNumScalerTiles) * bfloat16_single_tile_size_bytes;  // two scalers and matmul
+    const uint64_t scalers_memory = (2U * kNumScalerTiles) * bfloat16_single_tile_size_bytes;  // scaler and matmul
     const uint64_t output_memory = twice_block_size * bfloat16_single_tile_size_bytes;
     const uint64_t max_value_memory =
         (kNumMaxValueAfterReductionTiles + kMaxValueBeforeReductionTiles) * bfloat16_single_tile_size_bytes;
@@ -279,8 +268,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         (kNumExpSumBeforeReductionTiles + kNumExpSumAfterReductionTiles) * float32_single_tile_size_bytes;
     const uint64_t input_memory =
         /* inpunt */ (Wt * bfloat16_single_tile_size_bytes) +
-        /* target */ (uint32_read_page_size * kNumTargetIndexesTiles) +
-        /* grad */ (kNumGradTiles * bfloat16_single_tile_size_bytes);
+        /* target */ (uint32_read_page_size * kNumTargetIndexesTiles);
 
     // Total L1 memory required
     const uint64_t required_L1_in_bytes =
@@ -307,8 +295,8 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     auto cb_max_mask = create_circular_buffer(
         program, all_cores, kMaxMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    auto cb_scaler = create_circular_buffer(
-        program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+    auto cb_reduction_scaler = create_circular_buffer(
+        program, all_cores, KReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
     auto cb_max_value_before_reduction = create_circular_buffer(
         program,
@@ -342,12 +330,6 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         float32_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
 
-    auto cb_reduction_scaler = create_circular_buffer(
-        program, all_cores, KReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-
-    auto cb_grad = create_circular_buffer(
-        program, all_cores, KGradCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumGradTiles);
-
     auto cb_mat_mul_reduce =
         create_circular_buffer(program, all_cores, kMatMulCbIndex, data_format, bfloat16_single_tile_size_bytes, 1U);
 
@@ -369,12 +351,6 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         target_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Target buffer must be in DRAM. Target buffer of type {}",
         magic_enum::enum_name(target_buffer->buffer_type()));
-
-    auto* grad_buffer = grad.buffer();
-    TT_FATAL(
-        grad_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "Grad buffer must be in DRAM. Grad buffer of type {}",
-        magic_enum::enum_name(grad_buffer->buffer_type()));
 
     auto* output_buffer = output.buffer();
     TT_FATAL(
@@ -405,7 +381,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         program,
         all_cores,
         /* reader_compile_args */
-        {block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size, packed_scaler},
+        {block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size},
         defines,
         kReaderKernelPath);
 
@@ -445,7 +421,6 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         kernels,
         input_buffer,
         target_buffer,
-        grad_buffer,
         output_buffer,
         num_cores,
         num_cores_y,
@@ -489,7 +464,6 @@ void CrossEntropyBackwardProgramFactory::override_runtime_arguments(
 
     auto* input_buffer = tensor_args.input.buffer();
     auto* target_buffer = tensor_args.target.buffer();
-    auto* grad_buffer = tensor_args.grad.buffer();
     auto* output_buffer = tensor_return_value.buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
@@ -509,7 +483,6 @@ void CrossEntropyBackwardProgramFactory::override_runtime_arguments(
             auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[kInputBufferIdx] = input_buffer->address();
             runtime_args[kTargetBufferIdx] = target_buffer->address();
-            runtime_args[kGradBufferIdx] = grad_buffer->address();
         }
 
         // Update output buffers for the writer kernel

@@ -15,7 +15,6 @@ struct operation_attributes_t {
 struct tensor_args_t {
     const ttnn::Tensor& input;
     const ttnn::Tensor& target;
-    const ttnn::Tensor& grad;
 
     std::optional<ttnn::Tensor> preallocated_output;
 };

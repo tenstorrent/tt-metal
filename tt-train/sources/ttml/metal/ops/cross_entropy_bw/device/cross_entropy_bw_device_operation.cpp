@@ -71,14 +71,6 @@ void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
             tt::tt_metal::Layout::TILE,
             tt::tt_metal::DataType::BFLOAT16);
     }
-
-    // Currently, only gradients with shape (1, 1, 1, 1) are supported.
-    // Validate that the grad tensor meets this requirement.
-    TT_FATAL(
-        tensor_args.grad.get_logical_shape() == ttnn::Shape({1, 1, 1, 1}),
-        "Grad tensor must have shape (1, 1, 1, 1), but got shape: {}",
-        tensor_args.grad.get_logical_shape());
-    check_tensor(tensor_args.grad, "Grad", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
 }
 
 CrossEntropyBackwardDeviceOperation::spec_return_value_t CrossEntropyBackwardDeviceOperation::compute_output_specs(
@@ -122,7 +114,6 @@ tt::stl::hash::hash_t CrossEntropyBackwardDeviceOperation::compute_program_hash(
 std::tuple<operation_attributes_t, tensor_args_t> CrossEntropyBackwardDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& target_tensor,
-    const ttnn::Tensor& grad_tensor,
     float scaler,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     return {
@@ -132,7 +123,6 @@ std::tuple<operation_attributes_t, tensor_args_t> CrossEntropyBackwardDeviceOper
         tensor_args_t{
             .input = input_tensor,
             .target = target_tensor,
-            .grad = grad_tensor,
             .preallocated_output = preallocated_output,
         }};
 }

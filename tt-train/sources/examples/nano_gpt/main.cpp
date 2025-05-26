@@ -640,9 +640,6 @@ int main(int argc, char **argv) {
                         ttml::core::create_shape({batch_size, 1, 1, sequence_length}),
                         device,
                         ttnn::Layout::ROW_MAJOR));
-                // auto targets_tensor =
-                //     ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
-                //         targets, ttnn::Shape({batch_size * sequence_length}), device));
 
                 auto targets_tensor =
                     ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
@@ -767,7 +764,6 @@ int main(int argc, char **argv) {
                 optimizer->zero_grad();
             }
             auto output = run_model(model, features, masks);
-            // auto loss = ttml::ops::nll_loss(output, target);
             auto loss = ttml::ops::cross_entropy_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
             float loss_float = get_loss_value(loss);

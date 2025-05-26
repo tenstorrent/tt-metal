@@ -47,3 +47,14 @@ inline std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uin
     uint32_t offset = h * sizeof(uint32_t);
     return {page, offset};
 }
+
+void generate_tile_with_value(uint32_t cb, uint32_t packed_value) {
+    constexpr uint32_t onetile = 1U;
+    cb_reserve_back(cb, onetile);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb));
+    // 512 = 32x16
+    for (uint32_t i = 0; i < 512U; ++i, ++ptr) {
+        *ptr = packed_value;
+    }
+    cb_push_back(cb, onetile);
+}

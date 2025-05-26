@@ -62,37 +62,6 @@ xt::xarray<float> calculate_cross_entropy_backward(
     return result * scaler_tensor;
 }
 
-xt::xarray<float> calculate_softmax(const xt::xarray<float>& input) {
-    xt::xarray<float> shifted_input = input - xt::amax(input, -1, xt::keep_dims);
-    xt::xarray<float> exp_shifted_input = xt::exp(shifted_input);
-    xt::xarray<float> exp_sum = xt::sum(exp_shifted_input, -1, xt::keep_dims);
-    xt::xarray<float> softmax_output = exp_shifted_input / exp_sum;
-
-    return softmax_output;
-}
-
-void printTensor(const xt::xarray<float>& tensor) {
-    const uint32_t N = tensor.shape()[0];
-    const uint32_t C = tensor.shape()[1];
-    const uint32_t H = tensor.shape()[2];
-    const uint32_t W = tensor.shape()[3];
-
-    fmt::print("Tensor shape: {} x {} x {} x {}\n", N, C, H, W);
-    fmt::print("[\n");
-    for (uint32_t n = 0; n < N; ++n) {
-        fmt::print("[\n");
-        for (uint32_t h = 0; h < H; ++h) {
-            fmt::print("[ ");
-            for (uint32_t w = 0; w < W; ++w) {
-                fmt::print("{:.4f}, ", tensor(n, 0, h, w));
-            }
-            fmt::print("]\n");
-        }
-        fmt::print("]\n");
-    }
-    fmt::print("]\n");
-}
-
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
     using namespace ttml;
 
@@ -176,25 +145,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
-
-    // for (uint32_t n = 0; n < N; ++n) {
-    //     for (uint32_t h = 0; h < H; ++h) {
-    //         for (uint32_t w = 0; w < W; ++w) {
-    //             auto error = std::abs(result_xtensor(n, 0, h, w) - expected_result(n, 0, h, w));
-    //             auto max_error = 0.01F + std::abs(expected_result(n, 0, h, w)) * 0.03F;
-
-    //             if (error > max_error) {
-    //                 std::cout << "Error at (" << n << ", " << h << ", " << w << "): " << result_xtensor(n, 0, h, w)
-    //                           << " vs " << expected_result(n, 0, h, w) << " (error: " << error
-    //                           << ", max_error: " << max_error << ")" << " target: " << target_tensor(n, h) <<
-    //                           std::endl;
-    //             }
-    //         }
-    //     }
-    // }
-
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
-    EXPECT_TRUE(false);
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
@@ -339,87 +290,4 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Huge_Backward) {
     auto result_xtensor = core::to_xtensor(result);
     assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
-}
-
-// Helper: Convert vector to a JSON-like string
-std::string vector_to_json(const std::string& name, const std::vector<float>& vec) {
-    std::ostringstream oss;
-    oss << "\"" << name << "\": [";
-    for (size_t i = 0; i < vec.size(); ++i) {
-        oss << std::fixed << std::setprecision(6) << vec[i];
-        if (i + 1 < vec.size())
-            oss << ", ";
-    }
-    oss << "]";
-    return oss.str();
-}
-
-TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Print_Result) {
-    using namespace ttml;
-    const uint32_t N = 1U, C = 1U, H = 1U, W = 16U;
-
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
-    std::random_device rd;
-    std::mt19937 gen(42);  // gen(rd());
-    std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
-
-    const std::string output_path = "softmax_test_output.jsonl";
-    std::ofstream file(output_path);
-    if (!file.is_open()) {
-        fmt::print("Failed to open file: {}\n", output_path);
-    }
-    fmt::print("Writing to: {}\n ", std::filesystem::current_path());
-
-    auto write_result = [&](const std::vector<float>& input,
-                            const std::vector<float>& xtensor_res,
-                            const std::vector<float>& op_res,
-                            const std::vector<float>& custom_res) {
-        file << "{" << vector_to_json("input", input) << ", " << vector_to_json("xtensor_res", xtensor_res) << ", "
-             << vector_to_json("op_res", op_res) << ", " << vector_to_json("custom_res", custom_res) << "}\n";
-    };
-
-    const uint32_t test_size = 1000U;
-
-    xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
-    auto grad = core::from_xtensor(grad_tensor, &autograd::ctx().get_device());
-
-    for (uint32_t i = 0; i < test_size; ++i) {
-        xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
-        xt::xarray<float> target_tensor = xt::zeros<uint32_t>({N, H});
-        xt::xarray<float> target_one_hot_tensor = xt::zeros<float>({N, C, H, W});
-        target_tensor(0, 0) = class_dist(gen);
-        target_one_hot_tensor(0, 0, 0, target_tensor(0, 0)) = 1.0F;
-
-        auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-        auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
-            target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
-        auto target_one_hot = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-            target_one_hot_tensor, &autograd::ctx().get_device(), ttnn::Layout::TILE);
-
-        float scaler = 1.0F;
-
-        xt::xarray<float> xtensor_softmax = calculate_softmax(input_tensor);
-        xt::xarray<float> xtensor_res = calculate_cross_entropy_backward(input_tensor, target_tensor, scaler);
-
-        auto result = ttml::metal::cross_entropy_bw(input, target, grad, scaler);
-
-        auto custom_calculation = ttnn_fixed::softmax(input, 3);
-        custom_calculation = ttnn::subtract(custom_calculation, target_one_hot);
-
-        auto input_view = xt::view(input_tensor, 0, 0, 0, xt::all());
-        std::vector<float> input_vec(input_view.begin(), input_view.end());
-
-        auto xtensor_res_view = xt::view(xtensor_res, 0, 0, 0, xt::all());
-        std::vector<float> xtensor_res_vec(xtensor_res_view.begin(), xtensor_res_view.end());
-
-        auto op_res_vec = core::to_vector(result);
-        auto custom_res_vec = core::to_vector(custom_calculation);
-
-        write_result(input_vec, xtensor_res_vec, op_res_vec, custom_res_vec);
-    }
-
-    file.close();
-    fmt::print("Results written to {}\n", output_path);
-
-    EXPECT_TRUE(false);
 }
