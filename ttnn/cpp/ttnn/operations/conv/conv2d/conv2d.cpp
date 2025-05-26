@@ -322,7 +322,7 @@ Result conv2d_DRAM(
             conv_config.always_preprocess_weights = false;
         }
         Tensor sliced_input_tensor;
-        if (true) {  // conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
             sliced_input_tensor = ttnn::slice(
                 queue_id,
                 input_tensor_on_device,
@@ -360,6 +360,9 @@ Result conv2d_DRAM(
                 sliced_input_tensor_memory_config);
         }
         auto conv_config_l1 = conv_config;
+        conv_config_l1.deallocate_activation = true;
+        conv_config_l1.reallocate_halo_output = true;
+
         ttnn::Tensor sliced_output_tensor;
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(
