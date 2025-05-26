@@ -158,13 +158,13 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
                 unary_reader_kernel_id,
                 core,
                 {src_buffer->address(), input_unit_size, num_units_per_core, start_id});
+
             tt::tt_metal::SetRuntimeArgs(
                 program,
                 unary_writer_kernel_id,
                 core,
                 {dst_buffer->address(), output_unit_size, num_units_per_core, start_id});
         }
-
         if (backwards) {
             start_id -= num_units_per_core;
         } else {
