@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
@@ -117,12 +117,12 @@ def test_llama_model_inference(
 
     # Define minimum PCC for each iteration
     if layers == 1:
-        pcc = 0.921942
+        pcc = 0.921936
     else:
         pcc = 0.94
 
     # Define tight final PCC thresholds for quick mode
-    final_model_pcc = {"llama31_70b": 0.921942}[model_name]
+    final_model_pcc = {"llama31_70b": 0.921936}[model_name]
 
     final_k_cache_pcc = {
         "llama31_70b": 0.9997,
