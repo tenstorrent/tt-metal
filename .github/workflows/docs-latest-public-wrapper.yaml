@@ -1,4 +1,4 @@
-name: "[post-commit] Docs build and deploy to GitHub pages on main"
+name: "[post-commit] Docs build and deploy (release and main branches) to GitHub pages on main"
 
 on:
   workflow_dispatch:
@@ -24,7 +24,7 @@ jobs:
             VERSION=${BRANCH_NAME#releases/}
           else
             echo "Error: Branch name must be 'main' or follow pattern 'releases/vX.Y.Z' (e.g., releases/v0.58.0)"
-            exit 1
+            VERSION="not-for-deployment"  # This is to allow the users to build docs but not deploy them.
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
   build-artifact:
