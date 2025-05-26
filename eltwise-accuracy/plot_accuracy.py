@@ -114,7 +114,7 @@ def try_plot(plot_entry):
 
 
 def plot(plot_entry):
-    output_path = plot_entry["output"]
+    all_outputs = plot_entry["outputs"]
     data = plot_entry["data"]
 
     # Read parameters
@@ -231,7 +231,9 @@ def plot(plot_entry):
     if xticks is not None:
         ax.set_xticks(xticks)
 
-    plt.savefig(output_path, bbox_inches="tight", pad_inches=0.0)
+    for output_path in all_outputs:
+        plt.savefig(output_path, bbox_inches="tight", pad_inches=0.0)
+
     plt.close()
 
     pass
@@ -297,8 +299,9 @@ def plot_all(plot_config, base_output_dir, last_hashes, current_hashes, force_re
 
         # data = data.set_index(["base_x", "operation"])
 
-        output_path = plot_entry["output"]
-        create_directory(output_path)
+        all_outputs = plot_entry["outputs"]
+        for output_path in all_outputs:
+            create_directory(output_path)
 
         # Transform data if necessary
         plot_entry["data"] = data
