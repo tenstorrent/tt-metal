@@ -78,7 +78,7 @@ void kernel_main() {
                         (TILE_WIDTH * TILE_HEIGHT * local_tile_idx) + get_tilized_idx(h, target_value);
 
                     float value = bfloat16_to_float(write_ouput_l1_ptr[index_inside_tile]);
-                    value -= scaler;  // subtract 1.0F*scaler
+                    value -= scaler;  //*0.125;  // subtract 1.0F*scaler
                     write_ouput_l1_ptr[index_inside_tile] = float_to_bfloat16(value);
                 }
             }

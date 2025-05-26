@@ -194,6 +194,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     // }
 
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+    EXPECT_TRUE(false);
 }
 
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {

@@ -10,7 +10,7 @@ namespace ttml::metal::ops::cross_entropy_bw {
 
 ttnn::Tensor CrossEntropyBackwardOperation::invoke(
     const ttnn::Tensor& input_tensor, const ttnn::Tensor& target_tensor, const ttnn::Tensor& grad, float scaler) {
-    auto result = ttnn::prim::ttml_cross_entropy_bw(input_tensor, target_tensor, grad, scaler);
+    auto result = ttnn::prim::ttml_cross_entropy_bw(input_tensor, target_tensor, grad, scaler);  // add multiply by grad
     return result;
 }
 }  // namespace ttml::metal::ops::cross_entropy_bw

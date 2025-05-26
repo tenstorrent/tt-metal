@@ -255,7 +255,8 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
 
     // compile arguments
-    uint32_t block_size = get_block_size(Wt);
+    // uint32_t block_size = get_block_size(Wt);
+    uint32_t block_size = 1U;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
@@ -419,8 +420,8 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     std::vector<uint32_t> compute_group_1_args = {
         num_rows_per_core_group_1,  // per_core_block_cnt
         block_size,                 // per_core_block_size
-        Wt                          // num_inner / TILE_W
-    };
+        Wt,                         // num_inner / TILE_W
+        scaler_bits};
 
     kernels.compute_group_1 =
         create_compute_kernel(program, core_group_1, compute_group_1_args, defines, kComputeKernelPath);
@@ -429,8 +430,8 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     std::vector<uint32_t> compute_group_2_args = {
         num_rows_per_core_group_2,  // per_core_block_cnt
         block_size,                 // per_core_block_size
-        Wt                          // num_inner / TILE_W
-    };
+        Wt,                         // num_inner / TILE_W
+        scaler_bits};
 
     kernels.compute_group_2 =
         create_compute_kernel(program, core_group_2, compute_group_2_args, defines, kComputeKernelPath);

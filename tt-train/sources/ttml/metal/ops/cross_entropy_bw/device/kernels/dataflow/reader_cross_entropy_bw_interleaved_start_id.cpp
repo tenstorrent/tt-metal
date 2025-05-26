@@ -72,8 +72,6 @@ void kernel_main() {
     constexpr uint32_t target_indexes_read_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t packed_scaler = get_compile_time_arg_val(6);
 
-    DPRINT << "block_size: " << block_size << ENDL();
-
     constexpr uint32_t onetile = 1U;
 #ifdef DO_MASK_W
     constexpr bool do_mask_w = true;
@@ -153,6 +151,18 @@ void kernel_main() {
                         get_write_ptr(cb_grad_idx));  // read gead tile from the grad buffer
     noc_async_read_barrier();                         // wait until all tiles are read
     cb_push_back(cb_grad_idx, onetile);               // push the tile to the back of the grad buffer
+
+    // cb_reserve_back(cb_grad_idx, onetile);
+    // uint16_t grad_scaler = 0x3e00;
+    // generate_tile_with_value(cb_grad_idx, zero);  // generate tile with value 1.0F
+    // uint16_t* grad_scaler_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_grad_idx));
+    // grad_scaler_ptr[0] = grad_scaler;
+
+    // cb_push_back(cb_grad_idx, onetile);
+
+    // print_tile(cb_grad_idx, 0);
+
+    // print_tile(cb_grad_idx, 0);
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         // calculate the address of the first tile in the row
