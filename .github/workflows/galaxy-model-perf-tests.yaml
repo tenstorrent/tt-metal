@@ -2,6 +2,11 @@ name: "Galaxy model perf tests"
 
 on:
   workflow_dispatch:
+  inputs:
+    extra-tag:
+      required: true
+      type: string
+      default: "in-service"
   schedule:
     - cron: "0 0 * * 4" # Runs every Thursday at 12am UTC
 
@@ -19,6 +24,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
     with:
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
