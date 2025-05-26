@@ -52,7 +52,6 @@ void kernel_main() {
 #endif
         cb_wait_front(cb_id_out, onetile);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        // noc_async_write_tile(i, s, l1_read_addr);
         uint64_t dest_noc_addr = get_noc_addr(i, s);
         noc_async_write(l1_read_addr, dest_noc_addr, tile_bytes);
         noc_async_write_barrier();
