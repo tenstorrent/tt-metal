@@ -30,7 +30,7 @@ struct df_to_std<DataFormat::Float32> {
 };
 
 template <>
-struct df_to_std<DataFormat::Float16> {
+struct df_to_std<DataFormat::Float16_b> {
     using std_type = uint16_t;
 };
 
@@ -50,14 +50,13 @@ struct df_to_std<DataFormat::UInt16> {
 };
 
 template <>
-struct df_to_std<DataFormat::Uint8> {
+struct df_to_std<DataFormat::UInt8> {
     using std_type = uint8_t;
 };
 
 template <DataFormat df>
 using std_type_t = typename df_to_std<df>::std_type;
 
-// TODO(jbbieniekTT): return immediately calculated result using face bit mask
 FORCE_INLINE uint32_t calc_offset_inside_tile(
     const std::size_t& face_x, const std::size_t& face_y, const std::size_t& scalar_x, const std::size_t& scalar_y) {
     uint32_t offset = 0;

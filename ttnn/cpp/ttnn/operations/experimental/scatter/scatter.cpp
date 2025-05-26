@@ -85,7 +85,7 @@ Tensor ScatterOperation::invoke(
         return input_tensor;
     }
 
-    // index and src tensors should have same rank as input tensor.
+    // index and source tensors should have same rank as input tensor
     const bool input_tensor_is_dim_last_idx = (dim == -1 || dim == input_tensor_rank - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
 

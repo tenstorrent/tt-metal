@@ -27,8 +27,6 @@ def select_torch_dtype(ttnn_dtype):
         ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16),
         ([2, 2, 2, 2, 2, 2, 2, 2], -1, [2, 2, 2, 2, 2, 2, 2, 2], ttnn.float32),
         ([10, 1, 10, 1, 10], -1, [10, 1, 10, 1, 1], ttnn.bfloat16),
-        # ([50, 200], -1, [50, 100], ttnn.int32),
-        # ([50, 200], -1, [50, 100], ttnn.uint8),
     ],
 )
 def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, device):
@@ -67,22 +65,7 @@ def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, d
     torch_result_from_preallocated_ttnn = ttnn.to_torch(ttnn_preallocated_result)
     assert torch_result_from_preallocated_ttnn.shape == torch_preallocated_result.shape
     assert torch_result_from_preallocated_ttnn.dtype == torch_preallocated_result.dtype
-    # # assert_with_pcc(torch_preallocated_result, torch_result_from_preallocated_ttnn)
-
-
-"""
-TODO(jbbieniekTT): test the following:
-- input_rank vs dim
-- index_rank vs dim
-- index_shape vs source_shape
-- input_shape vs index_shape
-- non-integer index_dtype
-- input_dtype vs source_dtype
-- input_shape[dim] vs index_shape[dim]
-- indices vs input shape length
-- input_shape vs output_shape
-- non-tile, sharded, etc.
-"""
+    torch.testing.assert_close(torch_result_from_preallocated_ttnn, torch_preallocated_result)
 
 
 @pytest.mark.parametrize(
@@ -105,4 +88,26 @@ def test_scatter_bad_input(
     device,
 ):
     torch.manual_seed(22052025)
+
+    # input_rank vs dim
+
+    # index_rank vs dim
+
+    # index_shape vs source_shape
+
+    # input_shape vs index_shape
+
+    # input_dtype vs source_dtype
+
+    # input_dtype vs output_dtype
+
+    # indices vs input shape length
+
+    # input_shape vs output_shape
+
+    # non-tile
+
+    # sharded
+
+    # pytest.raises
     pass

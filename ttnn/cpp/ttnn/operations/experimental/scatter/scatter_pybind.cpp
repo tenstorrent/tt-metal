@@ -25,12 +25,9 @@ void bind_scatter_operation(py::module& module) {
                 * `src` (Tensor): The tensor containing the source values to be scattered onto input.
 
             Keyword Arguments:
-                * `reduce` (ScatterReductionType, optional): TODO(jbbieniekTT): finish
+                * `reduce` (ScatterReductionType, optional): currently not supported - this is the option to reduce numbers going to the same destination in output with a function like `amax`, `amin`, `sum`, etc.
                 * `memory_config` (MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
                 * `out` (Tensor, optional): Preallocated output tensor where scatter result should go to (should be the same shape as the input tensor). Defaults to `None`.
-
-            Constraints:
-                * ???
 
             Additional info:
                 * Up until this time, no reductions have been implemented.
@@ -42,8 +39,7 @@ void bind_scatter_operation(py::module& module) {
                 import ttnn
 
                 # Create a tensor
-                input_tensor = ttnn.Tensor([3, 1, 2])
-                // TODO(jbbieniekTT): finish
+                //
         )doc";
 
     using OperationType = decltype(ttnn::experimental::scatter_);

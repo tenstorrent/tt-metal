@@ -72,13 +72,11 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
 
     const CoreCoord core{0, 0};
 
-    // TODO(jbbieniekTT): multi-core
     auto grid{device->compute_with_storage_grid_size()};
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(grid, Ht);
 
-    // TODO(jbbieniekTT): check CB size.
     const uint32_t input_tiles = num_cb_unit * Wt_input;
     const uint32_t index_tiles = num_cb_unit * Wt_index;
     const uint32_t src_tiles = num_cb_unit * Wt_index;
@@ -120,7 +118,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     auto writer_kernel =
         create_kernel(program, writer_kernel_path, all_cores, WriterDataMovementConfig{compile_time_args});
 
-    // /////////////////////////////////
     const uint32_t& num_cores_y = compute_with_storage_grid_size.y;
     uint32_t tile_offset = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -150,7 +147,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
 
         tile_offset += ht_per_core;
     }
-    // /////////////////////////////////
 
     return {std::move(program), {reader_kernel, writer_kernel, compute_with_storage_grid_size}};
 }
@@ -159,9 +155,7 @@ void ScatterProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
-    // TODO(jbbieniekTT): multi-core
-}
+    tensor_return_value_t& output_tensor) {}
 
 CBHandle ScatterProgramFactory::create_cb(
     Program& program,
