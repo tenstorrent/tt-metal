@@ -84,6 +84,8 @@ def test_demo_multichip(
         }
         expected_perf_metrics = expected_perf_dict[galaxy_type][max_seq_len]
         expected_perf_metrics["decode_t/s"] = global_batch_size * expected_perf_metrics["decode_t/s/u"]
+    else:
+        expected_perf_metrics = None
 
     if perf_mode:
         json_perf_targets = {

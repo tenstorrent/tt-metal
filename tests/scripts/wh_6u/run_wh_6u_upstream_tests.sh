@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[upstream-tests] running metalium section. Note that skips should be treated as failures"
-./build/test/tt_metal/tt_fabric/test_system_health
-TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
-TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"
-TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+echo "[upstream-tests] Running falcon7b model unit tests"
+pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/tg/falcon7b/input_data_tg.json' models/demos/tg/falcon7b/demo_tg.py --timeout=300 -k "default_mode_1024_stochastic"
 
 echo "[upstream-tests] Running minimal model unit tests"
 pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
@@ -33,3 +29,10 @@ pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.
 
 echo "[upstream-tests] Unsetting LLAMA_DIR to ensure later tests can't use it"
 unset LLAMA_DIR
+
+echo "[upstream-tests] running metalium section. Note that skips should be treated as failures"
+./build/test/tt_metal/tt_fabric/test_system_health
+TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
+TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"
+TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
