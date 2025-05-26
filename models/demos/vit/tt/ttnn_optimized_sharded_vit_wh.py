@@ -103,21 +103,21 @@ def update_model_config(config, batch_size):
         ),
         "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            in0_block_w=3,  # 1,
+            in0_block_w=dim_t // 8,  # 24 // 8 == 3,
             out_subblock_h=1,
-            out_subblock_w=6,  # 4,
-            per_core_M=7,  # 7,
-            per_core_N=12,  # 16,
+            out_subblock_w=6,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=(dim_t // 8) * 4,  # 12,
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            in0_block_w=12,  # 4,
-            out_subblock_h=1,  # seqL_t,  # 7,
-            out_subblock_w=3,  # 2,
-            per_core_M=7,  # 7,
-            per_core_N=3,  # 4,
+            in0_block_w=(dim_t // 8) * 4,  # 12
+            out_subblock_h=1,
+            out_subblock_w=3,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=dim_t // 8,  # 3
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -278,7 +278,7 @@ def vit_intermediate(
     *,
     parameters,
 ):
-    print("In vit intermediate, hidden_states mem_config is: ", hidden_states.memory_config())
+    # print("In vit intermediate, hidden_states mem_config is: ", hidden_states.memory_config())
     output = ttnn.linear(
         hidden_states,
         parameters.dense.weight,
@@ -324,13 +324,13 @@ def vit_feedforward(
     *,
     parameters,
 ):
-    print("hidden states shape: ", hidden_states.shape, "attention output shape: ", attention_output.shape)
-    print(
-        "hidden states shard spec: ",
-        hidden_states.memory_config(),
-        "attention output shard spec: ",
-        attention_output.memory_config(),
-    )
+    # print("hidden states shape: ", hidden_states.shape, "attention output shape: ", attention_output.shape)
+    # print(
+    #     "hidden states shard spec: ",
+    #     hidden_states.memory_config(),
+    #     "attention output shard spec: ",
+    #     attention_output.memory_config(),
+    # )
     core_grid_ff = ttnn.CoreGrid(y=8, x=8)
 
     memory_config_ff = ttnn.create_sharded_memory_config(
@@ -340,7 +340,7 @@ def vit_feedforward(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    print("Memory config for feedforward: ", memory_config_ff)
+    # print("Memory config for feedforward: ", memory_config_ff)
 
     hidden_states = ttnn.reshard(hidden_states, memory_config_ff)
     intermediate = vit_intermediate(config, hidden_states, parameters=parameters.intermediate)
