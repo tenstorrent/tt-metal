@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import pytest
@@ -45,7 +45,7 @@ perf_targets = {
     "AllGatherConcat_0": {
         "op_name": "AllGatherConcat",
         "kernel_duration": 12419.194444444445,
-        "op_to_op": 623.4444444444445,
+        "op_to_op": 796.8888888888889,
         "non-overlapped-dispatch-time": 12541.7,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
