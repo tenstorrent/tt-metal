@@ -40,7 +40,7 @@ class TtConv:
         enable_split_reader=False,
         reshard_if_not_optimal=True,
         batch_size=1,
-        increase_conv_fidelity=False,
+        conv_math_fidelity=None,
     ):
         self.device = device
         self.parameters = parameters
@@ -63,11 +63,9 @@ class TtConv:
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
         self.reshape_tensor = reshape_tensor
-        self.increase_conv_fidelity = increase_conv_fidelity
 
         self.conv_config = self._initialize_conv_config()
-        self.conv_1x1_config = self.default_1x1_conv_config()
-        self.compute_config = self._initialize_compute_config()
+        self.compute_config = self._initialize_compute_config(conv_math_fidelity)
         if conv_alone:
             self.weights, self.bias = self.parameters["weight"], self.parameters["bias"]
         else:
@@ -113,34 +111,13 @@ class TtConv:
 
         return conv_config
 
-    def _initialize_compute_config(self):
+    def _initialize_compute_config(self, math_fidelity):
         return ttnn.init_device_compute_kernel_config(
             self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
-
-    def default_1x1_conv_config(self):
-        return ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2 if self.increase_conv_fidelity else ttnn.MathFidelity.LoFi,
+            math_fidelity=math_fidelity if math_fidelity is not None else ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
-        )
-
-    def is_1x1_conv(self, kernel_size, stride, padding, dilation, conv_config):
-        return (
-            kernel_size == 1
-            and stride == 1
-            and padding == 0
-            and dilation == 1
-            and not (
-                conv_config.shard_layout is not None
-                and conv_config.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
-            )
         )
 
     def __call__(self, x):
@@ -166,17 +143,7 @@ class TtConv:
             input_height=input_height,
             input_width=input_width,
             conv_config=self.conv_config,
-            compute_config=(
-                self.conv_1x1_config
-                if self.is_1x1_conv(
-                    kernel_size=self.input_params[0],
-                    stride=self.input_params[1],
-                    padding=self.input_params[2],
-                    dilation=self.dilation,
-                    conv_config=self.conv_config,
-                )
-                else self.compute_config
-            ),
+            compute_config=self.compute_config,
             groups=self.groups,
             memory_config=ttnn.L1_MEMORY_CONFIG if self.change_shard == True else None,
             return_weights_and_bias=True,
@@ -347,7 +314,7 @@ class TtSPPF:
             input_params=input_params[1],
             change_shard=True,
             deallocate_activation=True,
-            increase_conv_fidelity=True,
+            conv_math_fidelity=ttnn.MathFidelity.HiFi2,
         )
 
     def __call__(self, x):
@@ -525,7 +492,7 @@ class TtC2fAttn:
             input_params=input_params[1],
             change_shard=True,
             deallocate_activation=self.deallocate_activation,
-            increase_conv_fidelity=True,
+            conv_math_fidelity=ttnn.MathFidelity.HiFi2,
         )
         self.m = [
             TtBottleneck(
