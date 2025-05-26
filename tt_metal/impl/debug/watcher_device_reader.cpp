@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -839,16 +839,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
             core.coord.str(),
             launch_msg->kernel_config.brisc_noc_id);
     }
-    if (mbox_data->go_message_index < go_message_num_entries) {
-        DumpRunState(core, launch_msg, mbox_data->go_messages[mbox_data->go_message_index].signal);
-    } else {
-        LogRunningKernels(core, launch_msg);
-        TT_THROW(
-            "Watcher data corruption, unexpected go message index on core {}: {} (expected < {})",
-            core.coord.str(),
-            mbox_data->go_message_index,
-            go_message_num_entries);
-    }
+    DumpRunState(core, launch_msg, mbox_data->go_message.signal);
 
     fprintf(f, "|");
     if (launch_msg->kernel_config.enables &
