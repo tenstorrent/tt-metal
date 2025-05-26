@@ -24,17 +24,17 @@ static Tensor create_scalar_config_tensor(
     uint32_t out_w,
     uint32_t kernel_size_h,
     uint32_t kernel_size_w,
-    std::optional<uint32_t> stride_h,
-    std::optional<uint32_t> stride_w,
-    std::optional<uint32_t> pad_h,
-    std::optional<uint32_t> pad_w,
-    std::optional<uint32_t> divisor_override,
+    uint32_t stride_h,
+    uint32_t stride_w,
+    uint32_t pad_h,
+    uint32_t pad_w,
     bool ceil_mode,
     uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
     uint32_t out_nhw_per_core,
     uint32_t num_shards_c,
-    CoreRangeSet all_cores) {
+    CoreRangeSet all_cores,
+    std::optional<uint32_t> divisor_override) {
     auto ranges = all_cores.ranges();
 
     std::vector<uint32_t> total_elems_per_c_shards(num_shards_c, out_h * out_w * in_n);
@@ -56,12 +56,10 @@ static Tensor create_scalar_config_tensor(
                 num_of_ele = total_elems_per_c_shards[channel];
             }
 
-            std::vector<ScalarInfo> scalars;
-            get_bf16_pool_scalar(
+            std::vector<ScalarInfo> scalars = get_bf16_avg_pool_config_scalars(
                 pool_type,
                 kernel_size_h,
                 kernel_size_w,
-                divisor_override,
                 in_h,
                 in_w,
                 out_h,
@@ -76,7 +74,7 @@ static Tensor create_scalar_config_tensor(
                 pad_h,
                 pad_w,
                 num_of_ele,
-                &scalars);
+                divisor_override);
 
             for (const auto& scalar : scalars) {
                 config_vector.push_back(scalar.start);
@@ -420,13 +418,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             stride_w,
             pad_h,
             pad_w,
-            divisor_override,
             ceil_mode,
             ceil_pad_h,
             ceil_pad_w,
             out_nhw_per_core,
             num_shards_c,
-            all_cores);
+            all_cores,
+            divisor_override);
 
         auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
         auto config_tensor_shard_orientation = input.shard_spec().value().orientation;
@@ -579,8 +577,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto shard_boundaries = sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
     auto top_left_indices =
         sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, false, true);
-    auto reader_indices =
-        sliding_window::construct_on_host_config_tensor(top_left_indices, sliding_window_config, parallel_config);
+    auto reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, parallel_config);
     log_debug(tt::LogOp, "reader_indices shape: {}", reader_indices.logical_shape());
     auto reader_indices_on_device =
         sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, is_block_sharded, input.device());
