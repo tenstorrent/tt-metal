@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
-from tests.ttnn.unit_tests.alspec.alspec_common import (
+from models.tt_transformers.tt.alspec_common import (
     get_buffer_address,
 )
 
@@ -38,12 +38,12 @@ def test_skip_tensor(
     grid = ttnn.num_cores_to_corerangeset(num_cores, storage_grid, row_wise=True)
 
     # Create the skip tensor
-    skip_tensor = torch.ones((num_devices, 1, ttnn.TILE_SIZE, num_cores * ttnn.TILE_SIZE))
+    skip_tensor = torch.ones((num_devices, num_cores, ttnn.TILE_SIZE, ttnn.TILE_SIZE))
     skip_tensor[:num_devices_to_skip] = 0  # Set skipping priority
     skip_tensor_mem_config = ttnn.create_sharded_memory_config(
         shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
         core_grid=grid,
-        strategy=ttnn.ShardStrategy.WIDTH,
+        strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
