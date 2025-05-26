@@ -11,7 +11,12 @@ if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_link_options(--coverage)
 endif()
 
-add_library(ttnn_core OBJECT)
+set(LIB_TYPE OBJECT)
+if(ENABLE_TTNN_SHARED_SUBLIBS)
+    set(LIB_TYPE SHARED)
+endif()
+
+add_library(ttnn_core ${LIB_TYPE})
 add_library(TT::NN::Core ALIAS ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
@@ -74,6 +79,7 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
         Boost::algorithm
 )
+install(TARGETS ttnn_core LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 ##################################################
 # Define a method build_library to define all the options and properties for a library
@@ -184,11 +190,6 @@ function(use_precompiled_header TARGET)
         target_precompile_headers(${TARGET} REUSE_FROM ${PRECOMPILED_HEADER_TARGET})
     endif()
 endfunction()
-
-set(LIB_TYPE OBJECT)
-if(ENABLE_TTNN_SHARED_SUBLIBS)
-    set(LIB_TYPE SHARED)
-endif()
 
 function(add_ttnn_sublibrary SUBLIBRARY_NAME)
     add_library(
