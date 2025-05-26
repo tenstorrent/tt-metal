@@ -200,7 +200,8 @@ void kernel_main() {
             reduction_semaphore_send_addr,
             reduction_semaphore_recv_noc_addr,
             i == 0 ? num_mcast_cores : 0,
-            false);  // linked = false
+            false,  // linked = false
+            true);  // multicast_path_reserve = true
     }
 
     // 4. global semaphore reset

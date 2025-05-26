@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -226,6 +226,7 @@ void kernel_main() {
                     act_multicast_data_addr,
                     act_mcast_sender_size_bytes,
                     act_mcast_num_cores + 1,
+                    true,
                     true);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc

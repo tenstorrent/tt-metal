@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -84,12 +84,13 @@ void kernel_main() {
         if (mcast) {
             // write mcast
             noc_async_write_multicast_one_packet(
-                l1_read_addr, mcast_addr_self_noc, page_size, num_dests - 1, false, noc);
-            noc_async_write_multicast(l1_read_addr, mcast_addr_self_noc, page_size, num_dests - 1, false, noc);
-            noc_async_write_multicast_loopback_src(l1_read_addr, mcast_addr_self_noc, page_size, num_dests, false, noc);
+                l1_read_addr, mcast_addr_self_noc, page_size, num_dests - 1, false, true, noc);
+            noc_async_write_multicast(l1_read_addr, mcast_addr_self_noc, page_size, num_dests - 1, false, true, noc);
+            noc_async_write_multicast_loopback_src(
+                l1_read_addr, mcast_addr_self_noc, page_size, num_dests, false, true, noc);
             // semaphore mcast
-            noc_semaphore_set_multicast(l1_read_addr, mcast_addr_self_noc, num_dests - 1, false, noc);
-            noc_semaphore_set_multicast_loopback_src(l1_read_addr, mcast_addr_self_noc, num_dests, false, noc);
+            noc_semaphore_set_multicast(l1_read_addr, mcast_addr_self_noc, num_dests - 1, false, true, noc);
+            noc_semaphore_set_multicast_loopback_src(l1_read_addr, mcast_addr_self_noc, num_dests, false, true, noc);
         }
 
 // dw_write skip BH since there's HW issue

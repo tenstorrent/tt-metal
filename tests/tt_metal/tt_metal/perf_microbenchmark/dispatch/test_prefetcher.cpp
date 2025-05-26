@@ -2363,8 +2363,6 @@ void configure_for_single_chip(
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
-        0,
-        0,
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;

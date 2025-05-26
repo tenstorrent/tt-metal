@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -605,11 +605,9 @@ int main(int argc, char** argv) {
             0,
             0,
             0,
-            0,  // unused for single device - used to "virtualize" the number of eth cores across devices
-            0,  // unused for single device - used to "virtualize" the number of eth cores across devices
-            0,  // unused for single device - used to "virtualize" the number of eth cores across devices
-            0,
-            0,
+            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
             true,  // is_dram_variant
             true,  // is_host_variant
         };
