@@ -153,17 +153,16 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
             tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
             tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
         } else {
-            std::vector<uint32_t> reader_runtime_args = {
-                src_buffer->address(), input_unit_size, num_units_per_core, start_id};
-            std::vector<uint32_t> writer_runtime_args = {
-                dst_buffer->address(), output_unit_size, num_units_per_core, start_id};
-            if (sharded) {
-                shard_builder::extend_sharding_run_time_args(input, reader_runtime_args);
-                shard_builder::extend_sharding_run_time_args(input, writer_runtime_args);
-            }
-            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
-
-            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                unary_reader_kernel_id,
+                core,
+                {src_buffer->address(), input_unit_size, num_units_per_core, start_id});
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                unary_writer_kernel_id,
+                core,
+                {dst_buffer->address(), output_unit_size, num_units_per_core, start_id});
         }
 
         if (backwards) {
