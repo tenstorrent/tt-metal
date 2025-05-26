@@ -2,7 +2,20 @@
 set -euo pipefail
 
 echo "[upstream-tests] Running falcon7b model unit tests"
-pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/tg/falcon7b/input_data_tg.json' models/demos/tg/falcon7b/demo_tg.py --timeout=300 -k "default_mode_1024_stochastic"
+declare -a FALCON_TESTS=(
+    "perf_mode_128_stochastic and not verify"
+    "perf_mode_1024_stochastic and not verify"
+    "perf_mode_2048_stochastic and not verify"
+    "default_mode_1024_stochastic"
+)
+for falcon_test_filter in "${FALCON_TESTS[@]}"; do
+    pytest --disable-warnings -q -s \
+        --input-method=json \
+        --input-path='models/demos/tg/falcon7b/input_data_tg.json' \
+        models/demos/tg/falcon7b/demo_tg.py \
+        --timeout=300 \
+        -k "$falcon_test_filter"
+done
 
 echo "[upstream-tests] Running minimal model unit tests"
 pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
