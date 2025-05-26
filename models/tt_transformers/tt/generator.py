@@ -76,7 +76,7 @@ class Generator:
                 user_id = group_user_id + model_id * batch_per_device
 
                 logger.info(f"Prefilling User {user_id + 1}")
-                seq_len = prompt_lens[user_id]
+                seq_len = int(prompt_lens[user_id])
                 last_token_idx = seq_len - 1
 
                 prefill_seq_len = get_padded_prefill_len(seq_len)
