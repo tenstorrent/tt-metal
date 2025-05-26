@@ -29,6 +29,16 @@ jobs:
             co-owner-1_id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2_id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
+          {
+            name: "[TG] Llama-3.1-70B-Instruct",
+            arch: wormhole_b0,
+            model: "meta-llama/Llama-3.1-70B-Instruct",
+            server_timeout: 30,
+            benchmark_timeout: 10,
+            runner-label: config-tg,
+            co-owner-1_id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2_id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          },
         ]
     runs-on:
       - arch-${{ matrix.test-group.arch }}
@@ -83,15 +93,24 @@ jobs:
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
+          server_pid="./server.pid"
+          server_log="./output/vllm_server.log"
+
           if [[ "${{ matrix.test-group.runner-label }}" == "config-t3000" ]]; then
             export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
             export MESH_DEVICE="T3K"
           fi
 
-          export HF_MODEL="${{ matrix.test-group.model }}"
+          if [[ "${{ matrix.test-group.runner-label }}" == "config-tg" ]]; then
+            export MESH_DEVICE="TG"
+            export TT_LLAMA_TEXT_VER="llama3_subdevices"
+            OVERRIDE_TT_CONFIG=(--override-tt-config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D"}')
+          fi
 
-          # Keep TT cache separate from HF hub
+          # Set TT Cache path
+          export HF_MODEL="${{ matrix.test-group.model }}"
           MODEL_NAME="${HF_MODEL/\//--}"
+          # Keep TT cache separate from HF hub
           export TT_CACHE_PATH="$HF_HOME/tt_cache/$MODEL_NAME"
 
           # vLLM environment variables
@@ -100,13 +119,15 @@ jobs:
           python3 vllm/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
             "${OVERRIDE_TT_CONFIG[@]}" \
-            > ./output/vllm_server.log 2>&1 &
+            > "$server_log" 2>&1 &
 
           # Store server's pid for cleanup
-          echo $! > ./server.pid
+          echo $! > "$server_pid"
 
       - name: ⏰ Wait for server to be ready
         run: |
+          server_log="./output/vllm_server.log"
+
           echo "Waiting for server..."
 
           timeout_seconds=$(( ${{ matrix.test-group.server_timeout }} * 60 ))
@@ -123,34 +144,60 @@ jobs:
           done
 
           echo "Server did not become ready in time (${timeout_seconds}s)."
-          cat ./output/vllm_server.log
+          printf "\n\n----------- Server Log -----------\n\n"
+          cat "$server_log"
           exit 1
 
       - name: 📐 Run benchmark
         timeout-minutes: ${{ matrix.test-group.benchmark_timeout }}
         run: |
+          benchmark_log="./output/vllm_benchmark.log"
+          server_log="./output/vllm_server.log"
+
           python3 vllm/benchmarks/benchmark_serving.py \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
             --dataset-name random \
-            --num-prompts 8 \
+            --num-prompts 32 \
             --random-input-len 100 \
             --random-output-len 100 \
             --ignore-eos \
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
             --result-filename output/vllm_result.json \
-            2>&1 | tee output/vllm_benchmark.log
+            2>&1 | tee $benchmark_log
+
+          # If the backend fails, the benchmark will still complete successfully but with all-zero results.
+          # It will contain a warning message, though
+          warning_message="All requests failed"
+          if grep -q "$warning_message" "$benchmark_log"; then
+            echo "❌ All requests failed, here's the server log:"
+            printf "\n\n----------- Server Log -----------\n\n"
+            cat "$server_log"
+            exit 1
+          fi
 
       - name: 🧹 Cleanup server process
         if: always()
         run: |
-          file = ./server.pid
-          if [ -f "$file" ]; then
-            pid = $(cat $file)
-            kill "$pid" 2>/dev/null || true
-            echo "Server process with pid $pid terminated 🧹"
-            rm -f "$file"
+          server_pid="./server.pid"
+          server_log="./output/vllm_server.log"
+
+          if [ -f "$server_pid" ]; then
+            pid=$(cat "$server_pid")
+            if kill -0 "$pid" 2>/dev/null; then
+              kill "$pid"
+              echo "✅ Server process with PID $pid terminated."
+              rm -f "$server_pid"
+            else
+              echo "❌ Server process already down!"
+              printf "\n\n----------- Server Log -----------\n\n"
+              cat "$server_log"
+              exit 1
+            fi
+          else
+            echo "❌ PID file not found. Server may not have started correctly."
+            exit 1
           fi
 
       - name: Show report
