@@ -7,12 +7,12 @@ import math
 from loguru import logger
 
 import ttnn
-from models.utility_functions import is_blackhole, _nearest_y
+from models.utility_functions import is_blackhole, _nearest_y, skip_for_blackhole
 import torch
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
-@pytest.mark.skip("Test case failing assert_equal() - see #22482")
+@skip_for_blackhole("Temporary skip until #18643 is not closed")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, stride_h, stride_w, num_cores, grid_size, height_sharded",
@@ -44,8 +44,6 @@ def test_run_downsample(
     height_sharded,
     dtype,
 ):
-    if dtype == ttnn.bfloat8_b and is_blackhole():
-        pytest.skip("Temporary skip until #18643 is not closed")
     if batch_size > 8 and dtype != ttnn.bfloat8_b:
         pytest.skip("Batch > 8 must be run fully bfp8")
     compute_grid_size = device.compute_with_storage_grid_size()
