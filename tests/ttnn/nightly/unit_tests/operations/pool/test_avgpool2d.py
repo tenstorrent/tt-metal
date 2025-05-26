@@ -162,6 +162,14 @@ def test_run_avg_pool2d(
     divisor_override,
     shard_scheme,
 ):
+    if (
+        shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        and tuple(input_shape) == (2, 512, 112, 32)
+        and divisor_override == None
+        and ceil_mode == True
+    ):
+        pytest.skip("Not enough L1 space for the correct calculation of the elements, use different kind of sharding")
+
     if any(p > k // 2 for p, k in zip(padding, kernel_size)):
         pytest.skip(
             "Known issue with this combination of parameters - RuntimeError: pad should be at most half of kernel size."
