@@ -2,11 +2,11 @@ name: "Galaxy model perf tests"
 
 on:
   workflow_dispatch:
-  inputs:
-    extra-tag:
-      required: true
-      type: string
-      default: "in-service"
+    inputs:
+      extra-tag:
+        required: true
+        type: string
+        default: "in-service"
   schedule:
     - cron: "0 0 * * 4" # Runs every Thursday at 12am UTC
 
