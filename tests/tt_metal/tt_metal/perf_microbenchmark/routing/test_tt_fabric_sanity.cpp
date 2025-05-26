@@ -229,7 +229,7 @@ struct test_board_t {
 
         // Init valid and available chip ids
         // consecutive rows of galaxy chips are chosen at random
-        // following is the arrangement with virtual mesh_chip_id
+        // following is the arrangement with virtual fabric_node_id
         // +----+----+----+---+
         // | 24 | 16 | 8  | 0 |
         // | 25 | 17 | 9  | 1 |
@@ -252,7 +252,7 @@ struct test_board_t {
         // populate valid chip and available chip IDs
         for (auto i = start_row_idx; i < (start_row_idx + num_rows); i++) {
             for (auto j = i; j < 32; j += 8) {
-                physical_chip_id = control_plane->get_physical_chip_id_from_mesh_chip_id({mesh_id, j});
+                physical_chip_id = control_plane->get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id, j));
                 physical_chip_ids.push_back(physical_chip_id);
             }
         }
@@ -265,20 +265,19 @@ struct test_board_t {
         chip_id_t physical_start_chip_id, const std::unordered_map<RoutingDirection, uint32_t>& mcast_depth) {
         std::vector<chip_id_t> physical_dsts;
         // APIs use mesh chip id, so convert physical chip id to mesh chip id
-        auto [mesh_id, chip_id] = this->get_mesh_chip_id(physical_start_chip_id);
+        auto fabric_node_id = this->get_fabric_node_id(physical_start_chip_id);
         bool valid = true;
         for (const auto& [routing_direction, num_hops_in_direction] : mcast_depth) {
             for (auto j = 0; j < num_hops_in_direction; j++) {
-                auto neighbors = this->get_intra_chip_neighbors(mesh_id, chip_id, routing_direction);
+                auto neighbors = this->get_intra_chip_neighbors(fabric_node_id, routing_direction);
                 if (neighbors.empty()) {
                     valid = false;
                     break;
                 }
                 // Assumes all neighbors are the same chip
-                chip_id = neighbors[0];
+                fabric_node_id.chip_id = neighbors[0];
                 // convert mesh chip id to physical chip id
-                physical_dsts.push_back(
-                    this->control_plane->get_physical_chip_id_from_mesh_chip_id({mesh_id, chip_id}));
+                physical_dsts.push_back(this->control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id));
             }
             if (!valid) {
                 break;
@@ -464,31 +463,27 @@ struct test_board_t {
         }
     }
 
-    inline std::pair<mesh_id_t, chip_id_t> get_mesh_chip_id(chip_id_t physical_chip_id) {
-        return control_plane->get_mesh_chip_id_from_physical_chip_id(physical_chip_id);
+    inline FabricNodeId get_fabric_node_id(chip_id_t physical_chip_id) {
+        return control_plane->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
     }
 
     inline std::vector<std::pair<chip_id_t, chan_id_t>> get_route_to_chip(
-        mesh_id_t src_mesh_id,
-        chip_id_t src_chip_id,
-        mesh_id_t dst_mesh_id,
-        chip_id_t dst_chip_id,
-        chan_id_t src_chan_id) {
-        return control_plane->get_fabric_route(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_chan_id);
+        FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) {
+        return control_plane->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, src_chan_id);
     }
 
     inline stl::Span<const chip_id_t> get_intra_chip_neighbors(
-        mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) {
-        return control_plane->get_intra_chip_neighbors(src_mesh_id, src_chip_id, routing_direction);
+        FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
+        return control_plane->get_intra_chip_neighbors(fabric_node_id, routing_direction);
     }
 
     inline routing_plane_id_t get_routing_plane_from_chan(chip_id_t physical_chip_id, chan_id_t eth_chan) {
-        const auto mesh_chip_id = this->get_mesh_chip_id(physical_chip_id);
-        return control_plane->get_routing_plane_id(mesh_chip_id.first, mesh_chip_id.second, eth_chan);
+        const auto fabric_node_id = this->get_fabric_node_id(physical_chip_id);
+        return control_plane->get_routing_plane_id(fabric_node_id, eth_chan);
     }
 
-    inline eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t eth_chan) {
-        auto active_eth_chans = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+    inline eth_chan_directions get_eth_chan_direction(FabricNodeId fabric_node_id, chan_id_t eth_chan) {
+        auto active_eth_chans = control_plane->get_active_fabric_eth_channels(fabric_node_id);
         for (const auto& [eth_chan_, direction] : active_eth_chans) {
             if (eth_chan_ == eth_chan) {
                 return direction;
@@ -525,7 +520,9 @@ struct test_device_t {
 
         device_handle = board_handle->get_device_handle(physical_chip_id);
         program_handle = tt_metal::CreateProgram();
-        std::tie(mesh_id, logical_chip_id) = board_handle->get_mesh_chip_id(physical_chip_id);
+        auto fabric_node_id = board_handle->get_fabric_node_id(physical_chip_id);
+        mesh_id = fabric_node_id.mesh_id;
+        logical_chip_id = fabric_node_id.chip_id;
         mesh_chip_id = (mesh_id << 16 | logical_chip_id);
         soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
 
@@ -589,7 +586,8 @@ struct test_device_t {
             }
 
             uint32_t direction = board_handle->get_eth_chan_direction(
-                mesh_id, logical_chip_id, soc_desc.logical_eth_core_to_chan_map.at(router_logical_cores[i]));
+                FabricNodeId(mesh_id, logical_chip_id),
+                soc_desc.logical_eth_core_to_chan_map.at(router_logical_cores[i]));
             router_compile_args.push_back(direction);
 
             // initialize the semaphore
@@ -753,7 +751,8 @@ struct test_device_t {
 
     inline std::vector<std::pair<chip_id_t, chan_id_t>> _get_route_to_chip(
         mesh_id_t dst_mesh_id, chip_id_t dst_chip_id, chan_id_t src_chan_id) {
-        return board_handle->get_route_to_chip(mesh_id, logical_chip_id, dst_mesh_id, dst_chip_id, src_chan_id);
+        return board_handle->get_route_to_chip(
+            FabricNodeId(mesh_id, logical_chip_id), FabricNodeId(dst_mesh_id, dst_chip_id), src_chan_id);
     }
 
     // generates a map fo preferred worker cores for a given router based on the physical distance
@@ -802,7 +801,7 @@ struct test_device_t {
     }
 
     inline stl::Span<const chip_id_t> get_intra_chip_neighbors(RoutingDirection routing_direction) {
-        return board_handle->get_intra_chip_neighbors(mesh_id, logical_chip_id, routing_direction);
+        return board_handle->get_intra_chip_neighbors(FabricNodeId(mesh_id, logical_chip_id), routing_direction);
     }
 };
 

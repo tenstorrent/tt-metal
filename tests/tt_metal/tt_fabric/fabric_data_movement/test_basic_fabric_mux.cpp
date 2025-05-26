@@ -121,7 +121,7 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
     std::unordered_map<tt_fabric::RoutingDirection, chip_id_t> chip_0_neigbors;
     std::optional<tt_fabric::RoutingDirection> chip_1_direction = std::nullopt;
     for (const auto& direction : routing_directions) {
-        auto neighbors = control_plane->get_intra_chip_neighbors(mesh_id, 0, direction);
+        auto neighbors = control_plane->get_intra_chip_neighbors(FabricNodeId(mesh_id, 0), direction);
         if (neighbors.empty()) {
             continue;
         }
@@ -203,7 +203,8 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
             if (logical_chip_id > physical_chip_ids.size()) {
                 throw std::runtime_error("Failed to setup neighbor map, logical chip id exceeding bounds");
             }
-            chip_id_t phys_chip_id = control_plane->get_physical_chip_id_from_mesh_chip_id({mesh_id, logical_chip_id});
+            chip_id_t phys_chip_id =
+                control_plane->get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id, logical_chip_id));
             physical_chip_matrix[i][j] = phys_chip_id;
             logical_chip_id += row_offset;
         }

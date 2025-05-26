@@ -20,12 +20,12 @@ Mesh: [
   id: 0,
   board: 2x2,
   topology: [1, 1],
-  host_mapping: [[]]},
+  host_ranks: [[0]]},
 {
   id: 1,
   board: 2x2,
   topology: [1, 1],
-  host_mapping: [[]]}
+  host_ranks: [[0]]}
 ]
 
 Graph: [

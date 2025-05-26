@@ -53,9 +53,9 @@ TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(tg_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
-    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 3);
+    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(0, 0), 3);
     for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(0, 0, 4, 31, chan);
+        auto path = control_plane->get_fabric_route(FabricNodeId(0, 0), FabricNodeId(4, 31), chan);
         EXPECT_EQ(path.size() > 0, true);
     }
 }
@@ -81,14 +81,14 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(t3k_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
-    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 0);
+    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(0, 0), 0);
     for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(0, 0, 0, 7, chan);
+        auto path = control_plane->get_fabric_route(FabricNodeId(0, 0), FabricNodeId(0, 7), chan);
         EXPECT_EQ(path.size() > 0, true);
     }
-    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 1);
+    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(0, 0), 1);
     for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(0, 0, 0, 7, chan);
+        auto path = control_plane->get_fabric_route(FabricNodeId(0, 0), FabricNodeId(0, 7), chan);
         EXPECT_EQ(path.size() > 0, true);
     }
 }
@@ -108,8 +108,9 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
-    auto control_plane = std::make_unique<ControlPlane>(
+    auto global_control_plane = std::make_unique<GlobalControlPlane>(
         t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
+    auto control_plane = global_control_plane->get_local_node_control_plane();
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 }
 
@@ -117,8 +118,9 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
-    auto control_plane = std::make_unique<ControlPlane>(
+    auto global_control_plane = std::make_unique<GlobalControlPlane>(
         t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
+    auto control_plane = global_control_plane->get_local_node_control_plane();
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     // TODO: Query this
     constexpr uint32_t num_routing_planes = 2;
@@ -129,10 +131,12 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
             auto dst_mesh_shape = control_plane->get_physical_mesh_shape(dst_mesh);
             auto dst_mesh_size = dst_mesh_shape[0] * dst_mesh_shape[1];
             auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(
-                src_mesh, std::rand() % src_mesh_size, std::rand() % num_routing_planes);
+                FabricNodeId(src_mesh, std::rand() % src_mesh_size), std::rand() % num_routing_planes);
             for (auto chan : valid_chans) {
                 auto path = control_plane->get_fabric_route(
-                    src_mesh, std::rand() % src_mesh_size, dst_mesh, std::rand() % dst_mesh_size, chan);
+                    FabricNodeId(src_mesh, std::rand() % src_mesh_size),
+                    FabricNodeId(dst_mesh, std::rand() % dst_mesh_size),
+                    chan);
                 EXPECT_EQ(path.size() > 0, true);
             }
         }
