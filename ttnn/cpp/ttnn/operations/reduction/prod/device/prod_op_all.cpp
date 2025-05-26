@@ -9,7 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
 #include "tools/profiler/op_profiler.hpp"
-
+#include <ttnn/operations/core/core.hpp>
 #include <umd/device/tt_cluster_descriptor.h>  // tt_ClusterDescriptor
 
 namespace tt {
@@ -23,9 +23,10 @@ void Prod_op::validate(const std::vector<tt::tt_metal::Tensor>& input_tensors) c
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL((input_tensor_a.get_layout() == tt::tt_metal::Layout::TILE), "Input Layout must be tilized");
     TT_FATAL(input_tensor_a.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED, "Error");
+    const auto dtype = input_tensor_a.get_dtype();
     TT_FATAL(
-        input_tensor_a.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",
+        dtype == tt::tt_metal::DataType::BFLOAT16 || dtype == tt::tt_metal::DataType::BFLOAT8_B,
+        "Error - unsupported data type for prod, expected BFLOAT16 or BFLOAT8 but got {}.",
         input_tensor_a.get_dtype());
 }
 
@@ -35,7 +36,9 @@ std::vector<tt::tt_metal::TensorSpec> Prod_op::compute_output_specs(
     return {tt::tt_metal::TensorSpec(
         ttnn::Shape({1, 1, 1, TILE_HW}),
         tt::tt_metal::TensorLayout(
-            input_tensor.get_dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), output_mem_config))};
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            output_mem_config))};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks Prod_op::create_program(
