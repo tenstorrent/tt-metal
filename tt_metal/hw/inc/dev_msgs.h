@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -277,8 +277,11 @@ struct debug_ring_buf_msg_t {
 };
 
 struct debug_stack_usage_t {
-    volatile uint16_t max_usage[DebugNumUniqueRiscs];
-    volatile uint16_t watcher_kernel_id[DebugNumUniqueRiscs];
+    struct usage_t {
+        // min free stack, offset by +1 (0 == unset)
+        volatile uint16_t min_free;
+        volatile uint16_t watcher_kernel_id;
+    } cpu[DebugNumUniqueRiscs];
 };
 
 enum watcher_enable_msg_t {
@@ -361,12 +364,17 @@ struct core_info_msg_t {
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;
+// Equal to the maximum number of subdevices + 1. This allows all workers that aren't assigned to a subdevice to receive
+// a dummy entry.
+constexpr uint32_t go_message_num_entries = 9;
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct subordinate_sync_msg_t subordinate_sync;
     uint32_t launch_msg_rd_ptr;
     struct launch_msg_t launch[launch_msg_buffer_num_entries];
-    volatile struct go_msg_t go_message;
+    volatile struct go_msg_t go_messages[go_message_num_entries];
+    uint32_t pads_1[3];
+    volatile uint32_t go_message_index;  // Index into go_messages to use. Always 0 on unicast cores.
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
     struct core_info_msg_t core_info;
