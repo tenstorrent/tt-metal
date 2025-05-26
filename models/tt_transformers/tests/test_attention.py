@@ -262,7 +262,7 @@ def test_attention_inference(
                             dims=(1, 0) if model_args.is_galaxy else (0, 1),
                             mesh_shape=model_args.cluster_shape,
                         ),
-                    )[:batch_size, :, :, :]
+                    )[:batch_size, : model_args.n_kv_heads, :, :]
                     for cache in tt_model.layer_past
                 ]
             for label, cache_pt, cache_tt in zip(["K", "V"], pytorch_layer_present, tt_layer_present):

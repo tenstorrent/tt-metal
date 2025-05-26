@@ -12,6 +12,8 @@ class DistributedNorm(LightweightModule):
         self.norm = norm
         self.args = args
 
+        self.use_sfd = args.use_sfd
+
         if TG:
             core_grid_ln = (
                 min(4, args.dim // 4 // 32 // 8),
@@ -64,6 +66,7 @@ class DistributedNorm(LightweightModule):
                     gamma=self.norm.weight_distributed,
                     mesh_device=self.args.mesh_device,
                     compute_kernel_config=self.ln_cfg,
+                    use_sfd=self.use_sfd,
                 )
 
         input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG

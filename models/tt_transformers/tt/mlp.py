@@ -43,7 +43,7 @@ class MLP(LightweightModule):
             ),  # Grab only the wX part of the name
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
+            mesh_mapper=args.fracture_scheme(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=(
                 ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else w2_mem_config if "w2" in name else w1_w3_mem_config
@@ -236,6 +236,7 @@ class MLP(LightweightModule):
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
+            use_sfd=self.args.use_sfd,
         )
 
         # Ensure dim 0 and 1 are 1

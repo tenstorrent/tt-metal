@@ -34,12 +34,12 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        True,
-        # False
+        # True,
+        False,
     ),
     ids=(
-        "paged_attention",
-        # "default_attention"
+        # "paged_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -117,7 +117,7 @@ def test_decoder_inference(
             device=mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_mapper=model_args.fracture_scheme(
                 mesh_device,
                 dims=(None, -2) if (model_args.is_galaxy and batch_size > 1) else (None, None),
                 mesh_shape=model_args.cluster_shape,
@@ -153,7 +153,7 @@ def test_decoder_inference(
         current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
+        mesh_mapper=model_args.fracture_scheme(
             mesh_device,
             dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,

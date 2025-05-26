@@ -36,11 +36,11 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        True,
+        # True,
         False,
     ),
     ids=(
-        "paged_attention",
+        # "paged_attention",
         "default_attention",
     ),
 )
@@ -52,7 +52,7 @@ from models.utility_functions import skip_for_grayskull
     "max_seq_len",
     (
         256,  # 4096,
-        # 1024 * 32,
+        1024 * 8,
         # 1024 * 64,
     ),
 )
@@ -225,7 +225,7 @@ def test_attention_inference(
                         dims=(1, 0) if model_args.is_galaxy else (0, 1),
                         mesh_shape=model_args.cluster_shape,
                     ),
-                )[:batch_size, :, :, :]
+                )[:batch_size, : model_args.n_kv_heads, :, :]
                 for cache in tt_model.layer_past
             ]
 

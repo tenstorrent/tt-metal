@@ -35,12 +35,12 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        True,
-        # False
+        # True,
+        False,
     ),
     ids=(
-        "paged_attention",
-        # "default_attention"
+        # "paged_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(

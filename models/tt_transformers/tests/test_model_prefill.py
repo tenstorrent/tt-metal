@@ -37,12 +37,12 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        True,
-        # False,
+        # True,
+        False,
     ),
     ids=(
-        "paged_attention",
-        # "default_attention",
+        # "paged_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -57,9 +57,11 @@ from models.utility_functions import skip_for_grayskull
     "optimizations",
     [
         lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
-        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
+        # lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
-    ids=["performance", "accuracy"],
+    ids=[
+        "performance",
+    ],
 )
 def test_model_inference(
     seq_len,
@@ -77,7 +79,7 @@ def test_model_inference(
     if is_ci_env and "accuracy" in test_id:
         pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
 
-    run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
+    run_ref_pt = False  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b

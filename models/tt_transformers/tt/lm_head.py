@@ -87,7 +87,7 @@ class LMHead(LightweightModule):
                     ttnn.as_tensor(
                         combined_split,
                         device=mesh_device,
-                        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                        mesh_mapper=args.fracture_scheme(mesh_device, dim=-1),
                         layout=ttnn.TILE_LAYOUT,
                         dtype=dtype,
                         memory_config=memory_config,

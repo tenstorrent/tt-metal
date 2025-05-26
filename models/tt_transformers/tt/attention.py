@@ -52,6 +52,8 @@ class Attention(LightweightModule):
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 
+        self.use_sfd = configuration.use_sfd
+
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
             weight = torch.zeros(1, 32, 8, 32)
@@ -226,7 +228,7 @@ class Attention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_mapper=configuration.fracture_scheme(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
             cache_file_name=cache_name("wqkv_sharded_2d"),
@@ -246,7 +248,7 @@ class Attention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_mapper=configuration.fracture_scheme(
                 self.mesh_device,
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
@@ -363,6 +365,7 @@ class Attention(LightweightModule):
             sharded=True,
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
+            use_sfd=self.use_sfd,
         )
 
         if self.TG:
@@ -504,6 +507,7 @@ class Attention(LightweightModule):
                 memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
                 sharded=True,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
+                use_sfd=self.use_sfd,
             )
             if self.TG:
                 attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
@@ -551,6 +555,7 @@ class Attention(LightweightModule):
                 sharded=True,
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
+                use_sfd=self.use_sfd,
             )
 
             if not self.TG:
@@ -603,6 +608,7 @@ class Attention(LightweightModule):
             num_all_gather_links=self.num_all_gather_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.ccl_dtype,
+            use_sfd=self.use_sfd,
         )
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
@@ -788,6 +794,7 @@ class Attention(LightweightModule):
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
+                use_sfd=self.use_sfd,
             )
 
         return output_11SH
