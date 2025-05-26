@@ -4,6 +4,15 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## May 26, 2025
+
+### [Llama 3.1-8B](tt_transformers)
+- Added support for Llama 3.1 8B on Blackhole P100, P150, 2xP150.
+
+### [Mistral 7B](tt_transformers)
+- Added support for Mistral 7B in [models/tt_transformers](tt_transformers).
+- Integrated Mistral 7B into the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
+
 ## May 5, 2025
 
 ### [Llama 3.2-90B-Vision](tt_transformers)
