@@ -36,6 +36,10 @@ void kernel_main() {
         for (uint32_t sub_core = 0; sub_core < total_subordinate_cores; sub_core++) {
             uint64_t src_base_noc_addr = get_noc_addr(responder_coords[sub_core][0], responder_coords[sub_core][1], 0);
             for (uint32_t i = 0; i < num_of_transactions; i++) {
+                /* The 64-bit NOC addresses consists of a 32-bit local address and a NOC XY coordinate. The local
+                 * address occupies the lower 32 bits and the NOC XY coordinate occupies the next 12 (unicast) to 24
+                 * (multicast) bits. In the get_noc_addr call, we set the local address to 0 to get the base address.
+                 * Then, we OR it with the local address in each iteration to get the full NOC address. */
                 uint64_t src_noc_addr = src_base_noc_addr | subordinate_l1_byte_addresses[sub_core];
 
                 noc_async_read(src_noc_addr, dst_addr, transaction_size_bytes);
