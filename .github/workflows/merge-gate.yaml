@@ -27,6 +27,9 @@ jobs:
     # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
     if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
 
@@ -90,7 +93,7 @@ jobs:
     secrets: inherit
     with:
       build-type: TSan
-      version: 22.04
+      version: 24.04
       skip-tt-train: false
       publish-artifact: false
 

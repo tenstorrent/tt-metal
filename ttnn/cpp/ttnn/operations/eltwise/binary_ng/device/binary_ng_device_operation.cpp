@@ -18,7 +18,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
                 (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
                 (a == UINT16 && b == UINT16));
         case SUB: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
-        case MUL:
+        case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == UINT16 && b == UINT16));
         case DIV:
         case RSUB:
         case LOGADDEXP:
@@ -38,9 +38,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case LCM:
         case GCD:
         case LEFT_SHIFT:
-        case RIGHT_SHIFT:
+        case RIGHT_SHIFT: return (a == INT32 && b == INT32);
         case BITWISE_XOR:
-        case BITWISE_OR: return (a == INT32 && b == INT32);
+        case BITWISE_OR:
         case BITWISE_AND: return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
         case QUANT:
         case REQUANT:
@@ -458,8 +458,7 @@ BinaryNgDeviceOperation::invoke(
 
     DataType dtype_a = input_tensor_a.get_dtype();
     DataType dtype_b = input_tensor_b.get_dtype();
-    bool device_check = input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b) && device_check);
+    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     return {
         operation_attributes_t{
@@ -492,8 +491,7 @@ BinaryNgDeviceOperation::invoke(
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> post_activations) {
     DataType dtype_a = input_tensor_a.get_dtype();
-    bool device_check = input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a) && device_check);
+    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     return {
         operation_attributes_t{

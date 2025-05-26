@@ -30,9 +30,7 @@
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
 #include "noc_nonblocking_api.h"
-#ifndef ARCH_GRAYSKULL
 #include "eth_l1_address_map.h"
-#endif
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -204,7 +202,6 @@ inline uint16_t debug_valid_dram_addr(uint64_t addr, uint64_t len) {
     return DebugSanitizeNocOK;
 }
 
-#ifndef ARCH_GRAYSKULL
 inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
@@ -226,7 +223,6 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
 #endif
     return DebugSanitizeNocOK;
 }
-#endif
 
 // Note:
 //  - this isn't racy w/ the host so long as invalid is written last
@@ -362,7 +358,6 @@ uint32_t debug_sanitize_noc_addr(
             dir,
             DEBUG_SANITIZE_NOC_TARGET,
             debug_valid_dram_addr(noc_local_addr, noc_len));
-#ifndef ARCH_GRAYSKULL
     } else if (core_type == AddressableCoreType::ETH) {
         if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(
@@ -375,7 +370,6 @@ uint32_t debug_sanitize_noc_addr(
                 DEBUG_SANITIZE_NOC_TARGET,
                 debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
         }
-#endif
     } else if (core_type == AddressableCoreType::TENSIX) {
         if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(
@@ -417,7 +411,7 @@ void debug_sanitize_noc_and_worker_addr(
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {
         // Local addr needs to be checked depending on whether we're on eth or tensix.
-#if (defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)) && !defined(ARCH_GRAYSKULL)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
         uint16_t return_code = debug_valid_eth_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #else
         uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);

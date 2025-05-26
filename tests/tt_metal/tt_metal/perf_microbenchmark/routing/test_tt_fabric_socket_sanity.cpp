@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -353,8 +353,7 @@ int main(int argc, char** argv) {
                                             .get_cluster()
                                             .get_soc_desc(test_device_id_l)
                                             .logical_eth_core_to_chan_map.at(router_logical_core);
-                        routing_plane = control_plane->get_routing_plane_id(eth_chan);
-
+                        routing_plane = control_plane->get_routing_plane_id(dev_l_mesh_id, dev_l_chip_id, eth_chan);
                         router_core_found = true;
                     }
                     auto connected_logical_cores = device.second->get_ethernet_sockets(neighbor);

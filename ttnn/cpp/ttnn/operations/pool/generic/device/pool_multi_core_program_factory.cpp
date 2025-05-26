@@ -62,20 +62,18 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
     uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
+    const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
 
-    uint32_t max_rows_for_reduction = 16;
-    // TODO #14588: temporarily disabling 32 row reductions due to issues in large kernels
-    /* uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
-    // For GRAYSKULL, make reduction for 16 rows at a time.
-    if (device->arch() == tt::ARCH::GRAYSKULL)
-        max_rows_for_reduction /= 2; */
-
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
+    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
     // Hardware can do reduction of 8 tiles at a time.
     // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-    const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
-    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
+    const bool is_large_kernel =
+        is_partial_tile ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2 : kernel_size_hw > tt::constants::TILE_HEIGHT;
 
+    // ToDo: enable 32 sticks per tile for reduction for all cases.
+    const uint32_t max_rows_for_reduction =
+        (!is_partial_tile && !is_large_kernel) ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
@@ -127,6 +125,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         uint32_t in_one_cb_npages = 1;
         tt::tt_metal::create_cb(in_one_cb_id, program, all_cores, in_one_cb_pagesize, in_one_cb_npages, in_df);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_one_cb_id, in_one_cb_pagesize, in_one_cb_npages);
+    }
+
+    uint32_t clear_value_cb_id = 32;
+    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT) {
+        // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
+        // is needed only if we use more then 16 sticks per tile for reduction.
+        clear_value_cb_id = next_cb_index++;
+        tt::tt_metal::create_cb(clear_value_cb_id, program, all_cores, tile_size(in_df), 1, in_df);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(in_df), 1);
     }
 
     // incoming data is the input cb instead of raw l1/dram addr
@@ -297,7 +304,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,
         in_scalar_cb_id,
         max_pool_partials_cb_id,
-        in_one_cb_id};
+        in_one_cb_id,
+        clear_value_cb_id};
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -322,21 +330,18 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_reader_indices_cb_id,
         in_scalar_cb_id,
         max_pool_partials_cb_id,
-        in_one_cb_id};
+        in_one_cb_id,
+        clear_value_cb_id};
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
         reader_kernel_fname =
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
             "reader_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
-    } else if (is_wide_reduction) {
-        reader_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_pool_2d_multi_core_sharded_with_halo_wide.cpp";
     } else {
         reader_kernel_fname =
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_pool_2d_multi_core_sharded_with_halo_v2.cpp";
+            "reader_pool_2d_multi_core_sharded.cpp";
     }
 
     auto reader0_config = tt::tt_metal::DataMovementConfig{

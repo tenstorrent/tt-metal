@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,10 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys,
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
+
+# file names for performance and accuracy mode override files
+PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
+ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 
 
 class TensorGroup(Enum):
@@ -315,7 +319,7 @@ def parse_optimizations(string):
     return apply_settings
 
 
-def parse_decoder_json(json_file_path):
+def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.performance):
     """
     Reads a JSON file and returns a DecodersPrecision instance.
     """
@@ -334,18 +338,26 @@ def parse_decoder_json(json_file_path):
             raise ValueError("Invalid JSON format: Missing 'decoders' key")
 
         num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
-        decoders_precision = DecodersPrecision(num_decoders, "model")
+        placeholder_model_name = "model"
+        decoder_conf = default_optimization(placeholder_model_name)
+        default_tensor_dtype_settings = decoder_conf.tensor_dtype_settings
+        default_op_fidelity_settings = decoder_conf.op_fidelity_settings
+        decoders_precision = DecodersPrecision(num_decoders, placeholder_model_name, decoder_conf)
 
         for decoder_id, settings in config_data["decoders"].items():
             decoder_id = int(decoder_id)
 
-            tensor_precision = {
-                TensorGroup[key]: PrecisionSetting[value] for key, value in settings.get("precision_cfg", {}).items()
-            }
+            tensor_precision = (
+                {TensorGroup[key]: PrecisionSetting[value] for key, value in settings.get("precision_cfg").items()}
+                if "precision_cfg" in settings
+                else default_tensor_dtype_settings
+            )
 
-            op_fidelity = {
-                OpGroup[key]: MathFidelitySetting[value] for key, value in settings.get("fidelity_cfg", {}).items()
-            }
+            op_fidelity = (
+                {OpGroup[key]: MathFidelitySetting[value] for key, value in settings.get("fidelity_cfg").items()}
+                if "fidelity_cfg" in settings
+                else default_op_fidelity_settings
+            )
 
             custom_opt = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
             decoders_precision.set_decoder_conf(decoder_id, custom_opt)
@@ -1425,9 +1437,10 @@ class ModelArgs:
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
-        if "rope_scaling" in params and params.get("use_scaled_rope", True):
-            self.rope_scaling_factor = params.get("factor", None)
-            self.orig_context_len = params.get("original_max_position_embeddings", None)
+        rope_scaling_params = params.get("rope_scaling", None)
+        if rope_scaling_params:
+            self.rope_scaling_factor = rope_scaling_params.get("factor", None)
+            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", None)
         else:
             self.rope_scaling_factor = None
             self.orig_context_len = None
@@ -2303,13 +2316,13 @@ class HfModelWrapper:
 class DecodersPrecision:
     @classmethod
     def accuracy(cls, num_decoders, model_name):
-        inst = cls(num_decoders, model_name, ModelOptimizations.accuracy(model_name))
+        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.accuracy)
         inst.__name__ = "accuracy"
         return inst
 
     @classmethod
     def performance(cls, num_decoders, model_name):
-        inst = cls(num_decoders, model_name, ModelOptimizations.performance(model_name))
+        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.performance)
         inst.__name__ = "performance"
         return inst
 
@@ -2346,6 +2359,32 @@ class DecodersPrecision:
         self._full_name = " | ".join(
             f"Decoder {decoder_id}: {conf._full_name}" for decoder_id, conf in self.decoder_optimizations.items()
         )
+
+    @classmethod
+    def _precision_factory(cls, num_decoders, model_name, optimization_level):
+        # use respective configuration for each optimization level
+        decoder_config_filename = None
+        match optimization_level:
+            case ModelOptimizations.accuracy:
+                decoder_config_filename = ACCURACY_DECODER_CONFIG_FILENAME
+            case ModelOptimizations.performance:
+                decoder_config_filename = PERFORMANCE_DECODER_CONFIG_FILENAME
+            case _:
+                raise ValueError(f"optimization_level ({optimization_level}) not implemented")
+
+        # check if decoder config exists, if it exists load it else use optimization_level
+        model_params_dir = Path(__file__).parent.parent
+        decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
+        inst = None
+        if decoder_config_path.exists():
+            inst = parse_decoder_json(decoder_config_path, default_optimization=optimization_level)
+            logger.info(
+                f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
+            )
+        else:
+            inst = cls(num_decoders, model_name, optimization_level(model_name))
+
+        return inst
 
 
 def num_to_corerange(x):

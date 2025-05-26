@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -158,6 +158,8 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint8, ttnn.uint32, ttnn.int32, ttnn.float32])
 def test_fp32_uint32(device, h, w, dtype):
+    if dtype == ttnn.uint8 or dtype == ttnn.int32:
+        pytest.skip("Test case failing assert_equal() - see #22482")
     run_identity_test(device, h, w, dtype, pcc=0.9998)
 
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@ def run_test_paged_fused_update_cache_decode(
     device,
     pcc,
     sub_core_grids=None,
+    row_major=False,
 ):
     max_num_blocks_per_seq = max_seq_len // block_size
     assert max_num_blocks_per_seq * block_size == max_seq_len
@@ -67,11 +68,20 @@ def run_test_paged_fused_update_cache_decode(
     # Prepare inputs
     x1 = torch.randn(input_shape).bfloat16().float()
     x2 = torch.randn(input_shape).bfloat16().float()
-    x1_pad = torch.nn.functional.pad(x1, (0, 0, 0, 32 - num_heads), "constant", 0)
-    x2_pad = torch.nn.functional.pad(x2, (0, 0, 0, 32 - num_heads), "constant", 0)
+    if row_major:
+        max_num_heads = 8
+        assert num_heads <= max_num_heads, f"num_heads must be less than or equal to {max_num_heads}"
+        x1_pad = torch.nn.functional.pad(x1, (0, 0, 0, max_num_heads - num_heads), "constant", 0)
+        x2_pad = torch.nn.functional.pad(x2, (0, 0, 0, max_num_heads - num_heads), "constant", 0)
 
-    xt1 = ttnn.Tensor(x1_pad, input_dtype).to(ttnn.TILE_LAYOUT)
-    xt2 = ttnn.Tensor(x2_pad, input_dtype).to(ttnn.TILE_LAYOUT)
+        xt1 = ttnn.Tensor(x1_pad, input_dtype).to(ttnn.ROW_MAJOR_LAYOUT)
+        xt2 = ttnn.Tensor(x2_pad, input_dtype).to(ttnn.ROW_MAJOR_LAYOUT)
+    else:
+        x1_pad = torch.nn.functional.pad(x1, (0, 0, 0, 32 - num_heads), "constant", 0)
+        x2_pad = torch.nn.functional.pad(x2, (0, 0, 0, 32 - num_heads), "constant", 0)
+
+        xt1 = ttnn.Tensor(x1_pad, input_dtype).to(ttnn.TILE_LAYOUT)
+        xt2 = ttnn.Tensor(x2_pad, input_dtype).to(ttnn.TILE_LAYOUT)
 
     # Sharding setup
     num_cores_per_cache = num_users

@@ -1,4 +1,5 @@
 set(UNIT_TESTS_FABRIC_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_1d_fabric.cpp
@@ -6,6 +7,7 @@ set(UNIT_TESTS_FABRIC_SRC
 )
 
 add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})
+gtest_discover_tests(fabric_unit_tests)
 
 target_link_libraries(
     fabric_unit_tests
@@ -43,6 +45,7 @@ target_link_libraries(
         test_common_libs
 )
 add_executable(test_system_health)
+gtest_discover_tests(test_system_health)
 
 target_include_directories(
     test_system_health_smoke
@@ -59,5 +62,3 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 target_link_libraries(test_system_health PRIVATE TT::SystemHealth::Smoke)
-
-gtest_discover_tests(fabric_unit_tests test_system_health)

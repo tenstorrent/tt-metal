@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -321,6 +321,21 @@ Tensor FoldOperation::invoke(
             return fold_with_transpose_(queue_id, input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w)
                 .at(0);
         }
+    }
+    if (input_tensor.memory_config().is_dram()) {
+        if (pad_h != 0 || pad_w != 0 || pad_c != 0) {
+            TT_THROW("Padding is not supported for DRAM folding");
+        }
+        auto batch_size = input_tensor.get_logical_shape()[0];
+        auto input_height = input_tensor.get_logical_shape()[1];
+        auto input_width = input_tensor.get_logical_shape()[2];
+        auto in_channels = input_tensor.get_logical_shape()[3];
+        auto output_tensor =
+            ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
+        return ttnn::reshape(
+            output_tensor,
+            ttnn::Shape(
+                {batch_size, input_height / stride_h, input_width / stride_w, (in_channels)*stride_h * stride_w}));
     }
     return ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }
