@@ -14,6 +14,11 @@
 
 #define ALWI inline __attribute__((always_inline))
 
+enum PoolType {
+    MAX = 0,
+    SUM = 1,
+};
+
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
 ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
@@ -75,6 +80,8 @@ void kernel_main() {
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
     constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(23);
+    constexpr bool is_blackhole = (bool)get_compile_time_arg_val(24);
+    constexpr uint32_t pool_type = get_compile_time_arg_val(25);
 
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
@@ -89,7 +96,7 @@ void kernel_main() {
     // as number of valid rows in upper two faces will be 16 and in bottom two some different number.
     // In that case not all rows will have valid data, so we need to clear them out.
     constexpr uint32_t window_hw = window_h * window_w;
-    if constexpr (window_hw > 16) {
+    if constexpr (window_hw > 16 || (pool_type == PoolType::SUM && is_blackhole)) {
         fill_with_val(get_read_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
         clear_out_tiles<in_cb_id, clear_value_cb_id>();
     }
