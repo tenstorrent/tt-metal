@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1174,3 +1174,22 @@ class Generator:
 
         if hasattr(super(Generator, self), "__del__"):
             super().__del__()
+
+
+def create_submeshes(mesh_device, data_parallel):
+    if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
+        return [mesh_device]
+
+    num_rows, num_cols = mesh_device.shape
+    num_devices = num_rows * num_cols
+    assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
+
+    # Check if the mesh is 8x4 (expected shape for TG) and perfer row split
+    # Submeshes with 8 devices are expected to be in ring topology hence the row split
+    if num_rows == 8 and num_cols == 4 and num_rows % data_parallel == 0:
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows // data_parallel, num_cols))
+        for submesh in submeshes:
+            submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))
+        return submeshes
+
+    return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
