@@ -62,13 +62,16 @@ void kernel_main() {
     constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
     constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(22);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(24);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(20);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(21);
+    constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(23);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(24);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(25);
+    constexpr uint32_t in_scalar_cb_id =
+        split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+
     uint32_t scalar_index = 0;
-    uint32_t element_index = 0;
     uint32_t scalar_start = 0;
     uint32_t scalar_end = 1;
     uint32_t scalar_value = 0;
@@ -108,31 +111,25 @@ void kernel_main() {
         scalar_start = config_ptr[3 * scalar_index];
         scalar_value = config_ptr[3 * scalar_index + 1];
         scalar_end = config_ptr[3 * scalar_index + 2];
+        scalar_index++;
     }
 
-    while (counter < reader_nindices || (reader_id == 0 && !one_scalar_per_core && element_index < reader_nindices)) {
-        if constexpr (!one_scalar_per_core && reader_id == 0) {
+    while (counter < reader_nindices) {
+        if constexpr (!one_scalar_per_core) {
             cb_reserve_back(in_scalar_cb_id, 1);
-            if (counter >= scalar_start) {
-                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value >> 16);
-                scalar_index++;
+            while ((counter >= scalar_end) && scalar_end != reader_nindices) {
                 scalar_start = scalar_end;
                 scalar_value = config_ptr[3 * scalar_index + 1];
                 scalar_end = config_ptr[3 * scalar_index + 2];
+                scalar_index++;
             }
+            if (counter == scalar_start || (counter == scalar_start + 1 && counter < scalar_end)) {
+                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value >> 16);
+            }
+
             cb_push_back(in_scalar_cb_id, 1);
-            element_index++;
-            if (counter >= scalar_start) {
-                cb_reserve_back(in_scalar_cb_id, 1);
-                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value >> 16);
-                scalar_index++;
-                scalar_start = scalar_end;
-                scalar_value = config_ptr[3 * scalar_index + 1];
-                scalar_end = config_ptr[3 * scalar_index + 2];
-                cb_push_back(in_scalar_cb_id, 1);
-                element_index++;
-            }
         }
+
         if (counter < reader_nindices || one_scalar_per_core) {
             for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
                 const uint16_t top_left_local_index = reader_indices_ptr[counter];

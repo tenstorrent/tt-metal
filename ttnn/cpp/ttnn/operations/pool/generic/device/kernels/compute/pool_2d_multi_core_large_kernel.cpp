@@ -113,11 +113,12 @@ void MAIN {
 
     constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(10);
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(11);  // for split reader
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(12);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
-    constexpr uint32_t interm_cb_id = get_compile_time_arg_val(14);
-    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(15);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(16);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(12);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(13);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(14);
+    constexpr uint32_t interm_cb_id = get_compile_time_arg_val(15);
+    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(16);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -136,18 +137,25 @@ void MAIN {
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
 
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, interm_cb_id, num_faces_in_input_tile, max_rows_for_reduction);
+        in_cb_id_0,
+        in_scalar_cb_id_0,
+        max_tiles_per_iter,
+        interm_cb_id,
+        num_faces_in_input_tile,
+        max_rows_for_reduction);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
     if constexpr (one_scalar_per_core) {
-        cb_wait_front(in_scalar_cb_id, 1);
+        cb_wait_front(in_scalar_cb_id_0, 1);
     }
 
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
+        const uint32_t curr_scalar_cb_id =
+            (split_reader && (i & 0x1) && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         if constexpr (!one_scalar_per_core) {
-            cb_wait_front(in_scalar_cb_id, 1);
+            cb_wait_front(curr_scalar_cb_id, 1);
         }
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; b_i++) {
             // perform the intermediate reductions over the first N - 1 whole chunks
@@ -165,7 +173,7 @@ void MAIN {
                     split_reader,
                     max_rows_for_reduction,
                     neginf_srca_maxpool,
-                    zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, h, interm_cb_id);
+                    zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, h, interm_cb_id);
             }
             cb_push_back(interm_cb_id, 1);
 
@@ -178,7 +186,7 @@ void MAIN {
                 max_rows_for_reduction,
                 neginf_srca_maxpool,
                 zero_srca_avgpool>(
-                interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
+                interm_cb_id, REDUCE_OP == PoolType::MAX ? curr_scalar_cb_id : in_one_cb_id, out_cb_id);
         }
 
         // perform the intermediate reduction over chunk N (across the whole chunk even if the last chunk is
@@ -194,7 +202,7 @@ void MAIN {
                 split_reader,
                 max_rows_for_reduction,
                 neginf_srca_maxpool,
-                zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, h, interm_cb_id);
+                zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, h, interm_cb_id);
         }
         cb_push_back(interm_cb_id, 1);
 
@@ -206,13 +214,13 @@ void MAIN {
             is_partial_tile,
             max_rows_for_reduction,
             neginf_srca_maxpool,
-            zero_srca_avgpool>(interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
+            zero_srca_avgpool>(interm_cb_id, REDUCE_OP == PoolType::MAX ? curr_scalar_cb_id : in_one_cb_id, out_cb_id);
         if constexpr (!one_scalar_per_core) {
-            cb_pop_front(in_scalar_cb_id, 1);
+            cb_pop_front(curr_scalar_cb_id, 1);
         }
     }
     if constexpr (one_scalar_per_core) {
-        cb_pop_front(in_scalar_cb_id, 1);
+        cb_pop_front(in_scalar_cb_id_0, 1);
     }
 }
 

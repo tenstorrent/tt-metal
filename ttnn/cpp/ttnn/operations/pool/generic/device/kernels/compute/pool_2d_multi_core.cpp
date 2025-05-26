@@ -68,10 +68,11 @@ void MAIN {
 
     constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(10);
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(11);
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(12);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(16);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(12);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(13);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(14);
     constexpr uint32_t is_blackhole = (bool)get_compile_time_arg_val(16);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -90,7 +91,7 @@ void MAIN {
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
 
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
+        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
     pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
 
     // In case we have <=16 sticks we will use only upper two faces of the tile.
@@ -117,8 +118,10 @@ void MAIN {
         cb_wait_front(in_scalar_cb_id, 1);
     }
     for (uint32_t i = 0; i < nsticks_per_core; i++) {
+        const uint32_t curr_scalar_cb_id =
+            (split_reader && (i & 0x1) && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         if constexpr (!one_scalar_per_core) {
-            cb_wait_front(in_scalar_cb_id, 1);
+            cb_wait_front(curr_scalar_cb_id, 1);
         }
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
             reduce_h_fused<
@@ -128,7 +131,7 @@ void MAIN {
                 face_r_dim,
                 num_faces_in_tile,
                 neginf_srca_maxpool,
-                zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
+                zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
         }
 
         if constexpr (tilize_reconfig_needed) {
@@ -137,13 +140,13 @@ void MAIN {
         }
         // perform the reduction over the either whole or partial chunk N
         reduce_h_fused<partial_iter_output_tiles, is_partial_tile, split_reader, face_r_dim, num_faces_in_tile>(
-            in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
+            in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
         if constexpr (!one_scalar_per_core) {
-            cb_pop_front(in_scalar_cb_id, 1);
+            cb_pop_front(curr_scalar_cb_id, 1);
         }
     }
     if constexpr (one_scalar_per_core) {
-        cb_pop_front(in_scalar_cb_id, 1);
+        cb_pop_front(in_scalar_cb_id_0, 1);
     }
 }
 

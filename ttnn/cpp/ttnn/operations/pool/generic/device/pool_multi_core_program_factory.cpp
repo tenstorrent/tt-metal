@@ -84,6 +84,13 @@ static Tensor create_scalar_config_tensor(
                 config_vector.push_back(scalar.end);
             }
 
+            // Fill with 0 values when the scalars count is less than out_nhw_per_core
+            for (uint32_t j = scalars.size(); j < out_nhw_per_core; j++) {
+                config_vector.push_back(0);
+                config_vector.push_back(0);
+                config_vector.push_back(0);
+            }
+
             // Advance core and tensor location tracking
             channel = (channel + 1) % num_shards_c;
             if (channel == 0) {
@@ -102,19 +109,6 @@ static Tensor create_scalar_config_tensor(
 
     const uint32_t entry_size = 3;
     const uint32_t entries_per_core = entry_size * out_nhw_per_core;
-
-    // Pad if not full
-    const uint32_t pad = (entries_per_core - (config_vector.size() % entries_per_core)) % entries_per_core;
-    if (pad != 0 && config_vector.size() >= 2) {
-        uint16_t last_core_start = *(config_vector.end() - 3);
-        uint16_t last_scalar = *(config_vector.end() - 2);
-        uint16_t last_core_end = *(config_vector.end() - 1);
-        for (uint32_t i = 0; i < pad / entry_size; ++i) {
-            config_vector.push_back(last_core_start);
-            config_vector.push_back(last_scalar);
-            config_vector.push_back(last_core_end);
-        }
-    }
 
     TT_FATAL(
         config_vector.size() % entries_per_core == 0,
@@ -225,21 +219,29 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     using tt::tt_metal::CircularBufferConfig;
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
-    uint32_t in_scalar_cb_id = next_cb_index++;
+    uint32_t in_scalar_cb_id_0 = next_cb_index++;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     uint32_t in_scalar_cb_npages = 1;
-    tt::tt_metal::create_cb(in_scalar_cb_id, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
-    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id, in_scalar_cb_pagesize, in_scalar_cb_npages);
+    tt::tt_metal::create_cb(in_scalar_cb_id_0, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
+    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
     // For avgpool, instantiate and use this CB, which consists of 1s. We don't want to divide
     // twice by kernel size for large kernel case.
     uint32_t in_one_cb_id = 32;
+    uint32_t in_scalar_cb_id_1 = 32;
     if (pool_type == Pool2DType::AVG_POOL2D) {
         in_one_cb_id = next_cb_index++;
         uint32_t in_one_cb_pagesize = tile_size(in_df);
         uint32_t in_one_cb_npages = 1;
         tt::tt_metal::create_cb(in_one_cb_id, program, all_cores, in_one_cb_pagesize, in_one_cb_npages, in_df);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_one_cb_id, in_one_cb_pagesize, in_one_cb_npages);
+        if (split_reader) {
+            in_scalar_cb_id_1 = next_cb_index++;
+            tt::tt_metal::create_cb(
+                in_scalar_cb_id_1, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
+            log_debug(
+                tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_1, in_scalar_cb_pagesize, in_scalar_cb_npages);
+        }
     }
 
     uint32_t clear_value_cb_id = 32;
@@ -427,10 +429,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             all_cores);
 
         auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
-        auto config_tensor_shard_orientation =
-            input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
-                ? ShardOrientation::COL_MAJOR
-                : input.shard_spec().value().orientation;
+        auto config_tensor_shard_orientation = input.shard_spec().value().orientation;
         ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
         MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
         auto config_tensor_device = config_tensor.to_device(device, memory_config);
@@ -464,7 +463,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_id_1,
         raw_in_cb_id,
         in_reader_indices_cb_id,
-        in_scalar_cb_id,
+        in_scalar_cb_id_0,
+        in_scalar_cb_id_1,
         max_pool_partials_cb_id,
         in_one_cb_id,
         clear_value_cb_id,
@@ -515,7 +515,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         max_rows_for_reduction,
         in_cb_id_0,
         in_cb_id_1,
-        in_scalar_cb_id,
+        in_scalar_cb_id_0,
+        in_scalar_cb_id_1,
         out_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
