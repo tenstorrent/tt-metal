@@ -108,8 +108,9 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
-    auto control_plane = std::make_unique<ControlPlane>(
+    auto global_control_plane = std::make_unique<GlobalControlPlane>(
         t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
+    auto control_plane = global_control_plane->get_local_node_control_plane();
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 }
 
@@ -117,8 +118,9 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
-    auto control_plane = std::make_unique<ControlPlane>(
+    auto global_control_plane = std::make_unique<GlobalControlPlane>(
         t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
+    auto control_plane = global_control_plane->get_local_node_control_plane();
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     // TODO: Query this
     constexpr uint32_t num_routing_planes = 2;

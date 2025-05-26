@@ -1153,6 +1153,7 @@ GlobalControlPlane::GlobalControlPlane(const std::string& mesh_graph_desc_file) 
 GlobalControlPlane::GlobalControlPlane(
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    mesh_graph_desc_file_ = mesh_graph_desc_file;
     this->initialize_host_mapping();
     control_plane_ =
         std::make_unique<ControlPlane>(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
