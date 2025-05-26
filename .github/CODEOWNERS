@@ -183,7 +183,7 @@ models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/whisper @skhorasganiTT @uaydonat
 models/demos/grayskull @uaydonat
 models/demos/yolov4 @dvartaniansTT @mbahnasTT @rdraskicTT @mbezuljTT @tenstorrent/metalium-developers-convolutions
-models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
+models/demos/**/*resnet* @tenstorrent/metalium-developers-convolutions
 models/experimental/ @sminakov-tt @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/demos/ufld_v2 @tenstorrent/cse-developer-ttnn
