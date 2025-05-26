@@ -36,6 +36,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::IDENTITY_UINT32: return "SFPU_OP_IDENTITY_INCLUDE";
         case UnaryOpType::FLOOR:
         case UnaryOpType::CEIL:
+        case UnaryOpType::TRUNC:
         case UnaryOpType::ROUND: return "SFPU_OP_ROUND_FAMILY_INCLUDE";
         case UnaryOpType::RDIV:
         case UnaryOpType::RSUB: return "SFPU_OP_REVERSE_FAMILY_INCLUDE";
@@ -438,6 +439,15 @@ std::pair<string, string> get_op_init_and_func_default(
                 op_init_and_name = {"rounding_op_tile_init();", fmt::format("ceil_tile_float32({});", idst)};
             } else {
                 op_init_and_name = {"rounding_op_tile_init();", fmt::format("ceil_tile({});", idst)};
+            }
+            break;
+        case UnaryOpType::TRUNC:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::FLOAT32) {
+                op_init_and_name = {"trunc_tile_init();", fmt::format("trunc_tile_float32({});", idst)};
+            } else {
+                op_init_and_name = {"trunc_tile_init();", fmt::format("trunc_tile({});", idst)};
             }
             break;
         case UnaryOpType::RELU6:

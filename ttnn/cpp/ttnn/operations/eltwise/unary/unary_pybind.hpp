@@ -1511,66 +1511,7 @@ void bind_unary_composite_threshold(
             py::arg("memory_config") = std::nullopt});
 }
 
-template <typename unary_operation_t>
-void bind_unary_composite_trunc(
-    py::module& module, const unary_operation_t& operation, const std::string& description) {
-    auto doc = fmt::format(
-        R"doc(
-        Applies {0} to :attr:`input_tensor` element-wise.
-
-        .. math::
-            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes, layouts, and ranks:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE
-                 - 2, 3, 4
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor)
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description);
-
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               QueueId queue_id) { return self(queue_id, input_tensor, memory_config, output_tensor); },
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
-}
-
-// OpHandler_float_with_default
+//OpHandler_float_with_default
 template <typename unary_operation_t>
 void bind_unary_composite_float_with_default(
     py::module& module,
@@ -1761,42 +1702,13 @@ void py_module(py::module& module) {
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_unary_operation(
-        module,
-        ttnn::floor,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_operation(
-        module,
-        ttnn::eqz,
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-    detail::bind_unary_operation(
-        module,
-        ttnn::ceil,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_operation(
-        module,
-        ttnn::mish,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc",
-        "[Supported range -20 to inf]",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_operation(
-        module,
-        ttnn::gez,
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-    detail::bind_unary_operation(
-        module,
-        ttnn::gtz,
-        R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+    detail::bind_unary_operation(module, ttnn::floor, R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
+    detail::bind_unary_operation(module, ttnn::trunc, R"doc(\mathrm{{output\_tensor}}_i = \verb|trunc|(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::eqz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+    detail::bind_unary_operation(module, ttnn::ceil, R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
+    detail::bind_unary_operation(module, ttnn::mish, R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc", "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
+    detail::bind_unary_operation(module, ttnn::gez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+    detail::bind_unary_operation(module, ttnn::gtz, R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc", "", R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
 
     detail::bind_unary_operation(
         module,
@@ -2182,39 +2094,12 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_composite(module, ttnn::var_hw, R"doc(Performs var_hw function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::std_hw, R"doc(Performs std_hw function on :attr:`input_tensor`.)doc");
-    detail::bind_unary_composite(
-        module,
-        ttnn::normalize_hw,
-        R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16)doc",
-        R"doc(ROW_MAJOR, TILE)doc",
-        R"doc(4)doc",
-        "",
-        R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
-    detail::bind_unary_composite(
-        module,
-        ttnn::logical_not_,
-        R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_composite(
-        module,
-        ttnn::normalize_global,
-        R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16)doc",
-        R"doc(ROW_MAJOR, TILE)doc",
-        R"doc(4)doc",
-        "",
-        R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
-    detail::bind_unary_composite(
-        module,
-        ttnn::frac,
-        R"doc(Performs frac function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_composite_trunc(module, ttnn::trunc, R"doc(Not supported for grayskull.)doc");
+    detail::bind_unary_composite(module, ttnn::normalize_hw, R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc", "", R"doc(BFLOAT16)doc", R"doc(ROW_MAJOR, TILE)doc",
+        R"doc(4)doc", "", R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
+    detail::bind_unary_composite(module, ttnn::logical_not_, R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_composite(module, ttnn::normalize_global, R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc", "", R"doc(BFLOAT16)doc",
+        R"doc(ROW_MAJOR, TILE)doc", R"doc(4)doc", "", R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
+    detail::bind_unary_composite(module, ttnn::frac, R"doc(Performs frac function on :attr:`input_tensor`.)doc",  "", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_composite_floats_with_default(
         module, ttnn::hardswish, "scale", "Scale value", 1.0f / 6.0f, "shift", "Shift value", 0.5f);
