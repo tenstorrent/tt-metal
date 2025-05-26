@@ -322,13 +322,13 @@ Result conv2d_DRAM(
             conv_config.always_preprocess_weights = false;
         }
         Tensor sliced_input_tensor;
-        if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (true) {  // conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
             sliced_input_tensor = ttnn::slice(
                 queue_id,
                 input_tensor_on_device,
-                std::array<uint32_t, 4>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
-                std::array<uint32_t, 4>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
-                std::array<uint32_t, 4>{
+                ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
+                ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
+                ttnn::SmallVector<uint32_t>{
                     1,
                     1,
                     1,
@@ -349,9 +349,9 @@ Result conv2d_DRAM(
             sliced_input_tensor = ttnn::experimental::padded_slice(
                 queue_id,
                 input_tensor_on_device,
-                std::array<uint32_t, 4>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
-                std::array<uint32_t, 4>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
-                std::array<uint32_t, 4>{
+                ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
+                ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
+                ttnn::SmallVector<uint32_t>{
                     1,
                     1,
                     1,
