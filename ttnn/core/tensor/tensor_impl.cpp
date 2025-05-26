@@ -1283,7 +1283,7 @@ Tensor pad(
     const auto input_data_type = tensor.dtype();
 
     auto pad = [&input_padded_shape, &output_padded_shape, &input_tensor_start, &pad_value_](const auto& input_buffer) {
-        const int rank = input_padded_shape.rank();
+        const size_t rank = input_padded_shape.rank();
 
         auto output_buffer = std::vector<T>(output_padded_shape.volume());
         std::fill(output_buffer.begin(), output_buffer.end(), pad_value_);
@@ -1294,9 +1294,23 @@ Tensor pad(
 
         if (rank == 1) {
             std::memcpy(
-                output_buffer.data() + input_tensor_start[0], input_buffer.begin(), input_padded_shape[0] * sizeof(T));
+                output_buffer.data() + input_tensor_start[0],
+                input_buffer.begin(),
+                static_cast<size_t>(input_padded_shape[0]) * sizeof(T));
             return output_buffer;
         }
+
+        // Note: compute_strides from shape.hpp can overflow
+        auto compute_strides = [](const tt::tt_metal::Shape& shape) -> tt::stl::SmallVector<size_t> {
+            size_t num_elements = shape.volume();
+
+            ttnn::SmallVector<size_t> strides;
+            for (size_t index = 0; index < shape.rank(); index++) {
+                num_elements /= static_cast<size_t>(shape[index]);
+                strides.push_back(num_elements);
+            }
+            return strides;
+        };
 
         // Calculate strides
         auto input_strides = compute_strides(input_padded_shape);
@@ -1313,17 +1327,17 @@ Tensor pad(
 
             for (int i = 0; i < rank - 1; ++i) {
                 input_idx += coords[i] * input_strides[i];
-                output_idx += (coords[i] + input_tensor_start[i]) * output_strides[i];
+                output_idx += (coords[i] + static_cast<size_t>(input_tensor_start[i])) * output_strides[i];
             }
 
             // Add offset (left padding) for the innermost dimension
-            output_idx += input_tensor_start[rank - 1] * output_strides[rank - 1];
+            output_idx += static_cast<size_t>(input_tensor_start[rank - 1]) * output_strides[rank - 1];
 
             // Copy entire input row with memcpy
             std::memcpy(
                 output_buffer.data() + output_idx,
                 input_buffer.begin() + input_idx,
-                input_padded_shape[rank - 1] * sizeof(T));
+                static_cast<size_t>(input_padded_shape[rank - 1]) * sizeof(T));
 
             // Increment coordinates (from right to left), ignore last dimension
             processed_all_coords = true;
