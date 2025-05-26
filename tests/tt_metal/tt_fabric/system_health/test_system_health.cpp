@@ -20,6 +20,8 @@ TEST(Cluster, ReportSystemHealth) {
     // Despite potential error messages, this test will not fail
     // It is a report of system health
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& eth_connections = cluster.get_ethernet_connections();
+    const auto& eth_connections_to_remote_mmio_devices = cluster.get_ethernet_connections_to_remote_mmio_devices();
 
     auto unique_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
     std::stringstream ss;
@@ -47,10 +49,21 @@ TEST(Cluster, ReportSystemHealth) {
             cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);
             eth_ss << " eth channel " << std::dec << (uint32_t)chan << " " << eth_core.str();
             if (cluster.is_ethernet_link_up(chip_id, eth_core)) {
-                const auto& [connected_chip_id, connected_eth_core] =
-                    cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
-                eth_ss << " link UP, retrain: " << read_vec[0] << ", connected to chip " << connected_chip_id << " "
-                       << connected_eth_core.str();
+                if (eth_connections.at(chip_id).find(chan) != eth_connections.at(chip_id).end()) {
+                    const auto& [connected_chip_id, connected_eth_core] =
+                        cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
+                    std::cout << "Connected chip: " << connected_chip_id
+                              << " connected eth core: " << connected_eth_core.str() << std::endl;
+                    eth_ss << " link UP, retrain: " << read_vec[0] << ", connected to chip " << connected_chip_id << " "
+                           << connected_eth_core.str();
+                } else {
+                    const auto& [connected_chip_unique_id, connected_eth_core] =
+                        cluster.get_connected_ethernet_core_to_remote_mmio_device(std::make_tuple(chip_id, eth_core));
+                    std::cout << "Connected unique chip: " << connected_chip_unique_id
+                              << " connected eth core: " << connected_eth_core.str() << std::endl;
+                    eth_ss << " link UP, retrain: " << read_vec[0] << ", connected to chip " << connected_chip_unique_id
+                           << " " << connected_eth_core.str();
+                }
                 if (read_vec[0] > 0) {
                     unexpected_system_states.push_back(chip_id_ss.str() + eth_ss.str());
                 }

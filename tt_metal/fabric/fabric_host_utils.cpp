@@ -61,15 +61,15 @@ FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::Cluster
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     chip_id_t src_chip_id, chip_id_t dst_chip_id, RoutingDirection direction) {
     const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    const auto [src_mesh_id, src_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(src_chip_id);
-    const auto [dst_mesh_id, dst_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dst_chip_id);
+    const auto src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_chip_id);
+    const auto dst_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(dst_chip_id);
 
     // the subset of routers that support forwarding b/w those chips
-    const std::vector<chan_id_t>& forwarding_channels = control_plane->get_forwarding_eth_chans_to_chip(
-        src_mesh_id, src_logical_chip_id, dst_mesh_id, dst_logical_chip_id, direction);
+    const std::vector<chan_id_t>& forwarding_channels =
+        control_plane->get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
 
     const std::vector<chan_id_t>& fabric_channels =
-        control_plane->get_active_fabric_eth_channels_in_direction(src_mesh_id, src_logical_chip_id, direction);
+        control_plane->get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
 
     std::vector<uint32_t> link_indices;
     for (uint32_t i = 0; i < fabric_channels.size(); i++) {
@@ -84,12 +84,11 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
 
 std::vector<uint32_t> get_forwarding_link_indices(chip_id_t src_chip_id, chip_id_t dst_chip_id) {
     const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    const auto [src_mesh_id, src_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(src_chip_id);
-    const auto [dst_mesh_id, dst_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dst_chip_id);
+    const auto src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_chip_id);
+    const auto dst_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(dst_chip_id);
 
     // find the forwarding direction b/w src and dest chip
-    const auto& forwarding_direction =
-        control_plane->get_forwarding_direction(src_mesh_id, src_logical_chip_id, dst_mesh_id, dst_logical_chip_id);
+    const auto& forwarding_direction = control_plane->get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
     if (!forwarding_direction.has_value()) {
         return {};
     }

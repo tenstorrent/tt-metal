@@ -102,7 +102,7 @@ class CustomMeshGraphFabric2DDynamicFixture : public BaseFabricFixture {
 public:
     void SetUp(
         const std::string& mesh_graph_desc_file,
-        const std::vector<std::vector<chip_id_t>>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
         tt::tt_metal::MetalContext::instance().get_cluster().set_custom_control_plane_mesh_graph(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
         this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
