@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
-#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <map>
@@ -31,11 +30,7 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "fabric_edm_packet_header.hpp"
 #include "fabric_host_interface.h"
-#include "fabric_types.hpp"
-#include "hal.hpp"
-#include "hal_types.hpp"
 #include "kernel_config/demux.hpp"
 #include "kernel_config/eth_router.hpp"
 #include "kernel_config/eth_tunneler.hpp"
@@ -48,7 +43,6 @@
 #include "system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
@@ -513,6 +507,7 @@ std::unordered_map<chip_id_t, std::unique_ptr<Program>> command_queue_pgms;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> routing_cores;
 std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> empty_cores;
+std::unordered_map<chip_id_t, std::vector<TerminationInfo>> termination_info;
 
 // Helper function to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
 std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
@@ -640,16 +635,24 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
 
                 // Add dispatch kernels for the mmio/remote pair
                 for (DispatchKernelNode node : nodes_for_one_mmio) {
-                    TT_ASSERT(node.device_id == 0 || node.device_id == 1);
-                    if (node.device_id == 0) {
+                    constexpr uint32_t k_MMIO = 0;
+                    constexpr uint32_t k_Remote = 1;
+                    TT_ASSERT(node.device_id == k_MMIO || node.device_id == k_Remote);
+                    TT_ASSERT(
+                        node.servicing_device_id == k_MMIO || node.servicing_device_id == k_Remote ||
+                        node.servicing_device_id == x);
+
+                    if (node.device_id == k_MMIO) {
                         node.device_id = mmio_device_id;
-                        if (node.servicing_device_id == 0) {
-                            node.servicing_device_id = mmio_device_id;
-                        } else if (node.servicing_device_id == 1) {
-                            node.servicing_device_id = remote_device_id;
-                        }
                     } else {
+                        // node.device_id == k_Remote
                         node.device_id = remote_device_id;
+                    }
+
+                    if (node.servicing_device_id == k_MMIO) {
+                        node.servicing_device_id = mmio_device_id;
+                    } else if (node.servicing_device_id == k_Remote) {
+                        node.servicing_device_id = remote_device_id;
                     }
                     increment_node_ids(node, index_offset);
                     nodes.push_back(node);
@@ -903,6 +906,18 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
         }
     }
 
+    // Register termination info
+    for (auto node_and_kernel : node_id_to_kernel) {
+        if (node_and_kernel->GetDeviceId() != device->id()) {
+            continue;
+        }
+
+        const auto& info = node_and_kernel->GetTerminationInfo();
+        if (info.has_value()) {
+            termination_info[device->id()].push_back(info.value());
+        }
+    }
+
     // Compile the program and return it so Device can register it
     detail::CompileProgram(device, *cq_program, /*force_slow_dispatch=*/true);
     // Write runtime args to device
@@ -972,79 +987,6 @@ void configure_dispatch_cores(IDevice* device) {
             node_id_to_kernel[idx]->ConfigureCore();
         }
     }
-}
-
-std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, FabricConfig fabric_config) {
-    std::unique_ptr<Program> fabric_program_ptr;
-    std::uint32_t router_mask = 0;
-    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-    auto& fabric_context = control_plane->get_fabric_context();
-
-    auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
-    fabric_context.set_num_fabric_initialized_routers(device->id(), router_chans_and_direction.size());
-    if (router_chans_and_direction.empty()) {
-        return nullptr;
-    }
-
-    fabric_program_ptr = std::make_unique<Program>();
-
-    for (const auto& router_chan : router_chans_and_direction) {
-        router_mask += 0x1 << (uint32_t)router_chan.first;
-    }
-
-    auto master_router_chan = (uint32_t)(router_chans_and_direction.begin()->first);
-    fabric_context.set_fabric_master_router_chan(device->id(), master_router_chan);
-
-    // setup runtime args
-    std::vector<uint32_t> router_runtime_args = {
-        router_chans_and_direction.size(),  // 0: number of active fabric routers
-        router_mask,                        // 1: active fabric router mask
-        master_router_chan,                 // 2: master router channel
-    };
-
-    std::vector<uint32_t> router_compile_args = {
-        (tt::tt_fabric::DEFAULT_ROUTER_RX_QUEUE_SIZE_BYTES >> 4),  // 0: rx_queue_size_words
-        0,                                                         // 1: test_results_addr
-        0,                                                         // 2: test_results_size
-        0,  // 3: timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
-        0,  // 4: is_master_router
-        0,  // 5: router direction
-    };
-
-    std::map<string, string> router_defines = {};
-    if (fabric_config == FabricConfig::FABRIC_2D) {
-        router_defines["FVC_MODE_PULL"] = "";
-        tt::tt_fabric::set_routing_mode(ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PULL);
-    } else {
-        // TODO: delete or selectively set
-        //       https://github.com/tenstorrent/tt-metal/issues/20000
-        if (isFabricUnitTest()) {
-            tt::tt_fabric::set_routing_mode(ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH);
-            router_defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
-        } else {
-            tt::tt_fabric::set_routing_mode(
-                ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH | ROUTING_MODE_LOW_LATENCY);
-        }
-    }
-
-    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    for (const auto& [router_chan, direction] : router_chans_and_direction) {
-        router_compile_args[4] = (master_router_chan == router_chan);
-        router_compile_args[5] = direction;
-        auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
-        auto kernel = tt_metal::CreateKernel(
-            *fabric_program_ptr,
-            "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
-            router_logical_core,
-            tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = router_defines});
-
-        tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, router_logical_core, router_runtime_args);
-    }
-
-    detail::CompileProgram(device, *fabric_program_ptr, /*force_slow_dispatch=*/device->using_fast_dispatch());
-    return fabric_program_ptr;
 }
 
 bool check_dateline(
@@ -1118,11 +1060,11 @@ void build_tt_fabric_program(
         return;
     }
 
-    std::unordered_map<RoutingDirection, std::set<chan_id_t>> active_fabric_eth_channels;
+    std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
     std::unordered_map<RoutingDirection, chip_id_t> chip_neighbors;
     uint32_t num_intra_chip_neighbors = 0;
     const auto topology = fabric_context.get_fabric_topology();
-    bool is_2D_routing = topology == Topology::Mesh;
+    const bool is_2D_routing = topology == Topology::Mesh;
 
     for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
         auto active_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
@@ -1204,8 +1146,8 @@ void build_tt_fabric_program(
         bool can_connect =
             (chip_neighbors.find(dir1) != chip_neighbors.end()) && (chip_neighbors.find(dir2) != chip_neighbors.end());
         if (can_connect) {
-            auto eth_chans_dir1 = get_ordered_fabric_eth_chans(device->id(), active_fabric_eth_channels.at(dir1));
-            auto eth_chans_dir2 = get_ordered_fabric_eth_chans(device->id(), active_fabric_eth_channels.at(dir2));
+            auto eth_chans_dir1 = active_fabric_eth_channels.at(dir1);
+            auto eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
 
             auto eth_chans_dir1_it = eth_chans_dir1.begin();
             auto eth_chans_dir2_it = eth_chans_dir2.begin();
@@ -1324,8 +1266,6 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         return create_and_compile_tt_fabric_program(device);
-    } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
-        return create_and_compile_2d_fabric_program(device, fabric_config);
     }
     return nullptr;
 }
@@ -1357,6 +1297,13 @@ const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_
         return empty_cores[dev_id];
     }
     return routing_cores[dev_id];
+}
+
+const std::vector<TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id) {
+    if (!termination_info.contains(dev_id)) {
+        termination_info[dev_id] = {};
+    }
+    return termination_info[dev_id];
 }
 
 }  // namespace tt::tt_metal

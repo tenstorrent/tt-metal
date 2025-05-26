@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -240,6 +240,10 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_relaxed_memory_ordering_disabled()) {
         this->defines_ += "-DDISABLE_RELAXED_MEMORY_ORDERING ";
+    }
+
+    if (rtoptions.get_gathering_enabled()) {
+        this->defines_ += "-DENABLE_GATHERING ";
     }
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {

@@ -36,30 +36,25 @@ TESTS=(
     # Async Write
     "1 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
     "2 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 8 --num_dest_endpoints 8 --num_links 16 --benchmark"
-    "3 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1"
-    "4 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 8 --num_dest_endpoints 8 --num_links 16 --benchmark --metal_fabric_init_level 1"
      # Async Write Mcast
-    "5 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 1"
-    "6 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --w_depth 1"
-    "7 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 1 --metal_fabric_init_level 1"
+    "3 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 1"
+    "4 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --w_depth 1"
      # TODO: Enable benchmark functionality for mcast
      # Atomic Inc
-    "8 --fabric_command 64 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
-    "9 --fabric_command 64 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1"
+    "5 --fabric_command 64 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
      # Async Write Atomic Inc
-    "10 --fabric_command 65 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
-    "11 --fabric_command 65 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1"
+    "6 --fabric_command 65 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
 
      # Async Write with Push Router
-    "12 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --push_router"
-    "13 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 8 --num_dest_endpoints 8 --num_links 16 --benchmark --push_router"
+    "7 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --push_router"
+    "8 --fabric_command 1 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 8 --num_dest_endpoints 8 --num_links 16 --benchmark --push_router"
      # Async Write Mcast with Push Router
-    "14 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --num_links 16 --e_depth 1 --push_router"
-    "15 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --num_links 16 --w_depth 1 --push_router"
+    "9 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --num_links 16 --e_depth 1 --push_router"
+    "10 --fabric_command 1 --board_type n300 --data_kb_per_tx 600 --num_links 16 --w_depth 1 --push_router"
      # Atomic Inc with Push Router
-    "16 --fabric_command 64 --board_type n300 --data_kb_per_tx 600 --push_router"
+    "11 --fabric_command 64 --board_type n300 --data_kb_per_tx 600 --push_router"
      # Async Write Atomic Inc with Push Router
-    "17 --fabric_command 65 --board_type n300 --data_kb_per_tx 600 --push_router"
+    "12 --fabric_command 65 --board_type n300 --data_kb_per_tx 600 --push_router"
 )
 
 for TEST in "${TESTS[@]}"; do
@@ -67,5 +62,5 @@ for TEST in "${TESTS[@]}"; do
     read -r TEST_NUMBER TEST_ARGS <<< "$TEST"
     echo "LOG_FABRIC: Test $TEST_NUMBER: $TEST_ARGS"
     # Execute the test command with extracted arguments
-    TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} $TEST_ARGS
+    TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity $TEST_ARGS
 done

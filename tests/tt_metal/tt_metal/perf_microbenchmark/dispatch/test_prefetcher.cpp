@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,7 +40,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/logger.hpp>
-#include "noc/noc_parameters.h"
 #include <tt-metalium/program.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
@@ -359,7 +358,8 @@ void add_prefetcher_linear_read_cmd(IDevice* device,
 
     cmd.relay_linear.pad1 = 0;
     cmd.relay_linear.pad2 = 0;
-    cmd.relay_linear.noc_xy_addr = NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y);
+    cmd.relay_linear.noc_xy_addr =
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y);
     cmd.relay_linear.addr = addr;
     cmd.relay_linear.length = length;
 
@@ -2339,7 +2339,7 @@ void configure_for_single_chip(
         0,  // unused on hd, filled in below for h and d
         0,  // unused unless tunneler is between h and d
         split_prefetcher_g,
-        NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
         prefetch_downstream_cb_sem,
         prefetch_downstream_buffer_pages,
         num_compute_cores,  // max_write_packed_cores
@@ -2363,6 +2363,8 @@ void configure_for_single_chip(
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+        0,
+        0,
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -3224,7 +3226,7 @@ void configure_for_multi_chip(
         0,  // unused on hd, filled in below for h and d
         0,  // unused unless tunneler is between h and d
         split_prefetcher_g,
-        NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
         prefetch_downstream_cb_sem,
         prefetch_downstream_buffer_pages,
         num_compute_cores,

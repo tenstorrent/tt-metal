@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -289,6 +289,8 @@ REGISTER_UNARY_OPERATION(tan, TAN);
 REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
 REGISTER_UNARY_OPERATION(bitwise_not, BITWISE_NOT);
 REGISTER_UNARY_OPERATION(alt_complex_rotate90, ALT_COMPLEX_ROTATE90);
+REGISTER_UNARY_OPERATION(floor, FLOOR);
+REGISTER_UNARY_OPERATION(ceil, CEIL);
 
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
@@ -321,8 +323,6 @@ REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(round, ROUND, int32_t);
 constexpr auto identity = ttnn::register_operation<"ttnn::identity", ttnn::operations::unary::Identity>();
 constexpr auto abs = ttnn::register_operation<"ttnn::abs", ttnn::operations::unary::Abs>();
 constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::unary::Eqz>();
-constexpr auto floor = ttnn::register_operation<"ttnn::floor", ttnn::operations::unary::Floor>();
-constexpr auto ceil = ttnn::register_operation<"ttnn::ceil", ttnn::operations::unary::Ceil>();
 constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();

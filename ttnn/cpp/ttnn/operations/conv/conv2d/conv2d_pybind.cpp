@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -413,6 +413,7 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
+            bool,
             bool>(),
         py::kw_only(),
         py::arg("dtype") = DataType::BFLOAT16,
@@ -434,7 +435,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_weights_double_buffer") = false,
         py::arg("enable_split_reader") = false,
         py::arg("enable_subblock_padding") = false,
-        py::arg("in_place") = false);
+        py::arg("in_place") = false,
+        py::arg("enable_kernel_stride_folding") = false);
     py_conv_config.def_readwrite(
         "dtype",
         &Conv2dConfig::dtype,
@@ -541,6 +543,31 @@ void py_bind_conv2d(py::module& module) {
             Enables support for in_place halo.
             This re-uses the input tensor as the output for halo, overwriting the input tensor.
             This can be used if the input tensor is not used by any other op after the conv op.
+        )doc");
+
+    py_conv_config.def_readwrite("enable_kernel_stride_folding", &Conv2dConfig::enable_kernel_stride_folding, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        Enables tensor folding optimization when strides match kernel dimensions.
+
+        This feature is under development and may change without notice.
+        Use with caution in production environments (Issue: #22378).
+
+        When enabled, this optimization reshapes tensors as follows:
+
+        * Input tensor (NHWC format):
+          - From: (N, H, W, IC)
+          - To: (N, H/stride[0], W/stride[1], IC * kernel[0] * kernel[1])
+
+        * Weight tensor:
+          - From: (OC, IC, kernel[0], kernel[1])
+          - To: (1, 1, IC * kernel[0] * kernel[1], OC)
+
+        Note: This optimization is currently only applied when all of the following conditions are met:
+        1. The stride dimensions exactly match the kernel dimensions (stride[0] == kernel[0] and stride[1] == kernel[1])
+        2. The input tensor is stored in DRAM memory
+
+        ===============================================================
         )doc");
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });

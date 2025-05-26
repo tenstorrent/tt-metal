@@ -102,6 +102,7 @@ ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-c
 ttnn/cpp/ttnn/operations/experimental/cnn/ @tenstorrent/metalium-developers-convolutions @esmalTT
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/experimental/slice_write/ @tenstorrent/metalium-developers-convolutions @sjameelTT @ntarafdar @amorrisonTT
+ttnn/cpp/ttnn/operations/experimental/padded_slice/ @tenstorrent/metalium-developers-convolutions @sjameelTT @ntarafdar @amorrisonTT
 ttnn/cpp/ttnn/operations/experimental/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT @aczajkowskiTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 ttnn/cpp/ttnn/operations/eltwise/quantization/ @wenbinlyuTT @patrickroberts @sjameelTT

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,9 @@ public:
         const Shape2D& page_shape,
         const CoreRangeSet& corerangeset,
         const ShardOrientation shard_orientation);
+
+    tt::tt_metal::Shape get_tensor_shape_in_pages() const { return page_distribution_spec_.get_tensor_shape(); }
+    tt::tt_metal::Shape get_shard_shape_in_pages() const { return page_distribution_spec_.get_shard_shape(); }
 
     size_t num_dev_pages_per_core() const {
         return page_distribution_spec_.get_shard_shape().volume() *

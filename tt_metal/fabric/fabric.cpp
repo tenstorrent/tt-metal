@@ -32,14 +32,14 @@ class Program;
 namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes() {
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     return control_plane->get_fabric_context().get_fabric_channel_buffer_size_bytes();
 }
 
 void append_fabric_connection_rt_args(
-    chip_id_t src_chip_id,
-    chip_id_t dst_chip_id,
-    uint32_t link_idx,
+    const chip_id_t src_chip_id,
+    const chip_id_t dst_chip_id,
+    const uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
@@ -50,14 +50,15 @@ void append_fabric_connection_rt_args(
         src_chip_id,
         dst_chip_id);
 
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
-    auto [src_mesh_id, src_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(src_chip_id);
-    auto [dst_mesh_id, dst_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dst_chip_id);
+    const auto [src_mesh_id, src_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(src_chip_id);
+    const auto [dst_mesh_id, dst_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dst_chip_id);
 
     const auto& fabric_context = control_plane->get_fabric_context();
-    auto topology = fabric_context.get_fabric_topology();
-    bool is_2d_fabric = topology == Topology::Mesh;
+    const auto topology = fabric_context.get_fabric_topology();
+    const bool is_2d_fabric = topology == Topology::Mesh;
+
     if (!is_2d_fabric) {
         TT_FATAL(
             src_mesh_id == dst_mesh_id,
@@ -66,33 +67,65 @@ void append_fabric_connection_rt_args(
             dst_mesh_id);
     }
 
-    auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
-    std::optional<std::set<chan_id_t>> candidate_ethernet_cores;
-    // mimic the 1d fabric connection setup steps to correctly find the candidate links
-    for (const auto& direction : routing_directions) {
-        // This assumes all neighbor chips to the dst mesh are the same
-        auto neighbors = control_plane->get_chip_neighbors(src_mesh_id, src_logical_chip_id, direction);
-        auto neighbor_mesh_chips = neighbors.find(dst_mesh_id);
-        if (neighbor_mesh_chips == neighbors.end() || neighbor_mesh_chips->second[0] != dst_logical_chip_id) {
-            continue;
+    // get the direction in which the data will be forwarded from the src_chip_id
+    std::optional<RoutingDirection> forwarding_direction;
+    if (is_2d_fabric) {
+        forwarding_direction =
+            control_plane->get_forwarding_direction(src_mesh_id, src_logical_chip_id, dst_mesh_id, dst_logical_chip_id);
+    } else {
+        // TODO: Workaround for #22524 routing tables not having wraparound links
+        // for 1D fabric, we loop to match the dst chip since we need to ensure src and dst are on the same line
+        // remove this once control plane has row/col info/view
+        for (const auto& direction : FabricContext::routing_directions) {
+            // This assumes all neighbor chips to the dst mesh are the same
+            auto neighbors = control_plane->get_chip_neighbors(src_mesh_id, src_logical_chip_id, direction);
+            auto neighbor_mesh_chips = neighbors.find(dst_mesh_id);
+            if (neighbor_mesh_chips == neighbors.end() || neighbor_mesh_chips->second[0] != dst_logical_chip_id) {
+                continue;
+            }
+
+            forwarding_direction = direction;
+            break;
         }
-
-        candidate_ethernet_cores =
-            control_plane->get_active_fabric_eth_channels_in_direction(src_mesh_id, src_logical_chip_id, direction);
-        break;
     }
-
     TT_FATAL(
-        candidate_ethernet_cores.has_value(),
-        "Could not find any fabric ethernet cores between src {} and dst {} chips",
+        forwarding_direction.has_value(),
+        "Could not find any forwarding direction from src {} to dst {}",
         src_chip_id,
         dst_chip_id);
 
-    TT_FATAL(link_idx < candidate_ethernet_cores.value().size(), "link idx out of bounds");
+    if (!is_2d_fabric) {
+        // for 1D fabric we need to check if src and dst are on the same line
+        // remove this once control plane has row/col info/view
+        auto neighbors =
+            control_plane->get_chip_neighbors(src_mesh_id, src_logical_chip_id, forwarding_direction.value());
+        auto neighbor_mesh_chips = neighbors.find(dst_mesh_id);
+        TT_FATAL(
+            neighbor_mesh_chips != neighbors.end() && neighbor_mesh_chips->second[0] == dst_logical_chip_id,
+            "dst chip {} is not an immediate neighbor of src chip {}",
+            dst_chip_id,
+            src_chip_id);
+    }
 
-    auto fabric_router_channel = get_ordered_fabric_eth_chans(src_chip_id, candidate_ethernet_cores.value())[link_idx];
-    auto router_direction =
-        control_plane->get_eth_chan_direction(src_mesh_id, src_logical_chip_id, fabric_router_channel);
+    const auto candidate_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
+        src_mesh_id, src_logical_chip_id, forwarding_direction.value());
+    TT_FATAL(
+        link_idx < candidate_eth_chans.size(),
+        "requested link idx {}, out of bounds, max available {}",
+        link_idx,
+        candidate_eth_chans.size());
+
+    const auto forwarding_links =
+        get_forwarding_link_indices_in_direction(src_chip_id, dst_chip_id, forwarding_direction.value());
+    TT_FATAL(
+        std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
+        "requested link idx {}, cannot be used for forwarding b/w src {} and dst {}",
+        link_idx,
+        src_chip_id,
+        dst_chip_id);
+
+    const auto fabric_router_channel = candidate_eth_chans[link_idx];
+    const auto router_direction = control_plane->routing_direction_to_eth_direction(forwarding_direction.value());
 
     CoreCoord fabric_router_virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
