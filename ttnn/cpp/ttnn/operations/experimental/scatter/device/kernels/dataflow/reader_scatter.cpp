@@ -92,13 +92,13 @@ FORCE_INLINE void scatter_along_whole_axis(
                                 tile_guts<index_type>(index_l1_ptr, face_x, face_y, scalar_x, scalar_y, tile_index_w);
                             // check if index value targets currently chosen input tile (tile_input)
                             // shall `index_type` be used for those variables?
-                            const uint32_t dest_tile_id_in_row = index_value / 32;
+                            const uint32_t dest_tile_id_in_row = index_value >> 5;
                             if (dest_tile_id_in_row != tile_input) {
                                 continue;
                             }
                             volatile number_type& source_value =
                                 tile_guts<number_type>(source_l1_ptr, face_x, face_y, scalar_x, scalar_y, tile_index_w);
-                            const uint32_t x_index_in_tile = index_value % 32;
+                            const uint32_t x_index_in_tile = index_value & 31;
                             const uint32_t dest_scalar_x =
                                 (x_index_in_tile < 16) ? x_index_in_tile : (x_index_in_tile - 16);
                             const uint32_t dest_face_id_x = (x_index_in_tile < 16) ? 0 : 1;

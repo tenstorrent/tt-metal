@@ -59,16 +59,8 @@ using std_type_t = typename df_to_std<df>::std_type;
 
 FORCE_INLINE uint32_t calc_offset_inside_tile(
     const std::size_t& face_x, const std::size_t& face_y, const std::size_t& scalar_x, const std::size_t& scalar_y) {
-    uint32_t offset = 0;
-
-    // choose the quarter of interest
-    if (face_x == 1 && face_y == 0) {
-        offset += TILE_FACE_HW * 1;
-    } else if (face_x == 0 && face_y == 1) {
-        offset += TILE_FACE_HW * 2;
-    } else if (face_x == 1 && face_y == 1) {
-        offset += TILE_FACE_HW * 3;
-    }
+    const uint32_t face_multiplier = ((face_y << 1) | (face_x));
+    uint32_t offset = TILE_FACE_HW * face_multiplier;
 
     offset += scalar_y * TILE_FACE_WIDTH + scalar_x;
 
@@ -90,11 +82,11 @@ FORCE_INLINE volatile T& tile_guts(
 
 FORCE_INLINE uint32_t
 get_width_scalar_index(const uint32_t& tile_id, const uint32_t& face_x, const uint32_t& scalar_x) {
-    return tile_id * tt::constants::TILE_WIDTH + face_x * (tt::constants::TILE_WIDTH / 2) + scalar_x;
+    return tile_id * tt::constants::TILE_WIDTH + face_x * (tt::constants::TILE_WIDTH >> 1) + scalar_x;
 }
 
 FORCE_INLINE uint32_t get_height_scalar_index(const uint32_t& h, const uint32_t& face_y, const uint32_t& scalar_y) {
-    return h * tt::constants::TILE_HEIGHT + face_y * (tt::constants::TILE_HEIGHT / 2) + scalar_y;
+    return h * tt::constants::TILE_HEIGHT + face_y * (tt::constants::TILE_HEIGHT >> 1) + scalar_y;
 }
 
 template <bool is_dram>
@@ -103,12 +95,6 @@ FORCE_INLINE IAGF<is_dram> make_addr_gtor(const uint32_t& cb, const uint32_t& ba
         .bank_base_address = base_addr,
         .page_size = static_cast<uint32_t>(get_tile_size(cb)),
         .data_format = get_dataformat(cb)};
-}
-
-FORCE_INLINE std::size_t calculate_ht_offset_for_core(
-    const uint32_t& Ht, const uint32_t& total_number_of_cores, const uint32_t& compute_with_storage_grid_size_x) {
-    const uint32_t core_id = get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
-    return (core_id * Ht) / total_number_of_cores;
 }
 
 struct ScatterCTAs {
