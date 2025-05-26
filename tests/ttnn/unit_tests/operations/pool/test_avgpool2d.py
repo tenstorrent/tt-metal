@@ -7,6 +7,7 @@ import ttnn
 import pytest
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_blackhole
 
 
 @pytest.fixture(scope="module")
@@ -77,6 +78,7 @@ def run_avg_pool2d(
     assert allclose, " Reference and output tensor are not close"
 
 
+@skip_for_blackhole("Nigthly CI tests failing, ticket #20492")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",  # NCHW
