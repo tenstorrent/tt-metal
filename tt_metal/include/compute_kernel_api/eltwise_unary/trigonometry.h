@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_trigonometry.h"
+#include "ckernel_sfpu_trigonometry.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -18,7 +20,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sin_tile_init() { MATH((llk_math_eltwise_unary_sfpu_sine_init<APPROX>())); }
+ALWI void sin_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::sine, APPROX>())); }
 
 // clang-format off
 /**
@@ -34,12 +36,15 @@ ALWI void sin_tile_init() { MATH((llk_math_eltwise_unary_sfpu_sine_init<APPROX>(
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void sin_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_sine_op<APPROX>(idst))); }
+ALWI void sin_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_sfpu_trig<SfpuType::sine, APPROX>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cos_tile_init() { MATH((llk_math_eltwise_unary_sfpu_cosine_init<APPROX>())); }
+ALWI void cos_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::cosine, APPROX>())); }
 
 // clang-format off
 /**
@@ -55,12 +60,15 @@ ALWI void cos_tile_init() { MATH((llk_math_eltwise_unary_sfpu_cosine_init<APPROX
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void cos_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_cosine_op<APPROX>(idst))); }
+ALWI void cos_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_sfpu_trig<SfpuType::cosine, APPROX>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void tan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tan_init<APPROX>())); }
+ALWI void tan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::tan, APPROX>())); }
 
 // clang-format off
 /**
@@ -76,5 +84,8 @@ ALWI void tan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tan_init<APPROX>()
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void tan_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_tan_op<APPROX>(idst))); }
+ALWI void tan_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_sfpu_trig<SfpuType::tan, APPROX>, idst, (int)VectorMode::RC)));
+}
 }  // namespace ckernel

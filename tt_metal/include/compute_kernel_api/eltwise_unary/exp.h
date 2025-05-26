@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_exp.h"
+#include "ckernel_sfpu_exp.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -20,7 +22,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = false>
 ALWI void exp_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_exponential_init<fast_and_approx>()));
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, fast_and_approx>(sfpu::exp_init<fast_and_approx>)));
 }
 
 // clang-format off
@@ -40,7 +42,8 @@ ALWI void exp_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void exp_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_exponential<fast_and_approx>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_params<fast_and_approx>(
+        ckernel::sfpu::calculate_exponential<fast_and_approx>, idst, (int)VectorMode::RC, 8, 0)));
 }
 
 }  // namespace ckernel

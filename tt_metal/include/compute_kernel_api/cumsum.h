@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_cumsum.h"
+#include "ckernel_sfpu_cumsum.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -34,14 +36,19 @@ namespace ckernel {
  */
  // clang-format on
 ALWI void cumsum_tile(uint32_t idst, bool first = true) {
-    MATH((llk_math_eltwise_unary_sfpu_cumsum<false>(idst, first)));  // There is only non APPROXIMATE implementation
+    MATH((llk_math_eltwise_unary_sfpu_params<false>(
+        ckernel::sfpu::calculate_cumsum<false>,  // There is only non APPROXIMATE implementation
+        idst,
+        VectorMode::RC_custom,  // Can only work in RC_custom mode
+        first)));               // There is only non APPROXIMATE implementation
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void cumsum_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_cumsum_init<false>()));  // There is only non APPROXIMATE implementation
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::cumsum, false>(
+        sfpu::cumsum_init<false>)));  // There is only non APPROXIMATE implementation
 }
 
 }  // namespace ckernel

@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_typecast.h"
+#include "ckernel_sfpu_typecast.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -52,12 +54,116 @@ namespace ckernel {
  // clang-format on
 template <uint32_t IN_DTYPE, uint32_t OUT_DTYPE>
 ALWI void typecast_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_typecast<APPROX, IN_DTYPE, OUT_DTYPE>(idst)));
+    MATH(({
+        if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float16_b && OUT_DTYPE == (uint32_t)DataFormat::UInt16) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_uint16<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt16 && OUT_DTYPE == (uint32_t)DataFormat::Float16_b) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_uint16_to_fp16b<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Int32 && OUT_DTYPE == (uint32_t)DataFormat::Float16_b) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_int32_to_fp16b<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float16_b && OUT_DTYPE == (uint32_t)DataFormat::Int32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_int32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (
+            IN_DTYPE == (uint32_t)DataFormat::Float16_b && OUT_DTYPE == (uint32_t)DataFormat::Float32) {
+            // no SFPU kernel needed, handled by packer
+        } else if constexpr (
+            IN_DTYPE == (uint32_t)DataFormat::Float32 && OUT_DTYPE == (uint32_t)DataFormat::Float16_b) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp32_to_fp16b<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float32 && OUT_DTYPE == (uint32_t)DataFormat::UInt16) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_uint16<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt16 && OUT_DTYPE == (uint32_t)DataFormat::Float32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_uint16_to_fp32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float32 && OUT_DTYPE == (uint32_t)DataFormat::Int32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_int32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Int32 && OUT_DTYPE == (uint32_t)DataFormat::Float32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_int32_to_fp32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp8_b && OUT_DTYPE == (uint32_t)DataFormat::UInt16) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_uint16<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt16 && OUT_DTYPE == (uint32_t)DataFormat::Bfp8_b) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_uint16_to_fp16b<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp8_b && OUT_DTYPE == (uint32_t)DataFormat::Int32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_int32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Int32 && OUT_DTYPE == (uint32_t)DataFormat::Bfp8_b) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_int32_to_fp16b<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float16_b && OUT_DTYPE == (uint32_t)DataFormat::UInt32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_uint32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt32 && OUT_DTYPE == (uint32_t)DataFormat::Float16_b) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_uint32_to_fp16b<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float32 && OUT_DTYPE == (uint32_t)DataFormat::UInt32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_uint32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt32 && OUT_DTYPE == (uint32_t)DataFormat::Float32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_uint32_to_fp32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp8_b && OUT_DTYPE == (uint32_t)DataFormat::UInt32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_uint32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt32 && OUT_DTYPE == (uint32_t)DataFormat::Bfp8_b) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_uint32_to_fp16b<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt16 && OUT_DTYPE == (uint32_t)DataFormat::UInt32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_uint16_to_uint32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp8_b && OUT_DTYPE == (uint32_t)DataFormat::Float16_b) {
+            // no SFPU kernel needed, handled by unpacker
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float16_b && OUT_DTYPE == (uint32_t)DataFormat::Bfp8_b) {
+            // no SFPU kernel needed, handled by packer
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp8_b && OUT_DTYPE == (uint32_t)DataFormat::Float32) {
+            // no SFPU kernel needed, handled by unpacker/packer
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float32 && OUT_DTYPE == (uint32_t)DataFormat::Bfp8_b) {
+            // no SFPU kernel needed, handled by packer
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp4_b && OUT_DTYPE == (uint32_t)DataFormat::UInt16) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_uint16<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt16 && OUT_DTYPE == (uint32_t)DataFormat::Bfp4_b) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_uint16_to_fp16b<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp4_b && OUT_DTYPE == (uint32_t)DataFormat::Int32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_int32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Int32 && OUT_DTYPE == (uint32_t)DataFormat::Bfp4_b) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_int32_to_fp16b<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp4_b && OUT_DTYPE == (uint32_t)DataFormat::UInt32) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_fp16b_to_uint32<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::UInt32 && OUT_DTYPE == (uint32_t)DataFormat::Bfp4_b) {
+            llk_math_eltwise_unary_sfpu_params<APPROX>(
+                ckernel::sfpu::calculate_typecast_uint32_to_fp16b<APPROX, 8>, idst, (int)VectorMode::RC);
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp4_b && OUT_DTYPE == (uint32_t)DataFormat::Float16_b) {
+            // no SFPU kernel needed, handled by unpacker
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float16_b && OUT_DTYPE == (uint32_t)DataFormat::Bfp4_b) {
+            // no SFPU kernel needed, handled by packer
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp4_b && OUT_DTYPE == (uint32_t)DataFormat::Bfp8_b) {
+            // no SFPU kernel needed, handled by unpacker
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp8_b && OUT_DTYPE == (uint32_t)DataFormat::Bfp4_b) {
+            // no SFPU kernel needed, handled by packer
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Bfp4_b && OUT_DTYPE == (uint32_t)DataFormat::Float32) {
+            // no SFPU kernel needed, handled by unpacker/packer
+        } else if constexpr (IN_DTYPE == (uint32_t)DataFormat::Float32 && OUT_DTYPE == (uint32_t)DataFormat::Bfp4_b) {
+            // no SFPU kernel needed, handled by packer
+        }
+    }));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void typecast_tile_init() { MATH((llk_math_eltwise_unary_sfpu_typecast_init<APPROX>())); }
+ALWI void typecast_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROX>())); }
 
 }  // namespace ckernel

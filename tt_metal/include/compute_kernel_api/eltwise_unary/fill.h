@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_fill.h"
+#include "ckernel_sfpu_fill.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -29,7 +31,10 @@ namespace ckernel {
  * | param0          | The value the output is if the input is greater than 0                     | float    |                                                       | True     |
  */
 // clang-format on
-ALWI void fill_tile(uint32_t idst, float param0) { MATH((llk_math_eltwise_unary_sfpu_fill<APPROX>(idst, param0))); }
+ALWI void fill_tile(uint32_t idst, float param0) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_fill<APPROX>, idst, (int)VectorMode::RC, param0)));
+}
 
 // clang-format off
 /**
@@ -46,11 +51,12 @@ ALWI void fill_tile(uint32_t idst, float param0) { MATH((llk_math_eltwise_unary_
  */
 // clang-format on
 ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_fill_bitcast<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_fill_bitcast<APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void fill_tile_init() { MATH((llk_math_eltwise_unary_sfpu_fill_init<APPROX>())); }
+ALWI void fill_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::fill, APPROX>())); }
 
 }  // namespace ckernel

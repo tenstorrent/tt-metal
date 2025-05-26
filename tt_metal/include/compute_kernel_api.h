@@ -58,7 +58,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = true>
 ALWI void rsqrt_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_rsqrt_init<fast_and_approx>()));
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt, fast_and_approx>(sfpu::rsqrt_init<fast_and_approx>)));
 }
 
 // clang-format off
@@ -78,7 +78,8 @@ ALWI void rsqrt_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void rsqrt_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_rsqrt<fast_and_approx>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_params<fast_and_approx>(
+        ckernel::sfpu::calculate_rsqrt<fast_and_approx, 8, 25>, idst, (int)VectorMode::RC)));
 }
 
 /**
@@ -87,7 +88,7 @@ ALWI void rsqrt_tile(uint32_t idst) {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void sigmoid_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid_init<fast_and_approx>()));
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::sigmoid, fast_and_approx>(sfpu::sigmoid_init<fast_and_approx>)));
 }
 
 // clang-format off
@@ -106,14 +107,15 @@ ALWI void sigmoid_tile_init() {
 // clang-format on
 template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx>(idst, vec_mode)));
+    MATH((llk_math_eltwise_unary_sfpu_params<fast_and_approx>(
+        ckernel::sfpu::calculate_sigmoid<fast_and_approx>, idst, vec_mode)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void log_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log_init<APPROX>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::log, APPROX>(sfpu::log_init<APPROX>)));  // TODO(AP): move out init
 }
 
 // clang-format off
@@ -130,13 +132,17 @@ ALWI void log_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void log_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_log<APPROX>(idst))); }
+ALWI void log_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_log<APPROX, false>, idst, (int)VectorMode::RC, 0)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void log_with_base_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log_with_base_init<APPROX>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::log_with_base, APPROX>(
+        sfpu::log_init<APPROX>)));  // TODO(AP): move out init
 }
 
 // clang-format off
@@ -155,7 +161,8 @@ ALWI void log_with_base_tile_init() {
  */
 // clang-format on
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
-    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX>(idst, base_scale)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_log<APPROX, true>, idst, (int)VectorMode::RC, base_scale)));
 }
 
 // TODO: Move to trigonometry.h
@@ -163,7 +170,8 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
  * Please refer to documentation for any_init.
  */
 ALWI void tanh_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_tanh_init<APPROX>()));  // TODO(AP): move out init
+    MATH((
+        llk_math_eltwise_unary_sfpu_init<SfpuType::tanh, APPROX>(sfpu::tanh_init<APPROX>)));  // TODO(AP): move out init
 }
 
 
@@ -182,12 +190,15 @@ ALWI void tanh_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void tanh_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_tanh<APPROX>(idst))); }
+ALWI void tanh_tile(uint32_t idst) {
+    MATH(
+        (llk_math_eltwise_unary_sfpu_params<APPROX>(ckernel::sfpu::calculate_tanh<APPROX>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void signbit_tile_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_init<APPROX>())); }
+ALWI void signbit_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::signbit, APPROX>())); }
 
 // clang-format off
 /**
@@ -203,7 +214,10 @@ ALWI void signbit_tile_init() { MATH((llk_math_eltwise_unary_sfpu_signbit_init<A
  * | idst            | The index of the tile in DST register buffer to modify the sign bit of     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void signbit_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_signbit<APPROX>(idst))); }
+ALWI void signbit_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_signbit<APPROX>, idst, (int)VectorMode::RC)));
+}
 
 // clang-format off
 /**
@@ -219,12 +233,14 @@ ALWI void signbit_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_signbi
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void abs_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs<APPROX>(idst))); }
+ALWI void abs_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(ckernel::sfpu::calculate_abs<APPROX>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_abs_init<APPROX>())); }
+ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::abs, APPROX>())); }
 
 // clang-format off
 /**
@@ -242,7 +258,10 @@ ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_abs_init<APPROX>()
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void abs_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs_int32<APPROX>(idst))); }
+ALWI void abs_tile_int32(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_abs_int32<APPROX>, idst, (int)VectorMode::RC)));
+}
 
 // clang-format off
 /**
@@ -258,12 +277,15 @@ ALWI void abs_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs_
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void sign_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_sign<APPROX>(idst))); }
+ALWI void sign_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_sign<APPROX>, idst, (int)VectorMode::RC, 1)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_sign_init<APPROX>())); }
+ALWI void sign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::sign, APPROX>())); }
 
 // clang-format off
 /**
@@ -279,12 +301,15 @@ ALWI void sign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_sign_init<APPROX>
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void square_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_square<APPROX>(idst))); }
+ALWI void square_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_square<APPROX>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void square_tile_init() { MATH((llk_math_eltwise_unary_sfpu_square_init<APPROX>())); }
+ALWI void square_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::square, APPROX>())); }
 
 // compare to zero operators
 
@@ -302,7 +327,10 @@ ALWI void square_tile_init() { MATH((llk_math_eltwise_unary_sfpu_square_init<APP
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void ltz_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_ltz<APPROX>(idst))); }
+ALWI void ltz_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp<APPROX, SfpuType::less_than_zero>, idst, (int)VectorMode::RC, 8)));
+}
 
 // clang-format off
 /**
@@ -318,12 +346,15 @@ ALWI void ltz_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_ltz<APPROX
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void ltz_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_ltz_int32<APPROX>(idst))); }
+ALWI void ltz_tile_int32(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::less_than_zero>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void ltz_tile_init() { MATH((llk_math_eltwise_unary_sfpu_ltz_init<APPROX>())); }
+ALWI void ltz_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::less_than_zero, APPROX>())); }
 
 // clang-format off
 /**
@@ -339,7 +370,10 @@ ALWI void ltz_tile_init() { MATH((llk_math_eltwise_unary_sfpu_ltz_init<APPROX>()
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void eqz_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_eqz<APPROX>(idst))); }
+ALWI void eqz_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp<APPROX, SfpuType::equal_zero>, idst, (int)VectorMode::RC, 8)));
+}
 
 // clang-format off
 /**
@@ -355,12 +389,15 @@ ALWI void eqz_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_eqz<APPROX
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void eqz_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_eqz_int32<APPROX>(idst))); }
+ALWI void eqz_tile_int32(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::equal_zero>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void eqz_tile_init() { MATH((llk_math_eltwise_unary_sfpu_eqz_init<APPROX>())); }
+ALWI void eqz_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::equal_zero, APPROX>())); }
 
 // clang-format off
 /**
@@ -376,7 +413,10 @@ ALWI void eqz_tile_init() { MATH((llk_math_eltwise_unary_sfpu_eqz_init<APPROX>()
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void lez_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_lez<APPROX>(idst))); }
+ALWI void lez_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp<APPROX, SfpuType::less_than_equal_zero>, idst, (int)VectorMode::RC, 8)));
+}
 
 // clang-format off
 /**
@@ -392,12 +432,15 @@ ALWI void lez_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_lez<APPROX
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void lez_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_lez_int32<APPROX>(idst))); }
+ALWI void lez_tile_int32(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::less_than_equal_zero>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lez_tile_init() { MATH((llk_math_eltwise_unary_sfpu_lez_init<APPROX>())); }
+ALWI void lez_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::less_than_equal_zero, APPROX>())); }
 
 // clang-format off
 /**
@@ -413,12 +456,15 @@ ALWI void lez_tile_init() { MATH((llk_math_eltwise_unary_sfpu_lez_init<APPROX>()
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void tiled_prod_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_tiled_prod<APPROX>(idst))); }
+ALWI void tiled_prod_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_tiled_prod<APPROX>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tiled_prod_init<APPROX>())); }
+ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::tiled_prod, APPROX>())); }
 
 // clang-format off
 /**
@@ -434,7 +480,10 @@ ALWI void tiled_prod_tile_init() { MATH((llk_math_eltwise_unary_sfpu_tiled_prod_
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void gtz_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_gtz<APPROX>(idst))); }
+ALWI void gtz_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp<APPROX, SfpuType::greater_than_zero>, idst, (int)VectorMode::RC, 8)));
+}
 
 // clang-format off
 /**
@@ -450,12 +499,15 @@ ALWI void gtz_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_gtz<APPROX
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void gtz_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_gtz_int32<APPROX>(idst))); }
+ALWI void gtz_tile_int32(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::greater_than_zero>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void gtz_tile_init() { MATH((llk_math_eltwise_unary_sfpu_gtz_init<APPROX>())); }
+ALWI void gtz_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::greater_than_zero, APPROX>())); }
 
 // clang-format off
 /**
@@ -471,7 +523,10 @@ ALWI void gtz_tile_init() { MATH((llk_math_eltwise_unary_sfpu_gtz_init<APPROX>()
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void nez_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_nez<APPROX>(idst))); }
+ALWI void nez_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp<APPROX, SfpuType::not_equal_zero>, idst, (int)VectorMode::RC, 8)));
+}
 
 // clang-format off
 /**
@@ -487,12 +542,15 @@ ALWI void nez_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_nez<APPROX
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void nez_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_nez_int32<APPROX>(idst))); }
+ALWI void nez_tile_int32(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::not_equal_zero>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void nez_tile_init() { MATH((llk_math_eltwise_unary_sfpu_nez_init<APPROX>())); }
+ALWI void nez_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::not_equal_zero, APPROX>())); }
 
 // clang-format off
 /**
@@ -508,7 +566,10 @@ ALWI void nez_tile_init() { MATH((llk_math_eltwise_unary_sfpu_nez_init<APPROX>()
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void gez_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_gez<APPROX>(idst))); }
+ALWI void gez_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp<APPROX, SfpuType::greater_than_equal_zero>, idst, (int)VectorMode::RC, 8)));
+}
 
 // clang-format off
 /**
@@ -524,12 +585,15 @@ ALWI void gez_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_gez<APPROX
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void gez_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_gez_int32<APPROX>(idst))); }
+ALWI void gez_tile_int32(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp_int<APPROX, SfpuType::greater_than_equal_zero>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void gez_tile_init() { MATH((llk_math_eltwise_unary_sfpu_gez_init<APPROX>())); }
+ALWI void gez_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::greater_than_equal_zero, APPROX>())); }
 
 // POWER : y = x^(const param0)
 // clang-format off
@@ -548,13 +612,14 @@ ALWI void gez_tile_init() { MATH((llk_math_eltwise_unary_sfpu_gez_init<APPROX>()
  */
 // clang-format on
 ALWI void power_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_power<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_power_iterative<APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPROX>())); }
+ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::power, APPROX>())); }
 
 // clang-format off
 // MAX : y = max(idst0, idst1)
@@ -576,12 +641,15 @@ ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPRO
  * | idst1           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void max_tile(uint32_t idst0, uint32_t idst1) { MATH((llk_math_eltwise_unary_sfpu_max<APPROX>(idst0))); }
+ALWI void max_tile(uint32_t idst0, uint32_t idst1) {
+    MATH(
+        (llk_math_eltwise_unary_sfpu_params<APPROX>(ckernel::sfpu::calculate_max<APPROX>, idst0, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_max_init<APPROX>())); }
+ALWI void max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::max, APPROX>())); }
 
 // clang-format off
 // exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]
@@ -598,12 +666,14 @@ ALWI void max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_max_init<APPROX>()
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void exp2_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_exp2<true>(idst))); }
+ALWI void exp2_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<true>(ckernel::sfpu::calculate_exp2<true>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void exp2_tile_init() { MATH((llk_math_eltwise_unary_sfpu_exp2_init<true>())); }
+ALWI void exp2_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exp2, true>(sfpu::exp2_init<true>))); }
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off
@@ -622,13 +692,14 @@ ALWI void exp2_tile_init() { MATH((llk_math_eltwise_unary_sfpu_exp2_init<true>()
  */
 // clang-format on
 ALWI void heaviside_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_heaviside<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_heaviside<APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void heaviside_tile_init() { MATH((llk_math_eltwise_unary_sfpu_heaviside_init<APPROX>())); }
+ALWI void heaviside_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::heaviside, APPROX>())); }
 
 // unary ne : if x != value --> 1.0, else 0.0
 // clang-format off
@@ -647,13 +718,14 @@ ALWI void heaviside_tile_init() { MATH((llk_math_eltwise_unary_sfpu_heaviside_in
  */
 // clang-format on
 ALWI void unary_ne_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_ne<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_unary_ne<APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_ne_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_ne_init<APPROX>())); }
+ALWI void unary_ne_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unary_ne, APPROX>())); }
 
 // unary ne : if x != value --> 1, else 0
 // clang-format off
@@ -672,7 +744,8 @@ ALWI void unary_ne_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_ne_init
  */
 // clang-format on
 ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_ne_int32<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp_unary_int<APPROX, SfpuType::unary_ne>, idst, (int)VectorMode::RC, param0)));
 }
 
 // unary eq : if x == value --> 1.0, else 0.0
@@ -692,13 +765,14 @@ ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_eq_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_eq<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_unary_eq<APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_eq_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_eq_init<APPROX>())); }
+ALWI void unary_eq_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unary_eq, APPROX>())); }
 
 // unary eq : if x == value --> 1, else 0
 // clang-format off
@@ -717,7 +791,8 @@ ALWI void unary_eq_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_eq_init
  */
 // clang-format on
 ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_eq_int32<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_comp_unary_int<APPROX, SfpuType::unary_eq>, idst, (int)VectorMode::RC, param0)));
 }
 
 // expm1 : (exp(x) - 1)
@@ -735,12 +810,14 @@ ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void expm1_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_expm1<true>(idst))); }
+ALWI void expm1_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<true>(ckernel::sfpu::calculate_expm1<true>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void expm1_tile_init() { MATH((llk_math_eltwise_unary_sfpu_expm1_init<true>())); }
+ALWI void expm1_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::expm1, true>(sfpu::expm1_init<true>))); }
 
 // TODO: move to trigonometry.h
 // clang-format off
@@ -757,13 +834,15 @@ ALWI void expm1_tile_init() { MATH((llk_math_eltwise_unary_sfpu_expm1_init<true>
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void asin_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_asin<true>(idst))); }
+ALWI void asin_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<true>(ckernel::sfpu::calculate_asin<true>, idst, (int)VectorMode::RC)));
+}
 
 // TODO: move to trigonometry.h
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void asin_tile_init() { MATH((llk_math_eltwise_unary_sfpu_asin_init<true>())); }
+ALWI void asin_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::asin, true>())); }
 
 // TODO: move to trigonometry.h
 // clang-format off
@@ -780,13 +859,15 @@ ALWI void asin_tile_init() { MATH((llk_math_eltwise_unary_sfpu_asin_init<true>()
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void atan_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_atan<true>(idst))); }
+ALWI void atan_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<true>(ckernel::sfpu::calculate_atan<true>, idst, (int)VectorMode::RC)));
+}
 
 // TODO: move to trigonometry.h
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void atan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_atan_init<true>())); }
+ALWI void atan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::atan, true>(sfpu::atan_init<true>))); }
 
 // TODO: move to trigonometry.h
 // clang-format off
@@ -803,21 +884,26 @@ ALWI void atan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_atan_init<true>()
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void acos_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_acos<true>(idst))); }
+ALWI void acos_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<true>(ckernel::sfpu::calculate_acos<true>, idst, (int)VectorMode::RC)));
+}
 
 // TODO: move to trigonometry.h
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void acos_tile_init() { MATH((llk_math_eltwise_unary_sfpu_acos_init<true>())); }
+ALWI void acos_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::acos, true>())); }
 
 // silu
 // Function SILU (same as Swish)
 // use activation Silu[x] = x*Sigmoid[x]
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
-ALWI void silu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_silu<APPROX>(idst))); }
+ALWI void silu_tile(uint32_t idst) {
+    MATH(
+        (llk_math_eltwise_unary_sfpu_params<APPROX>(ckernel::sfpu::calculate_silu<APPROX>, idst, (int)VectorMode::RC)));
+}
 
-ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>())); }
+ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::silu, APPROX>())); }
 
 // topK local sort
 // clang-format off
@@ -860,8 +946,15 @@ ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>
 // clang-format on
 ALWI void topk_local_sort(
     uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<true>(
-        idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step)));
+    MATH((llk_math_eltwise_unary_sfpu_params<true>(
+        ckernel::sfpu::calculate_bitonic_topk_phases_steps<true>,
+        idst,
+        (int)VectorMode::RC_custom,
+        idir,
+        i_end_phase,
+        i_start_phase,
+        i_end_step,
+        i_start_step)));
 }
 
 // topK merge
@@ -896,7 +989,8 @@ ALWI void topk_local_sort(
 // clang-format on
 template <bool idir = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, idir>(idst, m_iter, k)));
+    MATH((llk_math_eltwise_unary_sfpu_params<true>(
+        ckernel::sfpu::calculate_bitonic_topk_merge<true, idir>, idst, (int)VectorMode::RC_custom, m_iter, k)));
 }
 
 // topK rebuild
@@ -932,13 +1026,23 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
  */
 // clang-format on
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_rebuild<true>(idst, idir, m_iter, k, logk, skip_second)));
+    MATH((llk_math_eltwise_unary_sfpu_params<true>(
+        ckernel::sfpu::calculate_bitonic_topk_rebuild<true>,
+        idst,
+        (int)VectorMode::RC_custom,
+        idir,
+        m_iter,
+        k,
+        logk,
+        skip_second)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>())); }
+ALWI void topk_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::topk_local_sort, true>(sfpu::topk_init<true>)));
+}
 
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
@@ -995,13 +1099,14 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
  */
 // clang-format on
 ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_max<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_unary_max_min<true, APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_init<APPROX>())); }
+ALWI void unary_max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unary_max, APPROX>())); }
 
 // unary gt : if x > value --> 1.0, else 0.0
 // clang-format off
@@ -1020,13 +1125,14 @@ ALWI void unary_max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_max_in
  */
 // clang-format on
 ALWI void unary_gt_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_gt<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_unary_gt<APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_gt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_gt_init<APPROX>())); }
+ALWI void unary_gt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unary_gt, APPROX>())); }
 
 // unary lt : if x < value --> 1.0, else 0.0
 // clang-format off
@@ -1045,13 +1151,14 @@ ALWI void unary_gt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_gt_init
  */
 // clang-format on
 ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_lt<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_unary_lt<APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_lt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_lt_init<APPROX>())); }
+ALWI void unary_lt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unary_lt, APPROX>())); }
 
 // clang-format off
 /**
@@ -1069,13 +1176,16 @@ ALWI void unary_lt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_lt_init
  */
 // clang-format on
 ALWI void alt_complex_rotate90_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90<APPROX>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_alt_complex_rotate90<APPROX>, idst, (int)VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void alt_complex_rotate90_tile_init() { MATH((llk_math_eltwise_unary_sfpu_alt_complex_rotate90_init<APPROX>())); }
+ALWI void alt_complex_rotate90_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::alt_complex_rotate90, APPROX>()));
+}
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -1094,13 +1204,14 @@ ALWI void alt_complex_rotate90_tile_init() { MATH((llk_math_eltwise_unary_sfpu_a
  */
 // clang-format on
 ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_min<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_unary_max_min<false, APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_min_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_min_init<APPROX>())); }
+ALWI void unary_min_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unary_min, APPROX>())); }
 
 ALWI uint32_t get_compute_special_value_flags() {
     uint32_t ret_val = 0;

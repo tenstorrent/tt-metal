@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_reverseops.h"
+#include "ckernel_reverseops.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -38,11 +40,16 @@ namespace ckernel {
  * | param0         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
  */
  // clang-format on
-ALWI void rsub_tile(uint32_t idst, uint32_t param0) { MATH((llk_math_eltwise_unary_sfpu_rsub<APPROX>(idst, param0))); }
+ALWI void rsub_tile(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_rsub<APPROX, 8>, idst, (int)VectorMode::RC, param0)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rsub_init<APPROX>())); }
+ALWI void rsub_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROX>(sfpu::rsub_init<APPROX>)));
+}
 
 }  // namespace ckernel

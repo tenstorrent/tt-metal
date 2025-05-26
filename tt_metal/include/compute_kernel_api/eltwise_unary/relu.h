@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_relu.h"
+#include "ckernel_sfpu_relu.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -31,13 +33,14 @@ namespace ckernel {
  */
  // clang-format on
 ALWI void relu_max_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_relu_max<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::relu_max<APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void relu_max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_relu_max_init<APPROX>())); }
+ALWI void relu_max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::relu_max, APPROX>())); }
 
 // clang-format off
 /**
@@ -55,13 +58,14 @@ ALWI void relu_max_tile_init() { MATH((llk_math_eltwise_unary_sfpu_relu_max_init
  */
  // clang-format on
 ALWI void relu_min_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_relu_min<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::relu_min<APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void relu_min_tile_init() { MATH((llk_math_eltwise_unary_sfpu_relu_min_init<APPROX>())); }
+ALWI void relu_min_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROX>())); }
 
 // clang-format off
 /**
@@ -77,12 +81,14 @@ ALWI void relu_min_tile_init() { MATH((llk_math_eltwise_unary_sfpu_relu_min_init
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void relu_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_relu<APPROX>(idst))); }
+ALWI void relu_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(ckernel::sfpu::relu_min<APPROX>, idst, (int)VectorMode::RC, 0)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void relu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_relu_init<APPROX>())); }
+ALWI void relu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min, APPROX>())); }
 
 // clang-format off
 /**
@@ -100,12 +106,13 @@ ALWI void relu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_relu_init<APPROX>
  */
  // clang-format on
 ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope) {
-    MATH((llk_math_eltwise_unary_sfpu_lrelu<APPROX>(idst, slope)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_lrelu<APPROX>, idst, (int)VectorMode::RC, slope)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void leaky_relu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_lrelu_init<APPROX>())); }
+ALWI void leaky_relu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::lrelu, APPROX>())); }
 
 }  // namespace ckernel

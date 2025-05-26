@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_erf_erfc.h"
+#include "ckernel_sfpu_erf_erfc.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -21,7 +23,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = true>
 ALWI void erf_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_erf_init<fast_and_approx>()));
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::erf, fast_and_approx>()));
 }
 
 // clang-format off
@@ -40,7 +42,8 @@ ALWI void erf_tile_init() {
  // clang-format on
 template <bool fast_and_approx = true>
 ALWI void erf_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_erf<fast_and_approx>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_params<fast_and_approx>(
+        ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erf, fast_and_approx>, idst, (int)VectorMode::RC)));
 }
 
 /************** ERFC *****************/
@@ -50,7 +53,7 @@ ALWI void erf_tile(uint32_t idst) {
  */
 template <bool fast_and_approx = true>
 ALWI void erfc_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_erfc_init<fast_and_approx>()));
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::erfc, fast_and_approx>()));
 }
 
 // clang-format off
@@ -69,7 +72,8 @@ ALWI void erfc_tile_init() {
  // clang-format on
 template <bool fast_and_approx = true>
 ALWI void erfc_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_erfc<fast_and_approx>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_params<fast_and_approx>(
+        ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erfc, fast_and_approx>, idst, (int)VectorMode::RC)));
 }
 
 }  // namespace ckernel

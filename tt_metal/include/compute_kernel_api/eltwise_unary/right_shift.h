@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_right_shift.h"
+#include "ckernel_sfpu_right_shift.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -31,12 +33,13 @@ namespace ckernel {
  */
  // clang-format on
 ALWI void right_shift_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_right_shift<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_right_shift<APPROX>, idst, (int)VectorMode::RC, param0)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void right_shift_tile_init() { MATH((llk_math_eltwise_unary_sfpu_right_shift_init<APPROX>())); }
+ALWI void right_shift_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::right_shift, APPROX>())); }
 
 }  // namespace ckernel

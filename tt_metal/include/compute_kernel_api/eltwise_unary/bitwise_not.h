@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_bitwise_not.h"
+#include "ckernel_sfpu_bitwise_not.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -29,11 +31,14 @@ namespace ckernel {
  * | idst            | The index of the tile in DST register buffer to modify the computation of  | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
  // clang-format on
-ALWI void bitwise_not_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_bitwise_not<APPROX>(idst))); }
+ALWI void bitwise_not_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_bitwise_not<APPROX>, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_not_tile_init() { MATH((llk_math_eltwise_unary_sfpu_bitwise_not_init<APPROX>())); }
+ALWI void bitwise_not_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::bitwise_not, APPROX>())); }
 
 }  // namespace ckernel

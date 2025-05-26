@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_dropout.h"
+#include "ckernel_sfpu_dropout.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -32,12 +34,15 @@ namespace ckernel {
  */
  // clang-format on
 ALWI void dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_factor) {
-    MATH((llk_math_eltwise_unary_sfpu_dropout<APPROX>(idst, probability, scale_factor)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_dropout<APPROX>, idst, (int)VectorMode::RC, probability, scale_factor)));
 }
 
 /**
  * This init should be called once in kernel
  */
-ALWI void dropout_kernel_init(uint32_t seed) { MATH((llk_math_eltwise_unary_sfpu_dropout_init<APPROX>(seed))); }
+ALWI void dropout_kernel_init(uint32_t seed) {
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::dropout, APPROX>(sfpu::dropout_init<APPROX>, seed)));
+}
 
 }  // namespace ckernel
