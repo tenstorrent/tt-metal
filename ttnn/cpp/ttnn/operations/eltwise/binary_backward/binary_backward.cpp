@@ -358,6 +358,16 @@ std::vector<ttnn::Tensor> ExecuteBackwardLogaddexp2::invoke(
     const Tensor& input_a,
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        !(input_a.dtype() == ttnn::DataType::BFLOAT8_B || grad.dtype() == ttnn::DataType::BFLOAT8_B ||
+          other.dtype() == ttnn::DataType::BFLOAT8_B),
+        "BFLOAT8_B dtypes are not supported !!");
+
+    TT_FATAL(
+        !(input_a.dtype() == ttnn::DataType::BFLOAT4_B || grad.dtype() == ttnn::DataType::BFLOAT4_B ||
+          other.dtype() == ttnn::DataType::BFLOAT4_B),
+        "BFLOAT4_B dtypes are not supported !!");
+
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor oppow = ttnn::add(
