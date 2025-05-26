@@ -177,7 +177,6 @@ class TtConv:
                 )
                 else self.compute_config
             ),
-            # compute_config=self.compute_config,
             groups=self.groups,
             memory_config=ttnn.L1_MEMORY_CONFIG if self.change_shard == True else None,
             return_weights_and_bias=True,
