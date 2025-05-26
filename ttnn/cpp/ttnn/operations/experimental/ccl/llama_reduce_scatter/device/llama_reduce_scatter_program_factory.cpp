@@ -217,6 +217,10 @@ uint32_t max_shards_per_worker(const std::vector<std::vector<ReadRequest>>& sche
     }
     return max_shards_per_worker;
 }
+CoreRangeSet get_llama_ccl_cores() {
+    // We externally reserve this core range for CCL cores
+    return CoreRangeSet(CoreRange({1, 6}, {2, 7}));
+}
 
 CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_t num_workers, bool row_wise) {
     CoreRangeSet worker_cores;
@@ -396,7 +400,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
         num_packets_total_per_device,
         input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    auto available_cores = sub_device_cores.subtract(packet_worker_cores_grid);
+    auto available_cores = detail::get_llama_ccl_cores();
 
     auto sender_core_grid = detail::get_worker_cores(
         available_cores, num_workers_per_link * num_links, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
