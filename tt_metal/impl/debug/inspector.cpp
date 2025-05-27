@@ -291,6 +291,7 @@ void Inspector::program_set_binary_status(
         auto& instance = Inspector::instance();
         std::lock_guard<std::mutex> lock(instance.programs_mutex);
         auto& program_data = instance.programs_data[program->get_id()];
+        program_data.binary_status_per_device[device_id] = status;
         instance.logger.log_program_binary_status_change(program_data, device_id, status);
     }
     catch (const std::exception& e) {

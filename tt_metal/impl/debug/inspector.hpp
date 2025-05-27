@@ -32,6 +32,7 @@ namespace inspector {
         time_point compile_started_timestamp;
         time_point compile_finished_timestamp;
         std::unordered_map<int, KernelData> kernels;
+        std::unordered_map<std::size_t, ProgramBinaryStatus> binary_status_per_device;
     };
 
     class Logger {
