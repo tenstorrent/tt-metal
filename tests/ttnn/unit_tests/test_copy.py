@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@ from models.utility_functions import skip_for_grayskull
 
 
 # Test for int types
-@skip_for_grayskull()
 @pytest.mark.parametrize("shape", [[1, 1, 32, 256], [64, 64], [9, 32, 768], [128]])
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32])
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
@@ -30,7 +29,7 @@ def test_copy(shape, layout, dtype, device):
 
     ttnn.copy(input, input_b)
     assert input_b.shape == input.shape
-    assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(input_b), 0.99)
+    assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(input_b), 1)
 
 
 # Test for block sharding
@@ -83,7 +82,7 @@ def test_copy_block_sharded(device, shape, shard_scheme, dtype):
     ttnn.copy(input_tensor, output_tensor)
     input_tensor = ttnn.to_torch(input_tensor)
     outout_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(input_tensor, outout_tensor, 0.99)
+    assert_with_pcc(input_tensor, outout_tensor, 1)
 
 
 # Test for width sharding
@@ -140,7 +139,7 @@ def test_copy_width_sharded(device, shape, shard_scheme, dtype):
     ttnn.copy(input_tensor, output_tensor)
     input_tensor = ttnn.to_torch(input_tensor)
     outout_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(input_tensor, outout_tensor, 0.99)
+    assert_with_pcc(input_tensor, outout_tensor, 1)
 
 
 # Test for height sharding
@@ -198,4 +197,4 @@ def test_copy_height_sharded(device, shape, shard_scheme, dtype):
     ttnn.copy(input_tensor, output_tensor)
     input_tensor = ttnn.to_torch(input_tensor)
     outout_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(input_tensor, outout_tensor, 0.99)
+    assert_with_pcc(input_tensor, outout_tensor, 1)
