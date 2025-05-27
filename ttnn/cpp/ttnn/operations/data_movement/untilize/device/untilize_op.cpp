@@ -36,6 +36,18 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
 
     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
 
+    if (this->sub_core_grids.has_value()) {
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Input memory layout must be interleaved when sub_core_grid argument provided");
+        TT_FATAL(
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Output memory layout must be interleaved when sub_core_grid argument provided");
+        TT_FATAL(
+            this->use_multicore == true,
+            "sub_core_grid implementation only supported when use_multicore flag argument is set to true");
+    }
+
     /* TODO (GR): Cleanup
      * Allowed Configs:
      * - height shard -> height shard (multicore)
@@ -164,7 +176,7 @@ operation::ProgramWithCallbacks Untilize::create_program(
             this->fp32_dest_acc_en,
             this->sub_core_grids.value());
     }
-    if (!this->enough_space_height) {
+    if (!this->enough_space_height && !input_tensor_a.is_sharded() && !output_tensor.is_sharded()) {
         return detail::untilize_multi_core_block(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
