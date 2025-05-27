@@ -79,7 +79,7 @@ std::vector<uint32_t> read_control_buffer_from_core(
                 distributed::FDMeshCommandQueue& mesh_cq =
                     dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
-                distributed::DeviceMemoryAddress address = {
+                const distributed::DeviceMemoryAddress address = {
                     device_coord, core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
                 control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
                 mesh_cq.enqueue_read_shard_from_core(
@@ -126,7 +126,7 @@ void write_control_buffer_to_core(
                 distributed::FDMeshCommandQueue& mesh_cq =
                     dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
-                distributed::DeviceMemoryAddress address = {
+                const distributed::DeviceMemoryAddress address = {
                     device_coord, core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
                 mesh_cq.enqueue_write_shard_to_core(
                     address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);

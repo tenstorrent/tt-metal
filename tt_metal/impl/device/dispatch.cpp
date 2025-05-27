@@ -28,12 +28,11 @@ void validate_core_read_write_bounds(
     IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes) {
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::L1) {
-        TT_FATAL(
-            address >= device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE), "Region in L1 is out of bounds");
-        TT_FATAL(
-            address + size_bytes <= device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE) +
-                                        device->get_dev_size(virtual_core, HalL1MemAddrType::BASE),
-            "Region in L1 is out of bounds");
+        const DeviceAddr l1_base_address = device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE);
+        const DeviceAddr l1_size = device->get_dev_size(virtual_core, HalL1MemAddrType::BASE);
+
+        TT_FATAL(address >= l1_base_address, "Region in L1 is out of bounds");
+        TT_FATAL(address + size_bytes <= l1_base_address + l1_size, "Region in L1 is out of bounds");
     } else {
         TT_ASSERT(mem_type == HalMemType::DRAM);
 
