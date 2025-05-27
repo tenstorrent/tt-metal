@@ -32,7 +32,11 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
     const std::uint32_t src_format = get_operand_src_format(icb);
     const bool is_32bit = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
 
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, !is_32bit, icb)));
+    if (is_32bit) {
+        MATH((llk_math_transpose_dest_init<false, true>()));
+    } else {
+        MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, !is_32bit, icb)));
+    }
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(icb, icb)));
 
@@ -62,7 +66,7 @@ ALWI void transpose_wh_init_short(uint32_t icb) {
     if (is_32bit)
     {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(true, false)));
-	MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, false, icb)));
+	//MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, false, icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     }
     else
@@ -99,7 +103,7 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
 
     if (is_32bit) {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, itile, false)));
-        MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(idst)));
+        UNPACK((llk_unpack_set_srcb_dummy_valid()));
         MATH((llk_math_transpose_dest<false, true>(idst)));
     } else {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)));
