@@ -3,10 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "llama_reduce_scatter_pybind.hpp"
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "ttnn-pybind/decorators.hpp"
 #include "llama_reduce_scatter.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-namespace ttnn::operations::experimental::ccl {
+
 namespace py = pybind11;
+
+namespace ttnn::operations::experimental::ccl {
 
 void py_bind_llama_reduce_scatter(py::module& module) {
     auto doc =

@@ -15,7 +15,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
+namespace {
 
 template <typename ccl_operation_t>
 void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -68,10 +68,10 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_all_gather_concat(pybind11::module& module) {
-    detail::bind_all_gather_concat(
+    bind_all_gather_concat(
         module,
         ttnn::experimental::all_gather_concat,
         R"doc(
