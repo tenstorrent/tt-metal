@@ -365,6 +365,34 @@ def prepare_generator_args(
             True,  # ci_only
             8,  # data_parallel
         ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            16,  # data_parallel
+        ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            32,  # data_parallel
+        ),
         (  # CI stress test batch-1 run - Runs a short prefill (128) and exhaust the KV cache (128K), by running 50000 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -394,6 +422,8 @@ def prepare_generator_args(
         "DP-4-b32",  # DP 4 throughput
         "ci-b1-DP-4",  # CI DP 4 batch 1
         "ci-b1-DP-8",  # CI DP 8 batch 1
+        "ci-b1-DP-16",  # CI DP 16 batch 1
+        "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
     ],
 )
@@ -405,7 +435,7 @@ def prepare_generator_args(
     ],
     ids=["performance", "accuracy"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 1}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -488,11 +518,14 @@ def test_demo_text(
 
     if is_ci_env:
         llama_dir = os.getenv("LLAMA_DIR", "")
-        is_31_70b = "3.1-70B" in llama_dir
+        is_33_70b = "3.3-70B" in llama_dir
         is_32_1b = "3.2-1B" in llama_dir
         is_31_8b = "3.1-8B" in llama_dir
-        if num_devices == 32 and (data_parallel > 4 or (data_parallel == 4 and not is_31_70b)):
-            pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 on TG")
+
+        tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
+
+        if num_devices == 32 and not tg_enabled:
+            pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
         if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b):
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
         if data_parallel > 1 and batch_size > 1:
