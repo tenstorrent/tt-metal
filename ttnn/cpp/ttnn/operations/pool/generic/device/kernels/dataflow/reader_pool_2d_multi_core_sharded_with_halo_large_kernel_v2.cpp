@@ -85,7 +85,7 @@ void kernel_main() {
             fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
             cb_push_back(in_scalar_cb_id_0, 1);
         }
-        if (bf16_scalar != bf16_one_u32 && !one_scalar_per_core) {
+        if (bf16_scalar != bf16_one_u32 || !one_scalar_per_core) {
             // Pool operation is not maxpool
             fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
         }
