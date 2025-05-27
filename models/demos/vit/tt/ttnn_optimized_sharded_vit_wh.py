@@ -58,13 +58,14 @@ def update_model_config(config, batch_size):
             block_w=3,  # 96 == 3 tiles,
             inplace=False,
         ),
+        # shard_spec = [224, 96]
         "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=dim_t__x // 2,  # 2,
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            in0_block_w=3,  # shard shape is [224, 96],
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,  # 6,
+            out_subblock_w=3,  # 6,
             per_core_M=seqL_t,  # 7,
-            per_core_N=3 * dim_t__x,  # 12,
+            per_core_N=3 * 3,  #
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -212,16 +213,6 @@ def vit_attention(
     *_, hidden_size = hidden_states.shape
     head_size = hidden_size // num_heads
 
-    # reshard back to 48 cores
-    block_sharded_config_48_cores = ttnn.create_sharded_memory_config(
-        hidden_states.padded_shape,
-        core_grid=config.core_grid,  # 48
-        strategy=ttnn.ShardStrategy.BLOCK,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
-
-    hidden_states = ttnn.reshard(hidden_states, block_sharded_config_48_cores)
-
     query_key_value = ttnn.linear(
         hidden_states,
         parameters.attention.query_key_value.weight,
@@ -230,6 +221,16 @@ def vit_attention(
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["query_key_value_matmul_program_config"],
     )
+
+    # reshard back to 48 cores
+    block_sharded_config_48_cores = ttnn.create_sharded_memory_config(
+        query_key_value.padded_shape,
+        core_grid=config.core_grid,  # 48
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    query_key_value = ttnn.reshard(query_key_value, block_sharded_config_48_cores)
 
     (
         query,
