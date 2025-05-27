@@ -5,7 +5,6 @@
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/assert.hpp>
-#include <algorithm>
 
 namespace ttnn::operations::pool {
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
