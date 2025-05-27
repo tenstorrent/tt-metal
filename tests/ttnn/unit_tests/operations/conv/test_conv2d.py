@@ -28,6 +28,10 @@ import torch
     [ttnn.bfloat8_b, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
+    "input_dtype",
+    [None, ttnn.float32],
+)
+@pytest.mark.parametrize(
     "fp32_accum",
     [True, False],
 )
@@ -65,6 +69,7 @@ def test_conv_features(
     output_layout,
     fp32_accum,
     packer_l1_acc,
+    input_dtype,
 ):
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and shard_layout == WS:
         pytest.skip("Bug in Width Sharded Row Major Tensor Creation when height%32!=0. #19408")
@@ -100,6 +105,7 @@ def test_conv_features(
         preprocess_weights_on_device=True,
         run_twice=True,
         input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
+        input_dtype=input_dtype,
     )
 
 

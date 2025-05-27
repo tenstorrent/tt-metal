@@ -82,6 +82,7 @@ def run_conv(
     fp32_accum=False,
     packer_l1_acc=False,
     input_layout=ttnn.ROW_MAJOR_LAYOUT,
+    input_dtype=None,
     output_layout=ttnn.TILE_LAYOUT,
     deallocate_activation=False,
     groups=1,
@@ -139,6 +140,8 @@ def run_conv(
         pad_left = padding
         pad_right = padding
 
+    if input_dtype is None:
+        input_dtype = activations_dtype
     torch.manual_seed(0)
     conv_input_shape = (total_batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
@@ -183,7 +186,7 @@ def run_conv(
 
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
-        activations_dtype,
+        input_dtype,
         mesh_mapper=input_mesh_mapper,
         layout=input_layout,
         device=device if activations_dtype == ttnn.bfloat8_b else None,
