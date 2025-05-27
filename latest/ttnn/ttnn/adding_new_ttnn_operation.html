@@ -790,49 +790,47 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos"> 4</span>
 <span class="linenos"> 5</span><span class="cp">#pragma once</span>
 <span class="linenos"> 6</span>
-<span class="linenos"> 7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;pybind11/pybind11.h&gt;</span>
-<span class="linenos"> 8</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;pybind11/stl.h&gt;</span>
-<span class="linenos"> 9</span>
-<span class="linenos">10</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn-pybind/decorators.hpp"</span>
-<span class="linenos">11</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn/operations/examples/example/example.hpp"</span>
-<span class="linenos">12</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn/types.hpp"</span>
+<span class="linenos"> 7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn-pybind/pybind_fwd.hpp"</span>
+<span class="linenos"> 8</span>
+<span class="linenos"> 9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">10</span><span class="k">namespace</span><span class="w"> </span><span class="nn">py</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nn">pybind11</span><span class="p">;</span>
+<span class="linenos">11</span>
+<span class="linenos">12</span><span class="kt">void</span><span class="w"> </span><span class="nf">bind_example_operation</span><span class="p">(</span><span class="n">py</span><span class="o">::</span><span class="k">module</span><span class="o">&amp;</span><span class="w"> </span><span class="k">module</span><span class="p">);</span>
 <span class="linenos">13</span>
-<span class="linenos">14</span><span class="k">namespace</span><span class="w"> </span><span class="nn">py</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nn">pybind11</span><span class="p">;</span>
+<span class="linenos">14</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
 <span class="linenos">15</span>
-<span class="linenos">16</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">17</span>
-<span class="linenos">18</span><span class="kt">void</span><span class="w"> </span><span class="nf">bind_example_operation</span><span class="p">(</span><span class="n">py</span><span class="o">::</span><span class="k">module</span><span class="o">&amp;</span><span class="w"> </span><span class="k">module</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">19</span><span class="w">    </span><span class="n">bind_registered_operation</span><span class="p">(</span>
-<span class="linenos">20</span><span class="w">        </span><span class="k">module</span><span class="p">,</span>
-<span class="linenos">21</span><span class="w">        </span><span class="n">ttnn</span><span class="o">::</span><span class="n">prim</span><span class="o">::</span><span class="n">example</span><span class="p">,</span>
-<span class="linenos">22</span><span class="w">        </span><span class="sa">R</span><span class="s">"</span><span class="dl">doc(</span><span class="s">example(input_tensor: ttnn.Tensor) -&gt; ttnn.Tensor</span><span class="dl">)doc</span><span class="s">"</span><span class="p">,</span>
-<span class="linenos">23</span>
-<span class="linenos">24</span><span class="w">        </span><span class="c1">// Add pybind overloads for the C++ APIs that should be exposed to python</span>
-<span class="linenos">25</span><span class="w">        </span><span class="c1">// There should be no logic here, just a call to `self` with the correct arguments</span>
-<span class="linenos">26</span><span class="w">        </span><span class="c1">// The overload with `queue_id` argument will be added automatically for primitive operations</span>
-<span class="linenos">27</span><span class="w">        </span><span class="c1">// This specific function can be called from python as `ttnn.prim.example(input_tensor)` or</span>
-<span class="linenos">28</span><span class="w">        </span><span class="c1">// `ttnn.prim.example(input_tensor, queue_id=queue_id)`</span>
-<span class="linenos">29</span><span class="w">        </span><span class="n">ttnn</span><span class="o">::</span><span class="n">pybind_overload_t</span><span class="p">{</span>
-<span class="linenos">30</span><span class="w">            </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="k">decltype</span><span class="p">(</span><span class="n">ttnn</span><span class="o">::</span><span class="n">prim</span><span class="o">::</span><span class="n">example</span><span class="p">)</span><span class="o">&amp;</span><span class="w"> </span><span class="n">self</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">Tensor</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">31</span><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="n">self</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">);</span>
-<span class="linenos">32</span><span class="w">            </span><span class="p">},</span>
-<span class="linenos">33</span><span class="w">            </span><span class="n">py</span><span class="o">::</span><span class="n">arg</span><span class="p">(</span><span class="s">"input_tensor"</span><span class="p">)});</span>
-<span class="linenos">34</span>
-<span class="linenos">35</span><span class="w">    </span><span class="n">bind_registered_operation</span><span class="p">(</span>
-<span class="linenos">36</span><span class="w">        </span><span class="k">module</span><span class="p">,</span>
-<span class="linenos">37</span><span class="w">        </span><span class="n">ttnn</span><span class="o">::</span><span class="n">composite_example</span><span class="p">,</span>
-<span class="linenos">38</span><span class="w">        </span><span class="sa">R</span><span class="s">"</span><span class="dl">doc(</span><span class="s">composite_example(input_tensor: ttnn.Tensor) -&gt; ttnn.Tensor</span><span class="dl">)doc</span><span class="s">"</span><span class="p">,</span>
-<span class="linenos">39</span>
-<span class="linenos">40</span><span class="w">        </span><span class="c1">// Add pybind overloads for the C++ APIs that should be exposed to python</span>
-<span class="linenos">41</span><span class="w">        </span><span class="c1">// There should be no logic here, just a call to `self` with the correct arguments</span>
-<span class="linenos">42</span><span class="w">        </span><span class="n">ttnn</span><span class="o">::</span><span class="n">pybind_overload_t</span><span class="p">{</span>
-<span class="linenos">43</span><span class="w">            </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="k">decltype</span><span class="p">(</span><span class="n">ttnn</span><span class="o">::</span><span class="n">composite_example</span><span class="p">)</span><span class="o">&amp;</span><span class="w"> </span><span class="n">self</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">Tensor</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">44</span><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="n">self</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">);</span>
-<span class="linenos">45</span><span class="w">            </span><span class="p">},</span>
-<span class="linenos">46</span><span class="w">            </span><span class="n">py</span><span class="o">::</span><span class="n">arg</span><span class="p">(</span><span class="s">"input_tensor"</span><span class="p">)});</span>
-<span class="linenos">47</span><span class="p">}</span>
-<span class="linenos">48</span>
-<span class="linenos">49</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+<span class="linenos">16</span><span class="cm">/*</span>
+<span class="linenos">17</span><span class="cm">void bind_example_operation(py::module&amp; module) {</span>
+<span class="linenos">18</span><span class="cm">    bind_registered_operation(</span>
+<span class="linenos">19</span><span class="cm">        module,</span>
+<span class="linenos">20</span><span class="cm">        ttnn::prim::example,</span>
+<span class="linenos">21</span><span class="cm">        R"doc(example(input_tensor: ttnn.Tensor) -&gt; ttnn.Tensor)doc",</span>
+<span class="linenos">22</span>
+<span class="linenos">23</span><span class="cm">        // Add pybind overloads for the C++ APIs that should be exposed to python</span>
+<span class="linenos">24</span><span class="cm">        // There should be no logic here, just a call to `self` with the correct arguments</span>
+<span class="linenos">25</span><span class="cm">        // The overload with `queue_id` argument will be added automatically for primitive operations</span>
+<span class="linenos">26</span><span class="cm">        // This specific function can be called from python as `ttnn.prim.example(input_tensor)` or</span>
+<span class="linenos">27</span><span class="cm">        // `ttnn.prim.example(input_tensor, queue_id=queue_id)`</span>
+<span class="linenos">28</span><span class="cm">        ttnn::pybind_overload_t{</span>
+<span class="linenos">29</span><span class="cm">            [](const decltype(ttnn::prim::example)&amp; self, const ttnn::Tensor&amp; input_tensor) -&gt; ttnn::Tensor {</span>
+<span class="linenos">30</span><span class="cm">                return self(input_tensor);</span>
+<span class="linenos">31</span><span class="cm">            },</span>
+<span class="linenos">32</span><span class="cm">            py::arg("input_tensor")});</span>
+<span class="linenos">33</span>
+<span class="linenos">34</span><span class="cm">    bind_registered_operation(</span>
+<span class="linenos">35</span><span class="cm">        module,</span>
+<span class="linenos">36</span><span class="cm">        ttnn::composite_example,</span>
+<span class="linenos">37</span><span class="cm">        R"doc(composite_example(input_tensor: ttnn.Tensor) -&gt; ttnn.Tensor)doc",</span>
+<span class="linenos">38</span>
+<span class="linenos">39</span><span class="cm">        // Add pybind overloads for the C++ APIs that should be exposed to python</span>
+<span class="linenos">40</span><span class="cm">        // There should be no logic here, just a call to `self` with the correct arguments</span>
+<span class="linenos">41</span><span class="cm">        ttnn::pybind_overload_t{</span>
+<span class="linenos">42</span><span class="cm">            [](const decltype(ttnn::composite_example)&amp; self, const ttnn::Tensor&amp; input_tensor) -&gt; ttnn::Tensor {</span>
+<span class="linenos">43</span><span class="cm">                return self(input_tensor);</span>
+<span class="linenos">44</span><span class="cm">            },</span>
+<span class="linenos">45</span><span class="cm">            py::arg("input_tensor")});</span>
+<span class="linenos">46</span><span class="cm">}</span>
+<span class="linenos">47</span><span class="cm">*/</span>
 </pre></div>
 </div>
 </div>
@@ -847,10 +845,10 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos"> 4</span>
 <span class="linenos"> 5</span><span class="cp">#pragma once</span>
 <span class="linenos"> 6</span>
-<span class="linenos"> 7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;pybind11/pybind11.h&gt;</span>
+<span class="linenos"> 7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn-pybind/pybind_fwd.hpp"</span>
 <span class="linenos"> 8</span>
-<span class="linenos"> 9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">py</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nn">pybind11</span><span class="p">;</span>
-<span class="linenos">10</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">10</span><span class="k">namespace</span><span class="w"> </span><span class="nn">py</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nn">pybind11</span><span class="p">;</span>
 <span class="linenos">11</span>
 <span class="linenos">12</span><span class="kt">void</span><span class="w"> </span><span class="nf">py_module</span><span class="p">(</span><span class="n">py</span><span class="o">::</span><span class="k">module</span><span class="o">&amp;</span><span class="w"> </span><span class="k">module</span><span class="p">);</span>
 <span class="linenos">13</span>
