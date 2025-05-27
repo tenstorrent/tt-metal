@@ -103,6 +103,10 @@ run_t3000_qwen3_tests() {
   fail=0
   start_time=$(date +%s)
 
+  echo "LOG_METAL: Warning: updating transformers version. Make sure this is the last-run test."
+  echo "LOG_METAL: Remove this when https://github.com/tenstorrent/tt-metal/pull/22608 merges."
+  pip install -r models/tt_transformers/requirements.txt
+
   echo "LOG_METAL: Running run_t3000_qwen3_tests"
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
@@ -295,6 +299,12 @@ run_t3000_tests() {
 
   # Run resnet50 tests
   run_t3000_resnet50_tests
+
+  # Run qwen25 tests
+  run_t3000_qwen25_tests
+
+  # Run qwen3 tests
+  run_t3000_qwen3_tests
 }
 
 fail=0
