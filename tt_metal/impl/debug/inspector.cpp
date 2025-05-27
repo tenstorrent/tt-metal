@@ -243,9 +243,6 @@ void Inspector::program_kernel_compile_finished(
     const IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
     const tt::tt_metal::JitBuildOptions& build_options) noexcept {
-    tt::log_warning(
-        tt::LogInspector,
-        "Kernel name: {}, path: {}", kernel->name(), build_options.path);
     if (!is_enabled()) {
         return;
     }
