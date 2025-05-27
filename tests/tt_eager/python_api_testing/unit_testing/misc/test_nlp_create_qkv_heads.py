@@ -129,7 +129,8 @@ Generic shapes + functionality
 
 def run_nlp_create_qkv_heads_test(
     batch,
-    seq_len,
+    seq_len_q,
+    seq_len_kv,
     head_dim,
     num_q_heads,
     num_kv_heads,
@@ -143,16 +144,16 @@ def run_nlp_create_qkv_heads_test(
     torch.manual_seed(1234)
 
     if read_from_input_tensor_kv:
-        in0_shape = [batch, 1, seq_len, num_q_heads * head_dim]
-        in1_shape = [batch, 1, seq_len, 2 * num_kv_heads * head_dim]
+        in0_shape = [batch, 1, seq_len_q, num_q_heads * head_dim]
+        in1_shape = [batch, 1, seq_len_kv, 2 * num_kv_heads * head_dim]
         A = torch.randn(in0_shape)
         B = torch.randn(in1_shape)
-        in0_t = ttnn.Tensor(A, dtype).to(ttnn.TILE_LAYOUT).to(device, in_mem_config)
-        in1_t = ttnn.Tensor(B, dtype).to(ttnn.TILE_LAYOUT).to(device, in_mem_config)
+        in0_t = ttnn.from_torch(A, dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=in_mem_config)
+        in1_t = ttnn.from_torch(B, dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=in_mem_config)
     else:
-        in0_shape = [batch, 1, seq_len, (num_q_heads + 2 * num_kv_heads) * head_dim]
+        in0_shape = [batch, 1, seq_len_q, (num_q_heads + 2 * num_kv_heads) * head_dim]
         A = torch.randn(in0_shape)
-        in0_t = ttnn.Tensor(A, dtype).to(ttnn.TILE_LAYOUT).to(device, in_mem_config)
+        in0_t = ttnn.from_torch(A, dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=in_mem_config)
 
     q, k, v = ttnn.experimental.nlp_create_qkv_heads(
         in0_t,
@@ -173,12 +174,12 @@ def run_nlp_create_qkv_heads_test(
     logger.debug(f"k: {k.memory_config().buffer_type} and {k.get_dtype()}")
     logger.debug(f"v: {v.memory_config().buffer_type} and {v.get_dtype()}")
 
-    assert list(q.padded_shape) == [batch, num_q_heads, seq_len, head_dim]
+    assert list(q.shape) == [batch, num_q_heads, seq_len_q, head_dim]
     if transpose_k_heads:
-        assert list(k.padded_shape) == [batch, num_kv_heads, head_dim, seq_len]
+        assert list(k.shape) == [batch, num_kv_heads, head_dim, seq_len_kv]
     else:
-        assert list(k.padded_shape) == [batch, num_kv_heads, seq_len, head_dim]
-    assert list(v.padded_shape) == [batch, num_kv_heads, seq_len, head_dim]
+        assert list(k.shape) == [batch, num_kv_heads, seq_len_kv, head_dim]
+    assert list(v.shape) == [batch, num_kv_heads, seq_len_kv, head_dim]
 
     pyt_got_back_rm_q = tt2torch_tensor(q)
     pyt_got_back_rm_k = tt2torch_tensor(k)
@@ -193,9 +194,9 @@ def run_nlp_create_qkv_heads_test(
         )
 
     # Additional shuffling for Q, K, V heads
-    ref_q = torch.reshape(ref_q, [batch, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
-    ref_k = torch.reshape(ref_k, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
-    ref_v = torch.reshape(ref_v, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
+    ref_q = torch.reshape(ref_q, [batch, seq_len_q, num_q_heads, head_dim]).transpose(-3, -2)
+    ref_k = torch.reshape(ref_k, [batch, seq_len_kv, num_kv_heads, head_dim]).transpose(-3, -2)
+    ref_v = torch.reshape(ref_v, [batch, seq_len_kv, num_kv_heads, head_dim]).transpose(-3, -2)
     if transpose_k_heads:
         ref_k = ref_k.transpose(-2, -1)
 
@@ -244,16 +245,19 @@ def run_nlp_create_qkv_heads_test(
     ids=["BFLOAT8_B", "BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
-    "batch, seq_len, head_dim, num_q_heads, num_kv_heads, transpose_k_heads, read_from_input_tensor_kv",
+    "batch, seq_len_q, seq_len_kv, head_dim, num_q_heads, num_kv_heads, transpose_k_heads, read_from_input_tensor_kv",
     (
-        (1, 128, 64, 71, 1, False, False),
-        (111, 64, 96, 5, 3, True, False),
-        (5, 1024, 64, 8, 8, True, True),
+        (1, 128, 128, 64, 71, 1, False, False),
+        (111, 64, 64, 96, 5, 3, True, False),
+        (5, 1024, 1024, 64, 8, 8, True, True),
+        (1, 4096, 77, 64, 10, 10, False, True),
+        (1, 4096, 77, 64, 10, 10, True, True),
     ),
 )
 def test_nlp_create_qkv_heads_test(
     batch,
-    seq_len,
+    seq_len_q,
+    seq_len_kv,
     head_dim,
     num_q_heads,
     num_kv_heads,
@@ -272,7 +276,8 @@ def test_nlp_create_qkv_heads_test(
     else:
         run_nlp_create_qkv_heads_test(
             batch,
-            seq_len,
+            seq_len_q,
+            seq_len_kv,
             head_dim,
             num_q_heads,
             num_kv_heads,
@@ -342,6 +347,7 @@ def test_nlp_create_qkv_heads_llama_test(
         run_nlp_create_qkv_heads_test(
             batch,
             seq_len,
+            seq_len,
             head_dim,
             num_q_heads,
             num_kv_heads,
@@ -358,9 +364,9 @@ def test_nlp_create_qkv_heads_with_program_cache(device, use_program_cache):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.L1_MEMORY_CONFIG
     for _ in range(2):
-        run_nlp_create_qkv_heads_test(5, 1024, 64, 4, 2, True, False, dtype, mem_config, mem_config, device)
+        run_nlp_create_qkv_heads_test(5, 1024, 1024, 64, 4, 2, True, False, dtype, mem_config, mem_config, device)
         # Same in0_shape to make sure cache misses if we have additional optional tensor works
-        run_nlp_create_qkv_heads_test(5, 1024, 64, 8, 8, True, True, dtype, mem_config, mem_config, device)
+        run_nlp_create_qkv_heads_test(5, 1024, 1024, 64, 8, 8, True, True, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
