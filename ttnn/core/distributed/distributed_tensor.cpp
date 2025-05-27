@@ -40,6 +40,11 @@ public:
                         },
                         [&](const MeshMapperConfig::Shard& shard) {
                             auto chunks = experimental::xtensor::chunk(current_tensor, mesh_dim_size, shard.dim);
+                            TT_FATAL(
+                                shape_.dims() == 1 || chunks.size() == mesh_dim_size,
+                                "ND sharding requires the number of chunks {} to match the mesh dimension size {}",
+                                chunks.size(),
+                                mesh_dim_size);
                             next_tensors.insert(
                                 next_tensors.end(),
                                 std::make_move_iterator(chunks.begin()),
