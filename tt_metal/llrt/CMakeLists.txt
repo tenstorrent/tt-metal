@@ -31,7 +31,8 @@ target_link_libraries(
     wh_hal
     PRIVATE
         hw
-        fmt::fmt-header-only
+        fmt::fmt
+        magic_enum::magic_enum
         umd::device
 )
 
@@ -57,7 +58,8 @@ target_link_libraries(
     bh_hal
     PRIVATE
         hw
-        fmt::fmt-header-only
+        fmt::fmt
+        magic_enum::magic_enum
         umd::device
 )
 
