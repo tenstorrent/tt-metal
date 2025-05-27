@@ -48,10 +48,20 @@ std::vector<uint32_t> get_bf16_pool_scalar(
                     // Initial kernel window start based on stride and padding
                     int hstart = out_x * stride_h - pad_h;
                     int wstart = out_y * stride_w - pad_w;
-                    int hend = hstart + kernel_h;
-                    int wend = wstart + kernel_w;
+                    int hend = ((hstart + (int)kernel_h) < (int)(in_h + pad_h + ceil_h)) ? hstart + (int)kernel_h
+                                                                                         : (int)(in_h + pad_h + ceil_h);
+                    int wend = ((wstart + (int)kernel_w) < (int)(in_w + pad_w + ceil_w)) ? wstart + (int)kernel_w
+                                                                                         : (int)(in_w + pad_w + ceil_w);
+                                        // Valid region (input-only, without pad)
+                    int valid_hstart = (hstart > 0) ? hstart : 0;
+                    int valid_wstart = (wstart > 0) ? wstart : 0;
+                    int valid_hend = (hend < (int)in_h) ? hend : (int)in_h;
+                    int valid_wend = (wend < (int)in_w) ? wend : (int)in_w;
 
-                    int pool_area;
+                    int effective_h = valid_hend - valid_hstart;
+                    int effective_w = valid_wend - valid_wstart;
+
+                    int pool_area = 0;
 
                     // Count how many *actual* kernel elements fall within the padded input bounds
                     pool_area = (hend - hstart) * (wend - wstart);
@@ -60,6 +70,22 @@ std::vector<uint32_t> get_bf16_pool_scalar(
                     // Remove doubly subtracted corner if both overflows happened
                     if (hend > (int)in_h && wend > (int)in_w) {
                         pool_area += (hend - in_h) * (wend - in_w);
+                    if (count_include_pad) {
+                        pool_area = (hend - hstart) * (wend - wstart);
+
+                        int pad_h_over = hend - (int)in_h - (int)pad_h > 0 ? hend - (int)in_h - (int)pad_h : 0;
+                        int pad_w_over = wend - (int)in_w - (int)pad_w > 0 ? wend - (int)in_w - (int)pad_w : 0;
+
+                        pool_area -= pad_h_over * kernel_w;
+                        pool_area -= pad_w_over * kernel_h;
+
+                        if (pad_h_over > 0 && pad_w_over > 0) {
+                            pool_area += pad_h_over * pad_w_over;
+                        }
+
+                        pool_area = pool_area > 1 ? pool_area : 1;  // Avoid division by zero);
+                    } else {
+                        pool_area = (effective_h > 0 && effective_w > 0) ? effective_h * effective_w : 0;
                     }
 
                     float value = pool_area > 0 ? 1.f / (float)pool_area : 0.f;
