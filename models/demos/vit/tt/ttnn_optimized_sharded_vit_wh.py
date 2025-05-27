@@ -245,6 +245,12 @@ def vit_attention(
     ttnn.deallocate(hidden_states)
     value = ttnn.reallocate(value)
 
+    print("q mem_config is: ", query.memory_config())
+    print("k mem_config is: ", key.memory_config())
+    print("v mem_config is: ", value.memory_config())
+    print("q shape is: ", query.shape)
+    print("k shape is: ", key.shape)
+    print("v shape is: ", value.shape)
     attention_scores = ttnn.matmul(
         query,
         key,
@@ -255,10 +261,13 @@ def vit_attention(
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
-    attention_probs = ttnn.transformer.attention_softmax_(
+    attention_scores = ttnn.mul_(
         attention_scores,
-        attention_mask=attention_mask,
-        head_size=head_size,
+        1.0 / (head_size**0.5),
+    )
+
+    attention_probs = ttnn.softmax_in_place(
+        attention_scores,
         program_config=config.program_configs["softmax_program_config"],
     )
 
