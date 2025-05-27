@@ -232,7 +232,7 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 72000000,
+            "trace_region_size": 92000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
@@ -342,12 +342,12 @@ def test_demo_text(
                 5555 * 4,
                 6666 * 4,
                 7777 * 4,
-                8888 * 4,
-                9999 * 4,
-                10000 * 4,
-                11111 * 4,
-                12222 * 4,
-                15384 * 4,
+                8888 * 2,
+                9999 * 2,
+                10000 * 2,
+                11111 * 2,
+                12222 * 2,
+                15384 * 2,
             ]
             * 2,
             input_prompts,
