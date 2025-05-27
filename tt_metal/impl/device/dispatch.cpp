@@ -29,6 +29,8 @@ void validate_core_read_write_bounds(
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::L1) {
         TT_FATAL(
+            address >= device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE), "Region in L1 is out of bounds");
+        TT_FATAL(
             address + size_bytes <= device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE) +
                                         device->get_dev_size(virtual_core, HalL1MemAddrType::BASE),
             "Region in L1 is out of bounds");
@@ -39,6 +41,7 @@ void validate_core_read_write_bounds(
         const DeviceAddr dram_base_address = device->allocator()->get_bank_offset(
             BufferType::DRAM, device->dram_channel_from_virtual_core(virtual_core));
 
+        TT_FATAL(address >= dram_base_address, "Region in DRAM is out of bounds");
         TT_FATAL(address + size_bytes <= dram_base_address + dram_channel_size, "Region in DRAM is out of bounds");
     }
 }
