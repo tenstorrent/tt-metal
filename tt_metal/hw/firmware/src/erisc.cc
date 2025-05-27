@@ -17,6 +17,9 @@ namespace kernel_profiler {
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+    uint32_t core_flat_id __attribute__((used));
+    uint32_t profiler_core_count_per_dram __attribute__((used));
+    uint32_t dram_buffer_page_size __attribute__((used));
 }
 #endif
 

@@ -110,6 +110,7 @@ class RunTimeOptions {
 
     bool profiler_enabled = false;
     bool profile_dispatch_cores = false;
+    bool profile_do_experimental = false;
     bool profiler_sync_enabled = false;
     bool profiler_mid_run_tracy_push = false;
     bool profiler_buffer_usage_enabled = false;
@@ -325,6 +326,7 @@ public:
     inline bool get_profiler_tracy_mid_run_push() const { return profiler_mid_run_tracy_push; }
     inline bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     inline bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
+    inline bool get_profiler_do_experimental() const { return profile_do_experimental; }
     inline std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
 
     inline void set_kernels_nullified(bool v) { null_kernels = v; }

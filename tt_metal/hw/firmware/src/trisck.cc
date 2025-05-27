@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 // This c-file's purpose is:
 // 1) include the generated list of kernels
 //      The files hold run_kernel() definition and inline kernel_main functions for every ckernel

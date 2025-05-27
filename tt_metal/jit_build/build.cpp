@@ -195,6 +195,10 @@ void JitBuildEnv::init(
         } else {
             this->defines_ += "-DPROFILE_KERNEL=1 ";
         }
+
+        if (rtoptions.get_profiler_do_experimental()) {
+            this->defines_ += "-DPROFILE_KERNEL_EXPERIMENTAL=1 ";
+        }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled

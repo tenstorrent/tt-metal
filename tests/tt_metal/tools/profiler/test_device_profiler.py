@@ -103,7 +103,8 @@ def get_function_name():
 
 
 @skip_for_grayskull()
-def test_multi_op():
+@pytest.mark.parametrize("experimental", [True, False])
+def test_multi_op(experimental):
     OP_COUNT = 1000
     RUN_COUNT = 2
     REF_COUNT_DICT = {
@@ -115,7 +116,11 @@ def test_multi_op():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
+    if experimental:
+        os.environ["TT_METAL_PROFILER_EXPERIMENTAL"] = "1"
     devicesData = run_device_profiler_test(setupAutoExtract=True)
+    if experimental:
+        os.environ["TT_METAL_PROFILER_EXPERIMENTAL"] = "0"
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
