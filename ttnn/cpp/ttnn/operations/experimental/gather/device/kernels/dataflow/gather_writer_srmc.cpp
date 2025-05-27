@@ -9,15 +9,7 @@
 #include <cstdint>
 
 /*
-To improve performance of both reader and writer kernels the work has been split so that they both prepare input and
-save output data.
-
-Reader:
-    * Reads input index tensor data from DRAM and writes it to L1 circular buffer.
-    * Performs calculation on indexes to get the correct value from input tensor indexes.
-    * Writes values to output L1 circular buffer.
-
-Writer:
+To improve performance writer kernel performs both writing as well as reading data.
     * Reads input tensor values from DRAM to L1.
     * Write output values from L1 to DRAM.
 */

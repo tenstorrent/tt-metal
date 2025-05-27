@@ -9,7 +9,43 @@
 #include <tt-metalium/constants.hpp>
 
 #include <cstdint>
+/*
+This kernel implements a parallel gather operation along the last dimension (Wt_index) of the tensor, enabling support
+for all tensor sizes without memory constraints.
 
+--- Updated Algorithm Description ---
+
+1. **Parallel Row Processing**:
+    - Each core is assigned a portion of the Wt_index dimension (the axis along which the gather is performed).
+    - All rows (Ht) are processed sequentially, but within each row, tiles along Wt_index are distributed across
+available cores.
+    - If the number of tiles in Wt_index exceeds the number of cores, each core processes multiple tiles in a loop.
+
+2. **Per-Core Work Assignment**:
+    - Each core calculates its starting tile in Wt_index based on its absolute core coordinates.
+    - The core processes its assigned tiles, then increments by the total number of cores to process additional tiles if
+needed.
+
+3. **Processing Steps**:
+    - For each assigned Wt_index tile:
+        - Read the input index tensor tile from DRAM into L1.
+        - Reserve space for the corresponding output tile in L1.
+        - For each input tensor tile (Wt_input):
+            - Wait for the input tensor tile to be available in L1.
+            - For each value in the input index tensor tile:
+                - If the index points to a value in the current input tensor tile, process it:
+                    - Calculate the local index within the tile.
+                    - Read the value from the input tensor tile.
+                    - Write the value to the output tensor tile at the correct position.
+                - If not, skip to the next value.
+            - Move to the next input tensor tile.
+        - Push the completed output tile to the output buffer.
+        - Pop the processed input index tensor tile from the buffer.
+        - Move to the next assigned Wt_index tile (by incrementing by the total number of cores).
+
+This approach enables parallel processing of the gather operation along the Wt_index dimension, maximizing core
+utilization and supporting large tensors.
+*/
 void kernel_main() {
     // Runtime args
     const uint32_t input_index_tensor_buffer_addr = get_arg_val<uint32_t>(0);

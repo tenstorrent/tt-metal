@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gather_device_operation.hpp"
-#include <sys/types.h>
 
 using namespace tt::tt_metal;
 

@@ -8,11 +8,8 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
-#include <cstdint>
-#include <vector>
-
 namespace ttnn::operations::experimental::gather::program {
-// Single row - single core (horizontal parallelism)
+// Single row - single core
 GatherProgramFactorySRSC::cached_program_t GatherProgramFactorySRSC::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     tt::tt_metal::Program program{};
@@ -242,6 +239,7 @@ void GatherProgramFactorySRSC::override_runtime_arguments(
     }  // core_y loop
 }
 
+// Single row - multi core
 GatherProgramFactorySRMC::cached_program_t GatherProgramFactorySRMC::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     tt::tt_metal::Program program{};

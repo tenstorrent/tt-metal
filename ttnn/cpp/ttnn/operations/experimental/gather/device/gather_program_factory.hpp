@@ -14,7 +14,7 @@
 
 namespace ttnn::operations::experimental::gather::program {
 using namespace tt::tt_metal;
-// Single row - single core (horizontal parallelism)
+// Single row - single core
 struct GatherProgramFactorySRSC {
     struct shared_variables_t {
         KernelHandle gather_reader_kernel_id;
@@ -29,7 +29,7 @@ struct GatherProgramFactorySRSC {
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
-// Single row - multi core (vertical parallelism)
+// Single row - multi core
 struct GatherProgramFactorySRMC {
     struct shared_variables_t {
         KernelHandle gather_reader_kernel_id;
