@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -251,7 +251,8 @@ class transformer_2d_model:
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=self.compute_kernel_config.fp32_dest_acc_en,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
 
         conv_kwargs = {
@@ -328,7 +329,12 @@ class transformer_2d_model:
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     transpose_shards=False,
                 )
-
+                compute_config = ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                )
                 conv_kwargs_1 = {
                     "in_channels": self.proj_out_in_channels,
                     "out_channels": self.proj_out_out_channels,
@@ -371,6 +377,7 @@ class transformer_2d_model:
                     **conv_kwargs_1,
                     weight_tensor=self.proj_out_conv_weights,
                     bias_tensor=self.proj_out_conv_bias,
+                    compute_config=compute_config,
                     return_output_dim=True,
                     return_weights_and_bias=True,
                 )

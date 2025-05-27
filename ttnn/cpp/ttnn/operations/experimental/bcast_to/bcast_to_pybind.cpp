@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "bcast_to_pybind.hpp"
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include "ttnn-pybind/decorators.hpp"
 
-#include "bcast_to_pybind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to.hpp"
 
 namespace ttnn::operations::experimental::broadcast_to::detail {
