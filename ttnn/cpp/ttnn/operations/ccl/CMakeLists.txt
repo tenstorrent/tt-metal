@@ -30,6 +30,9 @@ target_sources(
         all_to_all_dispatch/all_to_all_dispatch.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_device_operation.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_program_factory.cpp
+        multidevice_scatter/multidevice_scatter.cpp
+        multidevice_scatter/device/multidevice_scatter_device_operation.cpp
+        multidevice_scatter/device/multidevice_scatter_program_factory.cpp
         reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
         reduce_scatter/device/reduce_scatter_op.cpp
         reduce_scatter/reduce_scatter.cpp

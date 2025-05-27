@@ -1,0 +1,65 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include <utility>
+
+#include "ttnn/tensor/types.hpp"
+#include "multidevice_scatter_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/work_split.hpp>
+
+namespace ttnn::operations::ccl {
+
+MultiDeviceScatterDeviceOperation::program_factory_t MultiDeviceScatterDeviceOperation::select_program_factory(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return MultiDeviceScatter{};
+}
+
+void MultiDeviceScatterDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+
+void MultiDeviceScatterDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+
+MultiDeviceScatterDeviceOperation::spec_return_value_t MultiDeviceScatterDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::tt_metal;
+
+    auto input_tensor = tensor_args.input_tensor;
+    auto output_shape = input_tensor.logical_shape();
+    const auto& mesh_view = input_tensor.mesh_device()->get_view();
+
+    const uint32_t num_devices = (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+
+    output_shape[operation_attributes.dim] = output_shape[operation_attributes.dim] / num_devices;
+    return {TensorSpec(
+        Shape(output_shape),
+        TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), operation_attributes.output_mem_config))};
+}
+
+MultiDeviceScatterDeviceOperation::tensor_return_value_t MultiDeviceScatterDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+
+    auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
+    return tensor;
+}
+
+std::tuple<MultiDeviceScatterDeviceOperation::operation_attributes_t, MultiDeviceScatterDeviceOperation::tensor_args_t>
+MultiDeviceScatterDeviceOperation::invoke(
+    const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    const ttnn::MemoryConfig& memory_config) {
+    return {
+        operation_attributes_t{
+            .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
+            .cluster_axis = cluster_axis,
+            .output_mem_config = memory_config,
+        },
+        tensor_args_t{.input_tensor = input_tensor}};
+}
+
+}  // namespace ttnn::operations::ccl
