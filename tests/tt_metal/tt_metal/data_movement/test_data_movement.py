@@ -100,6 +100,17 @@ test_bounds = {
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
+        50: {  # One to One Directed Ideal
+            "riscv_1": {"latency": {"lower": 21000, "upper": 23000}, "bandwidth": 24.0},  # 21882
+            "riscv_0": {"latency": {"lower": 17600, "upper": 17800}, "bandwidth": 29.6},  # 17705
+        },
+        51: {  # One from One Directed Ideal
+            "riscv_1": {"latency": {"lower": 21300, "upper": 21500}, "bandwidth": 24.5},  # 21398
+            "riscv_0": {"latency": {"lower": 17600, "upper": 17800}, "bandwidth": 29.7},  # 17682
+        },
+        52: {  # One to All Directed Ideal
+            "riscv_0": {"latency": {"lower": 26900, "upper": 27100}, "bandwidth": 19.4},  # 26966
+        },
     },
     "blackhole": {
         0: {

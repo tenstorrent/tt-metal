@@ -39,6 +39,8 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // Program
     Program program = CreateProgram();
 
+    size_t element_size_bytes = bfloat16::SIZEOF;
+
     // Sharded L1 buffers
     const size_t total_size_bytes =
         test_config.num_of_transactions * test_config.transaction_size_pages * test_config.page_size_bytes;
@@ -49,9 +51,9 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 
     auto master_shard_parameters = ShardSpecBuffer(
         master_core_set,
-        {1, total_size_bytes / 2},
+        {1, total_size_bytes / element_size_bytes},
         ShardOrientation::ROW_MAJOR,
-        {1, test_config.page_size_bytes / 2},
+        {1, test_config.page_size_bytes / element_size_bytes},
         {1, total_size_pages});
     auto master_l1_buffer = CreateBuffer(ShardedBufferConfig{
         .device = device,
@@ -65,9 +67,9 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 
     auto subordinate_shard_parameters = ShardSpecBuffer(
         subordinate_core_set,
-        {1, total_size_bytes / 2},
+        {1, total_size_bytes / element_size_bytes},
         ShardOrientation::ROW_MAJOR,
-        {1, test_config.page_size_bytes / 2},
+        {1, test_config.page_size_bytes / element_size_bytes},
         {1, total_size_pages});
     auto subordinate_l1_buffer = CreateBuffer(ShardedBufferConfig{
         .device = device,
@@ -195,8 +197,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     }
 }
 
-/* ========== Test case for one to one data movement; Test id = 50 ========== */  // Arbitrary test id (should ideally
-                                                                                  // be 5)
+/* ========== Test case for one to one data movement; Test id = 50 ========== */  // Arbitrary test id
 
 /*
     This test case is for directed ideal data movement from one L1 to another L1.
@@ -206,7 +207,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
 */
 
 TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
-    uint32_t test_id = 50;  // Arbitrary test id (should ideally be 5)
+    uint32_t test_id = 50;  // Arbitrary test ID
 
     // Parameters
     /*
@@ -218,22 +219,16 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
         - Max total transaction size
             = 180 * 8192 bytes
             = 1474560 bytes
-            = 1.4 MB = L1 capacity
+            = 1.4 MB = L1 capacity (for BH, half for WH)
     */
-    uint32_t num_of_transactions = 128;
+    uint32_t num_of_transactions = 128;  // 180;
     uint32_t transaction_size_pages = 4 * 32;
-    uint32_t page_size_bytes = 32;  // (=flit size): 32 bytes for WH, 64 for BH -> // Question: Would this work better
-                                    // as a constant defined in a common file?
-    if (arch_ == tt::ARCH::BLACKHOLE) {
-        page_size_bytes *= 2;
-    }
+    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // (=flit size): 32 bytes for WH, 64 for BH
 
     // Cores
     /*
         Any two cores that are next to each other on the torus
-
-        Question: Would it be worth testing this with several pairs of adjacent cores to see if the performance is
-       consistent?
+         - May be worth considering the performance of this test with different pairs of adjacent cores
     */
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {0, 1};
@@ -254,14 +249,5 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
         EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
 }
-
-/*
-    NOTES/QUESTIONS:
-    - 180 transactions is too high -> Using 128 for now
-        - Is there a way to calculate the max number of transactions that fit into L1? How much does L1 even store
-   again? Excluding the space allocated for things like semaphores, etc.
-        - Also why did this configuration work for test_unary_dram but not for this one?
-        - Is there an automated way to determine the max number of transactions that fit into L1?
-*/
 
 }  // namespace tt::tt_metal

@@ -561,7 +561,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllDirectedIdeal) {
             = 1474560 bytes
             < 1.5 MB = L1 capacity
     */
-    uint32_t num_of_transactions = 180;
+    uint32_t num_of_transactions = 128;
     uint32_t transaction_size_pages = 4 * 32;
     uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
     CoreCoord master_core_coord = {0, 0};
@@ -589,7 +589,5 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllDirectedIdeal) {
         EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
 }
-
-// ^^ WORK IN PROGRESS
 
 }  // namespace tt::tt_metal
