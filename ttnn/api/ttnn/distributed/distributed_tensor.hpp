@@ -87,7 +87,7 @@ struct MeshMapperConfig {
 
 // Creates an ND mesh mapper that distributes a tensor according to the `config`.
 // If `shape` is not provided, the shape of `mesh_device` is used.
-// Otherwise, the size of the shape must match the size of the mesh device shape.
+// Otherwise, the size of the shape must be smaller than the mesh device shape.
 std::unique_ptr<TensorToMesh> create_mesh_mapper(
     MeshDevice& mesh_device,
     const MeshMapperConfig& config,
