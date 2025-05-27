@@ -238,6 +238,40 @@ inline auto any_non_height_sharded(const Tensor& a, const auto& b, const MemoryC
     return false;
 }
 
+// TODO: testing code, remove soon
+inline auto any_b_sharded_w_non_align(const Tensor& a, const auto& b, const MemoryConfig& c) {
+    bool rtn = false;
+
+    if constexpr (requires { b.is_sharded(); }) {
+        if (b.is_sharded()) {
+            rtn = b.logical_shape()[-1] % b.shard_spec()->shape[1] != 0;
+        }
+    }
+
+    return rtn;
+}
+
+inline auto any_b_sharded_shape(const Tensor& a, const auto& b, const MemoryConfig& c) {
+    bool rtn = false;
+
+    if constexpr (requires { b.is_sharded(); }) {
+        if (b.is_sharded()) {
+            rtn = false
+                // or
+                //  b.shard_spec()->shape[1] == 32
+                // or
+                // b.shard_spec()->shape[1] ==64 // this seems having problem
+                //  or
+                //  b.shard_spec()->shape[1] == 128
+                //  or
+                // b.shard_spec()->shape[1] == 256
+                ;
+        }
+    }
+
+    return rtn;
+}
+
 inline auto is_uneven(const Tensor& t) {
     if (not t.is_sharded()) {
         return false;
