@@ -90,8 +90,6 @@ target_sources(
             api/tt-metalium/sub_device_types.hpp
             api/tt-metalium/system_mesh.hpp
             api/tt-metalium/tile.hpp
-            api/tt-metalium/trace.hpp
-            api/tt-metalium/trace_buffer.hpp
             api/tt-metalium/tt_align.hpp
             api/tt-metalium/tt_backend_api_types.hpp
             api/tt-metalium/tt_memory.h
