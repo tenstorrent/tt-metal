@@ -26,7 +26,7 @@ jobs:
             runs-on: ["cloud-virtual-machine", "N300", "in-service"]
             run-args: |
               mkdir -p generated/test_reports
-              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_wormhole_b0 --benchmark_out_format=json --benchmark_out=bench.json
+              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=bench.json
               ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py bench.json
             timeout: 15
             # Allan Liu
