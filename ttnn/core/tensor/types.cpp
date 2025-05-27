@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
@@ -53,6 +52,38 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
         case tt::tt_metal::DataType::UINT8: return tt::DataFormat::UInt8;
         default: TT_ASSERT(false, "Unsupported DataType"); return tt::DataFormat::Float16_b;
     }
+}
+
+MemoryConfig::MemoryConfig(
+    TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) :
+    memory_layout_(memory_layout), buffer_type_(buffer_type), shard_spec_(std::move(shard_spec)) {}
+
+MemoryConfig::MemoryConfig(BufferType buffer_type, NdShardSpec nd_shard_spec) :
+    memory_layout_(TensorMemoryLayout::BLOCK_SHARDED),
+    buffer_type_(buffer_type),
+    nd_shard_spec_(std::move(nd_shard_spec)),
+    created_with_nd_shard_spec_(true) {}
+
+MemoryConfig::MemoryConfig(
+    TensorMemoryLayout memory_layout,
+    BufferType buffer_type,
+    std::optional<ShardSpec> shard_spec,
+    std::optional<NdShardSpec> nd_shard_spec,
+    bool created_with_nd_shard_spec) :
+    memory_layout_(memory_layout),
+    buffer_type_(buffer_type),
+    shard_spec_(std::move(shard_spec)),
+    nd_shard_spec_(std::move(nd_shard_spec)),
+    created_with_nd_shard_spec_(created_with_nd_shard_spec) {}
+
+MemoryConfig MemoryConfig::create_with_prepopulated_shard_specs(
+    TensorMemoryLayout memory_layout,
+    BufferType buffer_type,
+    std::optional<ShardSpec> shard_spec,
+    std::optional<NdShardSpec> nd_shard_spec,
+    bool created_with_nd_shard_spec) {
+    return MemoryConfig(
+        memory_layout, buffer_type, std::move(shard_spec), std::move(nd_shard_spec), created_with_nd_shard_spec);
 }
 
 bool MemoryConfig::is_sharded() const {
