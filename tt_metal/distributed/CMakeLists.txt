@@ -21,25 +21,34 @@ set(DISTRIBUTED_SRC
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
 set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
-set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
 
-add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
+# Check if ULFM MPI exists, otherwise use system MPI
+if(EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
+    message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
+    set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
 
-set_target_properties(
-    OpenMPI::MPI
-    PROPERTIES
-        EXCLUDE_FROM_ALL
-            TRUE
-)
+    add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
 
-set_target_properties(
-    OpenMPI::MPI
-    PROPERTIES
-        IMPORTED_LOCATION
-            ${ULFM_LIB}
-        INTERFACE_INCLUDE_DIRECTORIES
-            ${ULFM_PREFIX}/include
-)
+    set_target_properties(
+        OpenMPI::MPI
+        PROPERTIES
+            EXCLUDE_FROM_ALL
+                TRUE
+    )
+
+    set_target_properties(
+        OpenMPI::MPI
+        PROPERTIES
+            IMPORTED_LOCATION
+                ${ULFM_LIB}
+            INTERFACE_INCLUDE_DIRECTORIES
+                ${ULFM_PREFIX}/include
+    )
+else()
+    message(STATUS "ULFM MPI not found, using system MPI")
+    find_package(MPI REQUIRED COMPONENTS C)
+    add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
+endif()
 
 target_link_libraries(
     distributed
