@@ -285,9 +285,6 @@ public:
 
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> local_sender_channels_connection_info_addr;
 
-    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced;
-    std::array<size_t, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced;
-
     size_t termination_signal_ptr = 0;
     size_t edm_local_sync_ptr = 0;
     size_t edm_status_ptr = 0;

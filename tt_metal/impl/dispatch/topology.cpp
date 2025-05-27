@@ -1253,6 +1253,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
                 eth_logical_core,
                 tt::tt_metal::EthernetConfig{
                     .noc = tt_metal::NOC::NOC_0,
+                    .processor = static_cast<DataMovementProcessor>(risc_id),
                     .compile_args = ct_args,
                     .defines = defines,
                     .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
