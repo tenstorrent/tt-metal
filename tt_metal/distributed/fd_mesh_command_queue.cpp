@@ -334,10 +334,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
     IDevice* device = mesh_device_->get_device(address.device_coord);
-    if (device->get_mem_type_of_core(address.virtual_core_coord) == HalMemType::DRAM) {
-        address.address += device->allocator()->get_bank_offset(
-            BufferType::DRAM, device->dram_channel_from_virtual_core(address.virtual_core_coord));
-    }
+    address.address = device_dispatch::add_bank_offset_to_address(device, address.virtual_core_coord, address.address);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
@@ -366,10 +363,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     IDevice* device = mesh_device_->get_device(address.device_coord);
-    if (device->get_mem_type_of_core(address.virtual_core_coord) == HalMemType::DRAM) {
-        address.address += device->allocator()->get_bank_offset(
-            BufferType::DRAM, device->dram_channel_from_virtual_core(address.virtual_core_coord));
-    }
+    address.address = device_dispatch::add_bank_offset_to_address(device, address.virtual_core_coord, address.address);
 
     device_dispatch::validate_core_read_write_bounds(device, address.virtual_core_coord, address.address, size_bytes);
 

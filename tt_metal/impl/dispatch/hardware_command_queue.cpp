@@ -356,10 +356,7 @@ void HWCommandQueue::enqueue_read_from_core(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_enqueue_read_from_core");
 
-    if (this->device_->get_mem_type_of_core(virtual_core) == HalMemType::DRAM) {
-        address += this->device_->allocator()->get_bank_offset(
-            BufferType::DRAM, this->device_->dram_channel_from_virtual_core(virtual_core));
-    }
+    address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
 
     device_dispatch::validate_core_read_write_bounds(this->device_, virtual_core, address, size_bytes);
 
@@ -396,10 +393,7 @@ void HWCommandQueue::enqueue_write_to_core(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_enqueue_write_to_core");
 
-    if (this->device_->get_mem_type_of_core(virtual_core) == HalMemType::DRAM) {
-        address += this->device_->allocator()->get_bank_offset(
-            BufferType::DRAM, this->device_->dram_channel_from_virtual_core(virtual_core));
-    }
+    address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 

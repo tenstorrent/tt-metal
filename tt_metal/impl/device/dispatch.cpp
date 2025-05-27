@@ -46,6 +46,25 @@ void validate_core_read_write_bounds(
     }
 }
 
+DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address) {
+    const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
+    if (mem_type == HalMemType::DRAM) {
+        address += device->allocator()->get_bank_offset(
+            BufferType::DRAM, device->dram_channel_from_virtual_core(virtual_core));
+    } else {
+        TT_ASSERT(mem_type == HalMemType::L1);
+        if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, device->id())) {
+            auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+            const auto logical_core =
+                soc_desc.translate_coord_to(virtual_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+            const uint32_t bank_id =
+                device->allocator()->get_bank_ids_from_logical_core(BufferType::L1, logical_core)[0];
+            address += device->allocator()->get_bank_offset(BufferType::L1, bank_id);
+        }
+    }
+    return address;
+}
+
 void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_params) {
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
 
