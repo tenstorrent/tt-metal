@@ -16,11 +16,9 @@
 #include "ttnn/types.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
 
-namespace ttnn::operations::ternary {
+namespace ttnn::operations::experimental::where {
 
-// TODO: Name collision with variant
 template <typename T>
 concept FloatOrTensorConcept = std::is_same_v<T, Tensor> || std::floating_point<T>;
 
@@ -29,7 +27,6 @@ struct WhereDeviceOperation {
     using spec_return_value_t = TensorSpec;
 
     struct operation_attributes_t {
-        TernaryOpType ternary_op_type;
         const std::optional<float> b_scalar;
         const std::optional<float> c_scalar;
         const MemoryConfig memory_config;
@@ -39,8 +36,7 @@ struct WhereDeviceOperation {
 
         tt::stl::hash::hash_t to_hash() const {
             // hash has to exclude the scalar value
-            return tt::stl::hash::hash_objects_with_default_seed(
-                ternary_op_type, memory_config, dtype, compute_kernel_config);
+            return tt::stl::hash::hash_objects_with_default_seed(memory_config, dtype, compute_kernel_config);
         }
     };
     struct tensor_args_t {
@@ -79,35 +75,10 @@ struct WhereDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    struct BroadcastScalarsWhereProgram {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
-            tt::tt_metal::KernelHandle broadcast_kernel_id;
-            tt::tt_metal::CBHandle cb_src0;
-            tt::tt_metal::CBHandle cb_output;
-            CoreRangeSet all_device_cores;
-            uint32_t src0_single_tile_size;
-            uint32_t dst_single_tile_size;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-    };
-
-    using program_factory_t = std::variant<ElementWiseMultiCoreWhereProgram, BroadcastScalarsWhereProgram>;
+    using program_factory_t = std::variant<ElementWiseMultiCoreWhereProgram>;
     // ElementWiseTensorsWhereProgram
     // BroadcastTensorScalarWhereProgram
-    //
+    // BroadcastScalarsWhereProgram
     // +sfpu
     // +Sharded
 
@@ -185,7 +156,6 @@ struct WhereDeviceOperation {
     // can't use invoke template, we check existance of the invoke function before template instantiation
     template <FloatOrTensorConcept BType, FloatOrTensorConcept CType>
     static std::tuple<operation_attributes_t, tensor_args_t> invoke_impl(
-        TernaryOpType ternary_op_type,
         const Tensor& a_tensor,
         const BType& b_tensor,
         const CType& c_tensor,
@@ -220,7 +190,6 @@ struct WhereDeviceOperation {
 
         return {
             operation_attributes_t{
-                .ternary_op_type = ternary_op_type,
                 .b_scalar = fetchScalar(b_tensor),
                 .c_scalar = fetchScalar(c_tensor),
                 .memory_config = memory_config.value_or(
@@ -236,51 +205,43 @@ struct WhereDeviceOperation {
     }
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        TernaryOpType ternary_op_type,
         const Tensor& a_tensor,
         const Tensor& b_tensor,
         const Tensor& c_tensor,
         const std::optional<const DataType>& dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> output_tensor) {
-        return invoke_impl(
-            ternary_op_type, a_tensor, b_tensor, c_tensor, dtype, memory_config, std::move(output_tensor));
+        return invoke_impl(a_tensor, b_tensor, c_tensor, dtype, memory_config, std::move(output_tensor));
     }
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        TernaryOpType ternary_op_type,
         const Tensor& a_tensor,
         float b_tensor,
         const Tensor& c_tensor,
         const std::optional<const DataType>& dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> output_tensor) {
-        return invoke_impl(
-            ternary_op_type, a_tensor, b_tensor, c_tensor, dtype, memory_config, std::move(output_tensor));
+        return invoke_impl(a_tensor, b_tensor, c_tensor, dtype, memory_config, std::move(output_tensor));
     }
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        TernaryOpType ternary_op_type,
         const Tensor& a_tensor,
         const Tensor& b_tensor,
         float c_tensor,
         const std::optional<const DataType>& dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> output_tensor) {
-        return invoke_impl(
-            ternary_op_type, a_tensor, b_tensor, c_tensor, dtype, memory_config, std::move(output_tensor));
+        return invoke_impl(a_tensor, b_tensor, c_tensor, dtype, memory_config, std::move(output_tensor));
     }
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        TernaryOpType ternary_op_type,
         const Tensor& a_tensor,
         float b_tensor,
         float c_tensor,
         const std::optional<const DataType>& dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> output_tensor) {
-        return invoke_impl(
-            ternary_op_type, a_tensor, b_tensor, c_tensor, dtype, memory_config, std::move(output_tensor));
+        return invoke_impl(a_tensor, b_tensor, c_tensor, dtype, memory_config, std::move(output_tensor));
     }
 };
 
@@ -288,10 +249,11 @@ static_assert(
     ttnn::decorators::PrimitiveOperationConcept<WhereDeviceOperation>,
     "WhereDeviceOperation must satisfy PrimitiveOperationConcept ");
 
-}  // namespace ttnn::operations::ternary
+}  // namespace ttnn::operations::experimental::where
 
 namespace ttnn::prim {
-// TODO: WhereDeviceOperation could be renamed to TernaryDeviceOperation
+
 constexpr auto where_impl =
-    ttnn::register_operation<"ttnn::prim::where_impl", ttnn::operations::ternary::WhereDeviceOperation>();
+    ttnn::register_operation<"ttnn::prim::where_impl", ttnn::operations::experimental::where::WhereDeviceOperation>();
+
 }  // namespace ttnn::prim

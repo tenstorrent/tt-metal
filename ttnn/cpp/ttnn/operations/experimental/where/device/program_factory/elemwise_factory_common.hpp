@@ -4,7 +4,6 @@
 
 #pragma once
 
-/// #include <algorithm>
 #include <optional>
 
 #include <tt-metalium/work_split.hpp>
@@ -16,7 +15,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::ternary {
+namespace ttnn::operations::experimental::where {
 
 template <bool initialize_args>
 inline void set_eltwise_unary_runtime_args(
@@ -638,4 +637,4 @@ inline void set_eltwise_ternary_runtime_args(
     }
 }
 
-}  // namespace ttnn::operations::ternary
+}  // namespace ttnn::operations::experimental::where

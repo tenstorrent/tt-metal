@@ -47,6 +47,7 @@
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
 #include "ttnn/operations/experimental/gather/gather_pybind.hpp"
+#include "ttnn/operations/experimental/where/where_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -110,6 +111,8 @@ void py_module(py::module& module) {
     ccl::py_module(m_experimental_ccl);
 
     broadcast_to::detail::py_bind_broadcast_to(module);
+
+    where::detail::bind_where(module);
 }
 
 }  // namespace ttnn::operations::experimental

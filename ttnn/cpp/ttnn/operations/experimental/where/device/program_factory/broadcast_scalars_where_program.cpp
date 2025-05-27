@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "ttnn/operations/eltwise/ternary/device/where_prim/where_device_operation.hpp"
-#include "ttnn/operations/eltwise/ternary/device/where_prim/where_program_factory/elemwise_factory_common.hpp"
+#include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
+#include "ttnn/operations/experimental/where/device/program_factory/elemwise_factory_common.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>

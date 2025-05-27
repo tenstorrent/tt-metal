@@ -3,25 +3,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/eltwise/ternary/device/where_prim/where_device_operation.hpp"
+#include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 
 #include <tracy/Tracy.hpp>
+#include "tt-metalium/assert.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::ternary {
+namespace ttnn::operations::experimental::where {
 
 WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // TODO : Add all programs
     ZoneScopedN("WhereDeviceOperation::select_program_factory");
-    if (operation_attributes.b_scalar.has_value() && operation_attributes.c_scalar.has_value()) {
-        return BroadcastScalarsWhereProgram{};
-    }
+
+    TT_FATAL(
+        !operation_attributes.b_scalar.has_value() && !operation_attributes.c_scalar.has_value(),
+        "Scalar input arguments are not supported in the current implementation of where!");
 
     return ElementWiseMultiCoreWhereProgram{};
 }
@@ -137,20 +139,20 @@ void WhereDeviceOperation::validate_on_program_cache_hit(
     if (batch_size_0_a != batch_size_0_b) {
         TT_ASSERT(
             batch_size_0_a > batch_size_0_b and batch_size_0_b == 1,
-            "ttnn::operations::ternary::WhereDeviceOperation: batch size mismatch");
+            "ttnn::operations::experimental::where::WhereDeviceOperation: batch size mismatch");
     }
     if (batch_size_1_a != batch_size_1_b) {
         TT_ASSERT(
             batch_size_1_a > batch_size_1_b and batch_size_1_b == 1,
-            "ttnn::operations::ternary::WhereDeviceOperation: batch size mismatch");
+            "ttnn::operations::experimental::where::WhereDeviceOperation: batch size mismatch");
     }
 
     TT_FATAL(
         height_a == height_b || height_a == 1 || height_b == 1,
-        "ttnn::operations::ternary::WhereDeviceOperation: height mismatch");
+        "ttnn::operations::experimental::where::WhereDeviceOperation: height mismatch");
     TT_FATAL(
         width_a == width_b || width_a == 1 || width_b == 1,
-        "ttnn::operations::ternary::WhereDeviceOperation: width mismatch");
+        "ttnn::operations::experimental::where::WhereDeviceOperation: width mismatch");
 }
 
 WhereDeviceOperation::spec_return_value_t WhereDeviceOperation::compute_output_specs(
@@ -323,4 +325,4 @@ bool WhereDeviceOperation::skip_launch(
     return tensor_return_value.logical_shape().volume() == 0;
 }
 
-}  // namespace ttnn::operations::ternary
+}  // namespace ttnn::operations::experimental::where

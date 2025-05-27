@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "ttnn/operations/eltwise/ternary/device/where_prim/where_device_operation.hpp"
-#include "ttnn/operations/eltwise/ternary/device/where_prim/where_program_factory/elemwise_factory_common.hpp"
+#include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
+#include "ttnn/operations/experimental/where/device/program_factory/elemwise_factory_common.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -13,7 +13,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
-namespace ttnn::operations::ternary {
+namespace ttnn::operations::experimental::where {
 
 WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::cached_program_t
 WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
@@ -28,7 +28,6 @@ WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
     const auto& b = tensor_args.input_tensor_b;
     const auto& c = tensor_args.input_tensor_c;
     auto& output = tensor_return_value;
-    const auto& op_type = operation_attributes.ternary_op_type;
 
     Program program{};
     IDevice* device = a.device();
@@ -120,13 +119,13 @@ WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
     /* Specify data movement kernels for reading/writing data to/from DRAM */
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/where_prim/kernel/dataflow/elemwise_reader_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_reader_kernel.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/where_prim/kernel/dataflow/writer.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/dataflow/writer.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
@@ -135,7 +134,7 @@ WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
     /* Use the add_tiles operation in the compute kernel */
     KernelHandle compute_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/ternary/device/where_prim/kernel/compute/elemwise_where_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/compute/elemwise_where_kernel.cpp",
         all_device_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
@@ -182,4 +181,4 @@ void WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::override_runtime_ar
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {};
-}  // namespace ttnn::operations::ternary
+}  // namespace ttnn::operations::experimental::where

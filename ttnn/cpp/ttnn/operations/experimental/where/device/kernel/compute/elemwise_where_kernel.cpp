@@ -62,7 +62,7 @@ inline __attribute__((always_inline)) void sfpu_unary_2op(
 }
 
 template <typename binary_op_t>
-inline __attribute__((always_inline)) void sfpu_binary_op_ng(
+inline __attribute__((always_inline)) void sfpu_binary_op(
     tt::CBIndex cb_in0,
     tt::CBIndex cb_in1,
     tt::CBIndex cb_out0,
@@ -116,17 +116,17 @@ void MAIN {
 
     sfpu_unary_2op(cb_in0, cb_3, cb_4, per_core_block_cnt, per_core_block_size);
 
-    sfpu_binary_op_ng(cb_in1, cb_3, cb_5, per_core_block_cnt, per_core_block_size, [](uint32_t i) {
+    sfpu_binary_op(cb_in1, cb_3, cb_5, per_core_block_cnt, per_core_block_size, [](uint32_t i) {
         ckernel::mul_binary_tile_init();
         ckernel::mul_binary_tile(i * 2, i * 2 + 1);
     });
 
-    sfpu_binary_op_ng(cb_in2, cb_4, cb_6, per_core_block_cnt, per_core_block_size, [](uint32_t i) {
+    sfpu_binary_op(cb_in2, cb_4, cb_6, per_core_block_cnt, per_core_block_size, [](uint32_t i) {
         ckernel::mul_binary_tile_init();
         ckernel::mul_binary_tile(i * 2, i * 2 + 1);
     });
 
-    sfpu_binary_op_ng(cb_5, cb_6, cb_out0, per_core_block_cnt, per_core_block_size, [](uint32_t i) {
+    sfpu_binary_op(cb_5, cb_6, cb_out0, per_core_block_cnt, per_core_block_size, [](uint32_t i) {
         ckernel::add_binary_tile_init();
         ckernel::add_binary_tile(i * 2, i * 2 + 1);
 

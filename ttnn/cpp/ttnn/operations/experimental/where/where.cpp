@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,56 +11,45 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+// #include "ttnn/operations/eltwise/binary/binary.hpp"
+// #include "ttnn/operations/eltwise/unary/unary.hpp"
+
+#include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
+// #include "ttnn/operations/experimental/where/common/ternary_op_types.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace ternary {
-
-namespace ternary_utils {
+namespace operations::experimental::where {
 
 // where - ternary operator y = (predicate) ? value_true : value_false; elementwise
 // y = (predicate >= 0)*value_true + (predicate < 0)*value_false
 
+namespace details {
 using FloatOrTensor = std::variant<Tensor, float>;
 
+template <FloatOrTensorConcept T, FloatOrTensorConcept U>
 Tensor where_impl(
     QueueId queue_id,
     const Tensor& predicate,
-    const FloatOrTensor& value_true,
-    const FloatOrTensor& value_false,
+    const T& value_true,
+    const U& value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-    auto get_multiplied = [&](const Tensor& condition, const FloatOrTensor& value) -> Tensor {
-        if (std::holds_alternative<Tensor>(value)) {
-            return ttnn::multiply(queue_id, condition, std::get<Tensor>(value), std::nullopt, output_mem_config);
-        } else {
-            return ttnn::multiply(queue_id, condition, std::get<float>(value), std::nullopt, output_mem_config);
-        }
-    };
-
-    Tensor t2 = get_multiplied(ttnn::gtz(queue_id, predicate, output_mem_config), value_true);
-    Tensor t1 = get_multiplied(ttnn::lez(queue_id, predicate, output_mem_config), value_false);
-
-    if (output_tensor.has_value()) {
-        ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config, output_tensor);
-    } else {
-        output_tensor = ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config);
-    }
-
-    return output_tensor.value();
+    // TODO: missing const dtype
+    auto dtype = ttnn::DataType::BFLOAT16;
+    return ttnn::prim::where_impl(
+        queue_id, predicate, value_true, value_false, dtype, output_mem_config, std::move(output_tensor));
 }
+}  // namespace details
 
-}  // namespace ternary_utils
-Tensor WhereOperation::invoke(
+}  // namespace operations::experimental::where
+Tensor operations::experimental::where::WhereOperation::invoke(
     QueueId queue_id,
     const Tensor& predicate,
     const Tensor& value_true,
     const Tensor& value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-    return ternary_utils::where_impl(
+    return details::where_impl(
         queue_id,
         predicate,
         value_true,
@@ -69,14 +58,14 @@ Tensor WhereOperation::invoke(
         std::move(output_tensor));
 }
 
-Tensor WhereOperation::invoke(
+Tensor operations::experimental::where::WhereOperation::invoke(
     QueueId queue_id,
     const Tensor& predicate,
     const float value_true,
     const Tensor& value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-    return ternary_utils::where_impl(
+    return details::where_impl(
         queue_id,
         predicate,
         value_true,
@@ -85,14 +74,14 @@ Tensor WhereOperation::invoke(
         std::move(output_tensor));
 }
 
-Tensor WhereOperation::invoke(
+Tensor operations::experimental::where::WhereOperation::invoke(
     QueueId queue_id,
     const Tensor& predicate,
     const Tensor& value_true,
     const float value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-    return ternary_utils::where_impl(
+    return details::where_impl(
         queue_id,
         predicate,
         value_true,
@@ -101,14 +90,14 @@ Tensor WhereOperation::invoke(
         std::move(output_tensor));
 }
 
-Tensor WhereOperation::invoke(
+Tensor operations::experimental::where::WhereOperation::invoke(
     QueueId queue_id,
     const Tensor& predicate,
     const float value_true,
     const float value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-    return ternary_utils::where_impl(
+    return details::where_impl(
         queue_id,
         predicate,
         value_true,
@@ -117,6 +106,4 @@ Tensor WhereOperation::invoke(
         std::move(output_tensor));
 }
 
-}  // namespace ternary
-}  // namespace operations
 }  // namespace ttnn
