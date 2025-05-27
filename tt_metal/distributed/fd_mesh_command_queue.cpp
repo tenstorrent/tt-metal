@@ -325,7 +325,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 }
 
 void FDMeshCommandQueue::enqueue_write_shard_to_core(
-    const DeviceMemoryAddress& address,
+    DeviceMemoryAddress& address,
     const void* src,
     uint32_t size_bytes,
     bool blocking,
@@ -334,6 +334,11 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
     IDevice* device = mesh_device_->get_device(address.device_coord);
+    if (device->get_mem_type_of_core(address.virtual_core_coord) == HalMemType::DRAM) {
+        address.address += device->allocator()->get_bank_offset(
+            BufferType::DRAM, device->dram_channel_from_virtual_core(address.virtual_core_coord));
+    }
+
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     device_dispatch::write_to_core(
@@ -352,7 +357,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
 }
 
 void FDMeshCommandQueue::enqueue_read_shard_from_core(
-    const DeviceMemoryAddress& address,
+    DeviceMemoryAddress& address,
     void* dst,
     uint32_t size_bytes,
     bool blocking,
@@ -360,7 +365,14 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
-    IDevice* device = this->mesh_device_->get_device(address.device_coord);
+    IDevice* device = mesh_device_->get_device(address.device_coord);
+    if (device->get_mem_type_of_core(address.virtual_core_coord) == HalMemType::DRAM) {
+        address.address += device->allocator()->get_bank_offset(
+            BufferType::DRAM, device->dram_channel_from_virtual_core(address.virtual_core_coord));
+    }
+
+    device_dispatch::validate_core_read_write_bounds(device, address.virtual_core_coord, address.address, size_bytes);
+
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     if (size_bytes > 0) {
@@ -408,11 +420,12 @@ void FDMeshCommandQueue::write_shard_to_device(
             const auto virtual_core =
                 shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                DeviceMemoryAddress address = {
+                    .device_coord = device_coord,
+                    .virtual_core_coord = virtual_core,
+                    .address = shard_view->address() + chunk_mapping_in_bytes.dst};
                 enqueue_write_shard_to_core(
-                    DeviceMemoryAddress{
-                        .device_coord = device_coord,
-                        .virtual_core_coord = virtual_core,
-                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
+                    address,
                     (char*)src + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
                     /*blocking=*/false,
@@ -457,11 +470,12 @@ void FDMeshCommandQueue::read_shard_from_device(
             const auto virtual_core =
                 shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                DeviceMemoryAddress address = {
+                    .device_coord = device_coord,
+                    .virtual_core_coord = virtual_core,
+                    .address = shard_view->address() + chunk_mapping_in_bytes.dst};
                 enqueue_read_shard_from_core(
-                    DeviceMemoryAddress{
-                        .device_coord = device_coord,
-                        .virtual_core_coord = virtual_core,
-                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
+                    address,
                     (char*)dst + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
                     /*blocking=*/false,

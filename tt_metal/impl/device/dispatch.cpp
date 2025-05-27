@@ -7,7 +7,7 @@
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
 #include "dispatch/system_memory_manager.hpp"
-
+#include "allocator.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -34,7 +34,12 @@ void validate_core_read_write_bounds(
             "Region in L1 is out of bounds");
     } else {
         TT_ASSERT(mem_type == HalMemType::DRAM);
-        TT_FATAL(address + size_bytes <= device->dram_size_per_channel(), "Region in DRAM is out of bounds");
+
+        const DeviceAddr dram_channel_size = device->dram_size_per_channel();
+        const DeviceAddr dram_base_address = device->allocator()->get_bank_offset(
+            BufferType::DRAM, device->dram_channel_from_virtual_core(virtual_core));
+
+        TT_FATAL(address + size_bytes <= dram_base_address + dram_channel_size, "Region in DRAM is out of bounds");
     }
 }
 
