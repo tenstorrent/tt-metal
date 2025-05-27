@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "assert.hpp"
-#include "command_queue_common.hpp"
+#include "dispatch/command_queue_common.hpp"
 #include "demux.hpp"
 #include "device.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
@@ -27,7 +27,10 @@
 #include "impl/context/metal_context.hpp"
 #include "rtoptions.hpp"
 #include <umd/device/types/xy_pair.h>
+#include "dispatch/system_memory_manager.hpp"
 #include "utils.hpp"
+
+#include "tt_metal/api/tt-metalium/device_pool.hpp"
 
 using namespace tt::tt_metal;
 
@@ -353,7 +356,7 @@ void DispatchKernel::CreateKernel() {
     // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
     // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
     // ethernet cores in the chip.
-    uint32_t num_virtual_active_eth_cores = dynamic_cast<Device*>(device_)->get_ethernet_core_count_on_dispatcher();
+    uint32_t num_virtual_active_eth_cores = tt::DevicePool::instance().get_max_num_eth_cores_across_all_devices();
     uint32_t num_physical_active_eth_cores =
         MetalContext::instance()
             .get_cluster()
@@ -439,8 +442,8 @@ void DispatchKernel::CreateKernel() {
         {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual_noc_coords.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
     };
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;

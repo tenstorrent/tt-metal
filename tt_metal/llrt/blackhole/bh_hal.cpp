@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
@@ -88,7 +88,7 @@ void Hal::initialize_bh() {
             ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
-            (addr == IERISC_RESET_PC || addr == SLAVE_IERISC_RESET_PC));  // used to program start addr for eth FW
+            (addr == IERISC_RESET_PC || addr == SUBORDINATE_IERISC_RESET_PC));  // used to program start addr for eth FW
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
@@ -109,7 +109,7 @@ void Hal::initialize_bh() {
             case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
             case DebugErisc: return 0;  // Not managed/checked by us.
             case DebugIErisc: return MEM_IERISC_STACK_SIZE;
-            case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
+            case DebugSubordinateIErisc: return MEM_BRISC_STACK_SIZE;
             case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
             case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
             case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
@@ -118,7 +118,10 @@ void Hal::initialize_bh() {
     };
 
     this->num_nocs_ = NUM_NOCS;
+    this->noc_node_id_ = NOC_NODE_ID;
+    this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;
     this->noc_stream_reg_space_size_ = NOC_STREAM_REG_SPACE_SIZE;
@@ -138,6 +141,22 @@ void Hal::initialize_bh() {
     this->eps_ = EPS_BH;
     this->nan_ = NAN_BH;
     this->inf_ = INF_BH;
+
+    this->noc_x_id_translate_table_ = {
+        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
+        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_1),
+        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_2),
+        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_3),
+        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_4),
+        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_5)};
+
+    this->noc_y_id_translate_table_ = {
+        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_0),
+        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_1),
+        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_2),
+        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3),
+        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
+        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
 }
 
 }  // namespace tt_metal

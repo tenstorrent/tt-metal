@@ -8,7 +8,7 @@
 
 #include "moreh_dot_backward.hpp"
 #include "pybind11/cast.h"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_dot_backward/device/moreh_dot_backward_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot_backward {

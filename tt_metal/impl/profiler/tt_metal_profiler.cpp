@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <core_descriptor.hpp>
@@ -56,8 +56,8 @@
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
+#include <tt-metalium/device_pool.hpp>
 #include "rtoptions.hpp"
-#include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -182,7 +182,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             .defines = kernel_defines});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
-    if (device->dispatch_firmware_active()) {
+    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             auto device_coord = mesh_device->get_view().find_device(device_id);
             distributed::MeshWorkload workload;
@@ -221,7 +221,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             &sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
-    if (device->dispatch_firmware_active()) {
+    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             mesh_device->mesh_command_queue().finish();
         } else {
@@ -258,11 +258,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
 
     uint32_t hostStartTime_H = 0;
 
-    uint64_t preDeviceTimeLarge = 0;
-    uint64_t preHostTimeLarge = 0;
-    uint64_t firstDeviceTimeLarge = 0;
-    uint64_t firstHostTimeLarge = 0;
-
     for (int i = 2; i < 2 * (sampleCount + 1); i += 2) {
         uint32_t deviceTime = sync_times[i];
         if (deviceTime < preDeviceTime) {
@@ -282,13 +277,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         deviceHostTimePair[device_id].push_back(std::pair<uint64_t, uint64_t>{deviceTimeLarge, hostTimeLarge});
 
         if (firstSample) {
-            firstDeviceTimeLarge = deviceTimeLarge;
-            firstHostTimeLarge = hostTimeLarge;
             firstSample = false;
         }
-
-        preDeviceTimeLarge = deviceTimeLarge;
-        preHostTimeLarge = hostTimeLarge;
     }
 
     double hostSum = 0;
@@ -713,9 +703,9 @@ void InitDeviceProfiler(IDevice* device) {
 
         if (tt_metal_device_profiler_map.find(device_id) == tt_metal_device_profiler_map.end()) {
             if (firstInit.exchange(false)) {
-                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(true));
+                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, true));
             } else {
-                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(false));
+                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, false));
             }
         }
 
@@ -758,14 +748,6 @@ void InitDeviceProfiler(IDevice* device) {
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer_ptr->address();
         setControlBuffer(device, control_buffer);
-
-        std::vector<uint32_t> inputs_DRAM(output_dram_buffer_ptr->size() / sizeof(uint32_t), 0);
-
-        if (device->dispatch_firmware_active()) {
-            issue_fd_write_to_profiler_buffer(profiler.output_dram_buffer, device, inputs_DRAM);
-        } else {
-            tt_metal::detail::WriteToBuffer(*(profiler.output_dram_buffer.get_buffer()), inputs_DRAM);
-        }
     }
 #endif
 }
@@ -902,8 +884,6 @@ void DumpDeviceProfileResults(
                 // last owner. Sync program also contains a buffer so it is safter to release it here
                 tt_metal_device_profiler_map.at(device_id).output_dram_buffer = {};
                 tt_metal_device_profiler_map.at(device_id).sync_program.reset();
-            } else {
-                InitDeviceProfiler(device);
             }
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
                 tt_metal_device_profiler_map.at(device_id).pushTracyDeviceResults();

@@ -39,8 +39,9 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
         TT_METAL_ENABLE_ERISC_IRAM: 1
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -67,7 +68,15 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U06F3ER8X9A # Stuti Raizada
+          owner: U053W15B6JF # Djordje Ivanovic
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - name: Generate gtest annotations on failure
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        if: ${{ failure() }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   quick-6u:
@@ -83,8 +92,9 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+        LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
         TT_METAL_ENABLE_ERISC_IRAM: 1
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -121,6 +131,14 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U06F3ER8X9A # Stuti Raizada
+          owner: U053W15B6JF # Djordje Ivanovic
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - name: Generate gtest annotations on failure
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        if: ${{ failure() }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

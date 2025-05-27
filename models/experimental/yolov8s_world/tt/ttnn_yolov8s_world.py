@@ -76,7 +76,6 @@ class TtConv:
             weights_dtype=ttnn.bfloat16,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            input_channels_alignment=16 if self.input_params[4] < 16 else 32,
             act_block_w_div=1,
             transpose_shards=False,
             deallocate_activation=False,
@@ -422,7 +421,7 @@ class TtMaxSigmoidAttnBlock:
         ttnn.deallocate(guide)
         aw = ttnn.reshape(aw, (batch, m, height, width, n))
 
-        aw = ttnn.max(aw, dim=-1)
+        aw = ttnn.max(aw, dim=-1, keepdim=True)
         aw = ttnn.permute(aw, (0, 1, 2, 4, 3))  # To increase the perfomance of squeeze operation
         aw = ttnn.squeeze(aw, -2)  # If the above permute is removed use ttnn.squeeze(aw, -1)
         aw = ttnn.div(aw, (self.hc**0.5))

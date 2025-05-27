@@ -155,7 +155,7 @@ tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair& p
 }
 
 CoordSystem metal_SocDescriptor::get_umd_coord_system() const {
-    return (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::PHYSICAL : CoordSystem::VIRTUAL;
+    return CoordSystem::VIRTUAL;
 }
 
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {

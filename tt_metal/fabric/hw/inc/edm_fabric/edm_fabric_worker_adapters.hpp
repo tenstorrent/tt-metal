@@ -47,11 +47,12 @@ struct WorkerToFabricEdmSenderImpl {
     static constexpr uint32_t open_connection_value = 1;
     static constexpr uint32_t close_connection_request_value = 2;
 
-    WorkerToFabricEdmSenderImpl() : from_remote_buffer_slot_rdptr_ptr(nullptr) {}
+    WorkerToFabricEdmSenderImpl() = default;
 
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
         bool is_persistent_fabric = get_arg_val<uint32_t>(arg_idx++);
+        const auto direction = get_arg_val<uint32_t>(arg_idx++);
         const WorkerXY edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
         const auto edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
         const uint8_t num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
@@ -74,6 +75,7 @@ struct WorkerToFabricEdmSenderImpl {
         ASSERT(edm_buffer_index_addr < 262144);
         return WorkerToFabricEdmSenderImpl(
             is_persistent_fabric,
+            direction,
             edm_worker_xy.x,
             edm_worker_xy.y,
             edm_buffer_base_addr,
@@ -90,8 +92,9 @@ struct WorkerToFabricEdmSenderImpl {
             write_at_cmd_buf);
     }
 
-    WorkerToFabricEdmSenderImpl(
+    FORCE_INLINE void init(
         bool connected_to_persistent_fabric,
+        uint8_t direction,
         uint8_t edm_worker_x,
         uint8_t edm_worker_y,
         std::size_t edm_buffer_base_addr,
@@ -105,30 +108,31 @@ struct WorkerToFabricEdmSenderImpl {
         volatile uint32_t* const worker_teardown_addr,
         uint32_t local_buffer_index_addr,
         uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
-        uint8_t sync_noc_cmd_buf = write_at_cmd_buf) :
-        edm_buffer_addr(edm_buffer_base_addr),
-        edm_buffer_slot_wrptr_addr(
-            connected_to_persistent_fabric ? edm_l1_sem_id
-                                           : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_l1_sem_id)),
-        edm_connection_handshake_l1_addr(
+        uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
+        this->direction = direction;
+        this->edm_buffer_addr = edm_buffer_base_addr;
+        this->edm_buffer_slot_wrptr_addr = connected_to_persistent_fabric
+                                               ? edm_l1_sem_id
+                                               : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_l1_sem_id);
+        this->edm_connection_handshake_l1_addr =
             connected_to_persistent_fabric
                 ? edm_connection_handshake_l1_id
-                : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_connection_handshake_l1_id)),
-        edm_worker_location_info_addr(edm_worker_location_info_addr),
-        edm_buffer_index_addr(
-            connected_to_persistent_fabric ? edm_buffer_index_id
-                                           : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_buffer_index_id)),
-        from_remote_buffer_slot_rdptr_ptr(from_remote_buffer_slot_rdptr_ptr),
-        worker_teardown_addr(worker_teardown_addr),
-        edm_buffer_base_addr(edm_buffer_base_addr),
-        buffer_slot_wrptr_ptr(reinterpret_cast<tt_l1_ptr size_t*>(local_buffer_index_addr)),
-        buffer_size_bytes(buffer_size_bytes),
-        num_buffers_per_channel(num_buffers_per_channel),
-        last_buffer_index(num_buffers_per_channel - 1),
-        edm_noc_x(edm_worker_x),
-        edm_noc_y(edm_worker_y),
-        data_noc_cmd_buf(data_noc_cmd_buf),
-        sync_noc_cmd_buf(sync_noc_cmd_buf) {
+                : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_connection_handshake_l1_id);
+        this->edm_worker_location_info_addr = edm_worker_location_info_addr;
+        this->edm_buffer_index_addr = connected_to_persistent_fabric
+                                          ? edm_buffer_index_id
+                                          : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_buffer_index_id);
+        this->from_remote_buffer_slot_rdptr_ptr = from_remote_buffer_slot_rdptr_ptr;
+        this->worker_teardown_addr = worker_teardown_addr;
+        this->edm_buffer_base_addr = edm_buffer_base_addr;
+        this->buffer_slot_wrptr_ptr = reinterpret_cast<tt_l1_ptr size_t*>(local_buffer_index_addr);
+        this->buffer_size_bytes = buffer_size_bytes;
+        this->num_buffers_per_channel = num_buffers_per_channel;
+        this->last_buffer_index = num_buffers_per_channel - 1;
+        this->edm_noc_x = edm_worker_x;
+        this->edm_noc_y = edm_worker_y;
+        this->data_noc_cmd_buf = data_noc_cmd_buf;
+        this->sync_noc_cmd_buf = sync_noc_cmd_buf;
         ASSERT(buffer_size_bytes > 0);
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             ASSERT(num_buffers_per_channel == EDM_NUM_BUFFER_SLOTS);
@@ -136,6 +140,42 @@ struct WorkerToFabricEdmSenderImpl {
                 edm_buffer_slot_addrs[i] = edm_buffer_base_addr + (i * buffer_size_bytes);
             }
         }
+    }
+
+    WorkerToFabricEdmSenderImpl(
+        bool connected_to_persistent_fabric,
+        uint8_t direction,
+        uint8_t edm_worker_x,
+        uint8_t edm_worker_y,
+        std::size_t edm_buffer_base_addr,
+        uint8_t num_buffers_per_channel,
+        size_t edm_l1_sem_id,  // may also be an address
+        std::size_t edm_connection_handshake_l1_id,
+        std::size_t edm_worker_location_info_addr,  // The EDM's location for `EDMChannelWorkerLocationInfo`
+        uint16_t buffer_size_bytes,
+        size_t edm_buffer_index_id,
+        volatile uint32_t* const from_remote_buffer_slot_rdptr_ptr,
+        volatile uint32_t* const worker_teardown_addr,
+        uint32_t local_buffer_index_addr,
+        uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
+        uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
+        this->init(
+            connected_to_persistent_fabric,
+            direction,
+            edm_worker_x,
+            edm_worker_y,
+            edm_buffer_base_addr,
+            num_buffers_per_channel,
+            edm_l1_sem_id,
+            edm_connection_handshake_l1_id,
+            edm_worker_location_info_addr,
+            buffer_size_bytes,
+            edm_buffer_index_id,
+            from_remote_buffer_slot_rdptr_ptr,
+            worker_teardown_addr,
+            local_buffer_index_addr,
+            data_noc_cmd_buf,
+            sync_noc_cmd_buf);
     }
 
     template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index, uint8_t EDM_TO_DOWNSTREAM_NOC_VC = NOC_UNICAST_WRITE_VC>
@@ -169,7 +209,7 @@ struct WorkerToFabricEdmSenderImpl {
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             while (distance_behind<EDM_NUM_BUFFER_SLOTS>(
                        BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
-                       BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)}) < this->num_buffers_per_channel);
+                       BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)}) >= this->num_buffers_per_channel);
         } else {
             const auto first_rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
             auto buffer_ptr_wrap = 2 * this->num_buffers_per_channel;
@@ -219,13 +259,14 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
-    template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC>
+    template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api>
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         send_payload_from_address_with_trid_impl<
             EDM_IO_BLOCKING_MODE::NON_BLOCKING,
             enable_ring_support,
-            EDM_TO_DOWNSTREAM_NOC>(source_address, size_bytes, trid);
+            EDM_TO_DOWNSTREAM_NOC,
+            stateful_api>(source_address, size_bytes, trid);
     }
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
@@ -330,6 +371,7 @@ struct WorkerToFabricEdmSenderImpl {
         // Need to wait for the ack to teardown notice, from edm
         noc_semaphore_wait(this->worker_teardown_addr, 1);
         noc_async_write_barrier();
+        *(this->worker_teardown_addr) = 0;
     }
 
     void close() {
@@ -373,6 +415,7 @@ struct WorkerToFabricEdmSenderImpl {
     // the cmd buffer is used for edm-edm path
     uint8_t data_noc_cmd_buf;
     uint8_t sync_noc_cmd_buf;
+    uint8_t direction;
 
 private:
     template <bool stateful_api = false, bool enable_ring_support = false>
@@ -452,32 +495,38 @@ private:
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         post_send_payload_increment_pointers();
     }
-    template <EDM_IO_BLOCKING_MODE blocking_mode, bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC>
+    template <
+        EDM_IO_BLOCKING_MODE blocking_mode,
+        bool enable_ring_support,
+        uint8_t EDM_TO_DOWNSTREAM_NOC,
+        bool stateful_api>
     FORCE_INLINE void send_payload_from_address_with_trid_impl(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
-            send_chunk_from_address_with_trid<blocking_mode>(
+            send_chunk_from_address_with_trid<blocking_mode, stateful_api>(
                 source_address,
                 1,
                 size_bytes,
+                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> 32,
                 this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,
                 this->data_noc_cmd_buf);
         } else {
-            send_chunk_from_address_with_trid<blocking_mode>(
+            send_chunk_from_address_with_trid<blocking_mode, stateful_api>(
                 source_address,
                 1,
                 size_bytes,
+                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> 32,
                 this->edm_buffer_addr,
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,
                 this->data_noc_cmd_buf);
         }
-        post_send_payload_increment_pointers<true, enable_ring_support>(EDM_TO_DOWNSTREAM_NOC);
+        post_send_payload_increment_pointers<stateful_api, enable_ring_support>(EDM_TO_DOWNSTREAM_NOC);
     }
 
     template <EDM_IO_BLOCKING_MODE blocking_mode>

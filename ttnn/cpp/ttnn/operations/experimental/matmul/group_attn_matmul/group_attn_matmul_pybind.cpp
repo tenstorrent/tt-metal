@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul.hpp"

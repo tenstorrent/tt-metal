@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,12 @@ uint32_t find_closest_largest_divisor(uint32_t num1, uint32_t num2, uint32_t sta
 uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t start_divisor);
 
 uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t num2, uint32_t start_divisor);
+
+uint32_t get_input_channels_alignment(
+    TensorMemoryLayout input_tensor_memory_layout,
+    Layout input_tensor_layout,
+    bool is_mm_conv,
+    const std::optional<MemoryConfig>& input_memory_config);
 
 bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& kernel_size,
@@ -107,7 +113,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     const DeviceComputeKernelConfig& compute_config,
     const sliding_window::ParallelConfig& input_parallel_config,
     const sliding_window::ParallelConfig& output_parallel_config,
-    uint32_t in_channels,
+    uint32_t in_channels_padded,
     uint32_t out_channels,
     uint32_t batch_size,
     uint32_t output_height,
@@ -142,12 +148,14 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t input_height,
     uint32_t input_width,
     const CoreCoord& compute_grid_size,
-    Layout input_tensor_layout,
+    Layout input_layout,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
     const uint32_t groups,
     const bool enable_bias,
     const DeviceComputeKernelConfig& compute_config);
+
+ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape);
 
 template <typename T>
 std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig>
@@ -163,6 +171,41 @@ shard_or_reshard_tensor_if_required(
     bool is_mm_conv,
     bool auto_shard);
 
+template <typename T>
+ttnn::Tensor fold_tensor(
+    const ttnn::Tensor& tensor,
+    T* device,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 4> padding_n4,
+    std::optional<DataType> dtype,
+    bool is_weight_tensor = false);
+
+struct KernelStrideFoldingResult {
+    ttnn::Tensor input_tensor;
+    ttnn::Tensor weight_tensor;
+    std::optional<ttnn::Tensor> bias_tensor;
+    uint32_t input_height;
+    uint32_t input_width;
+    uint32_t in_channels;
+    std::array<uint32_t, 2> stride;
+    std::array<uint32_t, 2> kernel_size;
+    bool mm_conv;
+};
+
+template <typename T>
+KernelStrideFoldingResult apply_kernel_stride_folding(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    T* device,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t in_channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding_n4,
+    const Conv2dConfig& conv_config);
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 
 }  // namespace operations::conv

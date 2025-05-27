@@ -15,8 +15,6 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
@@ -75,7 +73,7 @@ constexpr uint32_t is_h_variant = get_compile_time_arg_val(41);
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
-constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SLAVE_NOC_X, DOWNSTREAM_SLAVE_NOC_Y));
+constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint64_t pcie_noc_xy =
@@ -107,9 +105,6 @@ static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 static uint32_t write_offset[3];  // added to write address on non-host writes
 
 static uint32_t upstream_total_acquired_page_count;
-
-static auto client_interface =
-    reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
 
 constexpr uint32_t packed_write_max_multicast_sub_cmds =
     get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
@@ -1123,7 +1118,7 @@ re_run_command:
             }
         } break;
 
-        case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL:
+        case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
             // DPRINT << "cmd_notify_dispatch_s_go_signal" << ENDL();
             process_notify_dispatch_s_go_signal_cmd();
             break;
@@ -1258,9 +1253,6 @@ static inline bool process_cmd_h(
 
 void kernel_main() {
     // DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
-    if constexpr (use_fabric(fabric_router_noc_xy)) {
-        tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*unused*/);
-    }
 
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);
