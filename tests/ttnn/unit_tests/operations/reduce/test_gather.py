@@ -5,8 +5,11 @@
 import pytest
 import torch
 import ttnn
+import numpy as np
 from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+TILE_HEIGHT = 32
 
 
 @pytest.mark.parametrize(
@@ -134,6 +137,42 @@ def test_gather_datatype_cases(
 
     ttnn_input = ttnn.from_torch(input, ttnn_input_datatype, layout=ttnn.Layout.TILE, device=device)
     ttnn_index = ttnn.from_torch(index, ttnn_index_datatype, layout=ttnn.Layout.TILE, device=device)
+
+    ttnn_gather = ttnn.experimental.gather(ttnn_input, dim, index=ttnn_index)
+
+    assert ttnn_gather.shape == index.shape
+    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+
+
+@pytest.mark.parametrize(
+    "input_shape, index_shape, dim",
+    [
+        ([32, 151936], [1, 151936], -1),
+        ([32, 256 * TILE_HEIGHT], [32, 64 * TILE_HEIGHT], -1),
+        ([1, 1, 32, 256 * TILE_HEIGHT], [1, 1, 32, 128 * TILE_HEIGHT], -1),
+        ([1, 1, 32, 63 * TILE_HEIGHT], [1, 1, 32, 63 * TILE_HEIGHT], -1),
+        ([1, 1, 32, 20 * TILE_HEIGHT], [1, 1, 32, 20 * TILE_HEIGHT], -1),
+        ([1, 1, 32, 96 * TILE_HEIGHT], [1, 1, 32, 96 * TILE_HEIGHT], -1),
+        ([1, 1, 32, 256 * TILE_HEIGHT], [1, 1, 32, 256 * TILE_HEIGHT], -1),
+    ],
+)
+def test_gather_long_tensor(input_shape, index_shape, dim, device):
+    torch.manual_seed(0)
+
+    torch_dtype = torch.bfloat16
+    max_uint16 = np.iinfo(
+        np.uint16
+    ).max  # uint32 types support does not exist in ttnn.transpose yet which is used in ttnn.gather.
+    # See issue: https://github.com/tenstorrent/tt-metal/issues/18057
+    # We need to limit max index to uint16 max value
+    max_idx_val = min(input_shape[dim], max_uint16)
+    input = torch.randn(input_shape, dtype=torch_dtype)
+    index = torch.randint(0, max_idx_val, index_shape, dtype=torch.int64)  # torch.int64 is required for torch.gather
+
+    torch_gather = torch.gather(input, dim, index)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
 
     ttnn_gather = ttnn.experimental.gather(ttnn_input, dim, index=ttnn_index)
 

@@ -32,9 +32,8 @@ struct GatherProgramFactorySRSC {
 // Single row - multi core (vertical parallelism)
 struct GatherProgramFactorySRMC {
     struct shared_variables_t {
-        // KernelHandle gather_reader_kernel_id;
-        // KernelHandle gather_writer_kernel_id;
-        // TODO: add kernel handles
+        KernelHandle gather_reader_kernel_id;
+        KernelHandle gather_writer_kernel_id;
         CoreCoord storage_grid_size;
     };
 

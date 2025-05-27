@@ -18,12 +18,12 @@ GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_f
     const auto input_index_tensor_shape = tensor_args.input_index_tensor.get_padded_shape();
     const uint32_t Wt_input = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
     const uint32_t Wt_index = input_index_tensor_shape[3] / tt::constants::TILE_WIDTH;
-    // TODO: Remove comment
-    // if (Wt_input > WT_THRESHOLD || Wt_index > WT_THRESHOLD) {
-    // Use GatherProgramFactorySRMC for larger Wt
-    return gather::program::GatherProgramFactorySRMC{};
-    // }
-    // return gather::program::GatherProgramFactorySRSC{};
+
+    if (Wt_input > WT_THRESHOLD || Wt_index > WT_THRESHOLD) {
+        // Use GatherProgramFactorySRMC for larger Wt
+        return gather::program::GatherProgramFactorySRMC{};
+    }
+    return gather::program::GatherProgramFactorySRSC{};
 }
 
 void GatherDeviceOperation::validate_on_program_cache_hit(
