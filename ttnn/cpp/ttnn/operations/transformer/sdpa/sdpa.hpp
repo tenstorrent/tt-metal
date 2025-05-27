@@ -88,6 +88,21 @@ struct ExecuteJointAttention {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
+struct ExecuteRingJointAttention {
+    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
+        QueueId queue_id,
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        const ttnn::Tensor& input_tensor_v,
+        const ttnn::Tensor& joint_tensor_q,
+        const ttnn::Tensor& joint_tensor_k,
+        const ttnn::Tensor& joint_tensor_v,
+        const std::string& joint_strategy,
+        SDPAProgramConfig program_config,
+        std::optional<float> scale = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+};
+
 }  // namespace operations::transformer
 
 namespace transformer {
@@ -103,6 +118,10 @@ constexpr auto chunked_scaled_dot_product_attention = ttnn::register_operation<
 constexpr auto joint_scaled_dot_product_attention = ttnn::register_operation<
     "ttnn::transformer::joint_scaled_dot_product_attention",
     ttnn::operations::transformer::ExecuteJointAttention>();
+
+constexpr auto ring_joint_scaled_dot_product_attention = ttnn::register_operation<
+    "ttnn::transformer::ring_joint_scaled_dot_product_attention",
+    ttnn::operations::transformer::ExecuteRingJointAttention>();
 
 }  // namespace transformer
 
