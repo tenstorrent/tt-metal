@@ -31,9 +31,9 @@ compute_width_sharding_reshard_segments(
     const std::array<uint32_t, 2>& remote_shard_shape,
     const std::vector<CoreCoord>& local_cores,
     const std::vector<CoreCoord>& remote_cores,
-    const BufferType& remote_buffer_type,
+    const tt::tt_metal::BufferType& remote_buffer_type,
     const CoreType& remote_core_type,
-    IDevice* device,
+    tt::tt_metal::IDevice* device,
     uint32_t element_size) {
     const uint32_t num_local_shards = local_cores.size();
     const uint32_t num_remote_shards = remote_cores.size();
