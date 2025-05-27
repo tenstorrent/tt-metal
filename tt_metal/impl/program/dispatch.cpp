@@ -1694,6 +1694,18 @@ void assemble_device_commands(
         program_command_sequence.program_binary_command_sequence.size_bytes() ==
         program_command_sequence.program_binary_command_sequence.write_offset_bytes());
 
+    // Assemble wait barrier command sequence
+    {
+        DeviceCommandCalculator calculator;
+        calculator.add_dispatch_wait();
+        program_command_sequence.wait_barrier_command_sequence = HostMemDeviceCommand(calculator.write_offset_bytes());
+        program_command_sequence.wait_barrier_command_sequence.add_dispatch_wait(
+            CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+        TT_ASSERT(
+            program_command_sequence.wait_barrier_command_sequence.size_bytes() ==
+            program_command_sequence.wait_barrier_command_sequence.write_offset_bytes());
+    }
+
     // Assemble launch message
     LaunchMessageGenerator launch_message_generator;
     DeviceCommandCalculator launch_message_calculator;
@@ -2166,6 +2178,11 @@ void write_program_command_sequence(
         write_data_to_cq(
             program_command_sequence.program_binary_command_sequence.data(),
             program_command_sequence.program_binary_command_sequence.size_bytes());
+    } else {
+        // Write the wait barrier before writing launch messages.
+        write_data_to_cq(
+            program_command_sequence.wait_barrier_command_sequence.data(),
+            program_command_sequence.wait_barrier_command_sequence.size_bytes());
     }
 
     // Write the launch message
