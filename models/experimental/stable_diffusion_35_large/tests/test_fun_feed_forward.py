@@ -7,58 +7,136 @@ import os
 import pytest
 import torch
 import ttnn
+import math
 
 from ..reference.feed_forward import FeedForward
 from ..tt.fun_feed_forward import TtFeedForwardParameters, sd_feed_forward
-from ..tt.utils import assert_quality, from_torch_fast
-from ..tt.parallel_config import ParallelConfig, create_dit_parallel_config
+from ..tt.utils import assert_quality, from_torch_fast_2d, create_global_semaphores, initialize_sd_parallel_config
+
+TILE_SIZE = 32
 
 
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    ("batch_size", "input_dim", "output_dim"),
+    (
+        "batch_size",
+        "embedding_dim",
+        "num_heads",
+        "sequence_length",
+        "cfg_factor",
+        "sp_factor",
+        "tp_factor",
+        "topology",
+        "shard_sequence",
+    ),
     [
-        (32, 128, 256),
+        (1, 2432, 38, 4096, 1, 2, 4, ttnn.Topology.Linear, True),
+        (1, 2432, 38, 333, 1, 2, 4, ttnn.Topology.Linear, False),
     ],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.usefixtures("use_program_cache")
 def test_feed_forward(
     *,
     mesh_device: ttnn.MeshDevice,
     batch_size: int,
-    input_dim: int,
-    output_dim: int,
+    embedding_dim: int,
+    num_heads: int,
+    sequence_length: int,
+    cfg_factor: int,
+    sp_factor: int,
+    tp_factor: int,
+    topology: ttnn.Topology,
+    shard_sequence: bool,
 ) -> None:
     mesh_shape = tuple(mesh_device.shape)
-    cfg_parallel = ParallelConfig(mesh_shape=mesh_shape, factor=1, mesh_axis=0)
-    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1], mesh_axis=1)
-    dit_parallel_config = create_dit_parallel_config(
-        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel
+    dit_parallel_config = initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, topology)
+    torch_dtype = torch.float32
+    ttnn_dtype = ttnn.bfloat16
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
 
-    dtype = torch.bfloat16
+    # create global semaphore handles
+    num_devices = mesh_device.get_num_devices()
+    rs_from_ccl_semaphore_handle = create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0)
+    rs_to_ccl_semaphore_handle = create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0)
 
-    torch_model = FeedForward(dim=input_dim, dim_out=output_dim).to(dtype=dtype)
+    torch_model = FeedForward(dim=embedding_dim, dim_out=embedding_dim).to(dtype=torch_dtype)
     torch_model.eval()
 
+    ## heads padding
+    pad_embedding_dim = (bool)(num_heads) % tp_factor
+    if pad_embedding_dim:
+        head_size = embedding_dim // num_heads
+        num_heads = math.ceil(num_heads / tp_factor) * tp_factor
+        hidden_dim_padding = (num_heads * head_size) - embedding_dim
+    else:
+        hidden_dim_padding = 0
+
     parameters = TtFeedForwardParameters.from_torch(
-        torch_model.state_dict(), device=mesh_device, parallel_config=dit_parallel_config, dtype=ttnn.bfloat8_b
+        torch_model.state_dict(),
+        dtype=ttnn_dtype,
+        device=mesh_device,
+        hidden_dim_padding=hidden_dim_padding,
+        parallel_config=dit_parallel_config,
     )
 
-    torch_input_tensor = torch.randn((batch_size, 1, 1, input_dim), dtype=dtype)
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((batch_size, sequence_length, embedding_dim), dtype=torch_dtype)
 
-    tt_input_tensor = from_torch_fast(torch_input_tensor, device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    input_padded_4d = torch_input_tensor.unsqueeze(1)
+    if pad_embedding_dim:
+        input_padded_4d = torch.nn.functional.pad(
+            input_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
+        )
+    if input_padded_4d.shape[2] % TILE_SIZE:
+        input_padded_4d = torch.nn.functional.pad(
+            input_padded_4d,
+            pad=(0, 0, 0, TILE_SIZE - (input_padded_4d.shape[2] % TILE_SIZE)),
+            mode="constant",
+            value=0,
+        )
+    tt_input_tensor = from_torch_fast_2d(
+        input_padded_4d,
+        mesh_device=mesh_device,
+        mesh_shape=dit_parallel_config.cfg_parallel.mesh_shape,
+        dims=[dit_parallel_config.sequence_parallel.mesh_axis + 2 if shard_sequence else None, None],
+        dtype=ttnn_dtype,
+        layout=ttnn.TILE_LAYOUT,
+    )
 
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
 
-    tt_output = sd_feed_forward(tt_input_tensor, parameters, parallel_config=dit_parallel_config)
+    tt_output = sd_feed_forward(
+        tt_input_tensor,
+        parameters,
+        parallel_config=dit_parallel_config,
+        rs_from_global_semaphore=rs_from_ccl_semaphore_handle,
+        rs_to_global_semaphore=rs_to_ccl_semaphore_handle,
+    )
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device,
+            mesh_shape=tuple(mesh_device.shape),
+            dims=[
+                dit_parallel_config.sequence_parallel.mesh_axis + 2,
+                dit_parallel_config.tensor_parallel.mesh_axis + 2,
+            ],
+        ),
+    )
+    tt_output_torch = tt_output_torch[:, :, 0:sequence_length, :embedding_dim]
 
-    assert_quality(torch_output, tt_output, pcc=0.998_800, shard_dim=-1)
+    assert_quality(torch_output, tt_output_torch, pcc=0.998_800, shard_dim=-1)
