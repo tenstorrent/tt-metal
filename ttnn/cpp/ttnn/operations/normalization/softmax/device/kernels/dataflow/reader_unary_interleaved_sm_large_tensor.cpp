@@ -64,7 +64,13 @@ void kernel_main() {
     }
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
+#if NUMERIC_STABLE
+    // We need an extra pass to get numeric stable
+    constexpr uint32_t total_passes = 3;
+#else
     constexpr uint32_t total_passes = 2;
+#endif
+
     for (uint32_t ncht = 0; ncht < NCht; ncht++) {
         // We need to pass once in order to calcualte the sum and then to calculate the final value.
         for (uint32_t cur_pass = 0; cur_pass < total_passes; cur_pass++) {
