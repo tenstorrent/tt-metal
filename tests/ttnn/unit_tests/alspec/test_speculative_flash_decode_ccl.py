@@ -10,12 +10,14 @@ import numpy as np
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.alspec.test_speculative_flash_decode import (
-    nearest_n,
-    nearest_pow_2,
     num_to_corerange,
     fa_rand,
     get_speculative_flash_decode_expected,
     prepare_test_config_and_data,
+)
+from models.tt_transformers.tt.alspec_common import (
+    nearest_n,
+    nearest_pow_2,
 )
 
 

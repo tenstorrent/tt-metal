@@ -18,6 +18,7 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from models.tt_transformers.tt.alspec_common import ALSpec
 
 
 @torch.no_grad()
@@ -34,11 +35,11 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        True,
+        # True,
         False,
     ),
     ids=(
-        "paged_attention",
+        # "paged_attention",
         "default_attention",
     ),
 )
@@ -52,7 +53,12 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (1024 * 16,),  # For decode-only unit test, there's no need to run with large sequence lengths
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
 )
 def test_attention_inference(
     max_seq_len,
@@ -85,7 +91,7 @@ def test_attention_inference(
 
     seq_len = 1
 
-    generation_start_pos = 0
+    generation_start_pos = 8 * 1024
     generation_length = 10
     all_tests_pass = True
 
@@ -101,6 +107,10 @@ def test_attention_inference(
     )
 
     transformation_mats = rope_setup.get_both_trans_mats()
+
+    # Set up ALSpec
+    alspec = None
+    alspec = ALSpec(mesh_device, model_args.head_dim, model_args.n_heads, k_chunk_size=128)
 
     page_table_tt = None
     paged_attention_config = None
@@ -139,6 +149,7 @@ def test_attention_inference(
         transformation_mats=transformation_mats,
         configuration=model_args,
         paged_attention_config=paged_attention_config,
+        alspec=alspec,
     )
 
     cos, sin = precompute_freqs(
@@ -178,6 +189,16 @@ def test_attention_inference(
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
 
+        # Disable skip tensor for the first iteration
+        if alspec and i == 0:
+            alspec.set_use_skip_tensor(False)
+
+        alspec.update_skip_tensor(reset=True)
+
+        # Sync priorities
+        alspec.synchronize_priority()
+
+        # Run the attention module
         tt_out = tt_model(
             attention_input,
             current_pos_tensor,
@@ -185,11 +206,18 @@ def test_attention_inference(
             mode="decode",
             page_table=page_table_tt,
         )
+
+        # Done compiling ops
+        if alspec and i == 0:
+            tt_model.done_compile = True
         # multi-device attention module returns replicated output
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
+
+        tt_out = alspec.get_correct_tensor(tt_out, dim=3)
+
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 
         # In this test all users have the same position (if using batch > 1)

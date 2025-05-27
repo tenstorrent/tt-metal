@@ -23,6 +23,7 @@ class Attention(LightweightModule):
         configuration,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        alspec=None,
     ):
         super().__init__()
 
@@ -53,6 +54,8 @@ class Attention(LightweightModule):
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 
         self.use_sfd = configuration.use_sfd
+        self.alspec = None if not self.use_sfd else alspec
+        self.done_compile = False
 
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
@@ -345,7 +348,7 @@ class Attention(LightweightModule):
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-            dtype=xself.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
         )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
@@ -453,6 +456,19 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+        elif self.use_sfd and self.alspec:
+            print("Using speculative SDPA decode")
+            attn_output_1G4D = self.alspec.speculative_sdpa_decode(
+                q_heads_1BQD,
+                keys,
+                values,
+                cur_pos_tensor=current_pos,
+            )
+
+            self.alspec.update_skip_tensor()
+
+            if not self.done_compile:
+                self.alspec.set_use_skip_tensor(True)
         else:
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
                 q_heads_1BQD,

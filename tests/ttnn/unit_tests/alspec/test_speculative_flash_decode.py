@@ -15,25 +15,14 @@ import math
 import numpy as np
 from tqdm import tqdm
 
+from models.tt_transformers.tt.alspec_common import (
+    nearest_n,
+    nearest_pow_2,
+)
+
 
 def is_watcher_enabled():
     return os.environ.get("TT_METAL_WATCHER") is not None
-
-
-def nearest_n(x, n):
-    return ((x + n - 1) // n) * n
-
-
-def nearest_pow_2(x):
-    if x < 1:
-        raise ValueError("x must be >= 1")
-    import math
-
-    power = math.ceil(math.log2(x))
-    return 1 << power
-    # if (2**math.log2(x) == x):
-    #     return x
-    # return 2**(int(x).bit_length())
 
 
 def num_to_corerange(x):
