@@ -664,7 +664,8 @@ Result conv2d_L1(
             mm_output_memory_config,
             conv_config.dtype,
             program_config,
-            activation);
+            activation,
+            compute_config);
 
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
