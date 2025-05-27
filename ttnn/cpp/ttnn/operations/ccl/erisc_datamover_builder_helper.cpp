@@ -124,8 +124,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             edm_builders_forward_direction[src_device->id()].reserve(local_link_cores.size());
             edm_builders_backward_direction[dest_device->id()].reserve(local_link_cores.size());
             for (size_t l = 0; l < this->num_links; l++) {
-                std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder> fwd_edm_builders_for_risc;
-                std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder> bwd_edm_builders_for_risc;
                 const auto curr_edm_config =
                     tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dateline);
                 log_trace(

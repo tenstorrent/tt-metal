@@ -204,14 +204,15 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             sender_channels_buffer_index_address.begin() + this->num_used_sender_channels)
                 .size() == this->num_used_sender_channels,
         "FabricEriscDatamoverConfig was constructed with illegal buffer index address");
-    static const size_t min_buffer_size = sizeof(tt::tt_fabric::PacketHeader);
+
+    const size_t min_buffer_size = sizeof(tt::tt_fabric::PacketHeader);
     TT_FATAL(
         channel_buffer_size_bytes >= min_buffer_size,
         "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than "
         "minimum "
         "size of {}",
         min_buffer_size);
-
+    this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     constexpr std::array<std::pair<size_t, size_t>, 1> linear_buffer_slot_options = {std::pair<size_t, size_t>{8, 16}};
     constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options = {
         std::pair<size_t, size_t>{8, 8}, std::pair<size_t, size_t>{4, 8}};
@@ -303,7 +304,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             num_sender_buffer_slots,
             num_receiver_buffer_slots);
     }
-    size_t total_slot_count =
+
+    std::size_t total_slot_count =
         num_alive_sender_channels * num_sender_buffer_slots + num_alive_receiver_channels * num_receiver_buffer_slots;
     TT_FATAL(
         total_slot_count * channel_buffer_size_bytes <= available_channel_buffering_space,
@@ -505,8 +507,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     edm_status_ptr(config.edm_status_address),
     enable_persistent_mode(enable_persistent_mode),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
-    dateline_connection(dateline_connection),
-    risc_id(risc_id) {
+    dateline_connection(dateline_connection) {
     std::fill(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),

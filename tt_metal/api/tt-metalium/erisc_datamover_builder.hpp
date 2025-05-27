@@ -278,7 +278,6 @@ public:
     //    protected:
     friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
-    size_t risc_id = 0;
     size_t my_noc_x = 0;
     size_t my_noc_y = 0;
 
