@@ -85,7 +85,7 @@ class TtLinearParameters:
             bias = torch.cat([bias] + [zeros] * (mesh_width - 1), dim=0)
             bias_mm = ttnn.ShardTensor2dMesh(device, mesh_shape=(mesh_height, mesh_width), dims=(None, 0))
         elif shard_dim in [1, -1]:
-            bias_mm = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, 1])
+            bias_mm = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, shard_dim])
         else:
             bias_mm = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=[None, None])
 

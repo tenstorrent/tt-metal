@@ -9,7 +9,6 @@ from dataclasses import dataclass
 import torch
 import ttnn
 
-from . import utils
 from .utils import from_torch_fast, from_torch_fast_2d
 
 
@@ -56,7 +55,6 @@ class TtLayerNormParameters:
 
         weight = state.get("weight")
         bias = state.get("bias")
-
         if distributed:
             # ttnn.layer_norm_post_all_gather currently requires weight and bias
             if weight is None:
@@ -143,17 +141,15 @@ def sd_layer_norm(
         dtype=ttnn.bfloat16,
     )
 
-    stats = utils.all_gather(
+    stats = ttnn.experimental.all_gather_async(
         stats,
         dim=len(x.shape) - 1,
+        cluster_axis=parallel_config.tensor_parallel.mesh_axis,
         mesh_device=x.device(),
-        cluster_axis=parallel_config.sequence_parallel.mesh_axis
-        if parallel_config.sequence_parallel.factor > 1
-        else None,
-        # all_gather currently requires linear topology when specifying a cluster axis
         topology=parallel_config.topology,
         multi_device_global_semaphore=ag_global_semaphore,
-        parallel_config=parallel_config,
+        memory_config=memory_config,
+        num_links=1,
     )
 
     x = ttnn.layer_norm_post_all_gather(
