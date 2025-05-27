@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <map>

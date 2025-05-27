@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -53,9 +52,7 @@ struct AvgPool2DOp {
 
 }  // namespace operations::pool
 
-constexpr auto max_pool2d =
-    ttnn::register_operation<"ttnn::max_pool2d", operations::pool::MaxPool2DOp>();
-constexpr auto avg_pool2d =
-    ttnn::register_operation<"ttnn::avg_pool2d", operations::pool::AvgPool2DOp>();
+constexpr auto max_pool2d = ttnn::register_operation<"ttnn::max_pool2d", operations::pool::MaxPool2DOp>();
+constexpr auto avg_pool2d = ttnn::register_operation<"ttnn::avg_pool2d", operations::pool::AvgPool2DOp>();
 
 }  // namespace ttnn
