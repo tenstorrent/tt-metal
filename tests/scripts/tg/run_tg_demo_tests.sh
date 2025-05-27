@@ -29,17 +29,13 @@ run_tg_llama3_tests() {
 
 run_tg_llama3_8b_dp_tests() {
   fail=0
-  start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_tg_llama3_8b_dp_tests"
 
   llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
-  LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
+  LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
   echo "LOG_METAL: Llama3 8B tests for $llama_dir completed"
 
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_tg_llama3_8b_dp_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -47,17 +43,13 @@ run_tg_llama3_8b_dp_tests() {
 
 run_tg_llama3_70b_dp_tests() {
   fail=0
-  start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_tg_llama3_70b_dp_tests"
 
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
-  LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
+  LLAMA_DIR=$llama_dir MESH_DEVICE=TG pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
   echo "LOG_METAL: Llama3 70B tests for $llama_dir completed"
 
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_tg_llama3_70b_dp_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
