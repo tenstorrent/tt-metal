@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,7 +51,7 @@ public:
 
     uint32_t get_completion_queue_limit(uint8_t cq_id) const;
 
-    uint32_t get_issue_queue_write_ptr(uint8_t cq_id) const;
+    size_t get_issue_queue_write_ptr(uint8_t cq_id) const;
 
     uint32_t get_completion_queue_read_ptr(uint8_t cq_id) const;
 
@@ -63,12 +63,12 @@ public:
 
     std::vector<SystemMemoryCQInterface>& get_cq_interfaces();
 
-    void* issue_queue_reserve(uint32_t cmd_size_B, uint8_t cq_id);
+    void* issue_queue_reserve(size_t cmd_size_B, uint8_t cq_id);
 
     void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr);
 
     // TODO: RENAME issue_queue_stride ?
-    void issue_queue_push_back(uint32_t push_size_B, uint8_t cq_id);
+    void issue_queue_push_back(size_t push_size_B, uint8_t cq_id);
 
     uint32_t completion_queue_wait_front(uint8_t cq_id, std::atomic<bool>& exit_condition) const;
 
@@ -103,7 +103,7 @@ private:
 
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;
-    uint32_t bypass_buffer_write_offset = 0;
+    size_t bypass_buffer_write_offset = 0;
 };
 
 }  // namespace tt::tt_metal

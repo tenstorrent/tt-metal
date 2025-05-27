@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -71,19 +71,19 @@ struct BufferReadDispatchParams {
     tt::stl::Span<const uint32_t> expected_num_workers_completed;
     uint32_t cq_id = 0;
     IDevice* device = nullptr;
-    uint32_t padded_page_size = 0;
-    uint32_t src_page_index = 0;
-    uint32_t unpadded_dst_offset = 0;
-    uint32_t pages_per_txn = 0;
-    uint32_t address = 0;
-    uint32_t total_pages_to_read = 0;
-    uint32_t total_pages_read = 0;
-    uint32_t num_banks = 0;
+    size_t padded_page_size = 0;
+    size_t src_page_index = 0;
+    size_t unpadded_dst_offset = 0;
+    size_t pages_per_txn = 0;
+    size_t address = 0;
+    size_t total_pages_to_read = 0;
+    size_t total_pages_read = 0;
+    size_t num_banks = 0;
 
     virtual ~BufferReadDispatchParams() = default;
 
     virtual void update_params_to_be_within_bounds(const Buffer& buffer) {
-        const uint32_t num_pages_per_bank = this->src_page_index / this->num_banks;
+        const size_t num_pages_per_bank = this->src_page_index / this->num_banks;
         this->address += num_pages_per_bank * this->padded_page_size;
         this->src_page_index = this->src_page_index % this->num_banks;
     }
@@ -98,8 +98,8 @@ struct BufferReadDispatchParams {
 };
 
 struct PartialPageSpec {
-    uint32_t partial_page_size = 0;
-    uint32_t num_partial_pages_per_full_page = 0;
+    size_t partial_page_size = 0;
+    size_t num_partial_pages_per_full_page = 0;
 };
 
 struct BufferReadLargePageDispatchParams : BufferReadDispatchParams {
@@ -110,11 +110,11 @@ using BufferReadDispatchParamsVariant = std::variant<BufferReadDispatchParams, B
 
 struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     bool width_split = false;
-    uint32_t initial_pages_skipped = 0;
-    uint32_t starting_src_host_page_index = 0;
+    size_t initial_pages_skipped = 0;
+    size_t starting_src_host_page_index = 0;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping = nullptr;
-    uint32_t total_pages_read = 0;
-    uint32_t max_pages_per_shard = 0;
+    size_t total_pages_read = 0;
+    size_t max_pages_per_shard = 0;
     CoreCoord core;
 };
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,8 @@
 
 namespace tt::tt_metal {
 
-SystemMemoryCQInterface::SystemMemoryCQInterface(uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t cq_start) :
+SystemMemoryCQInterface::SystemMemoryCQInterface(
+    uint16_t channel, uint8_t cq_id, std::size_t cq_size, std::size_t cq_start) :
     cq_start(cq_start),
     command_completion_region_size(
         (((cq_size - cq_start) / DispatchSettings::TRANSFER_PAGE_SIZE) / 4) * DispatchSettings::TRANSFER_PAGE_SIZE),

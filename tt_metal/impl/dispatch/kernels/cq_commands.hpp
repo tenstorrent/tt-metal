@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -99,16 +99,19 @@ constexpr uint32_t CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK = 0x7fff;
 struct CQPrefetchRelayPagedCmd {
     uint8_t start_page;
     uint16_t is_dram_and_length_adjust;  // is_dram flag and bytes subtracted from size (multiple of 32)
-    uint32_t base_addr;
-    uint32_t page_size;
-    uint32_t pages;
+    uint64_t base_addr;
+    uint64_t page_size;
+    uint64_t pages;
+    uint32_t pad;
 } __attribute__((packed));
 
 struct CQPrefetchRelayPagedPackedCmd {
     uint8_t pad1;
     uint16_t count;
-    uint32_t total_length;  // aggregate length of all sub-read-cmds
-    uint32_t stride;        // stride to start of next cmd
+    uint64_t total_length;  // aggregate length of all sub-read-cmds
+    uint64_t stride;        // stride to start of next cmd
+    uint64_t pad2;
+    uint32_t pad3;
 } __attribute__((packed));
 
 struct CQPrefetchRelayPagedPackedSubCmd {
@@ -124,16 +127,19 @@ constexpr uint32_t CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS = 35;
 struct CQPrefetchRelayInlineCmd {
     uint8_t dispatcher_type;
     uint16_t pad;
-    uint32_t length;
-    uint32_t stride;  // explicit stride saves a few insns on device
+    uint64_t length;
+    uint64_t stride;  // explicit stride saves a few insns on device
+    uint64_t pad2;
+    uint32_t pad3;
 } __attribute__((packed));
 
 struct CQPrefetchExecBufCmd {
     uint8_t pad1;
-    uint16_t pad2;
-    uint32_t base_addr;
-    uint32_t log_page_size;
-    uint32_t pages;
+    uint64_t base_addr;
+    uint64_t log_page_size;
+    uint64_t pages;
+    uint32_t pad2;
+    uint16_t pad3;
 } __attribute__((packed));
 
 // Reset the write pointer to the start of the ring buffer. If this isn't set,
@@ -201,8 +207,7 @@ struct CQDispatchWriteHostCmd {
     uint8_t is_event;  // one flag, false=read buffer
     uint16_t pad1;
     uint32_t pad2;
-    uint32_t pad3;
-    uint32_t length;
+    uint64_t length;
 } __attribute__((packed));
 
 constexpr uint16_t CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX = 0xFFFF;
@@ -299,8 +304,10 @@ constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM = 0x10;
 struct CQDispatchWaitCmd {
     uint8_t flags;    // see above
     uint16_t stream;  // stream to read/write
-    uint32_t addr;   // address to read
-    uint32_t count;  // wait while address is < count
+    uint64_t addr;    // address to read
+    uint64_t count;   // wait while address is < count
+    uint64_t pad;
+    uint32_t pad2;  // padding to align to 16 bytes
 } __attribute__((packed));
 
 struct CQDispatchDelayCmd {

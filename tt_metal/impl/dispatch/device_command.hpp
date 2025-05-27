@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -52,26 +52,25 @@ public:
 
     vector_aligned<uint32_t> cmd_vector() const;
 
-    void add_dispatch_wait(
-        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type = 0);
+    void add_dispatch_wait(uint32_t flags, size_t address, uint32_t stream, size_t count, uint8_t dispatcher_type = 0);
 
-    void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
+    void add_dispatch_wait_with_prefetch_stall(uint32_t flags, size_t address, uint32_t stream, size_t count);
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr);
 
     void add_prefetch_relay_paged(
         uint8_t is_dram,
         uint8_t start_page,
-        uint32_t base_addr,
-        uint32_t page_size,
-        uint32_t pages,
+        size_t base_addr,
+        size_t page_size,
+        size_t pages,
         uint16_t length_adjust = 0);
 
     void add_prefetch_relay_paged_packed(
-        uint32_t length,
+        size_t length,
         const std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
         uint16_t num_sub_cmds,
-        uint32_t offset_idx = 0);
+        size_t offset_idx = 0);
 
     template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear(
@@ -104,7 +103,7 @@ public:
         const void* data = nullptr);
 
     template <bool inline_data = false>
-    void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, bool is_event, const void* data = nullptr);
+    void add_dispatch_write_host(bool flush_prefetch, size_t data_sizeB, bool is_event, const void* data = nullptr);
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
 
@@ -123,7 +122,7 @@ public:
 
     void update_cmd_sequence(uint32_t cmd_offsetB, const void* new_data, uint32_t data_sizeB);
 
-    void add_data(const void* data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB)
+    void add_data(const void* data, size_t data_size_to_copyB, size_t cmd_write_offset_incrementB)
         __attribute((nonnull(2)));
 
     template <typename PackedSubCmd>
@@ -178,7 +177,7 @@ public:
         uint32_t write_offset_index = 0);
 
     template <typename CommandPtr, bool data = false>
-    CommandPtr reserve_space(uint32_t size_to_writeB) {
+    CommandPtr reserve_space(size_t size_to_writeB) {
         this->validate_cmd_write(size_to_writeB);
         CommandPtr cmd = (CommandPtr)((char*)this->cmd_region + this->cmd_write_offsetB);
         // Only zero out cmds
@@ -195,7 +194,7 @@ private:
     static bool zero_init_enable;
 
     void add_prefetch_relay_inline(
-        bool flush, uint32_t lengthB, DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER);
+        bool flush, size_t lengthB, DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER);
 
     // Write packed large cmd and subcmds, but not data.
     void add_dispatch_write_packed_large_internal(
@@ -208,7 +207,7 @@ private:
         const uint32_t offset_idx,
         uint32_t write_offset_index);
 
-    void validate_cmd_write(uint32_t data_sizeB) const;
+    void validate_cmd_write(size_t data_sizeB) const;
 
     void deepcopy(const DeviceCommand& other);
 
@@ -224,11 +223,10 @@ private:
         }
     }
 
-    uint32_t cmd_sequence_sizeB = 0;
+    size_t cmd_sequence_sizeB = 0;
     void* cmd_region = nullptr;
-    uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+    size_t cmd_write_offsetB = 0;
+    size_t pcie_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
     uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 
     vector_aligned<uint32_t> cmd_region_vector;

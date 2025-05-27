@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,7 +40,7 @@ enum class CommandQueueHostAddrType : uint8_t {
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t relative offset
-uint32_t get_relative_cq_offset(uint8_t cq_id, uint32_t cq_size);
+size_t get_relative_cq_offset(uint8_t cq_id, size_t cq_size);
 
 // used in system_memory_manager and device
 uint16_t get_umd_channel(uint16_t channel);
@@ -52,20 +52,20 @@ uint16_t get_umd_channel(uint16_t channel);
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t absolute offset
-uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size);
+size_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, size_t cq_size);
 
 // mostly used in debug_tools
 template <bool addr_16B>
-uint32_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
+size_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, size_t cq_size);
 
 template <bool addr_16B>
-uint32_t get_cq_issue_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
+size_t get_cq_issue_wr_ptr(chip_id_t chip_id, uint8_t cq_id, size_t cq_size);
 
 // has usage in system_memory_manager.cpp
 template <bool addr_16B>
-uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
+size_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, size_t cq_size);
 
 template <bool addr_16B>
-uint32_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
+size_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, size_t cq_size);
 
 }  // namespace tt::tt_metal

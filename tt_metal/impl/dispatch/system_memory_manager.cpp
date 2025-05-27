@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -211,7 +211,7 @@ uint32_t SystemMemoryManager::get_completion_queue_limit(const uint8_t cq_id) co
     return this->cq_interfaces[cq_id].completion_fifo_limit << 4;
 }
 
-uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) const {
+size_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) const {
     if (this->bypass_enable) {
         return this->bypass_buffer_write_offset;
     } else {
@@ -233,17 +233,17 @@ chip_id_t SystemMemoryManager::get_device_id() const { return this->device_id; }
 
 std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() { return this->cq_interfaces; }
 
-void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
+void* SystemMemoryManager::issue_queue_reserve(size_t cmd_size_B, const uint8_t cq_id) {
     if (this->bypass_enable) {
-        uint32_t curr_size = this->bypass_buffer.size();
-        uint32_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
+        size_t curr_size = this->bypass_buffer.size();
+        size_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
         this->bypass_buffer.resize(new_size);
         return (void*)((char*)this->bypass_buffer.data() + this->bypass_buffer_write_offset);
     }
 
-    uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
+    size_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
 
-    const uint32_t command_issue_limit = this->get_issue_queue_limit(cq_id);
+    const size_t command_issue_limit = this->get_issue_queue_limit(cq_id);
     if (issue_q_write_ptr +
             align(
                 cmd_size_B,
@@ -287,20 +287,20 @@ void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uin
 }
 
 // TODO: RENAME issue_queue_stride ?
-void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
+void SystemMemoryManager::issue_queue_push_back(size_t push_size_B, const uint8_t cq_id) {
     if (this->bypass_enable) {
         this->bypass_buffer_write_offset += push_size_B;
         return;
     }
 
     // All data needs to be PCIE_ALIGNMENT aligned
-    uint32_t push_size_16B =
+    size_t push_size_16B =
         align(
             push_size_B, tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST)) >>
         4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-    uint32_t issue_q_wr_ptr =
+    size_t issue_q_wr_ptr =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
 
     if (cq_interface.issue_fifo_wr_ptr + push_size_16B >= cq_interface.issue_fifo_limit) {
@@ -349,7 +349,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         return;
     }
 
-    const uint32_t prefetch_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+    const size_t prefetch_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
         CommandQueueDeviceAddrType::PREFETCH_Q_RD);
 
     // Helper to wait for fetch queue space, if needed

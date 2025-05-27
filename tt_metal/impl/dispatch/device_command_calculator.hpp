@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@
 namespace tt::tt_metal {
 class DeviceCommandCalculator {
 public:
-    uint32_t write_offset_bytes() const { return this->cmd_write_offsetB; }
+    size_t write_offset_bytes() const { return this->cmd_write_offsetB; }
 
     void add_dispatch_wait() {
         this->add_prefetch_relay_inline();
@@ -39,10 +39,10 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
-    void add_data(uint32_t cmd_write_offset_incrementB) { this->cmd_write_offsetB += cmd_write_offset_incrementB; }
+    void add_data(size_t cmd_write_offset_incrementB) { this->cmd_write_offsetB += cmd_write_offset_incrementB; }
 
     template <bool flush_prefetch = true, bool inline_data = false>
-    void add_dispatch_write_linear(uint32_t data_sizeB) {
+    void add_dispatch_write_linear(size_t data_sizeB) {
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += sizeof(CQDispatchCmd);
 
@@ -59,7 +59,7 @@ public:
         }
     }
 
-    void add_dispatch_write_linear_host_event(uint32_t data_sizeB) {
+    void add_dispatch_write_linear_host_event(size_t data_sizeB) {
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += sizeof(CQDispatchCmd) + data_sizeB;
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
@@ -89,7 +89,7 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
-    void add_dispatch_set_go_signal_noc_data(uint32_t num_words) {
+    void add_dispatch_set_go_signal_noc_data(size_t num_words) {
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += sizeof(CQDispatchCmd) + num_words * sizeof(uint32_t);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
@@ -108,8 +108,8 @@ public:
     }
 
     template <bool inline_data = false>
-    void add_dispatch_write_paged(uint32_t page_size, uint32_t pages) {
-        uint32_t data_sizeB = page_size * pages;
+    void add_dispatch_write_paged(size_t page_size, size_t pages) {
+        size_t data_sizeB = page_size * pages;
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += sizeof(CQDispatchCmd);
         if constexpr (inline_data) {
@@ -220,9 +220,8 @@ public:
 
 private:
     void add_prefetch_relay_inline() { this->cmd_write_offsetB += sizeof(CQPrefetchCmd); }
-    uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    size_t cmd_write_offsetB = 0;
+    size_t pcie_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+    size_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 };
 }  // namespace tt::tt_metal

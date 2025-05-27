@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -92,7 +92,7 @@ private:
     uint32_t dispatch_buffer_base_ = 0;
 
     uint32_t dispatch_buffer_block_size_pages_ = 0;
-    std::vector<uint32_t> device_cq_addrs_;
+    std::vector<size_t> device_cq_addrs_;
 
     DispatchSettings settings;
 

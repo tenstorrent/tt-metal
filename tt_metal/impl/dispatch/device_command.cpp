@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -103,7 +103,7 @@ vector_aligned<uint32_t> DeviceCommand<hugepage_write>::cmd_vector() const {
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait(
-    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type) {
+    uint32_t flags, size_t address, uint32_t stream, size_t count, uint8_t dispatcher_type) {
     auto initialize_wait_cmds = [&](CQPrefetchCmd* relay_wait, CQDispatchCmd* wait_cmd) {
         relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
         relay_wait->relay_inline.dispatcher_type = dispatcher_type;
@@ -134,7 +134,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait_with_prefetch_stall(
-    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count) {
+    uint32_t flags, size_t address, uint32_t stream, size_t count) {
     this->add_dispatch_wait(flags | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH, address, stream, count);
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     auto initialize_stall_cmd = [&](CQPrefetchCmd* stall_cmd) {
@@ -174,12 +174,7 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_linear(uint32_t noc_xy_ad
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_prefetch_relay_paged(
-    uint8_t is_dram,
-    uint8_t start_page,
-    uint32_t base_addr,
-    uint32_t page_size,
-    uint32_t pages,
-    uint16_t length_adjust) {
+    uint8_t is_dram, uint8_t start_page, size_t base_addr, size_t page_size, size_t pages, uint16_t length_adjust) {
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     auto initialize_relay_paged_cmd = [&](CQPrefetchCmd* relay_paged_cmd) {
         TT_ASSERT((length_adjust & CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK) == length_adjust);
@@ -205,10 +200,10 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_paged(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_prefetch_relay_paged_packed(
-    uint32_t length,
+    size_t length,
     const std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
     uint16_t num_sub_cmds,
-    uint32_t offset_idx) {
+    size_t offset_idx) {
     static_assert(sizeof(CQPrefetchRelayPagedPackedSubCmd) % sizeof(uint32_t) == 0);
 
     uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayPagedPackedSubCmd);
@@ -396,8 +391,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_paged(
 template <bool hugepage_write>
 template <bool inline_data>
 void DeviceCommand<hugepage_write>::add_dispatch_write_host(
-    bool flush_prefetch, uint32_t data_sizeB, bool is_event, const void* data) {
-    uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? data_sizeB : 0);
+    bool flush_prefetch, size_t data_sizeB, bool is_event, const void* data) {
+    size_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? data_sizeB : static_cast<size_t>(0));
     this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
     auto initialize_write_cmd = [&](CQDispatchCmd* write_cmd) {
@@ -418,7 +413,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_host(
     }
 
     if (inline_data) {
-        TT_ASSERT(data != nullptr);  // compiled out?
+        TT_ASSERT(data != nullptr);
         this->add_data(data, data_sizeB, data_sizeB);
     }
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
@@ -597,10 +592,10 @@ void DeviceCommand<hugepage_write>::update_cmd_sequence(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_data(
-    const void* data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB) {
+    const void* data, size_t data_size_to_copyB, size_t cmd_write_offset_incrementB) {
     this->validate_cmd_write(cmd_write_offset_incrementB);
     this->memcpy((uint8_t*)this->cmd_region + this->cmd_write_offsetB, data, data_size_to_copyB);
-    this->cmd_write_offsetB += cmd_write_offset_incrementB;
+    this->cmd_write_offsetB += static_cast<size_t>(cmd_write_offset_incrementB);
 }
 
 template <bool hugepage_write>
@@ -813,12 +808,12 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_prefetch_relay_inline(
-    bool flush, uint32_t lengthB, DispatcherSelect dispatcher_type) {
+    bool flush, size_t lengthB, DispatcherSelect dispatcher_type) {
     if (!flush) {
-        uint32_t dispatch_page_size = 1
-                                      << (dispatcher_type == DispatcherSelect::DISPATCH_MASTER
-                                              ? DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE
-                                              : DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
+        size_t dispatch_page_size = static_cast<size_t>(1)
+                                    << (dispatcher_type == DispatcherSelect::DISPATCH_MASTER
+                                            ? DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE
+                                            : DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
         TT_ASSERT(
             lengthB <= dispatch_page_size,
             "Data to relay for inline no flush {} must fit within one dispatch page {}",
@@ -884,8 +879,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large_internal(
 }
 
 template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::validate_cmd_write(uint32_t data_sizeB) const {
-    uint32_t data_endB = this->cmd_write_offsetB + data_sizeB;
+void DeviceCommand<hugepage_write>::validate_cmd_write(size_t data_sizeB) const {
+    size_t data_endB = this->cmd_write_offsetB + data_sizeB;
     TT_ASSERT(
         data_endB <= this->cmd_sequence_sizeB,
         "Out of bounds command sequence write: attemping to write {} B but only {} B available",
@@ -929,10 +924,10 @@ template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePack
 template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
 template void DeviceCommand<false>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>&, uint32_t, const uint32_t, const bool, uint32_t);
 
-template void DeviceCommand<true>::add_dispatch_write_host<false>(bool, uint32_t, bool, const void*);
-template void DeviceCommand<true>::add_dispatch_write_host<true>(bool, uint32_t, bool, const void*);
-template void DeviceCommand<false>::add_dispatch_write_host<false>(bool, uint32_t, bool, const void*);
-template void DeviceCommand<false>::add_dispatch_write_host<true>(bool, uint32_t, bool, const void*);
+template void DeviceCommand<true>::add_dispatch_write_host<false>(bool, uint64_t, bool, const void*);
+template void DeviceCommand<true>::add_dispatch_write_host<true>(bool, uint64_t, bool, const void*);
+template void DeviceCommand<false>::add_dispatch_write_host<false>(bool, uint64_t, bool, const void*);
+template void DeviceCommand<false>::add_dispatch_write_host<true>(bool, uint64_t, bool, const void*);
 
 template void DeviceCommand<true>::add_dispatch_write_paged<false>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
 template void DeviceCommand<true>::add_dispatch_write_paged<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
