@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/examples/example_multiple_return/example_multiple_return_pybind.hpp"
+#include "example_multiple_return_pybind.hpp"
+
+#include <pybind11/pybind11.h>
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/examples/example_multiple_return/example_multiple_return.hpp"
-
-namespace py = pybind11;
 
 namespace ttnn::operations::examples {
 

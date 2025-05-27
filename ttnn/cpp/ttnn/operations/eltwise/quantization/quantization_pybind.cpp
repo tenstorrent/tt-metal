@@ -2,16 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn-pybind/decorators.hpp"
-
 #include "quantization_pybind.hpp"
-#include "quantization.hpp"
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 
+#include <fmt/format.h>
+#include <pybind11/pybind11.h>
+#include "ttnn-pybind/decorators.hpp"
+
+#include "quantization.hpp"
+
 namespace ttnn::operations::quantization {
-namespace detail {
+namespace {
 
 template <typename T>
 void bind_quantize_operation(
@@ -256,11 +261,11 @@ void bind_dequantize_operation(
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_module(py::module& module) {
-    detail::bind_quantize_operation(module, ttnn::quantize, "Quantize Operation");
-    detail::bind_requantize_operation(module, ttnn::requantize, "Re-quantize Operation");
-    detail::bind_dequantize_operation(module, ttnn::dequantize, "De-quantize Operation");
+    bind_quantize_operation(module, ttnn::quantize, "Quantize Operation");
+    bind_requantize_operation(module, ttnn::requantize, "Re-quantize Operation");
+    bind_dequantize_operation(module, ttnn::dequantize, "De-quantize Operation");
 }
 }  // namespace ttnn::operations::quantization
