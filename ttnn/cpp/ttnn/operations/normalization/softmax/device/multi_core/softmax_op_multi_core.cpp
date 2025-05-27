@@ -255,9 +255,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     auto c_intermed1_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_7, im_cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_7, im_tile_size);
     auto cb_intermed1_id = CreateCircularBuffer(program, all_device_cores, c_intermed1_config);
-    auto c_intermedsum_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_12, im_cb_data_format}})
-                                    .set_page_size(tt::CBIndex::c_12, im_tile_size);
-    auto cb_intermedsum_id = CreateCircularBuffer(program, all_device_cores, c_intermedsum_config);
     auto c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{tt::CBIndex::c_2, scalar_cb_data_format}})
                             .set_page_size(tt::CBIndex::c_2, scalar_tile_size);
     auto cb_in2_id = CreateCircularBuffer(program, all_device_cores, c_in2_config);
