@@ -32,6 +32,7 @@ class KernelData:
     source: str
     program_id: int
 
+
 @dataclass
 class ProgramData:
     id: int
@@ -41,6 +42,7 @@ class ProgramData:
 
     def get_device_binary_status(self, device_id: int) -> str:
         return self.binary_status_per_device.get(device_id, "NotSet")
+
 
 def get_kernels(log_directory: str) -> list[KernelData]:
     yaml_path = os.path.join(log_directory, "kernels.yaml")
@@ -61,6 +63,7 @@ def get_kernels(log_directory: str) -> list[KernelData]:
         )
     return kernels
 
+
 def get_programs(log_directory: str, verbose: bool = False) -> list[ProgramData]:
     yaml_path = os.path.join(log_directory, "programs_log.yaml")
     with open(yaml_path, "r") as f:
@@ -72,10 +75,18 @@ def get_programs(log_directory: str, verbose: bool = False) -> list[ProgramData]
             startup_data = yaml.safe_load(f)
             for entry, startup_time in startup_data.items():
                 assert entry == "startup_time", "Expected 'startup_time' entry in startup.yaml"
-                startup_system_clock = datetime.strptime(startup_time.get("system_clock_iso"), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
+                startup_system_clock = (
+                    datetime.strptime(startup_time.get("system_clock_iso"), "%Y-%m-%dT%H:%M:%SZ")
+                    .replace(tzinfo=timezone.utc)
+                    .astimezone()
+                )
                 startup_clock_ns = int(startup_time.get("high_resolution_clock_ns", 0))
-        convert_timestamp = lambda timestamp_ns: startup_system_clock + timedelta(microseconds=(timestamp_ns - startup_clock_ns) / 1000)
-        print_log = lambda timestamp_ns, message: print(f"  {convert_timestamp(timestamp_ns).strftime('%Y-%m-%d %H:%M:%S.%f')}: {message}")
+        convert_timestamp = lambda timestamp_ns: startup_system_clock + timedelta(
+            microseconds=(timestamp_ns - startup_clock_ns) / 1000
+        )
+        print_log = lambda timestamp_ns, message: print(
+            f"  {convert_timestamp(timestamp_ns).strftime('%Y-%m-%d %H:%M:%S.%f')}: {message}"
+        )
 
     programs: list[ProgramData] = []
     for entry in data:
@@ -109,13 +120,19 @@ def get_programs(log_directory: str, verbose: bool = False) -> list[ProgramData]
             watcher_kernel_id = int(info.get("watcher_kernel_id"))
             programs[program_id].watcher_kernel_ids.append(watcher_kernel_id)
             if verbose:
-                print_log(int(info.get("timestamp_ns")), f"Program {program_id} kernel {watcher_kernel_id} compile finished in {info.get('duration_ns')/1000000} ms")
+                print_log(
+                    int(info.get("timestamp_ns")),
+                    f"Program {program_id} kernel {watcher_kernel_id} compile finished in {info.get('duration_ns')/1000000} ms",
+                )
         elif "program_compile_finished" in entry:
             info = entry["program_compile_finished"]
             program_id = int(info.get("id"))
             programs[program_id].compiled = True
             if verbose:
-                print_log(int(info.get("timestamp_ns")), f"Program {program_id} compile finished in {info.get('duration_ns')/1000000} ms")
+                print_log(
+                    int(info.get("timestamp_ns")),
+                    f"Program {program_id} compile finished in {info.get('duration_ns')/1000000} ms",
+                )
         elif "program_compile_already_exists" in entry:
             info = entry["program_compile_already_exists"]
             program_id = int(info.get("id"))
@@ -128,18 +145,24 @@ def get_programs(log_directory: str, verbose: bool = False) -> list[ProgramData]
             device_id = int(info.get("device_id"))
             programs[program_id].binary_status_per_device[device_id] = info.get("status")
             if verbose:
-                print_log(int(info.get("timestamp_ns")), f"Program {program_id} binary status changed to {info.get('status')}")
+                print_log(
+                    int(info.get("timestamp_ns")), f"Program {program_id} binary status changed to {info.get('status')}"
+                )
     if verbose:
         print()
     return programs
+
 
 def get_devices_in_use(programs: list[ProgramData]) -> set[int]:
     used_devices = set()
     for program in programs:
         # Only include devices with status "Committed"
-        committed_devices = {device_id for device_id, status in program.binary_status_per_device.items() if status == "Committed"}
+        committed_devices = {
+            device_id for device_id, status in program.binary_status_per_device.items() if status == "Committed"
+        }
         used_devices.update(committed_devices)
     return used_devices
+
 
 def main():
     args = docopt(__doc__, argv=sys.argv[1:])

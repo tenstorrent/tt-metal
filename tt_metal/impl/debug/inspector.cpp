@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "inspector.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
