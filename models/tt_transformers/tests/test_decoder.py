@@ -203,7 +203,8 @@ def test_decoder_inference(
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
 
-        tt_out = alspec.get_correct_tensor(tt_out, dim=3)
+        if alspec:
+            tt_out = alspec.get_correct_tensor(tt_out, dim=3)
 
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
         # In this test all users have the same position

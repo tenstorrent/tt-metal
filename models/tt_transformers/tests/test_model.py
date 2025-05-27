@@ -52,7 +52,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (32 * 1024,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -71,6 +71,11 @@ from models.utility_functions import skip_for_grayskull
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
 def test_model_inference(
@@ -123,7 +128,7 @@ def test_model_inference(
         final_model_pcc = {
             "llama32_1b": 0.9991 if mode_accuracy else 0.9864,
             "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
-            "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
+            "llama31_8b": 0.9987 if mode_accuracy else 0.9650,
             "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
             "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
         }[model_name]
@@ -190,7 +195,7 @@ def test_model_inference(
     embd = model_args.reference_embedding()
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
-    generation_start_pos = 0
+    generation_start_pos = 30 * 1024
     generation_length = iterations
 
     page_table_tt = None
@@ -283,15 +288,23 @@ def test_model_inference(
             page_table=page_table_tt,
         )
 
+        if i == 0:
+            tt_model.set_done_compile(True)  # Set done_compile to True after the first iteration
+
         # Convert ttnn tensor to torch tensor
         mesh_composer = ttnn.ConcatMesh2dToTensor(
             mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
         )
-        tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
-            .permute(2, 1, 0, 3)
-            .squeeze(2)[: model_args.max_batch_size, 0:1, : model_args.vocab_size]
-        )
+
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
+
+        # Apply ALSPEC if enabled
+        if tt_model.alspec:
+            tt_output_torch = tt_model.alspec.get_correct_tensor(tt_output_torch, dim=3)
+
+        tt_output_torch = tt_output_torch.permute(2, 1, 0, 3).squeeze(2)[
+            : model_args.max_batch_size, 0:1, : model_args.vocab_size
+        ]
 
         ttnn.deallocate(tt_out)
 

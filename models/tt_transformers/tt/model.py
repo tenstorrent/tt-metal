@@ -15,6 +15,7 @@ from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.rope import RotarySetup
 from models.tt_transformers.tt.embedding import Embedding
 from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.alspec_common import ALSpec
 
 
 class Transformer(LightweightModule):
@@ -38,6 +39,14 @@ class Transformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
+
+        # Set up ALSpec
+        self.use_sfd = args.use_sfd
+        self.alspec = None
+        self.done_compile = False
+
+        if self.use_sfd:
+            self.alspec = ALSpec(mesh_device, args.head_dim, args.n_heads, k_chunk_size=128)
 
         self.embd = Embedding(
             mesh_device=mesh_device,
@@ -69,6 +78,7 @@ class Transformer(LightweightModule):
                 transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
+                alspec=self.alspec,
             )
             for i in tqdm(range(self.n_layers))
         ]
@@ -99,6 +109,12 @@ class Transformer(LightweightModule):
             weight_cache_path=weight_cache_path,
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
+
+    def set_done_compile(self, done_compile):
+        self.done_compile = done_compile
+
+        for layer in self.layers:
+            layer.set_done_compile(done_compile)
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
@@ -372,6 +388,10 @@ class Transformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
+
+        if self.alspec and self.use_sfd:
+            if not self.done_compile:
+                self.alspec.set_use_skip_tensor(False)
 
         if mode == "prefill" and get_last_token == -1:
             return x
