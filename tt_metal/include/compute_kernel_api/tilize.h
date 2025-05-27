@@ -235,9 +235,10 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     PACK((llk_pack_fast_tilize_init()));
 }
 
-ALWI void fast_tilize_uninit() {
+ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_fast_tilize_uninit()));
     PACK((llk_pack_fast_tilize_uninit()));
+    PACK((llk_pack_init(ocb)));
 }
 
 ALWI void fast_tilize_init_short(uint32_t icb, uint32_t full_dim, uint32_t ocb) {

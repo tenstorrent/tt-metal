@@ -22,17 +22,17 @@
 
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    tilize_init_short(in_cb_id, in_block_w, out_cb_id);
+    fast_tilize_init_short(in_cb_id, in_block_w, out_cb_id);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
             cb_reserve_back(out_cb_id, in_block_w);
-            tilize_block(in_cb_id, in_block_w, out_cb_id);
+            fast_tilize_block(in_cb_id, in_block_w >= 8 ? 8 : in_block_w, in_block_w, out_cb_id);
             cb_push_back(out_cb_id, in_block_w);
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit(in_cb_id, out_cb_id);
+    fast_tilize_uninit(in_cb_id, out_cb_id);
 }  // tilize_in()
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
