@@ -61,6 +61,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fabric_router_vc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_device_reader.cpp
