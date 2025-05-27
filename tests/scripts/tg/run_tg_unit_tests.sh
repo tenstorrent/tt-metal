@@ -110,7 +110,7 @@ run_tg_tests() {
         read -r TEST_NUMBER TEST_ARGS <<< "$TEST"
         echo "LOG_FABRIC: Test $TEST_NUMBER: $TEST_ARGS"
         # Execute the test command with extracted arguments
-        TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity_wormhole_b0 $TEST_ARGS
+        TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity $TEST_ARGS
     done
 
   elif [[ "$1" == "llama3-70b" ]]; then
