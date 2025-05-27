@@ -214,7 +214,7 @@ void MAIN {
             is_partial_tile,
             max_rows_for_reduction,
             neginf_srca_maxpool,
-            zero_srca_avgpool>(interm_cb_id, REDUCE_OP == PoolType::MAX ? curr_scalar_cb_id : in_one_cb_id, out_cb_id);
+            zero_srca_avgpool>(interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id_0 : in_one_cb_id, out_cb_id);
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
         }

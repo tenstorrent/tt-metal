@@ -90,11 +90,24 @@ void kernel_main() {
     constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
     constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(20);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(21);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(24);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(25);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(26);
+    constexpr uint32_t in_scalar_cb_id =
+        split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+    constexpr bool is_blackhole = (bool)get_compile_time_arg_val(24);
+    constexpr uint32_t pool_type = (bool)get_compile_time_arg_val(25);
+
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
 
-    if (reader_id == 0) {
+    uint32_t scalar_index = 0;
+    uint32_t scalar_start = 0;
+    uint32_t scalar_end = 1;
+    uint32_t scalar_value = 0;
+
+    if constexpr (reader_id == 0 && one_scalar_per_core) {
         cb_reserve_back(in_scalar_cb_id, 1);
         fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id, 1);
@@ -120,13 +133,36 @@ void kernel_main() {
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
+    uint32_t config_l1_addr = get_read_ptr(config_cb_id);
+    volatile tt_l1_ptr uint32_t* config_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr uint32_t is_wide_reduction = in_c > MAX_TILES_PER_REDUCTION * TILE_WIDTH;
 
+    if constexpr (!one_scalar_per_core) {
+        scalar_start = config_ptr[3 * scalar_index];
+        scalar_value = config_ptr[3 * scalar_index + 1];
+        scalar_end = config_ptr[3 * scalar_index + 2];
+        scalar_index++;
+    }
+
     constexpr uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
     while (counter < reader_nindices) {
+        if constexpr (!one_scalar_per_core) {
+            cb_reserve_back(in_scalar_cb_id, 1);
+            while ((counter >= scalar_end) && scalar_end != reader_nindices) {
+                scalar_start = scalar_end;
+                scalar_value = config_ptr[3 * scalar_index + 1];
+                scalar_end = config_ptr[3 * scalar_index + 2];
+                scalar_index++;
+            }
+            if (counter == scalar_start || (counter == scalar_start + 1 && counter < scalar_end)) {
+                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value >> 16);
+            }
+
+            cb_push_back(in_scalar_cb_id, 1);
+        }
         if constexpr (is_wide_reduction) {
             const uint16_t top_left_local_index = reader_indices_ptr[counter++];
             for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {

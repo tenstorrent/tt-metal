@@ -66,8 +66,8 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(21);
     constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(22);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(23);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(24);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(25);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(25);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(26);
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
 
@@ -130,37 +130,36 @@ void kernel_main() {
             cb_push_back(in_scalar_cb_id, 1);
         }
 
-        if (counter < reader_nindices || one_scalar_per_core) {
-            for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-                const uint16_t top_left_local_index = reader_indices_ptr[counter];
-                uint32_t processed_rows = 0;
-                cb_reserve_back(in_cb_id, 1);
-                uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
-                for (uint32_t h = 0; h < window_h; ++h) {
-                    for (uint32_t w = 0; w < window_w; w++) {
-                        const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
-                        const uint32_t read_offset =
-                            in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
-                        noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
-                        out_l1_write_addr += read_bytes;
-                        processed_rows++;
-                        if ((processed_rows % max_rows_for_reduction) == 0) {
-                            noc_async_read_barrier();
-                            cb_push_back(in_cb_id, 1);
-                            cb_reserve_back(in_cb_id, 1);
-                            out_l1_write_addr = get_write_ptr(in_cb_id);
-                            // If next is last chunk, fill whole buffer with the init_value.
-                            if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
-                                fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
-                            }
+        for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
+            const uint16_t top_left_local_index = reader_indices_ptr[counter];
+            uint32_t processed_rows = 0;
+            cb_reserve_back(in_cb_id, 1);
+            uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
+            for (uint32_t h = 0; h < window_h; ++h) {
+                for (uint32_t w = 0; w < window_w; w++) {
+                    const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
+                    const uint32_t read_offset =
+                        in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
+                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
+                    out_l1_write_addr += read_bytes;
+                    processed_rows++;
+                    if ((processed_rows % max_rows_for_reduction) == 0) {
+                        noc_async_read_barrier();
+                        cb_push_back(in_cb_id, 1);
+                        cb_reserve_back(in_cb_id, 1);
+                        out_l1_write_addr = get_write_ptr(in_cb_id);
+                        // If next is last chunk, fill whole buffer with the init_value.
+                        if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
+                            fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
                         }
                     }
                 }
-                if (remaining_elems) {
-                    noc_async_read_barrier();
-                    cb_push_back(in_cb_id, 1);
-                }
             }
+            if (remaining_elems) {
+                noc_async_read_barrier();
+                cb_push_back(in_cb_id, 1);
+            }
+
             counter++;
             if constexpr (split_reader) {
                 counter++;  // interleave the indices
