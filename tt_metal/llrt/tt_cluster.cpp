@@ -227,13 +227,6 @@ void Cluster::generate_cluster_descriptor() {
             this->cluster_desc_->get_all_chips().size(),
             total_num_hugepages);
     }
-
-    if (this->arch_ == tt::ARCH::WORMHOLE_B0 and not this->is_galaxy_cluster()) {
-        // Give UMD Limited access to eth cores 8 and 9 for Non-Galaxy Wormhole Clusters
-        for (const auto& mmio_device_id : driver_->get_target_mmio_device_ids()) {
-            driver_->configure_active_ethernet_cores_for_mmio_device(mmio_device_id, {});
-        }
-    }
 }
 
 void Cluster::validate_harvesting_masks() const {
