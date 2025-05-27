@@ -173,7 +173,7 @@ unicast_Linear_0x4_mesh,noc_unicast_write,16,2,2,False,False,True,0.046588338857
 unicast_Linear_0x4_mesh,noc_unicast_write,2048,2,1,False,False,True,5.956217583711141,2908309.367046456
 unicast_Linear_0x4_mesh,noc_unicast_write,2048,2,2,False,False,True,5.954105158538734,2907277.9094427414
 unicast_Linear_0x4_mesh,noc_unicast_write,4096,2,1,False,False,True,10.713625687758991,2615631.271425535
-unicast_Linear_0x4_mesh,noc_unicast_write,4096,2,2,False,False,True,10.69251219503727,2610476.6101165214
+unicast_Linear_0x4_mesh,noc_unicast_write,4096,2,2,False,False,True,10.767322202324845,2610476.6101165214
 mcast_Linear_2x0_mesh,noc_unicast_write,16,4,1,False,False,True,0.040682791753097206,2542674.4845685754
 mcast_Linear_2x0_mesh,noc_unicast_write,2048,4,1,False,False,True,5.211097441663491,2544481.1726872516
 mcast_Linear_2x0_mesh,noc_unicast_write,4096,4,1,False,False,True,10.281691358811988,2510178.554397458
