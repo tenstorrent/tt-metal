@@ -72,6 +72,7 @@ HalCoreInfoType create_tensix_mem_map() {
         for (size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
             DeviceAddr fw_base{}, local_init{}, fw_launch{};
             uint32_t fw_launch_value{};
+            ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
             switch (processor_class_idx) {
                 case 0: {
                     fw_base = MEM_BRISC_FIRMWARE_BASE;
@@ -119,7 +120,8 @@ HalCoreInfoType create_tensix_mem_map() {
                 .fw_base_addr = fw_base,
                 .local_init_addr = local_init,
                 .fw_launch_addr = fw_launch,
-                .fw_launch_addr_value = fw_launch_value
+                .fw_launch_addr_value = fw_launch_value,
+                .memory_load = memory_load,
             };
         }
         processor_classes[processor_class_idx] = processor_types;
