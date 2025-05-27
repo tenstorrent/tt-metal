@@ -5,17 +5,21 @@
 
 #include "mpi_distributed_context.hpp"
 #include <mpi.h>
-
-// Check if we have ULFM support
-#ifdef OMPI_HAVE_MPI_EXT_ULFM
 #include <mpi-ext.h>
-#endif
 
 #include <algorithm>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include "assert.hpp"
+
+// Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
+// ULFM extensions.
+#if (defined(OPEN_MPI) && OPEN_MPI && defined(MPIX_ERR_PROC_FAILED))
+#define OMPI_HAS_ULFM 1
+#else
+#define OMPI_HAS_ULFM 0
+#endif
 
 namespace tt::tt_metal::distributed::multihost {
 
@@ -476,7 +480,10 @@ const ContextPtr& DistributedContext::get_current_world() { return MPIContext::g
 void DistributedContext::set_current_world(const ContextPtr& ctx) { MPIContext::set_current_world(ctx); }
 
 void MPIContext::revoke_and_shrink() {
-#ifdef OMPI_HAVE_MPI_EXT_ULFM
+#if (!OMPI_HAS_ULFM)
+    TT_THROW("revoke_and_shrink() requires MPI ULFM support which is not available in this build");
+#endif
+
     int rc = MPIX_Comm_revoke(comm_);
     if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
         abort(rc);
@@ -507,21 +514,17 @@ void MPIContext::revoke_and_shrink() {
     this->group_ = new_group;
     this->rank_ = new_rank;
     this->size_ = new_size;
-#else
-    TT_THROW("revoke_and_shrink() requires MPI ULFM support which is not available in this build");
-#endif
 }
 
 bool MPIContext::is_revoked() {
-#ifdef OMPI_HAVE_MPI_EXT_ULFM
+#if (!OPENMPI_HAS_ULFM)
+    TT_THROW("is_revoked() requires MPI ULFM support which is not available in this build");
+#endif
     int flag = 0;
     // MPI_Comm_test_inter is safe to call even if the communicator is revoked
     // don't need to check error code
     MPI_Comm_test_inter(comm_, &flag);
     return flag != 0;
-#else
-    TT_THROW("is_revoked() requires MPI ULFM support which is not available in this build");
-#endif
 }
 
 MPIContext::~MPIContext() {

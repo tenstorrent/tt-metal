@@ -3,13 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <mpi.h>
-
-// Check if we have ULFM support
+#include <mpi-ext.h>
 
 #include <tt-metalium/distributed_context.hpp>
 #include <gtest/gtest.h>
 #include "common/multihost_test_tools.hpp"
 #include <thread>
+
+// Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
+// ULFM extensions.
+#if (defined(OPEN_MPI) && OPEN_MPI && defined(MPIX_ERR_PROC_FAILED))
+#define OMPI_HAS_ULFM 1
+#else
+#define OMPI_HAS_ULFM 0
+#endif
 
 using tt::tt_metal::distributed::multihost::Color;
 using tt::tt_metal::distributed::multihost::DistributedContext;
@@ -17,11 +24,19 @@ using tt::tt_metal::distributed::multihost::DistributedException;
 using tt::tt_metal::distributed::multihost::Key;
 using tt::tt_metal::distributed::multihost::Rank;
 
-TEST(FaultTolerance, ShrinkAfterRankFailure) {
-#ifndef OMPI_HAVE_MPI_EXT_ULFM
-    GTEST_SKIP() << "MPI ULFM support is not available in this build";
+int main(int argc, char** argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+
+#if (!OMPI_HAS_ULFM)
+    ::testing::GTEST_FLAG(filter) = "-*";
+    fmt::println("ULFM support is not available in this build, skipping fault tolerance tests.");
+    return 0;
 #endif
 
+    return RUN_ALL_TESTS();
+}
+
+TEST(FaultTolerance, ShrinkAfterRankFailure) {
     //----------------------------------------------------------------------
     // 0 · Create world communicator and install MPI_ERRORS_RETURN
     //----------------------------------------------------------------------
@@ -73,10 +88,6 @@ TEST(FaultTolerance, ShrinkAfterRankFailure) {
 }
 
 TEST(FaultTolerance, DisableBrokenBlock) {
-#ifndef OMPI_HAVE_MPI_EXT_ULFM
-    GTEST_SKIP() << "MPI ULFM support is not available in this build";
-#endif
-
     // ‑‑ configuration ------------------------------------------------------
     constexpr int ranks_per_block = 2;  // two ranks share one machine / block
     constexpr int victim_block = 1;     // second block (ranks 2 & 3) – adjust at will
