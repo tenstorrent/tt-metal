@@ -251,7 +251,6 @@ class transformer_2d_model:
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
@@ -333,7 +332,6 @@ class transformer_2d_model:
                 compute_config = ttnn.init_device_compute_kernel_config(
                     self.device.arch(),
                     math_fidelity=ttnn.MathFidelity.LoFi,
-                    math_approx_mode=False,
                     fp32_dest_acc_en=False,
                     packer_l1_acc=True,
                 )
