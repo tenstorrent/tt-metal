@@ -386,6 +386,6 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
     "max_seq_len",
     (128,),
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_llama_tg_Embeddings(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc)
