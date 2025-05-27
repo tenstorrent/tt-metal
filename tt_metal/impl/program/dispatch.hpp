@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -165,12 +165,6 @@ void set_num_worker_sems_on_dispatch(
 
 void set_go_signal_noc_data_on_dispatch(
     IDevice* device, const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
-
-void set_core_go_message_mapping_on_device(
-    IDevice* device,
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
-    SystemMemoryManager& manager,
-    uint8_t cq_id);
 
 }  // namespace program_dispatch
 

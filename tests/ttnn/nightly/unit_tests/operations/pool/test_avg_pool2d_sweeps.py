@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from tests.ttnn.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
-from models.utility_functions import skip_for_blackhole
 
 import pytest
 import ttnn
@@ -50,7 +49,6 @@ parameters = {
 }
 
 
-@skip_for_blackhole("Nigthly CI tests failing, ticket #20492")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("input_spec", parameters["input_specs"])
 def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
