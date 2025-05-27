@@ -119,11 +119,12 @@ void MAIN {
         }
 
     if (one_scalar_per_core) {
-        cb_wait_front(in_scalar_cb_id, 1);
+        cb_wait_front(in_scalar_cb_id_0, 1);
     }
-    for (uint32_t i = 0; i < nsticks_per_core; i++) {
+    for (uint32_t i = 0; i < nsticks_per_core; ++i) {
         const uint32_t curr_scalar_cb_id =
             (split_reader && (i & 0x1) && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
