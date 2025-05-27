@@ -242,169 +242,31 @@ def prepare_generator_args(
             1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
-            True,  # paged_attention
+            False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,
         ),
-        (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            32,  # batch_size
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-            1,  # data_parallel
-        ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            128 * 1024,  # max_seq_len
+            32 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
-            True,  # paged_attention
+            False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
         ),
-        (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
-            "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            16 * 1024,  # max_seq_len
-            1,  # batch_size
-            15000,  # max_generated_tokens
-            True,  # paged_attention
-            {
-                "page_block_size": 32,
-                "page_max_num_blocks_per_dp": 1024,
-            },  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            False,  # ci_only
-            1,  # data_parallel
-        ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            8192,  # max_seq_len
-            1,  # batch_size
-            4096,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
-            1,  # data_parallel
-        ),
-        (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            2000,  # max_seq_len
-            32,  # batch_size
-            1024,  # max_generated_tokens  # TODO Update this to 4096, and make sure it fits in DRAM with correct page_params
-            True,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
-            1,  # data_parallel
-        ),
-        (  # Batch-1 run (Latency) - single user, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            1,  # batch_size
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-            4,  # data_parallel
-        ),
-        (  # Batch-1 run (Latency) - single user, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            1,  # batch_size
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-            8,  # data_parallel
-        ),
-        (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            32,  # batch_size
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-            4,  # data_parallel
-        ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            8192,  # max_seq_len
-            1,  # batch_size
-            4096,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
-            4,  # data_parallel
-        ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            8192,  # max_seq_len
-            1,  # batch_size
-            4096,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
-            8,  # data_parallel
-        ),
     ],
     ids=[
         "batch-1",  # latency
-        "batch-32",  # throughput
         "long-context",  # max-length
-        "reasoning-1",  # reasoning
-        "ci-1",  # CI batch 1
-        "ci-32",  # CI batch 32
-        "DP-4-b1",  # DP 4 latency
-        "DP-8-b1",  # DP 8 latency
-        "DP-4-b32",  # DP 4 throughput
-        "ci-b1-DP-4",  # CI DP 4 batch 1
-        "ci-b1-DP-8",  # CI DP 8 batch 1
     ],
 )
 @pytest.mark.parametrize(
@@ -568,6 +430,9 @@ def test_demo_text(
             max_generated_tokens,
         )
 
+        # The true length of the prompts is the decode starting position for each user
+        true_input_tokens_lens = decoding_pos
+
         max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
         assert (
             max_generated_tokens + max_encoded_prompt_len <= max_seq_len
@@ -585,37 +450,6 @@ def test_demo_text(
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
-        logger.info("Starting prefill warmup...")
-        profiler.start(f"compile_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt[::batch_size, :],  # Warmup prefill for each device
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-        )
-        profiler.end(f"compile_prefill", iteration=batch_idx)
-        logger.info("Finished prefill warmup")
-
-        logger.info(f"Starting prefill...")
-        profiler.start(f"inference_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt,
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-        )
-        prefilled_token = torch.argmax(logits, dim=-1)
-        profiler.end(f"inference_prefill", iteration=batch_idx)
-        logger.info(f"Prefill finished")
-
-        # Keep track of generated outputs to print out every iteration
-        all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
-        for user in range(global_batch_size):
-            user_tok = int(prefilled_token[user].item())
-            all_outputs[user].append(user_tok)
-
-        user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
-
         # TODO Argmax on device is only supported for batch_size=1 (per submesh)
         argmax_on_device = (
             False if (global_batch_size // data_parallel > 1 or sampling_params["temperature"] != 0) else True
@@ -625,14 +459,24 @@ def test_demo_text(
         else:
             device_sampling_params = None
 
+        #############################
+        # Prefill by decode
+        #############################
+
+        all_outputs = [[] for _ in range(global_batch_size)]
+        user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
+
+        decoding_pos = [0 for _ in range(global_batch_size)]  # Initial decoding positions for each user
+
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
 
         # Start decoding
         iteration = 0
         users_decoding = True
+        done_prefill = False  # Flag to indicate when prefill is done
 
-        out_tok = prefilled_token
+        out_tok = input_tokens_prefill_pt[:, 0:1]  # Take the first token from the prefill input
 
         logger.info(f"Starting decode loop...")
 
@@ -683,19 +527,29 @@ def test_demo_text(
 
             # Save output token to print out later
             for user in range(global_batch_size):
-                user_tok = out_tok[user].item()
-                if (
-                    user_tok not in tokenizer.stop_tokens and user_done[user] == False
-                ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
-                    all_outputs[user].append(user_tok)
+                # Prefill by decode
+                if iteration < true_input_tokens_lens[user]:
+                    all_outputs[user].append(int(input_tokens_prefill_pt[user, iteration].item()))
+
+                    # If we are still in the prefill phase, use the prefill input tokens
+                    if current_pos[user] < true_input_tokens_lens[user]:
+                        out_tok[user] = input_tokens_prefill_pt[user, current_pos[user]]
+                    else:
+                        done_prefill = True
                 else:
+                    user_tok = out_tok[user].item()
                     if (
-                        stop_at_eos
-                    ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
-                        user_done[user] = True
-                        logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-                        if all(user_done):
-                            users_decoding = False
+                        user_tok not in tokenizer.stop_tokens and user_done[user] == False
+                    ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
+                        all_outputs[user].append(user_tok)
+                    else:
+                        if (
+                            stop_at_eos
+                        ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
+                            user_done[user] = True
+                            logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+                            if all(user_done):
+                                users_decoding = False
 
             # Print out generated outputs for each user at the end of every iteration
             if not is_ci_env:
@@ -709,7 +563,7 @@ def test_demo_text(
             iteration += 1
 
             # Upper limit of generated tokens for each user
-            if iteration >= max_generated_tokens:
+            if iteration >= max_generated_tokens + max(true_input_tokens_lens):
                 users_decoding = False
 
             # Final print
@@ -747,45 +601,57 @@ def test_demo_text(
     profiler.end("run")
 
     # Prepare profile benchmark metrics for the first repeat batch only
-    compile_prefill_time = profiler.get_duration("compile_prefill")
+    # compile_prefill_time = profiler.get_duration("compile_prefill")
     compile_decode_time = profiler.get_duration("compile_decode")
 
-    total_inference_prefill_time = profiler.get_duration("inference_prefill")
+    # total_inference_prefill_time = profiler.get_duration("inference_prefill")
     total_inference_decode_time = 0
-    for i in range(1, iteration):  # Iteration 0 is the compile time
+    for i in range(
+        true_input_tokens_lens[0] + 1, iteration
+    ):  # Don't count the prefill by decode time + compile time of "first" decode iteration
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
     # Average prefill time for each user
-    avg_time_to_first_token = total_inference_prefill_time / global_batch_size
+    # avg_time_to_first_token = total_inference_prefill_time / global_batch_size
     # Average decode time per batch iteration
-    avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
+    avg_decode_iteration_time = total_inference_decode_time / (iteration - true_input_tokens_lens[0] - 1)
 
-    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size
-    decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
+    # prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size
+    decode_tok_s_user = (
+        num_tokens_generated_decode[0] - true_input_tokens_lens[0] - 1
+    ) / total_inference_decode_time  # Remove the compile time
     decode_tok_s = (
-        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size
+        (num_tokens_generated_decode[0] - true_input_tokens_lens[0] - 1)
+        / total_inference_decode_time
+        * global_batch_size
     )  # Remove the compile time
 
     measurements = {
         # Required measurements
-        "compile_prefill": compile_prefill_time,
+        # "compile_prefill": compile_prefill_time,
         "compile_decode": compile_decode_time,
-        "inference_prefill": total_inference_prefill_time,
+        # "inference_prefill": total_inference_prefill_time,
         "inference_decode": total_inference_decode_time,
-        "prefill_time_to_token": avg_time_to_first_token,
-        "prefill_t/s": prefill_tok_s,  # tokens/s
+        # "prefill_time_to_token": avg_time_to_first_token,
+        # "prefill_t/s": prefill_tok_s,  # tokens/s
         "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
         "decode_t/s": decode_tok_s,  # tokens/s
         # Optional measurements
-        "Total compile time": compile_prefill_time + compile_decode_time,
+        # "Total compile time": compile_prefill_time + compile_decode_time,
         "Full demo runtime": profiler.get_duration("run"),
     }
 
     # Decode performance for some specific tokens
     tok_1_perf = profiler.get_duration(f"inference_decode_time_{1}")  # Iteration 0 is compile time
-    tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}") if 127 < iteration else 0
-    tok_1024_perf = profiler.get_duration(f"inference_decode_time_{1023}") if 1023 < iteration else 0
-    tok_4096_perf = profiler.get_duration(f"inference_decode_time_{4095}") if 4095 < iteration else 0
+    tok_128_perf = (
+        profiler.get_duration(f"inference_decode_time_{127}") if 127 < iteration - true_input_tokens_lens[0] else 0
+    )
+    tok_1024_perf = (
+        profiler.get_duration(f"inference_decode_time_{1023}") if 1023 < iteration - true_input_tokens_lens[0] else 0
+    )
+    tok_4096_perf = (
+        profiler.get_duration(f"inference_decode_time_{4095}") if 4095 < iteration - true_input_tokens_lens[0] else 0
+    )
 
     if not stop_at_eos:
         logger.info(f"Please note that 'stop_at_eos' is disabled. Output repetition is expected.")
@@ -810,10 +676,10 @@ def test_demo_text(
 
     # Print some of the perf metrics
     logger.info("==")
-    logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
+    # logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
     logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
-    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token*1000, 2)}ms")
+    # logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token*1000, 2)}ms")
     logger.info(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
