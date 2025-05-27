@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/allocator.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 

@@ -5,6 +5,7 @@
 #include "convert_to_hwc_op.hpp"
 
 #include "convert_to_hwc_program_factory.hpp"
+
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::experimental::cnn {
@@ -22,7 +23,7 @@ void ConvertToHWC::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(shape[0] == 1 && shape[1] == 1, "Expected input tensor to be shape [1, 1, C, HW] (shape was {})", shape);
     TT_FATAL(C <= TILE_HEIGHT, "C must be less than or equal to 32 (was {})", C);
 
-    TT_FATAL(input.layout() == ROW_MAJOR_LAYOUT, "Input tensor must be in row-major layout");
+    TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Input tensor must be in row-major layout");
 
     TT_FATAL(input.is_sharded(), "Input tensor must be sharded");
 
