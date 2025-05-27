@@ -47,7 +47,7 @@ constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_8;
 constexpr auto cb_mat_mul_reduce = tt::CBIndex::c_9;
 constexpr auto cb_output = tt::CBIndex::c_10;
 
-constexpr uint32_t onetile = 1;
+constexpr uint32_t onetile = 1U;
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
@@ -83,6 +83,7 @@ void find_max_value_in_row() {
                     // instead of the expected -inf. similarly, -inf * 0 = NaN.
                     copy_tile_init(cb_mask);
                     copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+
                     mask_tile_init();
                     mask_tile(working_register, mask_register);  // mask should be next to tile register.
 
@@ -135,6 +136,7 @@ void find_max_value_in_row() {
                     // instead of the expected -inf. similarly, -inf * 0 = NaN.
                     copy_tile_init(cb_mask);
                     copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+
                     mask_tile_init();
                     mask_tile(working_register, mask_register);  // mask should be next to tile register.
 

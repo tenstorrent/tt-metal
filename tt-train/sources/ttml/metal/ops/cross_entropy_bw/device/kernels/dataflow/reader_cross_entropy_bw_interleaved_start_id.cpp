@@ -11,28 +11,26 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
-#include "tt-train/sources/ttml/metal/ops/common/common_utils.hpp"
+#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
-void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = 0; r < 32; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
+void read_block_tiles(
+    const uint32_t cb_input_idx,
+    const InterleavedAddrGenFast<true>& input_address_generator,
+    const uint32_t Wt,
+    const uint32_t block_size,
+    const uint32_t tile_bytes,
+    const uint32_t idx) {
+    for (uint32_t j = 0; j < Wt; j += block_size) {
+        cb_reserve_back(cb_input_idx, block_size);
+        uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
+            l1_write_addr += tile_bytes;
+        }
+
+        noc_async_read_barrier();
+        cb_push_back(cb_input_idx, block_size);
     }
-    DPRINT << "++++++" << ENDL();
 }
 
 void kernel_main() {
@@ -48,7 +46,7 @@ void kernel_main() {
     constexpr uint32_t cb_mask_idx = tt::CBIndex::c_2;
     constexpr uint32_t cb_max_mask_idx = tt::CBIndex::c_3;
     constexpr uint32_t cb_reduction_scaler_idx = tt::CBIndex::c_4;  // used for reduction
-    constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_9;
+    constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_9;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -65,52 +63,18 @@ void kernel_main() {
 #endif
 
     // generate scaler and mask tile
-    cb_reserve_back(cb_reduction_scaler_idx, onetile);
-    uint16_t* reduction_scaler_ptr =
-        reinterpret_cast<uint16_t*>(get_write_ptr(cb_reduction_scaler_idx));  // write scalar tile
-
-    uint16_t* mask_ptr = nullptr;
-    uint16_t* max_mask_ptr = nullptr;
-    if constexpr (do_mask_w) {
-        cb_reserve_back(cb_mask_idx, onetile);
-        cb_reserve_back(cb_max_mask_idx, onetile);
-        mask_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask_idx));          // write mask tile
-        max_mask_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_max_mask_idx));  // write max mask tile
-    }
-
-    // used only for testing
-    cb_reserve_back(cb_mat_mul_reduce, onetile);
-    uint16_t* mat_mul_reduce_ptr =
-        reinterpret_cast<uint16_t*>(get_write_ptr(cb_mat_mul_reduce));  // write mat mul reduce tile
-
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
     constexpr uint16_t minus_inf = 0xFF80;  // (bfloat16)-inf -> uint16_t
-    for (uint32_t face = 0; face < 4; ++face) {
-        uint32_t offset = (face & 1U) << 4U;
-        for (uint32_t h = 0; h < 16; ++h) {
-            for (uint32_t w = 0; w < 16; ++w) {
-                if constexpr (do_mask_w) {
-                    *mask_ptr++ = (offset + w < mask_w) ? one : zero;  // how to create the proper mask?
-                    *max_mask_ptr++ = (offset + w < mask_w) ? zero : minus_inf;
-                }
 
-                *reduction_scaler_ptr++ = one;
-
-                if (!(face & 1U) && (w == 0)) {
-                    *mat_mul_reduce_ptr++ = one;
-                } else {
-                    *mat_mul_reduce_ptr++ = zero;
-                }
-            }
-        }
-    }
     if constexpr (do_mask_w) {
-        cb_push_back(cb_mask_idx, onetile);
-        cb_push_back(cb_max_mask_idx, onetile);
+        generate_mask_tile(cb_mask_idx, one, zero, mask_w);
+        generate_mask_tile(cb_max_mask_idx, zero, minus_inf, mask_w);
     }
-    cb_push_back(cb_reduction_scaler_idx, onetile);
-    cb_push_back(cb_mat_mul_reduce, onetile);
+
+    generate_tile_with_bfloat16_value(
+        cb_reduction_scaler_idx, one);                  // generate tile with bfloat16 value 1.0 for reduction scaler
+    generate_matmul_row_reduce_tile(cb_matmul_reduce);  // generate tile for matmul row reduce
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     const DataFormat data_format = get_dataformat(cb_input_idx);
@@ -141,57 +105,68 @@ void kernel_main() {
         noc_async_read_barrier();              // wait until all tiles are read
         cb_push_back(cb_target_idx, onetile);  // push the tile to the back of the target buffer
 
-#ifdef EVERYTHING_FITS_IN_L1
         // read input buffer by blocks
-        for (uint32_t j = 0; j < Wt; j += block_size) {
-            cb_reserve_back(cb_input_idx, block_size);
-            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-                l1_write_addr += tile_bytes;
-            }
+        read_block_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 
-            noc_async_read_barrier();
-            cb_push_back(cb_input_idx, block_size);
-        }
-
-#else
-        // read input buffer by blocks to calculate max value in row
-        for (uint32_t j = 0; j < Wt; j += block_size) {
-            cb_reserve_back(cb_input_idx, block_size);
-            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-                l1_write_addr += tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_idx, block_size);
-        }
-
+#ifndef EVERYTHING_FITS_IN_L1
         // read input buffer by blocks to calculate sum(exp(x - max(x))) in row
-        for (uint32_t j = 0; j < Wt; j += block_size) {
-            cb_reserve_back(cb_input_idx, block_size);
-            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-                l1_write_addr += tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_idx, block_size);
-        }
+        read_block_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 
         // read input buffer by blocks to calculate softmax in row
-        for (uint32_t j = 0; j < Wt; j += block_size) {
-            cb_reserve_back(cb_input_idx, block_size);
-            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-                l1_write_addr += tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_idx, block_size);
-        }
-
+        read_block_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 #endif
+
+        // #ifdef EVERYTHING_FITS_IN_L1
+        //         // read input buffer by blocks
+        //         for (uint32_t j = 0; j < Wt; j += block_size) {
+        //             cb_reserve_back(cb_input_idx, block_size);
+        //             uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
+        //             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        //                 noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
+        //                 l1_write_addr += tile_bytes;
+        //             }
+
+        //             noc_async_read_barrier();
+        //             cb_push_back(cb_input_idx, block_size);
+        //         }
+
+        // #else
+        //         // read input buffer by blocks to calculate max value in row
+        //         for (uint32_t j = 0; j < Wt; j += block_size) {
+        //             cb_reserve_back(cb_input_idx, block_size);
+        //             uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
+        //             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        //                 noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
+        //                 l1_write_addr += tile_bytes;
+        //             }
+        //             noc_async_read_barrier();
+        //             cb_push_back(cb_input_idx, block_size);
+        //         }
+
+        //         // read input buffer by blocks to calculate sum(exp(x - max(x))) in row
+        //         for (uint32_t j = 0; j < Wt; j += block_size) {
+        //             cb_reserve_back(cb_input_idx, block_size);
+        //             uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
+        //             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        //                 noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
+        //                 l1_write_addr += tile_bytes;
+        //             }
+        //             noc_async_read_barrier();
+        //             cb_push_back(cb_input_idx, block_size);
+        //         }
+
+        //         // read input buffer by blocks to calculate softmax in row
+        //         for (uint32_t j = 0; j < Wt; j += block_size) {
+        //             cb_reserve_back(cb_input_idx, block_size);
+        //             uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
+        //             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        //                 noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
+        //                 l1_write_addr += tile_bytes;
+        //             }
+        //             noc_async_read_barrier();
+        //             cb_push_back(cb_input_idx, block_size);
+        //         }
+
+        // #endif
     }
 }

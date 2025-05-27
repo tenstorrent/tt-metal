@@ -105,10 +105,8 @@ tt::stl::hash::hash_t CrossEntropyBackwardDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.get_logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
-    auto hash = tt::tt_metal::operation::hash_operation<CrossEntropyBackwardDeviceOperation>(
+    return tt::tt_metal::operation::hash_operation<CrossEntropyBackwardDeviceOperation>(
         args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
-
-    return hash;
 }
 
 std::tuple<operation_attributes_t, tensor_args_t> CrossEntropyBackwardDeviceOperation::invoke(

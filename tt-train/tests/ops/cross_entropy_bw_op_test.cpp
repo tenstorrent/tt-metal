@@ -17,12 +17,6 @@
 #include "metal/operations.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
-// TODO: remove this latter : used only for testing
-#include <fstream>
-#include <iomanip>
-#include <iostream>
-#include <sstream>
-
 class CrossEntropyBackwardTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -102,7 +96,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Small_Backward) {
 TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     using namespace ttml;
 
-    const uint32_t N = 1U, C = 1U, H = 91U, W = 192U;
+    const uint32_t N = 1U, C = 1U, H = 91U, W = 187U;
     const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;

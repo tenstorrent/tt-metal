@@ -19,7 +19,7 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_output;
 };
 
-using tensor_return_value_t = ttnn::Tensor;  // return grad: tensor with shape (N, 1, H, W)
+using tensor_return_value_t = ttnn::Tensor;
 using spec_return_value_t = ttnn::TensorSpec;
 
 }  // namespace ttml::metal::ops::cross_entropy_bw::device

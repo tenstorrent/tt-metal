@@ -8,20 +8,7 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
-#include "tt-train/sources/ttml/metal/ops/common/common_utils.hpp"
-
-inline float bfloat16_to_float(uint16_t bf16) {
-    uint32_t tmp = static_cast<uint32_t>(bf16) << 16;
-    float result;
-    std::memcpy(&result, &tmp, sizeof(result));
-    return result;
-}
-
-inline uint16_t float_to_bfloat16(float value) {
-    uint32_t tmp;
-    std::memcpy(&tmp, &value, sizeof(tmp));
-    return static_cast<uint16_t>(tmp >> 16);
-}
+#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -36,11 +23,9 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);  // number of tiles in inner dimension
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(2);
 
-    float scaler{};
-    std::memcpy(&scaler, &scaler_bits, sizeof(float));
-
     constexpr uint32_t onetile = 1U;
 
+    const float scaler = uint32_to_float(scaler_bits);
     const uint32_t tile_bytes = get_tile_size(cb_output_idx);
     const DataFormat data_format = get_dataformat(cb_output_idx);
 
@@ -57,7 +42,7 @@ void kernel_main() {
             cb_wait_front(cb_output_idx, block_size);
             uint32_t l1_read_addr = get_read_ptr(cb_output_idx);
 
-            auto write_ouput_l1_ptr = reinterpret_cast<uint16_t *>(l1_read_addr);
+            auto write_output_l1_ptr = reinterpret_cast<uint16_t *>(l1_read_addr);
 
             for (uint32_t h = 0; h < TILE_HEIGHT; ++h) {
                 auto target_value = target_indexes_l1_ptr[h];
@@ -69,9 +54,9 @@ void kernel_main() {
                     uint32_t index_inside_tile =
                         (TILE_WIDTH * TILE_HEIGHT * local_tile_idx) + get_tilized_idx(h, target_value);
 
-                    float value = bfloat16_to_float(write_ouput_l1_ptr[index_inside_tile]);
+                    float value = bfloat16_to_float(write_output_l1_ptr[index_inside_tile]);
                     value -= scaler;
-                    write_ouput_l1_ptr[index_inside_tile] = float_to_bfloat16(value);
+                    write_output_l1_ptr[index_inside_tile] = float_to_bfloat16(value);
                 }
             }
 

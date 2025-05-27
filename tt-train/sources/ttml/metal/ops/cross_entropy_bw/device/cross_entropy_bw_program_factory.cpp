@@ -9,6 +9,7 @@
 #include <tt-metalium/buffer.hpp>
 
 #include "cross_entropy_bw_device_operation_types.hpp"
+#include "metal/ops/common/program_utils.hpp"
 
 namespace {
 
@@ -53,22 +54,6 @@ constexpr uint32_t kPageElementsNumber = 32U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
-
-uint32_t get_block_size(uint32_t num_inner) {
-    const uint32_t max_block_size = 4U;  // 4 is the maximum block size for enabled fp32 dest acc
-    for (uint32_t block_size = max_block_size; block_size > 1; block_size--) {
-        if (num_inner % block_size == 0) {  // if num_inner is divisible by block_size - choose this block_size
-            return block_size;
-        }
-    }
-    return 1U;
-}
-
-uint32_t pack_two_bfloat16_to_uint32(float value) {
-    uint32_t uint32_data = std::bit_cast<uint32_t>(value);
-    uint32_t casted_uint16_data = uint32_data >> 16U;
-    return casted_uint16_data | (casted_uint16_data << 16);
-}
 
 }  // namespace
 
@@ -244,8 +229,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scaler);
 
     // compile arguments
-    // uint32_t block_size = get_block_size(Wt);
-    uint32_t block_size = 1U;
+    uint32_t block_size = get_block_size(Wt, 3U);  // we need one extra register during calculation
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
@@ -267,7 +251,7 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     const uint64_t exp_sum_memory =
         (kNumExpSumBeforeReductionTiles + kNumExpSumAfterReductionTiles) * float32_single_tile_size_bytes;
     const uint64_t input_memory =
-        /* inpunt */ (Wt * bfloat16_single_tile_size_bytes) +
+        /* input */ (Wt * bfloat16_single_tile_size_bytes) +
         /* target */ (uint32_read_page_size * kNumTargetIndexesTiles);
 
     // Total L1 memory required
@@ -330,8 +314,8 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         float32_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
 
-    auto cb_mat_mul_reduce =
-        create_circular_buffer(program, all_cores, kMatMulCbIndex, data_format, bfloat16_single_tile_size_bytes, 1U);
+    auto cb_mat_mul_reduce = create_circular_buffer(
+        program, all_cores, kMatMulCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
     auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);

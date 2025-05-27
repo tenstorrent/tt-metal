@@ -226,7 +226,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    fmt::print("[before evaluate]\n");
     // evaluate model before training (sanity check to get reasonable accuracy
     // 1/num_targets)
     float accuracy_before_training = evaluate(test_dataloader, model, num_targets);
