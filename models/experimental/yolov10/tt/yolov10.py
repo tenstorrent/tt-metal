@@ -16,7 +16,7 @@ from models.experimental.yolo_common.yolo_utils import concat
 class TtnnYolov10:
     def __init__(self, device, parameters, conv_pt):
         self.device = device
-        self.conv1 = Conv(device, parameters.conv_args[0], conv_pt.model[0])
+        self.conv1 = Conv(device, parameters.conv_args[0], conv_pt.model[0], deallocate_activation=True)
         self.conv2 = Conv(device, parameters.conv_args[1], conv_pt.model[1], deallocate_activation=True)
         self.c2f_1 = TtnnC2f(
             shortcut=True, n=3, device=self.device, parameters=parameters.conv_args[2], conv_pt=conv_pt.model[2]
@@ -47,7 +47,6 @@ class TtnnYolov10:
 
     def __call__(self, input_tensor):
         conv1_out = self.conv1(input_tensor)
-
         conv2_out = self.conv2(conv1_out)
         ttnn.deallocate(conv1_out)
 

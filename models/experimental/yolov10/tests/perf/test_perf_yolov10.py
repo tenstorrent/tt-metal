@@ -66,6 +66,7 @@ def test_perf(device, use_weights_from_ultralytics):
     durations = []
 
     for i in range(2):
+        torch_input, ttnn_input = create_yolov10x_input_tensors(device)
         start = time.time()
         ttnn_model_output = ttnn_model(ttnn_input)
         end = time.time()
