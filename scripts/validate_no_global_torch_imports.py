@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
@@ -61,12 +61,12 @@ def main():
         print(f"Error: ttnn directory not found at {ttnn_dir}")
         sys.exit(1)
 
-    whitelist_dirs = [
+    exceptions = [
         "examples",
         "model_preprocessing.py",
         "torch_tracer.py",
     ]
-    whitelist_paths = [os.path.join(ttnn_dir, path) for path in whitelist_dirs]
+    exceptions_paths = [os.path.join(ttnn_dir, path) for path in exceptions]
 
     violations = []
 
@@ -75,8 +75,8 @@ def main():
             if file.endswith(".py"):
                 filepath = os.path.join(root, file)
 
-                # Check if this specific file is whitelisted
-                if any(filepath.startswith(wp) for wp in whitelist_paths):
+                # Check if this specific file is in exceptions list
+                if any(filepath.startswith(wp) for wp in exceptions_paths):
                     continue
 
                 imports = check_file(filepath)
