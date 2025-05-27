@@ -96,6 +96,5 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
         padding=(pad_h, pad_w),
         ceil_mode=ceil_mode,
         divisor_override=None,
-        count_include_pad=count_include_pad,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     )
