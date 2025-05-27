@@ -570,6 +570,12 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllDirectedIdeal) {
     NOC noc_id = NOC::NOC_0;
     bool is_linked = true;  // True or False?
 
+    // Limit the grid size to 100 cores because the max allowed kernel args is 256
+    if (grid_size.x * grid_size.y > 100) {
+        uint32_t smaller_dim = grid_size.x > grid_size.y ? grid_size.y : grid_size.x;
+        grid_size = {smaller_dim, smaller_dim};
+    }
+
     unit_tests::dm::core_to_all::OneToAllConfig test_config = {
         .test_id = test_id,
         .master_core_coord = master_core_coord,

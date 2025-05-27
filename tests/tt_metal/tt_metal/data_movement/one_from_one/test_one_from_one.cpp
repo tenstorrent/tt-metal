@@ -201,7 +201,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
     CoreCoord subordinate_core_coord = {0, 1};
 
     // Test Config
-    unit_tests::dm::core_to_core::OneToOneConfig test_config = {
+    unit_tests::dm::core_to_core::OneFromOneConfig test_config = {
         .test_id = test_id,
         .master_core_coord = master_core_coord,
         .subordinate_core_coord = subordinate_core_coord,
