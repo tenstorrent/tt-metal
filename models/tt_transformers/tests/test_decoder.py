@@ -18,6 +18,7 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from models.tt_transformers.tt.alspec_common import ALSpec
 
 
 @torch.no_grad()
@@ -52,7 +53,12 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (32 * 1024,),  # For decode-only unit test, there's no need to run with large sequence lengths
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
 )
 def test_decoder_inference(
     max_seq_len,
@@ -80,7 +86,7 @@ def test_decoder_inference(
     reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
 
-    generation_start_pos = 0
+    generation_start_pos = 30 * 1024
     generation_length = 10
     all_tests_pass = True
 
@@ -95,6 +101,10 @@ def test_decoder_inference(
         model_args.orig_context_len,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
+
+    # Set up ALSpec
+    alspec = None
+    alspec = ALSpec(mesh_device, model_args.head_dim, model_args.n_heads, k_chunk_size=128)
 
     # Prepare page table for paged attention
     page_table_tt = None
@@ -134,6 +144,7 @@ def test_decoder_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
+        alspec=alspec,
     )
 
     seqlen = 1
@@ -183,10 +194,16 @@ def test_decoder_inference(
             mode="decode",
             page_table=page_table_tt,
         )
+
+        if i == 0:
+            tt_model.set_done_compile(True)
+
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
+
+        tt_out = alspec.get_correct_tensor(tt_out, dim=3)
 
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
         # In this test all users have the same position

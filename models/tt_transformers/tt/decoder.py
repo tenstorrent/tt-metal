@@ -22,6 +22,7 @@ class TransformerBlock(LightweightModule):
         transformation_mats,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        alspec=None,
     ):
         super().__init__()
 
@@ -39,6 +40,10 @@ class TransformerBlock(LightweightModule):
         self.current = 0
         self.model_config = args.get_model_config()
 
+        self.use_sfd = args.use_sfd
+        self.alspec = alspec
+        self.done_compile = False
+
         self.layer_num = layer_num
 
         self.attention = Attention(
@@ -51,6 +56,7 @@ class TransformerBlock(LightweightModule):
             configuration=args,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
+            alspec=alspec,
         )
         self.feed_forward = MLP(
             mesh_device=mesh_device,
@@ -96,6 +102,10 @@ class TransformerBlock(LightweightModule):
             TG=args.is_galaxy,
         )
 
+    def set_done_compile(self, done_compile: bool):
+        self.done_compile = done_compile
+        self.attention.done_compile = done_compile
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -108,6 +118,17 @@ class TransformerBlock(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ) -> ttnn.Tensor:
+        if mode == "decode":
+            if self.alspec and self.use_sfd:
+                if not self.done_compile:
+                    self.alspec.set_use_skip_tensor(False)
+
+                self.alspec.update_skip_tensor(reset=True)
+
+                self.alspec.synchronize_priority()
+
+                x = self.alspec.synchronize_tensor(x)
+
         TG = self.args.is_galaxy
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG

@@ -457,7 +457,6 @@ class Attention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         elif self.use_sfd and self.alspec:
-            print("Using speculative SDPA decode")
             attn_output_1G4D = self.alspec.speculative_sdpa_decode(
                 q_heads_1BQD,
                 keys,
