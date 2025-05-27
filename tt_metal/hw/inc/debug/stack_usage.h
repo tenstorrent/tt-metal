@@ -90,7 +90,7 @@ static inline void record_stack_usage(uint32_t stack_free) {
     unsigned idx = debug_get_which_riscv();
     debug_stack_usage_t::usage_t tt_l1_ptr* usage = &GET_MAILBOX_ADDRESS_DEV(watcher.stack_usage)->cpu[idx];
     // min_free is initialized to zero, which we want to compare as
-    // least noteworthy, and an ofset free stack of one as the most
+    // least noteworthy, and an offset free stack of one as the most
     // noteworthy. Decrement the former, so zero wraps around before
     // checking. (The cast to uint32_t isn't necessary, but conveys
     // meaning.)
