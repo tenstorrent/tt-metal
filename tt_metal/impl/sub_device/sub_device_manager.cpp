@@ -8,7 +8,6 @@
 #include <host_api.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include <trace.hpp>
 #include <tt_align.hpp>
 #include <tt_stl/span.hpp>
 #include <functional>
@@ -25,6 +24,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_manager.hpp"
 #include "impl/context/metal_context.hpp"
+#include "trace/trace.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>

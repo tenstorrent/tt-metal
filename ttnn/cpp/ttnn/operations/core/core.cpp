@@ -7,7 +7,6 @@
 #include <utility>
 
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/trace.hpp>
 #include "cpp/ttnn/operations/data_movement/move/move.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
