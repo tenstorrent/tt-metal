@@ -186,7 +186,7 @@ void MAIN {
                 max_rows_for_reduction,
                 neginf_srca_maxpool,
                 zero_srca_avgpool>(
-                interm_cb_id, REDUCE_OP == PoolType::MAX ? curr_scalar_cb_id : in_one_cb_id, out_cb_id);
+                interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id_0 : in_one_cb_id, out_cb_id);
         }
 
         // perform the intermediate reduction over chunk N (across the whole chunk even if the last chunk is

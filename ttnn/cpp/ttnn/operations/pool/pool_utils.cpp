@@ -36,13 +36,12 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D:
             value = 1.;
-            scalars.push_back({0, bfloat16(value).to_packed() << 16, out_nhw_per_core - 1});
-
+            scalars.push_back({0, bfloat16(value).to_packed() << 16, out_nhw_per_core});
             break;
         case Pool2DType::AVG_POOL2D:
             if (divisor_override.has_value()) {
                 value = 1. / (float)divisor_override.value();
-                scalars.push_back({0, bfloat16(value).to_packed(), out_nhw_per_core - 1});
+                scalars.push_back({0, bfloat16(value).to_packed() << 16, out_nhw_per_core});
 
             } else if (ceil_mode && (ceil_w > 0 || ceil_h > 0)) {
                 for (uint32_t i = 0; i < out_nhw_per_core; i++) {
@@ -83,7 +82,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
                 }
             } else {
                 value = 1. / (float)(kernel_h * kernel_w);
-                scalars.push_back({0, bfloat16(value).to_packed() << 16, out_nhw_per_core - 1});
+                scalars.push_back({0, bfloat16(value).to_packed() << 16, out_nhw_per_core});
             }
             break;
         default: TT_FATAL(false, "Unsupported pool operation type");
