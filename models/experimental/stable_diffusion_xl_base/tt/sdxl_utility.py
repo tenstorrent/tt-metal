@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -66,12 +66,13 @@ def prepare_conv_params(
     act_block_h_override=0,
     fp32_dest_acc_en=False,
     math_fidelity=ttnn.MathFidelity.HiFi4,
+    packer_l1_acc=False,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_dest_acc_en,
-        packer_l1_acc=False,
+        packer_l1_acc=packer_l1_acc,
     )
 
     conv_config = ttnn.Conv2dConfig(
