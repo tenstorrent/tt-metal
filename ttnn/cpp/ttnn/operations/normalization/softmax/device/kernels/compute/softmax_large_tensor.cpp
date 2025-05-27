@@ -41,7 +41,6 @@ void reduce_cb(
     uint32_t cb_length_t);
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
 
-uint32_t ncht1 = 0;
 namespace NAMESPACE {
 void MAIN {
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
