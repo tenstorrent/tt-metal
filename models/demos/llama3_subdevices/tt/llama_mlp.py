@@ -283,5 +283,11 @@ class TtLlamaMLP(LightweightModule):
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
         )
 
+        if 1024 <= seq_len < 4096:
+            original_shape = w2_out_reduced.shape
+            w2_out_reduced = ttnn.reshape(
+                w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+            )
+
         # ttnn.deallocate(w2_out)
         return w2_out_reduced
