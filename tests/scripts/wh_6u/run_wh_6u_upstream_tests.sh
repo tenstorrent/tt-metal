@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[upstream-tests] Running minimal model unit tests"
-pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
-pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py
-pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_llama_perf
-pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
-# pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py hang???
-
 if [ -z "${LLAMA_DIR}" ]; then
   echo "Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
   exit 1
@@ -27,6 +20,13 @@ pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
 
 echo "[upstream-tests] Unsetting LLAMA_DIR to ensure later tests can't use it"
 unset LLAMA_DIR
+
+echo "[upstream-tests] Running minimal model unit tests"
+pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
+pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py
+pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_llama_perf
+pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
+# pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py hang???
 
 echo "[upstream-tests] running metalium section. Note that skips should be treated as failures"
 ./build/test/tt_metal/tt_fabric/test_system_health
