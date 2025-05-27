@@ -318,8 +318,7 @@ std::shared_ptr<Buffer> Buffer::create(
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id,
-    const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
+    const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
     auto buffer = std::make_shared<Buffer>(
@@ -329,7 +328,7 @@ std::shared_ptr<Buffer> Buffer::create(
         buffer_type,
         buffer_layout,
         shard_parameters,
-        buffer_distribution_spec,
+        std::nullopt,
         bottom_up,
         sub_device_id,
         true /* owns data */,
@@ -354,7 +353,7 @@ std::shared_ptr<Buffer> Buffer::create(
         shard_parameters,
         bottom_up,
         sub_device_id,
-        buffer_distribution_spec);
+        std::nullopt);
 
     return buffer;
 }
@@ -368,8 +367,7 @@ std::shared_ptr<Buffer> Buffer::create(
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id,
-    const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
+    const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     auto buffer = std::make_shared<Buffer>(
         device,
@@ -378,7 +376,7 @@ std::shared_ptr<Buffer> Buffer::create(
         buffer_type,
         buffer_layout,
         shard_parameters,
-        buffer_distribution_spec,
+        std::nullopt,
         bottom_up,
         sub_device_id,
         false /* owns data */,
@@ -399,7 +397,97 @@ std::shared_ptr<Buffer> Buffer::create(
         shard_parameters,
         bottom_up,
         sub_device_id,
-        buffer_distribution_spec);
+        std::nullopt);
+
+    return buffer;
+}
+
+std::shared_ptr<Buffer> Buffer::create(
+    IDevice* device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const BufferDistributionSpec& shard_parameters,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+
+    auto buffer = std::make_shared<Buffer>(
+        device,
+        size,
+        page_size,
+        buffer_type,
+        TensorMemoryLayout::BLOCK_SHARDED,
+        std::nullopt,
+        shard_parameters,
+        bottom_up,
+        sub_device_id,
+        true /* owns data */,
+        Private());
+
+    if (buffer->size_ == 0) {
+        buffer->allocation_status_ = AllocationStatus::ALLOCATED;
+        return buffer;
+    }
+
+    buffer->allocate_impl();
+
+    LIGHT_METAL_TRACE_FUNCTION_CALL(
+        CaptureBufferCreate,
+        buffer,
+        device,
+        std::nullopt,
+        size,
+        page_size,
+        buffer_type,
+        TensorMemoryLayout::BLOCK_SHARDED,
+        std::nullopt,
+        bottom_up,
+        sub_device_id,
+        shard_parameters);
+
+    return buffer;
+}
+
+std::shared_ptr<Buffer> Buffer::create(
+    IDevice* device,
+    DeviceAddr address,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const BufferDistributionSpec& shard_parameters,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    auto buffer = std::make_shared<Buffer>(
+        device,
+        size,
+        page_size,
+        buffer_type,
+        TensorMemoryLayout::BLOCK_SHARDED,
+        std::nullopt,
+        shard_parameters,
+        bottom_up,
+        sub_device_id,
+        false /* owns data */,
+        Private());
+
+    buffer->address_ = address;
+    buffer->allocation_status_ = AllocationStatus::ALLOCATED;
+
+    LIGHT_METAL_TRACE_FUNCTION_CALL(
+        CaptureBufferCreate,
+        buffer,
+        device,
+        address,
+        size,
+        page_size,
+        buffer_type,
+        TensorMemoryLayout::BLOCK_SHARDED,
+        std::nullopt,
+        bottom_up,
+        sub_device_id,
+        shard_parameters);
 
     return buffer;
 }

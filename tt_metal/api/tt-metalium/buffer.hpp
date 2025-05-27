@@ -209,8 +209,7 @@ public:
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
         const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
-        std::optional<SubDeviceId> sub_device_id = std::nullopt,
-        const std::optional<BufferDistributionSpec>& buffer_distribution_spec = std::nullopt);
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
         IDevice* device,
         DeviceAddr address,
@@ -220,8 +219,24 @@ public:
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
         const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
-        std::optional<SubDeviceId> sub_device_id = std::nullopt,
-        const std::optional<BufferDistributionSpec>& buffer_distribution_spec = std::nullopt);
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+    static std::shared_ptr<Buffer> create(
+        IDevice* device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferDistributionSpec& shard_parameter,
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+    static std::shared_ptr<Buffer> create(
+        IDevice* device,
+        DeviceAddr address,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferDistributionSpec& shard_parameter,
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;

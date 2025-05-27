@@ -89,15 +89,7 @@ std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorS
             },
             [&](const BufferDistributionSpec& buffer_distribution_spec) {
                 return Buffer::create(
-                    device,
-                    buffer_size_bytes,
-                    page_size_bytes,
-                    memory_config.buffer_type(),
-                    TensorMemoryLayout::BLOCK_SHARDED,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    buffer_distribution_spec);
+                    device, buffer_size_bytes, page_size_bytes, memory_config.buffer_type(), buffer_distribution_spec);
             }},
         shard_spec_buffer);
 }

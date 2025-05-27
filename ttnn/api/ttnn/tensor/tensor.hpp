@@ -210,6 +210,7 @@ public:
     const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
     const std::optional<ShardSpec>& shard_spec() const;
+    const std::optional<NdShardSpec>& nd_shard_spec() const;
 
     // ======================================================================================
     //                                      Extra Helper Functions
