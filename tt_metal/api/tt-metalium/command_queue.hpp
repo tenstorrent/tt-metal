@@ -9,7 +9,6 @@
 #include <memory>
 #include <thread>
 
-#include <tt-metalium/trace_buffer.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 
 #include <tt-metalium/vector_aligned.hpp>
@@ -21,6 +20,7 @@ class Program;
 class Kernel;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
+class TraceDescriptor;
 
 class CommandQueue {
 public:

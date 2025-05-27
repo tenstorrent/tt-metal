@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -111,8 +111,21 @@ class TtResnetBlock2D(nn.Module):
             device, conv_weights_2, conv_bias_2, conv_weights_dtype, act_block_h_override=32
         )
         if conv_shortcut:
-            _, _, self.tt_conv3_weights, self.tt_conv3_bias, self.conv3_params = prepare_conv_params(
-                device, conv_weights_3, conv_bias_3, conv_weights_dtype, act_block_h_override=32
+            (
+                self.compute_config_conv_linear,
+                _,
+                self.tt_conv3_weights,
+                self.tt_conv3_bias,
+                self.conv3_params,
+            ) = prepare_conv_params(
+                device,
+                conv_weights_3,
+                conv_bias_3,
+                conv_weights_dtype,
+                act_block_h_override=32,
+                fp32_dest_acc_en=False,
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                packer_l1_acc=True,
             )
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
@@ -303,7 +316,7 @@ class TtResnetBlock2D(nn.Module):
                 input_height=input_shape[2],
                 input_width=input_shape[3],
                 conv_config=self.conv_config,
-                compute_config=self.compute_config,
+                compute_config=self.compute_config_conv_linear,
                 groups=self.groups,
                 memory_config=None,
                 return_output_dim=True,

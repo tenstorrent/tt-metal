@@ -26,6 +26,9 @@ target_sources(
         all_gather_async/device/all_gather_async_op.cpp
         all_gather_async/device/all_gather_async_program.cpp
         all_gather_async/device/all_gather_async_program_minimal_variants.cpp
+        all_to_all_async/all_to_all_async.cpp
+        all_to_all_async/device/all_to_all_program_factory.cpp
+        all_to_all_async/device/all_to_all_async_op.cpp
         all_reduce_async/all_reduce_async.cpp
         all_gather_concat_heads_fused/all_gather_concat.cpp
         all_gather_concat_heads_fused/device/all_gather_concat_op.cpp
