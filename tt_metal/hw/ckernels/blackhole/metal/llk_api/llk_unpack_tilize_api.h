@@ -163,27 +163,6 @@ inline void llk_unpack_tilizeA_B_init(
         unpA_face_r_dim,
         unpB_face_r_dim
     );
-
-    //Sets the block_c_dim for unpack to use to increment the L1 address
-    const std::uint32_t c_dim_size = SCALE_DATUM_SIZE(unpack_src_format[operandA_id], ct_dim * ((num_faces==1) ? FACE_C_DIM: TILE_C_DIM)) >> 4;
-
-    //This sets the scartch register that CFGSHIFTMASK instruction uses to increment the L1 address
-    TT_SETDMAREG(0, LOWER_HALFWORD(c_dim_size), 0, LO_16(p_gpr_unpack::TILE_OFFSET));
-    TT_SETDMAREG(0, UPPER_HALFWORD(c_dim_size), 0, HI_16(p_gpr_unpack::TILE_OFFSET));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_unpack::TILE_OFFSET, 0, SCRATCH_SEC0_val_ADDR32);
-    TTI_NOP;
-
-    //Unpack 1 row of 1x16 at a time for SrcA
-    config_unpacker_x_end<p_setadc::UNP_A>(1);
-    config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
-
-    //Set Y stride for SrcA to be one 1x16 row of datums
-    uint unpA_ch1_y_stride = SCALE_DATUM_SIZE(unpack_dst_format[operandA_id], FACE_C_DIM);
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
-
-    llk_unpack_tilizeA_B_mop_config<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(narrow_tile, num_faces);
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
