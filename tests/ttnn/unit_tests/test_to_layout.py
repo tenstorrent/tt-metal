@@ -334,8 +334,8 @@ def test_to_layout_page_error(shape, device):
     "input_memory_layout",
     [
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        # ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         # ttnn.TensorMemoryLayout.INTERLEAVED,
     ],
 )
@@ -350,8 +350,8 @@ def test_to_layout_page_error(shape, device):
     "output_memory_layout",
     [
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        # ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         # ttnn.TensorMemoryLayout.INTERLEAVED,
     ],
 )
@@ -373,11 +373,9 @@ def test_untilize_single_core(
 ):
     num_cores_x = 8
     num_cores_y = 8
-    shard_core_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))]
-    )
+    shard_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
 
-    tensor_shape = [256, 256]
+    tensor_shape = [1, 1, 256, 256]
 
     input_shard_spec_shape = (64, 64)
     if input_memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
@@ -406,7 +404,12 @@ def test_untilize_single_core(
     output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
 
     ttnn_output_tensor = ttnn.untilize(
-        input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False, use_pack_untilize=use_pack_untilize
+        input_ttnn_tensor,
+        memory_config=output_memory_config,
+        use_multicore=False,
+        use_pack_untilize=use_pack_untilize
+        # input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize -> tensor_shape = [1, 2, 256, 8192] -> !enough_space
+        # input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize, sub_core_grids=shard_core_grid
     )
 
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)

@@ -63,11 +63,38 @@ void kernel_main() {
     };
 
     uint32_t stick_id = start_stick_id;
+
+    /* TODO (GR): Remove
+    DPRINT << "----" << ENDL();
+    DPRINT << "start_stick_id: " << start_stick_id << ENDL();
+    DPRINT << "num_sticks: " << num_sticks << ENDL();
+    DPRINT << "num_tiles_per_block: " << num_tiles_per_block << ENDL();
+    DPRINT << "block_width_size: " << block_width_size << ENDL();
+    DPRINT << "num_full_blocks_in_row: " << num_full_blocks_in_row << ENDL();
+
+    DPRINT << ENDL();
+    DPRINT << "compile 5: " << get_compile_time_arg_val(5) << ENDL();
+    DPRINT << "compile 6: " << get_compile_time_arg_val(6) << ENDL();
+    DPRINT << "pages_per_shard_x: " << get_compile_time_arg_val(8) << ENDL();
+    DPRINT << "pages_per_shard_y: " << get_compile_time_arg_val(9) << ENDL();
+
+    DPRINT << "----" << ENDL();
+    */
+
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         // Get Base Addresses
         for (uint32_t j = 0; j < tile_height; j++) {
             base_dst_noc_addr[j] = get_noc_addr(stick_id, s);
             stick_id++;
+
+            /* TODO (GR): Remove
+            std::pair<uint64_t, uint32_t> p = get_contiguous_noc_addr(stick_id, s);
+            DPRINT << "----" << ENDL();
+            DPRINT << stick_id << ENDL();
+            DPRINT << get_noc_addr(stick_id, s) << ENDL();
+            DPRINT << p.first << ENDL();
+            DPRINT << p.second << ENDL();
+            */
         }
 
         for (uint32_t j = 0; j < num_full_blocks_in_row; j++) {

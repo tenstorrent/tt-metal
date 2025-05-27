@@ -1211,12 +1211,16 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    int32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t num_tiles = a.volume() / TILE_HEIGHT / TILE_WIDTH;
 
-    uint32_t num_sticks = a.volume() / a.get_padded_shape()[-1];
-    uint32_t stick_size = a.get_padded_shape()[-1] * output.element_size();
+    uint32_t num_blocks_across_height = (a.volume() / a.get_padded_shape()[-1]) / TILE_HEIGHT;
+    uint32_t num_columns_of_blocks = 1;
+    if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        num_columns_of_blocks = a.get_padded_shape()[-1] / output.memory_config().shard_spec()->shape[1];
+    }
 
-    uint32_t num_tiles_in_row = a.get_padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles_per_column_row = a.get_padded_shape()[-1] / num_columns_of_blocks / TILE_WIDTH;
 
     // Determine how much L1 space we can use for input and output CBs,
     // ensuring that we don't intrude into other L1 storage space
@@ -1229,23 +1233,21 @@ operation::ProgramWithCallbacks untilize_single_core(
     // Determine how many tiles each block will store.
     // Currently we require that the number of tiles in a row is divisible by the number of blocks in a row, or
     // equivalently the number of tiles in a row is divisible by the number of tiles in a block.
-    uint32_t num_tiles_per_block = 1;
-    if (num_tiles_in_row <= max_tiles_per_cb) {
-        num_tiles_per_block = num_tiles_in_row;
-    } else {
-        for (uint32_t n_t = max_tiles_per_cb; n_t > 0; n_t--) {
-            if (num_tiles_in_row % n_t == 0) {
-                num_tiles_per_block = n_t;
+    uint32_t num_tiles_per_block = num_tiles_per_column_row;
+    if (num_tiles_per_block > max_tiles_per_cb) {
+        num_tiles_per_block = 1;
+        for (uint32_t i = max_tiles_per_cb; i > 0; --i) {
+            if (num_tiles_per_column_row % i == 0) {
+                num_tiles_per_block = i;
                 break;
             }
         }
     }
-    uint32_t block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
 
-    // The following three variables are writer runtime args, but not currently used by the kernel itself
-    uint32_t num_full_blocks_in_row = num_tiles_in_row / num_tiles_per_block;
-    uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;
-    uint32_t leftover_width_in_row = num_leftover_tiles * output.element_size();
+    uint32_t num_blocks_per_column_row = num_tiles_per_column_row / num_tiles_per_block;
+    uint32_t single_block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
+    uint32_t num_total_sticks = a.volume() / a.get_padded_shape()[-1] * num_columns_of_blocks;
+    uint32_t stick_size = a.volume() * output.element_size() / num_total_sticks;
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
@@ -1312,7 +1314,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
-        "writer_unary_stick_layout_split_rows_interleaved.cpp",
+        "writer_unary_stick_layout_split_rows.cpp",
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
 
@@ -1329,8 +1331,10 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     // Compute compile-time args
     std::vector<uint32_t> compute_compile_time_args = {
-        uint32_t(num_tiles / num_tiles_per_block),  // per_core_block_cnt
-        uint32_t(num_tiles_per_block),              // per_core_block_tile_cnt
+        uint32_t(
+            num_columns_of_blocks * num_blocks_per_column_row *
+            num_blocks_across_height),  // per_core_block_cnt (total number of blocks)
+        uint32_t(num_tiles_per_block),  // per_core_block_tile_cnt (tiles per block)
         uint32_t(src0_cb_index),
         uint32_t(output_cb_index)};
 
@@ -1351,14 +1355,13 @@ operation::ProgramWithCallbacks untilize_single_core(
     // Writer run-time args
     std::vector<uint32_t> writer_kernel_args = {
         dst_buffer->address(),
-        num_sticks,
-        stick_size,
+        num_blocks_across_height,
+        num_columns_of_blocks,
+        num_blocks_per_column_row,
         num_tiles_per_block,
-        block_width_size,
-        num_full_blocks_in_row,
-        num_leftover_tiles,
-        leftover_width_in_row,
-        std::uint32_t{0}};
+        single_block_width_size,
+        stick_size,
+    };
     if (output_is_sharded) {
         shard_builder::extend_sharding_run_time_args(output, writer_kernel_args);
     }

@@ -36,6 +36,21 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
 
     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
 
+    /* TODO (GR): Cleanup
+     * Allowed Configs:
+     * - height shard -> height shard (multicore)
+     * - width shard -> width shard (multicore)
+     * - block shard -> block shard (multicore)
+     *   - input block shard must be on a single rectangle of cores
+     * - height shard -> interleaved (multicore)
+     * - width shard -> interleaved (multicore)
+     * - block shard -> interleaved (multicore)
+     *   - input block shard must be on a single rectangle of cores
+     * - interleaved -> height shard (multicore)
+     *   - other shape restrictions too
+     * - interleaved -> interleaved
+     */
+
     if (!this->use_multicore) {
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::SINGLE_BANK,
@@ -73,6 +88,19 @@ std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<T
     const auto& input_tensor = input_tensors.at(0);
     DataType output_dtype =
         input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
+
+    // TODO (GR): Cleanup
+    if (!this->use_multicore) {
+        return {TensorSpec(
+            input_tensor.get_logical_shape(),
+            TensorLayout::fromPaddedShape(
+                output_dtype,
+                PageConfig(Layout::ROW_MAJOR),
+                this->output_mem_config,
+                input_tensor.get_logical_shape(),
+                input_tensor.get_padded_shape()))};
+    }
+
     if (this->output_mem_config.is_sharded()) {
         if (input_tensor.memory_config().is_sharded()) {
             auto mem_config = this->output_mem_config.with_shard_spec(input_tensor.memory_config().shard_spec());
