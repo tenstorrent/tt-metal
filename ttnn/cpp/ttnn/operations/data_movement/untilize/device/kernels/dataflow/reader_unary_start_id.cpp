@@ -17,6 +17,7 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
+    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
 #ifdef SHARDED
     using tensor_shard_info = ShardedInfo<
@@ -32,7 +33,6 @@ void kernel_main() {
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(3));
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = src_addr, .shard_array = mapping_table};
 #else
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
     const DataFormat data_format = get_dataformat(cb_id_in0);
     const InterleavedAddrGenFast<src_is_dram> s = {
         .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
@@ -41,13 +41,11 @@ void kernel_main() {
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb_reserve_back(cb_id_in0, onetile);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
-#ifdef SHARDED
-        noc_async_read_page(i, s, l1_write_addr);
-#else
-        noc_async_read_tile(i, s, l1_write_addr);
-#endif
+        uint64_t noc_read_addr = get_noc_addr(i, s);
+        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        noc_async_read(noc_read_addr, l1_write_addr, tile_bytes);
+
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, onetile);
     }
