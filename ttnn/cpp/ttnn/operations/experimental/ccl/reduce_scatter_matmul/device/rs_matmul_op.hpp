@@ -29,8 +29,8 @@
 namespace ttnn::operations::experimental::ccl {
 
 struct AllGatherRS {
-    using spec_return_value_t = ttnn::TensorSpec;
-    using tensor_return_value_t = Tensor;
+    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
     struct matmul_tensor_args_t {
         const Tensor input_tensor;
         const Tensor weight_tensor;
@@ -87,10 +87,9 @@ struct AllGatherRS {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    static std::vector<spec_return_value_t> compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
-    static std::vector<tensor_return_value_t> create_output_tensors(
-        const operation_attributes_t&, const tensor_args_t&);
-    std::tuple<operation_attributes_t, tensor_args_t> invoke(
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         const ttnn::Tensor& rs_tensor,

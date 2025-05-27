@@ -55,7 +55,7 @@ void py_bind_rs_matmul(pybind11::module& module) {
                const ttnn::Tensor& weight_tensor,                          // mm1 used
                const ttnn::Tensor& rs_tensor,                              // rs1
                ttnn::Tensor& intermediate_packet_buffer,                   // rs2
-               uint32_t dim,                                               // rs3
+               int32_t dim,                                                // rs3
                const GlobalSemaphore& cross_device_semaphore,              // rs4
                const uint32_t cluster_axis,                                // rs 5
                const MeshDevice& mesh_device,                              // rs 6
@@ -79,7 +79,7 @@ void py_bind_rs_matmul(pybind11::module& module) {
 
                ) -> std::vector<ttnn::Tensor> {
                 return self(
-                    input_tensor,
+                    queue_id input_tensor,
                     weight_tensor,
                     rs_tensor,
                     intermediate_packet_buffer,
