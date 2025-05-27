@@ -198,9 +198,9 @@ def test_run_avg_pool2d(
 ):
     if (
         shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED
-        and tuple(input_shape) == (2, 512, 112, 32)
+        and (tuple(input_shape) == (2, 512, 112, 32) or tuple(input_shape) == (1, 512, 112, 32))
         and divisor_override == None
-        and ceil_mode == True
+        and (ceil_mode == True or count_include_pad == False)
     ):
         pytest.skip("Not enough L1 space for the correct calculation of the elements, use different kind of sharding")
 
