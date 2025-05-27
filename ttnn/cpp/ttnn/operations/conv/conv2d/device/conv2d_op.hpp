@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -86,6 +86,18 @@ struct Conv2dConfig {
     // Re-use input tensor storage when creating output tensor
     bool in_place = false;
 
+    // ==================== EXPERIMENTAL FEATURES ====================
+    // Features in this section are under development.
+    // Use with caution.
+
+    // Kernel Stride Folding (Issue: #22378)
+    // Enables tensor folding optimization where:
+    // - Input tensor (NHWC) is reshaped to (N, H/stride[0], W/stride[1], C * stride[0] * stride[1])
+    // - Weight tensor (OC, IC, kernel[0], kernel[1]) is reshaped and permuted to (1, 1, IC * kernel[0] * kernel[1], OC)
+    // Currently only applied when strides match kernel dimensions
+    bool enable_kernel_stride_folding = false;
+    // ===============================================================
+
     static constexpr auto attribute_names = std::make_tuple(
         "dtype",
         "weights_dtype",
@@ -105,7 +117,8 @@ struct Conv2dConfig {
         "enable_weights_double_buffer",
         "enable_split_reader",
         "enable_subblock_padding",
-        "in_place");
+        "in_place",
+        "enable_kernel_stride_folding");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->dtype),
@@ -126,7 +139,8 @@ struct Conv2dConfig {
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_split_reader),
             std::cref(this->enable_subblock_padding),
-            std::cref(this->in_place));
+            std::cref(this->in_place),
+            std::cref(this->enable_kernel_stride_folding));
     }
 };
 

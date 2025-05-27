@@ -8,12 +8,8 @@
 
 namespace py = pybind11;
 
-namespace ttnn {
-namespace operations {
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 void py_module(py::module& module);
 
-}  // namespace matmul
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

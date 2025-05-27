@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -66,27 +65,65 @@ uint32_t element_size_bytes(DataType dtype) {
 std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec) {
     auto buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
     auto page_size_bytes = tensor_spec.compute_page_size_bytes();
-    auto shard_spec_buffer = tensor_spec.compute_shard_spec_buffer();
+    auto shard_spec_buffer = tensor_spec.compute_distribution_spec();
     auto memory_config = tensor_spec.tensor_layout().get_memory_config();
 
-    return Buffer::create(
-        device,
-        buffer_size_bytes,
-        page_size_bytes,
-        memory_config.buffer_type(),
-        memory_config.memory_layout(),
+    return std::visit(
+        tt::stl::overloaded{
+            [&](const std::monostate&) {
+                return Buffer::create(
+                    device,
+                    buffer_size_bytes,
+                    page_size_bytes,
+                    memory_config.buffer_type(),
+                    memory_config.memory_layout());
+            },
+            [&](const ShardSpecBuffer& shard_spec_buffer) {
+                return Buffer::create(
+                    device,
+                    buffer_size_bytes,
+                    page_size_bytes,
+                    memory_config.buffer_type(),
+                    memory_config.memory_layout(),
+                    shard_spec_buffer);
+            },
+            [&](const BufferDistributionSpec& buffer_distribution_spec) {
+                return Buffer::create(
+                    device,
+                    buffer_size_bytes,
+                    page_size_bytes,
+                    memory_config.buffer_type(),
+                    TensorMemoryLayout::BLOCK_SHARDED,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    buffer_distribution_spec);
+            }},
         shard_spec_buffer);
 }
 
 std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
     const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
-    const distributed::DeviceLocalBufferConfig device_local_buffer_config{
+    auto shard_spec_buffer_variant = tensor_spec.compute_distribution_spec();
+
+    distributed::DeviceLocalBufferConfig device_local_buffer_config{
         .page_size = tensor_spec.compute_page_size_bytes(),
         .buffer_type = memory_config.buffer_type(),
         .buffer_layout = memory_config.memory_layout(),
-        .shard_parameters = tensor_spec.compute_shard_spec_buffer(),
     };
+
+    std::visit(
+        tt::stl::overloaded{
+            [&](const std::monostate&) {},
+            [&](const ShardSpecBuffer& shard_spec_buffer) {
+                device_local_buffer_config.shard_parameters = shard_spec_buffer;
+            },
+            [&](const BufferDistributionSpec& buffer_distribution_spec) {
+                device_local_buffer_config.buffer_distribution_spec = buffer_distribution_spec;
+            },
+        },
+        shard_spec_buffer_variant);
 
     // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.
     // This is required for the time being, as TTNN has rich multi-device sharding implementation.

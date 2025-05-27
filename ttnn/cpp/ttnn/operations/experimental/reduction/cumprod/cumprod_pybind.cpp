@@ -1,8 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cumprod_pybind.hpp"
+
+#include <cstdint>
+#include <optional>
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -10,6 +13,7 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/reduction/cumprod/cumprod.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn::operations::experimental::reduction::cumprod::detail {
 void bind_cumprod_operation(py::module& module) {

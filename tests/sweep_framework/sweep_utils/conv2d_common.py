@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -258,9 +258,6 @@ def run_conv2d_short_sweep(
         input_layout = ttnn.Layout(input_layout)
         input_dtype = ttnn.DataType(input_dtype)
         input_memory_config = ttnn.DRAM_MEMORY_CONFIG if input_buffer_type == "dram" else ttnn.L1_MEMORY_CONFIG
-        torch_input_tensor = torch.reshape(
-            torch_input_tensor, (1, 1, batch_size * input_height * input_width, input_channels)
-        )
         tt_input_tensor = ttnn.from_torch(
             torch_input_tensor, dtype=input_dtype, layout=input_layout, device=device, memory_config=input_memory_config
         )
@@ -270,11 +267,15 @@ def run_conv2d_short_sweep(
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, weights_dtype)
         output_layout = ttnn.Layout(output_layout)
         output_dtype = ttnn.DataType(output_dtype)
+        enable_kernel_stride_folding = False
+        if stride_h == kernel_height and stride_w == kernel_width and stride_h >= 16 and pad_h == 0 and pad_w == 0:
+            enable_kernel_stride_folding = True
         conv_config = ttnn.Conv2dConfig(
             dtype=output_dtype,
             weights_dtype=weights_dtype,
             output_layout=output_layout,
             preprocess_weights_on_device=True,
+            enable_kernel_stride_folding=enable_kernel_stride_folding,
         )
     else:
         tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)

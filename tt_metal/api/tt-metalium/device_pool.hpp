@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,8 +36,10 @@ public:
     DevicePool(const DevicePool&) = delete;
     DevicePool(DevicePool&& other) noexcept = delete;
 
+    static bool is_initialized() { return _inst != nullptr; }
+
     static DevicePool& instance() noexcept {
-        TT_ASSERT(_inst != nullptr, "Trying to get DevicePool without initializing it");
+        TT_ASSERT(DevicePool::is_initialized(), "Trying to get DevicePool without initializing it");
         return *_inst;
     }
 
@@ -62,6 +64,8 @@ public:
     bool is_dispatch_firmware_active() const;
     void init_profiler() const;
     void initialize_fabric_and_dispatch_fw() const;
+    // API needed due to Issue #19729
+    std::size_t get_max_num_eth_cores_across_all_devices() const;
 
 private:
     ~DevicePool();

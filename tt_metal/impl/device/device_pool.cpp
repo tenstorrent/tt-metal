@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -315,7 +315,7 @@ void DevicePool::initialize_active_devices() const {
 
     // Activate fabric (must be before FD)
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (tt_fabric::is_tt_fabric_config(fabric_config) || tt_fabric::is_2d_fabric_config(fabric_config)) {
+    if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         log_info(tt::LogMetal, "Initializing Fabric");
         if (tt_fabric::is_2d_fabric_config(fabric_config)) {
             // TODO: need to write routing tables for unified 2d fabric.
@@ -421,6 +421,27 @@ IDevice* DevicePool::get_device(chip_id_t id) const {
     return it->get();
 }
 
+std::size_t DevicePool::get_max_num_eth_cores_across_all_devices() const {
+    // This API is needed due to Issue #19729:
+    // Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
+    // Records the maximum number of active ethernet cores across all devices opened in the cluster.
+    // TT-Mesh dispatch assumes that all physical devices in the Mesh have the maximum number of active
+    // ethernet cores (uniformity assumption)
+    // Dispatch firmware running on each physical device knows how many ethernet cores are actually
+    // available and will dispatch to/wait on the correct number of cores (effectively ignoring the
+    // value host dispatch provides, if its incorrect).
+    std::size_t max_eth_core_count = 0;
+    for (const auto& device : this->devices) {
+        max_eth_core_count = std::max(
+            MetalContext::instance()
+                .get_cluster()
+                .get_active_ethernet_cores(device->id(), /*skip_reserved_tunnel_cores*/ true)
+                .size(),
+            max_eth_core_count);
+    }
+    return max_eth_core_count;
+}
+
 void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     std::set<chip_id_t> devices_to_activate;
     if (this->skip_remote_devices) {
@@ -448,31 +469,10 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             this->activate_device(device_id);
         }
     }
-    // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
-    // Record the maximum number of active ethernet cores across all devices.
-    // TT-Mesh dispatch assumes that all physical devices in the Mesh have the maximum number of active
-    // ethernet cores (uniformity assumption)
-    // Dispatch firmware running on each physical device knows how many ethernet cores are actually
-    // available and will dispatch to/wait on the correct number of cores (effectively ignoring the
-    // value host dispatch provides, if its incorrect).
-    if (use_max_eth_core_count_on_all_devices_) {
-        std::size_t max_eth_core_count = 0;
-        for (const auto& device : this->devices) {
-            max_eth_core_count = std::max(
-                MetalContext::instance()
-                    .get_cluster()
-                    .get_active_ethernet_cores(device->id(), /*skip_reserved_tunnel_cores*/ true)
-                    .size(),
-                max_eth_core_count);
-        }
-        for (auto& device : this->devices) {
-            dynamic_cast<Device*>(device.get())->set_ethernet_core_count_on_dispatcher(max_eth_core_count);
-        }
-    }
 
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     // Only can launch Fabric if all devices are active
-    if (tt_fabric::is_tt_fabric_config(fabric_config) || tt_fabric::is_2d_fabric_config(fabric_config)) {
+    if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
             if (not _inst->is_device_active(i)) {
                 // Fabric currently requires all devices to be active
@@ -489,7 +489,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 
 void DevicePool::wait_for_fabric_router_sync() const {
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (!tt::tt_fabric::is_tt_fabric_config(fabric_config) && !tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+    if (!tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
         return;
     }
 
@@ -506,8 +506,7 @@ void DevicePool::wait_for_fabric_router_sync() const {
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(dev->id()).get_eth_core_for_channel(
                 master_router_chan, CoordSystem::LOGICAL);
 
-        const auto [router_sync_address, expected_status] =
-            fabric_context.get_fabric_router_sync_address_and_status(dev->id());
+        const auto [router_sync_address, expected_status] = fabric_context.get_fabric_router_sync_address_and_status();
         std::vector<std::uint32_t> master_router_status{0};
         while (master_router_status[0] != expected_status) {
             tt_metal::detail::ReadFromDeviceL1(
@@ -726,9 +725,20 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         tt::llrt::internal_::wait_until_cores_done(dev_id, RUN_MSG_GO, dispatch_cores, 0);
     }
 
+    // Process registered termination signals from topology
+    for (const auto& dev_id : devices_to_close) {
+        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        const auto& info = tt::tt_metal::get_registered_termination_cores(dev_id);
+        for (const auto& core_to_terminate : info) {
+            std::vector<uint32_t> val{core_to_terminate.val};
+            tt_metal::detail::WriteToDeviceL1(
+                dev, core_to_terminate.logical_core, core_to_terminate.address, val, core_to_terminate.core_type);
+        }
+    }
+
     // Terminate fabric routers
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (tt::tt_fabric::is_tt_fabric_config(fabric_config) || tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+    if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
         const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         const auto& fabric_context = control_plane->get_fabric_context();
         auto [termination_signal_address, signal] = fabric_context.get_fabric_router_termination_address_and_signal();
@@ -755,26 +765,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
         pass &= dev->close();
-    }
-
-    // At this point the routing core clients (dispatch) have been terminated
-    // Terminate worker routing cores on device. Remaining ethernet cores will get reset during init
-    for (const auto& dev_id : devices_to_close) {
-        const auto mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id);
-        auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(dev_id);
-        for (const auto& core : routing_cores) {
-            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, dev_id)) {
-                continue;
-            }
-            log_debug(
-                tt::LogMetal,
-                "Resetting dispatch routing core {} on Device {} when closing Device {}",
-                core.str(),
-                mmio_device_id,
-                dev_id);
-            tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(tt_cxy_pair(dev_id, core));
-        }
     }
 
     return pass;

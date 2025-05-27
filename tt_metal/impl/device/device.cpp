@@ -12,7 +12,6 @@
 #include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include <trace.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
@@ -48,6 +47,7 @@
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
+#include "trace/trace.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dprint_server.hpp"
@@ -63,7 +63,7 @@
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
-#include "trace_buffer.hpp"
+#include "trace/trace_buffer.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
@@ -1645,12 +1645,6 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
-
-void Device::set_ethernet_core_count_on_dispatcher(uint32_t num_ethernet_cores) {
-    ethernet_core_count_on_dispatcher_ = num_ethernet_cores;
-}
-
-uint32_t Device::get_ethernet_core_count_on_dispatcher() const { return ethernet_core_count_on_dispatcher_; }
 
 }  // namespace tt_metal
 

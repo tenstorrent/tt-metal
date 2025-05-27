@@ -225,6 +225,7 @@ class CMakeBuild(build_ext):
             "api/tt-metalium/fabric_host_interface.h",
             "api/tt-metalium/fabric_edm_types.hpp",
             "api/tt-metalium/fabric_edm_packet_header.hpp",
+            "api/tt-metalium/edm_fabric_counters.hpp",
             "core_descriptors/*.yaml",
             "fabric/hw/**/*",
             "fabric/mesh_graph_descriptors/*.yaml",

@@ -17,7 +17,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/trace_buffer.hpp>
+#include "trace/trace_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
@@ -153,8 +153,6 @@ public:
     void init_command_queue_device() override;
 
     void init_fabric() override;
-    void set_ethernet_core_count_on_dispatcher(uint32_t num_ethernet_cores);
-    uint32_t get_ethernet_core_count_on_dispatcher() const;
     // Puts device into reset
     bool close() override;
 
