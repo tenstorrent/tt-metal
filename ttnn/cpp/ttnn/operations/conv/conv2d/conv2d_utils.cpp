@@ -981,8 +981,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     bool untilize_out = conv_config.output_layout == Layout::ROW_MAJOR;
 
     // Output of halo op is always ROW_MAJOR, so input for convs is either DataType::FLOAT32 or DataType::BFLOAT16
-    auto conv_input_dtype =
-        (input_datatype == tt::tt_metal::DataType::BFLOAT8_B) ? tt_metal::DataType::BFLOAT16 : input_datatype;
+    auto conv_input_dtype = (input_datatype == tt::tt_metal::DataType::FLOAT32) ? tt_metal::DataType::FLOAT32
+                                                                                : tt_metal::DataType::BFLOAT16;
     uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_input_dtype));
 
     TT_FATAL(
