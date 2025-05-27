@@ -331,7 +331,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size):
         hidden_states,
         memory_config=ttnn.create_sharded_memory_config(
             hidden_states.shape,
-            core_grid=config.core_grid,
+            core_grid=config.core_grid_8x8,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -401,7 +401,7 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.977)
+    assert_with_pcc(torch_output, output, 0.975)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])

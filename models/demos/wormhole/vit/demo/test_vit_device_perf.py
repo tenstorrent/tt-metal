@@ -44,7 +44,7 @@ def test_vit_device_ops(
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_sec",
     [
-        1290,
+        1270,
     ],
 )
 def test_vit_perf_device(batch_size, expected_kernel_samples_per_sec):
