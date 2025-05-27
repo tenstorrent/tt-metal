@@ -66,7 +66,6 @@ def prepare_conv_params(
     act_block_h_override=0,
     fp32_dest_acc_en=False,
     math_fidelity=ttnn.MathFidelity.HiFi4,
-    math_approx_mode=False,
     packer_l1_acc=False,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -74,7 +73,6 @@ def prepare_conv_params(
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=packer_l1_acc,
-        math_approx_mode=math_approx_mode,
     )
 
     conv_config = ttnn.Conv2dConfig(
