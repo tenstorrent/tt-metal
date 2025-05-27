@@ -205,6 +205,7 @@ MPIContext::MPIContext(MPI_Comm comm, MPI_Group group) : comm_(comm), group_(gro
 
 Rank  MPIContext::rank()  const { return Rank(rank_); }
 Size  MPIContext::size()  const { return Size(size_); }
+bool MPIContext::have_ulfm_extensions() const { return OMPI_HAS_ULFM; }
 void MPIContext::barrier() const { MPI_CHECK(MPI_Barrier(comm_)); }
 
 /* ---- point‑to‑point ---------------------------------------------------- */

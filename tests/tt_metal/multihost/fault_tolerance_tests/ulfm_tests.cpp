@@ -1,22 +1,10 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#include <mpi.h>
-#include <mpi-ext.h>
-
 #include <tt-metalium/distributed_context.hpp>
 #include <gtest/gtest.h>
 #include "common/multihost_test_tools.hpp"
 #include <thread>
-
-// Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
-// ULFM extensions.
-#if (defined(OPEN_MPI) && OPEN_MPI && defined(MPIX_ERR_PROC_FAILED))
-#define OMPI_HAS_ULFM 1
-#else
-#define OMPI_HAS_ULFM 0
-#endif
 
 using tt::tt_metal::distributed::multihost::Color;
 using tt::tt_metal::distributed::multihost::DistributedContext;
@@ -27,11 +15,15 @@ using tt::tt_metal::distributed::multihost::Rank;
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
 
-#if (!OMPI_HAS_ULFM)
-    ::testing::GTEST_FLAG(filter) = "-*";
-    fmt::println("ULFM support is not available in this build, skipping fault tolerance tests.");
-    return 0;
-#endif
+    auto ctx = DistributedContext::get_current_world();
+
+    // Check if we have an MPIContext and if so, skip tests when we don't have ULFM support
+    auto mpi_ctx = dynamic_cast<tt::tt_metal::distributed::multihost::MPIContext*>(ctx.get());
+    if (mpi_ctx && !mpi_ctx->have_ulfm_extensions()) {
+        ::testing::GTEST_FLAG(filter) = "-*";
+        fmt::println("ULFM support is not available in this build, skipping fault tolerance tests.");
+        return 0;
+    }
 
     return RUN_ALL_TESTS();
 }
