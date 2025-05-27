@@ -770,6 +770,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t input_width,
     const CoreCoord& compute_grid_size,
     Layout input_layout,
+    tt_metal::DataType input_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
     const uint32_t groups,
@@ -868,6 +869,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             weights_shape,
             kernel_size,
             conv_config,
+            input_datatype,
             conv_out_memory_config,
             enable_bias,
             conv_is_1d_deptwise);
@@ -972,14 +974,14 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
+    const DataType input_datatype,
     const MemoryConfig& output_memory_config,
     const bool enable_bias,
     bool is_1d_depthwise_conv) {
     bool untilize_out = conv_config.output_layout == Layout::ROW_MAJOR;
 
-    // Output of halo op is always ROW_MAJOR, so input for convs is eighter DataType::FLOAT32 or DataType::BFLOAT16
-    const DataType input_dtype = conv_config.dtype == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
-    uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(input_dtype));
+    // Output of halo op is always ROW_MAJOR, so input for convs is either DataType::FLOAT32 or DataType::BFLOAT16
+    uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(input_datatype));
 
     TT_FATAL(
         conv_config.weights_dtype.has_value(),
