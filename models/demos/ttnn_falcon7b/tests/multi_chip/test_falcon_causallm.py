@@ -82,7 +82,7 @@ def test_falcon_causal_lm(
         model_location_or_version, config=configuration
     ).eval()
     
-    cache_dir = '/mnt/MLPerf/tt-dnn_models/hf_cache'
+    cache_dir = '/mnt/MLPerf/tt_dnn-models/hf_cache'
     my_model_id = 'tiiuae/falcon-7b'
 
     # Download config and modify if needed

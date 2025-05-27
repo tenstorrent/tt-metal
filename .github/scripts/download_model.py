@@ -2,7 +2,7 @@ import transformers
 from transformers import FalconConfig
 from transformers.models.falcon.modeling_falcon import FalconForCausalLM
 
-cache_dir = '/mnt/MLPerf/tt-dnn_models/hf_cache'
+cache_dir = '/mnt/MLPerf/tt_dnn-models/hf_cache'
 model_id = 'tiiuae/falcon-7b'
 
 # Download config and modify if needed
