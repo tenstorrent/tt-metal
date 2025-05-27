@@ -243,7 +243,6 @@ def vit_attention(
     )
     ttnn.deallocate(query_key_value)
     ttnn.deallocate(hidden_states)
-    value = ttnn.reallocate(value)
 
     print("q mem_config is: ", query.memory_config())
     print("k mem_config is: ", key.memory_config())
@@ -332,7 +331,6 @@ def vit_attention(
         program_config=config.program_configs["self_output_matmul_program_config"],
     )
     ttnn.deallocate(context_layer)
-    self_output = ttnn.reallocate(self_output)
 
     return self_output
 
