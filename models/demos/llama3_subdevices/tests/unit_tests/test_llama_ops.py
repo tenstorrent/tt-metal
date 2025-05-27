@@ -4,6 +4,7 @@
 import ttnn
 import torch
 import pytest
+import os
 
 from models.utility_functions import comp_pcc
 
@@ -27,6 +28,11 @@ from tests.ttnn.unit_tests.operations.test_paged_fused_update_cache import run_t
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
     run_test_row_major_rotary_embedding_llama,
+)
+
+from models.demos.llama3_subdevices.tests.test_llama_embedding import (
+    test_llama_embedding,
+    skip_for_grayskull,
 )
 
 
@@ -366,3 +372,27 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
     run_test_row_major_rotary_embedding_llama(
         mesh_device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
     )
+
+
+@torch.no_grad()
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (32,),
+)
+@pytest.mark.parametrize(
+    "max_seq_len",
+    (128,),
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_llama_tg_Embeddings(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+    test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc)
