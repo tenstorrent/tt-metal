@@ -125,7 +125,6 @@ class TtResnetBlock2D(nn.Module):
                 act_block_h_override=32,
                 fp32_dest_acc_en=False,
                 math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
                 packer_l1_acc=True,
             )
         else:
