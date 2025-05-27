@@ -2235,7 +2235,8 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
     "input_a_shape,input_b_shape,input_a_reshape,input_b_reshape",
     [
         ((32, 96), (96, 32), (32, 96), (96, 32)),  # No padding introduced
-        ((32, 96), (96, 32), (1, 90), (90, 16)),  # Padding introduced in M,K and N dimensions
+        ((32, 96), (96, 32), (1, 90), (90, 16)),  # Padding introduced in M,K and N dimensions, 1 face padded
+        ((32, 96), (96, 32), (1, 65), (65, 16)),  # Padding introduced in M,K and N dimensions, 2 faces padded
     ],
 )
 @pytest.mark.parametrize(

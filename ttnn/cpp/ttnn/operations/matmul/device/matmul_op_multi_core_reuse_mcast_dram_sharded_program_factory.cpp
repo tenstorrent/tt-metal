@@ -304,6 +304,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     std::vector<uint32_t> in0_sender_compile_time_args = {
         (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
         (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
+        (std::uint32_t)in0_last_ktile_w,                            // in0_last_ktile_w
         // in0 mcast args
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -599,7 +600,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 
         mm_in0_sender_args.push_back((std::uint32_t)worker_core_type);
         mm_in0_sender_args.push_back((std::uint32_t)sender_id);
-        mm_in0_sender_args.push_back((std::uint32_t)(core == all_storage_cores_vec.back() ? in0_last_ktile_w : 0));
+        mm_in0_sender_args.push_back(
+            (std::uint32_t)((core == all_storage_cores_vec.back()) and (in0_last_ktile_w > 0)));
         mm_in0_sender_args.insert(
             mm_in0_sender_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
         mm_in0_sender_args.insert(

@@ -157,7 +157,7 @@ void kernel_main() {
                             if constexpr (in0_last_ktile_w > 0) {
                                 if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
                                     noc_async_read_barrier();
-                                    pad_last_ktile<in0_data_format>(in0_last_ktile_w, l1_write_addr_in0);
+                                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
                                 }
                             }
 
