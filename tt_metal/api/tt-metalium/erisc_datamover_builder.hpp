@@ -137,11 +137,6 @@ struct FabricEriscDatamoverConfig {
 
     Topology topology = Topology::Linear;
 
-    std::vector<bool> enable_handshake;
-    std::vector<bool> enable_context_switch;
-    std::vector<bool> enable_interrupts;
-    std::vector<size_t> iterations_between_ctx_switch_and_teardown_checks;
-
     // add the noc-usage and cmd_buf-usage here
     std::array<std::size_t, num_receiver_channels> receiver_channel_forwarding_noc_ids;
     std::array<std::size_t, num_receiver_channels> receiver_channel_forwarding_data_cmd_buf_ids;

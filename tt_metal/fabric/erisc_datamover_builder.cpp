@@ -219,8 +219,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options_dateline = {
         std::pair<size_t, size_t>{8, 16}, std::pair<size_t, size_t>{8, 8}};
 
-    size_t num_sender_buffer_slots = std::numeric_limits<size_t>::max();
-    size_t num_receiver_buffer_slots = std::numeric_limits<size_t>::max();
+    size_t num_sender_buffer_slots;
+    size_t num_receiver_buffer_slots;
 
     auto get_optimal_num_slots = [this](
                                      auto& buffer_slot_options,
@@ -343,6 +343,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         buffer_addr += this->receiver_channels_size_bytes[i];
         log_trace(tt::LogOp, "Receiver {} channel_start: {}", i, this->receiver_channels_base_address[i]);
     }
+
+    log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         bool skip_current_channel = (i == non_dateline_sender_channel_idx && is_dateline);
