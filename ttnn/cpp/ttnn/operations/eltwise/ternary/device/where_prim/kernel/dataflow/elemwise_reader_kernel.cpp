@@ -6,7 +6,6 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    DPRINT << "read kernel start" << ENDL();
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src1_addr = get_arg_val<uint32_t>(1);
     uint32_t src2_addr = get_arg_val<uint32_t>(2);
@@ -21,6 +20,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+
     uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
     DataFormat src0_data_format = get_dataformat(cb_id_in0);
     const InterleavedAddrGenFast<src0_is_dram> s0 = {
@@ -58,5 +58,4 @@ void kernel_main() {
         cb_push_back(cb_id_in1, onetile);
         cb_push_back(cb_id_in2, onetile);
     }
-    // DPRINT << "copy data to CB DONE" << ENDL();
 }
