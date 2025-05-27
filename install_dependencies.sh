@@ -249,11 +249,11 @@ install_sfpi() {
 install_mpi_ulfm(){
     # Only install MPI ULFM for Ubuntu 22.04 or older
     # VERSION is already defined at the top of the script
-    # Convert version to comparable format (e.g., 22.04 -> 2204)
+    # Convert version to comparable format (e.g., 24.04 -> 2404)
     local VERSION_NUM=$(echo "$VERSION" | sed 's/\.//')
 
-    if [ "$VERSION_NUM" -gt "2204" ]; then
-        echo "→ Skipping MPI ULFM installation for Ubuntu $VERSION (only needed for 22.04 or older)"
+    if [ "$VERSION_NUM" -gt "2404" ]; then
+        echo "→ Skipping MPI ULFM installation for Ubuntu $VERSION (only needed for 24.04 or older)"
         return
     fi
 
