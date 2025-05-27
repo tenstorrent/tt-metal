@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -343,15 +343,6 @@ def to_torch(
     """
     import torch
 
-    class TorchTensor(torch.Tensor):
-        @classmethod
-        def __torch_function__(cls, func, types, func_args=(), func_kwargs=None):
-            # this tells torch to treat TorchTensor just like torch.Tensor's.
-            # Otherwise, torch will complain that it doesn't know how to handle it.
-            types = tuple(torch.Tensor if t == TorchTensor else t for t in types)
-            func = ttnn._ttnn.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
-            return super().__torch_function__(func, types, func_args, func_kwargs)
-
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
@@ -381,7 +372,7 @@ def to_torch(
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze(0)
 
-    torch_tensor = TorchTensor(tensor)
+    torch_tensor = tensor
 
     if dtype is not None:
         torch_tensor = torch_tensor.to(dtype=dtype)
