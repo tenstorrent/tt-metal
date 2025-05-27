@@ -49,14 +49,24 @@ namespace tt::tt_fabric {
 //                         ------------------
 //
 
-FabricRiscConfig::FabricRiscConfig() :
+FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
     enable_handshake(true),
     enable_context_switch(true),
     enable_interrupts(true),
     iterations_between_ctx_switch_and_teardown_checks(
         FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks) {
-    this->is_sender_channel_serviced.fill(true);
-    this->is_receiver_channel_serviced.fill(true);
+    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        this->is_sender_channel_serviced.fill(true);
+        this->is_receiver_channel_serviced.fill(true);
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        this->is_sender_channel_serviced.fill(risc_id == 0);
+        this->is_receiver_channel_serviced.fill(risc_id == 1);
+        this->enable_context_switch = false;
+        this->enable_interrupts = false;
+    } else {
+        TT_ASSERT(false);
+    }
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
@@ -75,7 +85,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     uint32_t buffer_address = edm_status_address + field_size;
     this->num_riscv_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    this->risc_configs.resize(this->num_riscv_cores);
+    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
+        this->risc_configs.emplace_back(risc_id);
+    }
 
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
         this->receiver_channels_counters_address[i] = buffer_address;

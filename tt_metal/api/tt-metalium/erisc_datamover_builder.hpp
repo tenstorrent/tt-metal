@@ -156,7 +156,7 @@ private:
 
 class FabricRiscConfig {
 public:
-    FabricRiscConfig();
+    FabricRiscConfig(uint32_t risc_id);
     bool enable_handshake;
     bool enable_context_switch;
     bool enable_interrupts;

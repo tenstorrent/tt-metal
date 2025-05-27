@@ -170,23 +170,27 @@ constexpr size_t sender_3_completed_packet_header_cb_size_headers =
 constexpr size_t sender_4_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 54);
 constexpr size_t sender_4_completed_packet_header_cb_size_headers =
     get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 55);
+
+constexpr size_t sender_channel_serviced_args_idx = MAIN_CT_ARGS_START_IDX + 56;
 constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced =
-    fill_array_with_next_n_args<bool, MAIN_CT_ARGS_START_IDX + 56, MAX_NUM_SENDER_CHANNELS>();
+    fill_array_with_next_n_args<bool, sender_channel_serviced_args_idx, MAX_NUM_SENDER_CHANNELS>();
+constexpr size_t receiver_channel_serviced_args_idx =
+    sender_channel_serviced_args_idx + is_sender_channel_serviced.size();
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced =
-    fill_array_with_next_n_args<bool, MAIN_CT_ARGS_START_IDX + 61, MAX_NUM_RECEIVER_CHANNELS>();
+    fill_array_with_next_n_args<bool, receiver_channel_serviced_args_idx, MAX_NUM_RECEIVER_CHANNELS>();
+constexpr size_t MAIN_CT_ARGS_IDX_2 = receiver_channel_serviced_args_idx + is_receiver_channel_serviced.size();
 
-constexpr bool enable_ethernet_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 63) != 0;
-constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 64) != 0;
-constexpr bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 65) != 0;
-constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 66);
-constexpr size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 67);
-constexpr size_t iterations_between_ctx_switch_and_teardown_checks =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 68);
-constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 69);
-constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 70);
-constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 71);
+constexpr bool enable_ethernet_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2) != 0;
+constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) != 0;
+constexpr bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2) != 0;
+constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3);
+constexpr size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 4);
+constexpr size_t iterations_between_ctx_switch_and_teardown_checks = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 5);
+constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 6);
+constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 7);
+constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 8);
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 72;
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_2 + 9;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
