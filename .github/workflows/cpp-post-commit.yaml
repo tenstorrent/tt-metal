@@ -38,8 +38,8 @@ jobs:
           {name: All C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
           {name: tools, cmd: ./tests/scripts/run_tools_tests.sh},
 
-          {name: user kernel path, cmd: "rm -rf /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api_${{ inputs.arch }} --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*"},
-          {name: api, cmd: "./build/test/tt_metal/unit_tests_api_${{ inputs.arch }}"},
+          {name: user kernel path, cmd: "rm -rf /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*"},
+          {name: api, cmd: "./build/test/tt_metal/unit_tests_api"},
           {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools"},
           {name: device, cmd: "./build/test/tt_metal/unit_tests_device"},
           {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch"},

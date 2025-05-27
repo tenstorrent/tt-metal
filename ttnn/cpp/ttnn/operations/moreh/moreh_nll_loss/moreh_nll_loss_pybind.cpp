@@ -9,8 +9,6 @@
 #include "moreh_nll_loss.hpp"
 #include "ttnn-pybind/decorators.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::moreh::moreh_nll_loss {
 
 void bind_moreh_nll_loss_operation(py::module& module) {

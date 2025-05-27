@@ -19,12 +19,15 @@ void ScaledDotProductAttentionDecode::validate(
     for (auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
-        TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to SDPA must be tilized");
         TT_FATAL(
             input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B ||
                 input_tensor.get_dtype() == DataType::BFLOAT4_B,
             "Unsupported data type {}.",
             input_tensor.get_dtype());
+    }
+
+    for (size_t i = 1; i < input_tensors.size(); i++) {
+        TT_FATAL(input_tensors.at(i).get_layout() == Layout::TILE, "Inputs to SDPA must be tilized except for Q");
     }
 
     const auto q_shape = input_tensors.at(0).get_padded_shape();

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@ from loguru import logger
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
+from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 
 
 # Copied from sdxl pipeline
@@ -74,38 +75,35 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
-def run_tt_unet(
-    ttnn_device, tt_unet, torch_latent_model_input, ttnn_prompt_embeds, ttnn_added_cond_kwargs, ttnn_timestep
+def run_tt_iteration(
+    ttnn_device,
+    tt_unet,
+    tt_scheduler,
+    input_tensor,
+    input_shape,
+    ttnn_prompt_embeds,
+    ttnn_added_cond_kwargs,
+    ttnn_timestep,
+    i,
 ):
-    B, C, H, W = torch_latent_model_input.shape
-    ttnn_latent_model_input = ttnn.from_torch(
-        torch_latent_model_input,
-        dtype=ttnn.bfloat16,
-        device=ttnn_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    B, C, H, W = input_shape
 
-    ttnn_latent_model_input = ttnn.permute(ttnn_latent_model_input, (0, 2, 3, 1))
-    ttnn_latent_model_input = ttnn.reshape(ttnn_latent_model_input, (1, 1, B * H * W, C))
-
+    input_tensor = tt_scheduler.scale_model_input(input_tensor, tt_scheduler.tt_timesteps[i])
     ttnn_noise_pred, output_shape = tt_unet.forward(
-        ttnn_latent_model_input,
+        input_tensor,
         [B, C, H, W],
         timestep=ttnn_timestep,
         encoder_hidden_states=ttnn_prompt_embeds,
         added_cond_kwargs=ttnn_added_cond_kwargs,
     )
 
-    noise_pred = ttnn.to_torch(ttnn_noise_pred)
-    noise_pred = noise_pred.reshape(B, output_shape[1], output_shape[2], output_shape[0])
-    noise_pred = torch.permute(noise_pred, (0, 3, 1, 2))
-    return noise_pred
+    return ttnn_noise_pred, output_shape
 
 
 @torch.no_grad()
 def run_demo_inference(
     ttnn_device,
+    is_ci_env,
     prompt,
     num_inference_steps,
     classifier_free_guidance,
@@ -135,7 +133,7 @@ def run_demo_inference(
         use_safetensors=True,
     )
 
-    # 2. Load tt_unet
+    # 2. Load tt_unet, tt_vae and tt_scheduler
     tt_unet = TtUNet2DConditionModel(
         ttnn_device,
         pipeline.unet.state_dict(),
@@ -144,6 +142,27 @@ def run_demo_inference(
         transformer_weights_dtype=ttnn.bfloat16,
     )
     tt_vae = TtAutoencoderKL(ttnn_device, pipeline.vae.state_dict()) if vae_on_device else None
+    tt_scheduler = TtEulerDiscreteScheduler(
+        ttnn_device,
+        pipeline.scheduler.config.num_train_timesteps,
+        pipeline.scheduler.config.beta_start,
+        pipeline.scheduler.config.beta_end,
+        pipeline.scheduler.config.beta_schedule,
+        pipeline.scheduler.config.trained_betas,
+        pipeline.scheduler.config.prediction_type,
+        pipeline.scheduler.config.interpolation_type,
+        pipeline.scheduler.config.use_karras_sigmas,
+        pipeline.scheduler.config.use_exponential_sigmas,
+        pipeline.scheduler.config.use_beta_sigmas,
+        pipeline.scheduler.config.sigma_min,
+        pipeline.scheduler.config.sigma_max,
+        pipeline.scheduler.config.timestep_spacing,
+        pipeline.scheduler.config.timestep_type,
+        pipeline.scheduler.config.steps_offset,
+        pipeline.scheduler.config.rescale_betas_zero_snr,
+        pipeline.scheduler.config.final_sigmas_type,
+    )
+    pipeline.scheduler = tt_scheduler
 
     cpu_device = "cpu"
 
@@ -314,15 +333,34 @@ def run_demo_inference(
         ]
 
     logger.info("Performing warmup run, to make use of program caching in actual inference...")
-    latent_model_input = latents
-    latent_model_input = pipeline.scheduler.scale_model_input(latent_model_input, timesteps[0])
-    run_tt_unet(
+    B, C, H, W = latents.shape
+
+    # All device code will work with channel last tensors
+    latents = torch.permute(latents, (0, 2, 3, 1))
+    latents = latents.reshape(1, 1, B * H * W, C)
+
+    latents = ttnn.from_torch(
+        latents,
+        dtype=ttnn.bfloat16,
+        device=ttnn_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # UNet will deallocate the input tensor
+    latent_model_input = ttnn.clone(latents)
+
+    # Compile run of Scheduler and UNet
+    run_tt_iteration(
         ttnn_device,
         tt_unet,
+        tt_scheduler,
         latent_model_input,
+        [B, C, H, W],
         ttnn_prompt_embeds[0],
         ttnn_added_cond_kwargs[0],
         ttnn_timesteps[0],
+        0,
     )
 
     logger.info("Starting ttnn inference...")
@@ -330,57 +368,71 @@ def run_demo_inference(
         unet_outputs = []
         for unet_slice in range(len(ttnn_prompt_embeds)):
             latent_model_input = latents
-            latent_model_input = pipeline.scheduler.scale_model_input(latent_model_input, timesteps[i])
-
-            noise_pred = run_tt_unet(
+            noise_pred, noise_shape = run_tt_iteration(
                 ttnn_device,
                 tt_unet,
+                tt_scheduler,
                 latent_model_input,
+                [B, C, H, W],
                 ttnn_prompt_embeds[unet_slice],
                 ttnn_added_cond_kwargs[unet_slice],
                 t,
+                i,
             )
+            C, H, W = noise_shape
 
             unet_outputs.append(noise_pred)
 
-        if len(unet_outputs) > 1:
-            noise_pred = torch.cat(unet_outputs, dim=0)
-        else:
-            noise_pred = unet_outputs[0]
         # perform guidance
         if classifier_free_guidance:
-            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred_uncond, noise_pred_text = unet_outputs
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-        # guidance rescale is 0, skip next step
-        latents = pipeline.scheduler.step(noise_pred, timesteps[i], latents, **extra_step_kwargs, return_dict=False)[0]
 
-    latents = latents.to(pipeline.vae.dtype)
-    # VAE upcasting to float32 is happening in the reference SDXL demo if VAE dtype is float16. If it's bfloat16, it will not be upcasted.
-    latents = latents / pipeline.vae.config.scaling_factor
+            ttnn.deallocate(noise_pred_uncond)
+            ttnn.deallocate(noise_pred_text)
+        else:
+            noise_pred = unet_outputs[0]
+
+        latents = tt_scheduler.step(
+            noise_pred, tt_scheduler.timesteps[i], latents, **extra_step_kwargs, return_dict=False
+        )[0]
+
+        ttnn.deallocate(noise_pred)
+        latents = ttnn.move(latents)
 
     if vae_on_device:
+        scaling_factor = ttnn.from_torch(
+            torch.Tensor([pipeline.vae.config.scaling_factor]),
+            dtype=ttnn.bfloat16,
+            device=ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        latents = ttnn.div(latents, scaling_factor)
+
         # Workaround for #22017
         ttnn_device.disable_and_clear_program_cache()
 
-        B, C, H, W = list(latents.shape)
-        latents = torch.permute(latents, (0, 2, 3, 1))
-        latents = latents.reshape(1, 1, B * H * W, C)
-        ttnn_latents = ttnn.from_torch(
-            latents,
-            dtype=ttnn.bfloat16,
-            device=ttnn_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
         logger.info("Running TT VAE")
-        image = tt_vae.forward(ttnn_latents, [B, C, H, W])
+        image = tt_vae.forward(latents, [B, C, H, W])
     else:
+        latents = ttnn.from_device(latents).to_torch()
+        latents = latents.reshape(B, H, W, C)
+        latents = torch.permute(latents, (0, 3, 1, 2))
+
+        latents = latents.to(pipeline.vae.dtype)
+
+        # VAE upcasting to float32 is happening in the reference SDXL demo if VAE dtype is float16. If it's bfloat16, it will not be upcasted.
+        latents = latents / pipeline.vae.config.scaling_factor
+
         image = pipeline.vae.decode(latents, return_dict=False)[0]
     image = pipeline.image_processor.postprocess(image, output_type="pil")[0]
 
-    image.save("output.png")
-    logger.info(f"Image saved to output.png")
+    if is_ci_env:
+        logger.info(f"Image generated successfully")
+    else:
+        image.save("output.png")
+        logger.info(f"Image saved to output.png")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 6 * 16384}], indirect=True)
@@ -411,6 +463,7 @@ def run_demo_inference(
 def test_demo(
     device,
     use_program_cache,
+    is_ci_env,
     prompt,
     num_inference_steps,
     classifier_free_guidance,
@@ -418,6 +471,7 @@ def test_demo(
 ):
     return run_demo_inference(
         device,
+        is_ci_env,
         prompt,
         num_inference_steps,
         classifier_free_guidance,

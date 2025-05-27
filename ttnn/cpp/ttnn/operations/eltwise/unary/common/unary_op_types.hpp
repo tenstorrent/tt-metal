@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -83,9 +83,7 @@ enum class UnaryOpType {
     BITWISE_OR,
     RIGHT_SHIFT,
     FLOOR,
-    FLOOR_FLOAT32,
     CEIL,
-    CEIL_FLOAT32,
     ROUND,
     LEFT_SHIFT,
     REMAINDER,

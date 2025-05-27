@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -772,8 +772,8 @@ class resnetBlock2D:
                 self.device.arch(),
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
             )
 
             conv_kwargs_4 = {

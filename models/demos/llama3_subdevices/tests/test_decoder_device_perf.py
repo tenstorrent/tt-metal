@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import pytest
@@ -21,7 +21,7 @@ from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -12
+DECODER_OP_END_INDEX = -13
 
 perf_targets = {
     "RMSAllGather_0": {
@@ -53,7 +53,7 @@ perf_targets = {
     },
     "AllGatherAsync_0": {
         "op_name": "AllGatherAsync_Binary_Mult",
-        "kernel_duration": 10607.277777777777,
+        "kernel_duration": 11328.694444444445,
         "op_to_op": 959.5555,
         "non-overlapped-dispatch-time": 4351.1,
         "kernel_duration_relative_margin": 0.05,
@@ -64,7 +64,7 @@ perf_targets = {
         "op_name": "QKV_MM",
         "kernel_duration": 8556.222222222223,
         "op_to_op": 716.4444444444445,
-        "non-overlapped-dispatch-time": 6102.0,
+        "non-overlapped-dispatch-time": 5653.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
@@ -91,7 +91,7 @@ perf_targets = {
         "op_name": "FF3_MM",
         "kernel_duration": 9435.333333333334,
         "op_to_op": 688.7777777777778,
-        "non-overlapped-dispatch-time": 6144.8,
+        "non-overlapped-dispatch-time": 7093.7,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.15,
