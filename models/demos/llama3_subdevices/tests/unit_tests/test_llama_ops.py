@@ -4,7 +4,6 @@
 import ttnn
 import torch
 import pytest
-import os
 
 from models.utility_functions import comp_pcc
 
@@ -32,7 +31,6 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
 
 from models.demos.llama3_subdevices.tests.test_llama_embedding import (
     test_llama_embedding,
-    skip_for_grayskull,
 )
 
 
@@ -375,14 +373,9 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [(8, 4)],
     indirect=True,
 )
 @pytest.mark.parametrize(
