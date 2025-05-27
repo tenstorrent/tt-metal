@@ -21,6 +21,12 @@ on:
     branches:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
 
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  packages: write
+
 jobs:
   static-checks:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336

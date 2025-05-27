@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -94,7 +94,7 @@ void kernel_main() {
 #ifndef SKIP_MCAST
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_async_write_multicast(
-                local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores - 1, true);
+                local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores - 1, true, true);
 #endif
 
             noc_semaphore_set_multicast(
@@ -123,7 +123,7 @@ void kernel_main() {
                 uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
 #ifndef SKIP_MCAST
                 noc_async_write_multicast_loopback_src(
-                    local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true);
+                    local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true, true);
 #endif
                 noc_semaphore_set_multicast_loopback_src(
                     in0_mcast_sender_valid_semaphore, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
