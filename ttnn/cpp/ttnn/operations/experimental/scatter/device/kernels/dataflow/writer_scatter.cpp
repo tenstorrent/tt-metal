@@ -11,10 +11,10 @@ namespace {
 template <bool is_dram>
 FORCE_INLINE void write_wt_tiles(
     IAGF<is_dram> addr_gtor, const uint32_t& cb, const uint32_t Wt_input, const uint32_t& ht_offset = 0) {
-    for (uint32_t tile = 0; tile < Wt_input; ++tile) {
+    for (uint32_t tile_num_in_row = 0; tile_num_in_row < Wt_input; ++tile_num_in_row) {
         cb_wait_front(cb, ONE_TILE);
         const uint32_t l1_addr = get_read_ptr(cb);
-        noc_async_write_tile(ht_offset * Wt_input + tile, addr_gtor, l1_addr);
+        noc_async_write_tile(ht_offset * Wt_input + tile_num_in_row, addr_gtor, l1_addr);
         noc_async_write_barrier();
         cb_pop_front(cb, ONE_TILE);
     }

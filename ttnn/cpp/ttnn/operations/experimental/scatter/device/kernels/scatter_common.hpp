@@ -58,10 +58,12 @@ template <DataFormat df>
 using std_type_t = typename df_to_std<df>::std_type;
 
 FORCE_INLINE uint32_t calc_offset_inside_tile(
-    const std::size_t& face_x, const std::size_t& face_y, const std::size_t& scalar_x, const std::size_t& scalar_y) {
+    const uint32_t& face_x, const uint32_t& face_y, const uint32_t& scalar_x, const uint32_t& scalar_y) {
+    // pick the face
     const uint32_t face_multiplier = ((face_y << 1) | (face_x));
     uint32_t offset = TILE_FACE_HW * face_multiplier;
 
+    // pick the value inside face
     offset += scalar_y * TILE_FACE_WIDTH + scalar_x;
 
     return offset;
@@ -72,10 +74,10 @@ FORCE_INLINE uint32_t get_tile_offset_in_row(const uint32_t& tile_id) { return t
 template <typename T>
 FORCE_INLINE volatile T& tile_guts(
     volatile tt_l1_ptr T* l1_ptr,
-    const std::size_t& face_x,
-    const std::size_t& face_y,
-    const std::size_t& scalar_x,
-    const std::size_t& scalar_y,
+    const uint32_t& face_x,
+    const uint32_t& face_y,
+    const uint32_t& scalar_x,
+    const uint32_t& scalar_y,
     const uint32_t& tile_id = 0) {
     return l1_ptr[get_tile_offset_in_row(tile_id) + calc_offset_inside_tile(face_x, face_y, scalar_x, scalar_y)];
 }

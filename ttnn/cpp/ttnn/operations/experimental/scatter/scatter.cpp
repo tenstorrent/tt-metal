@@ -7,10 +7,9 @@
 #include "device/scatter_device_operation.hpp"
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
 namespace ttnn::operations::experimental {
@@ -18,11 +17,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 Tensor pre_scatter_transform_tensor(
-    const Tensor& input_tensor,
-    const int8_t dim,
-    const bool is_dim_last_idx,
-    const bool is_rank_le_4d,
-    const bool padding = false) {
+    const Tensor& input_tensor, const int8_t dim, const bool is_dim_last_idx, const bool is_rank_le_4d) {
     if (input_tensor.get_logical_shape() == ttnn::Shape{1} || input_tensor.get_logical_shape() == ttnn::Shape{0}) {
         return input_tensor;
     }
@@ -30,13 +25,7 @@ Tensor pre_scatter_transform_tensor(
     const Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
     Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
-    if (padding) {
-        return ttnn::fill_implicit_tile_padding(transformed_tensor, -1);
-    }
-
     return transformed_tensor;
-
-    // return ttnn::fill_implicit_tile_padding(sliced_tensor, std::numeric_limits<float>::min());
 }
 
 Tensor post_scatter_transform_tensor(
@@ -44,10 +33,10 @@ Tensor post_scatter_transform_tensor(
     const auto orig_rank = original_lshape.rank();
 
     if (orig_rank < 4) {
-        output_tensor = ttnn::squeeze_from_4D(output_tensor, orig_rank);
+        output_tensor = ttnn::reshape(output_tensor, original_lshape);
     } else if (orig_rank > 4) {
         ttnn::SmallVector<uint32_t> result_shape(original_lshape.cbegin(), original_lshape.cend());
-        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{result_shape});
+        output_tensor = ttnn::reshape(output_tensor, original_lshape);
     }
 
     if (!is_dim_last_idx) {
@@ -79,8 +68,6 @@ Tensor ScatterOperation::invoke(
     const auto input_tensor_rank = input_tensor.get_padded_shape().rank();
 
     const auto original_index_tensor_lshape = index_tensor.get_logical_shape();
-    const auto index_tensor_rank = index_tensor.get_padded_shape().rank();
-
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;
     }
@@ -90,19 +77,19 @@ Tensor ScatterOperation::invoke(
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
 
     Tensor padded_index_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
-        index_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, false);
+        index_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
     Tensor padded_source_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
-        source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, false);
+        source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
     Tensor padded_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
-        input_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, false);
+        input_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
     std::optional<Tensor> optional_output_tensor_value = std::nullopt;
     if (opt_output.has_value()) {
         auto& output_tensor = opt_output.value();
         output_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
-            output_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d, false);
+            output_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
         optional_output_tensor_value = output_tensor;
     }
 

@@ -59,8 +59,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t Wt_input = input_shape[3] / TILE_WIDTH;
     const uint32_t Wt_index = index_shape[3] / TILE_WIDTH;
 
-    constexpr uint32_t num_cb_unit = 2;
-
     const int32_t dim{(args.dim >= 0) ? args.dim : (input_rank + args.dim)};
 
     auto device = input_tensor.device();
@@ -77,10 +75,13 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(grid, Ht);
 
-    const uint32_t input_tiles = num_cb_unit * Wt_input;
-    const uint32_t index_tiles = num_cb_unit * Wt_index;
-    const uint32_t src_tiles = num_cb_unit * Wt_index;
-    const uint32_t out_tiles = num_cb_unit * Wt_input;
+    constexpr uint32_t NUM_CB_TILE_UNITS = 2;
+    constexpr uint32_t ONE_TILE = 1;
+
+    const uint32_t input_tiles = NUM_CB_TILE_UNITS * ONE_TILE;
+    const uint32_t index_tiles = NUM_CB_TILE_UNITS * ONE_TILE;
+    const uint32_t src_tiles = NUM_CB_TILE_UNITS * ONE_TILE;
+    const uint32_t out_tiles = NUM_CB_TILE_UNITS * ONE_TILE;
 
     auto cb_input{create_cb(program, input_tensor.get_dtype(), ScatterCB::INPUT, all_cores, input_tiles)};
     auto cb_index{create_cb(program, index_tensor.get_dtype(), ScatterCB::INDEX, all_cores, index_tiles)};
