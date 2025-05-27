@@ -108,8 +108,6 @@ def run_distributed_layernorm(
         beta = None
         tt_gamma = None
         tt_beta = None
-        # tt_gamma = [None] * n_devices
-        # tt_beta = [None] * n_devices
 
     for i in range(iterations):
         tt_out = tt_distributed_layernorm(

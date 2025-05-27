@@ -43,7 +43,6 @@ void LayerNormPostAllGather::validate(
     TT_FATAL(stats.get_padded_shape()[2] == a.get_padded_shape()[2], "Error");
     // TODO: How to check if number of tile columns is correct? Would have to know # of devices and is_rmsnorm
 
-    // TT_FATAL(gamma.has_value(), "Error");
     if (gamma.has_value()) {
         const auto& gamma_tensor = gamma.value();
 
