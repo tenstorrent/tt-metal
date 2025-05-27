@@ -25,11 +25,15 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
         TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
         TT_FATAL(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
         TT_FATAL(input.device() == ref_device, "Operands to rotary embedding need to be on same device!");
-        TT_FATAL((input.get_layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
         TT_FATAL(
             (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
             "inputs for RoPE must be HEIGHT_SHARDED.");
         TT_FATAL((input.get_dtype() == DataType::BFLOAT16), "Inputs to rotary embedding must be bfloat16");
+    }
+    Layout tensor_layout = this->row_major_QK ? Layout::ROW_MAJOR : Layout::TILE;
+    for (int i = 0; i < input_tensors.size() - 1; i++) {
+        TT_FATAL(
+            input_tensors[i].get_layout() == tensor_layout, "input tensor {} must be in layout {}", i, tensor_layout);
     }
 
     // Check for decode mode
@@ -45,6 +49,15 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
         head_dim <= 128 ||
             std::get<ttnn::WormholeComputeKernelConfig>(this->compute_kernel_config).fp32_dest_acc_en == false,
         "If head_dim is > 128, fp32_dest_acc_en must be False");
+
+    if (this->row_major_QK) {
+        TT_FATAL(
+            q_input_tensor.get_logical_shape()[-2] * q_input_tensor.get_logical_shape()[-1] == TILE_WIDTH * TILE_HEIGHT,
+            "For row major, Q input tensor must be wrapped to tile size");
+        TT_FATAL(
+            k_input_tensor.get_logical_shape()[-2] * k_input_tensor.get_logical_shape()[-1] == TILE_WIDTH * TILE_HEIGHT,
+            "For row major, K input tensor must be wrapped to tile size");
+    }
 
     // Check that head_dim is a multiple of 32
     TT_FATAL(head_dim % TILE_WIDTH == 0, "Head dim must be a multiple of TILE_WIDTH");
@@ -80,6 +93,7 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
 
     // Checks for transformation matrix
     uint32_t trans_mat_num_cores = trans_mat.shard_spec()->grid.num_cores();
+    TT_FATAL((trans_mat.get_layout() == Layout::TILE), "transformation matrix must be tilized");
     TT_FATAL(
         trans_mat_num_cores >= (q_num_cores + k_num_cores),
         "Transformation matrix is repeated for Q and K must be sharded over core grid of Q and K");
@@ -112,7 +126,6 @@ operation::ProgramWithCallbacks RotaryEmbeddingLlamaFusedQK::create_program(
     const auto& trans_mat = input_tensors.at(4);
     auto& q_output_tensor = output_tensors.at(0);
     auto& k_output_tensor = output_tensors.at(1);
-
     return rotary_embedding_llama_fused_qk_multi_core_sharded(
         q_input_tensor,
         k_input_tensor,
@@ -121,7 +134,8 @@ operation::ProgramWithCallbacks RotaryEmbeddingLlamaFusedQK::create_program(
         trans_mat,
         q_output_tensor,
         k_output_tensor,
-        this->compute_kernel_config);
+        this->compute_kernel_config,
+        this->row_major_QK);
 }
 
 }  // namespace tt_metal

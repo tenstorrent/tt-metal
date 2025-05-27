@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -131,8 +131,8 @@ bool is_message_go() {
 #define EARLY_RETURN_FOR_DEBUG
 #endif
 
-inline __attribute__((always_inline)) void disable_gathering() {
-#if defined(ARCH_BLACKHOLE)
+inline __attribute__((always_inline)) void configure_gathering() {
+#if defined(ARCH_BLACKHOLE) && !defined(ENABLE_GATHERING)
     // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled
     // Brisc does not issue Tensix instructions but to be consistent for all riscs around Tensix we disable it
     // Disable gathering: set bit 18
@@ -190,7 +190,7 @@ inline __attribute__((always_inline)) void disable_relaxed_memory_ordering() {
 }
 
 inline __attribute__((always_inline)) void configure_csr() {
-    disable_gathering();
+    configure_gathering();
     configure_l1_data_cache();
     disable_relaxed_memory_ordering();
 }

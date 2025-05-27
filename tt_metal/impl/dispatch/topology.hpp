@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -13,14 +13,10 @@
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
+
 class IDevice;
 enum DispatchWorkerType : uint32_t;
-}  // namespace tt_metal
-}  // namespace tt
-
-namespace tt::tt_metal {
 
 // NOC ID used by dispatch kernels to communicate with downstream cores. This parameter
 // is required when setting up Command Queue objects on host.
@@ -66,5 +62,8 @@ const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(chip_id_t dev_id
 
 // Return the virtual cores used for dispatch routing/tunneling on a given device
 const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_t dev_id);
+
+// Return the list of termination targets that were registered for this device
+const std::vector<tt::tt_metal::TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id);
 
 }  // namespace tt::tt_metal

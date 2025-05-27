@@ -1,3 +1,5 @@
+project(tt_stl)
+
 add_library(tt_stl INTERFACE)
 add_library(TT::STL ALIAS tt_stl)
 
@@ -34,6 +36,7 @@ target_link_libraries(
         Reflect::Reflect
         magic_enum::magic_enum
         nlohmann_json::nlohmann_json
+        span
 )
 
 target_precompile_headers(
@@ -46,3 +49,7 @@ target_precompile_headers(
 target_link_libraries(metal_common_pch PRIVATE tt_stl)
 
 install(TARGETS tt_stl EXPORT Metalium FILE_SET api COMPONENT metalium-dev)
+
+if(TT_METAL_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

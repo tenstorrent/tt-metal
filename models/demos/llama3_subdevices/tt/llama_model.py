@@ -544,6 +544,7 @@ class TtTransformer(LightweightModule):
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
         h = None
+        # x needs to be in bfloat16_b as it gets reused as the residual tensor
         for i, layer in enumerate(self.layers):
             x, h = layer(
                 x,

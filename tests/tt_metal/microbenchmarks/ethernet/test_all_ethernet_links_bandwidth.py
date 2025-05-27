@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -43,7 +43,7 @@ def run_erisc_write_worker_bw(
 
     ARCH_NAME = os.getenv("ARCH_NAME")
     cmd = f"TT_METAL_DEVICE_PROFILER=1 \
-            {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_all_ethernet_links_{ARCH_NAME} \
+            {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_all_ethernet_links \
                 {benchmark_type} \
                 {num_packets} \
                 {packet_size} \
