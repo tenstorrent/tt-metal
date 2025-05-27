@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "trace.hpp"
+
 #include <command_queue.hpp>
 #include <device.hpp>
 #include <host_api.hpp>
 #include <logger.hpp>
-#include <trace.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <cstddef>
 #include <memory>
