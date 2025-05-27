@@ -31,8 +31,8 @@ void apply_fused_scale_mask(
 void apply_fused_attn_mask(
     uint32_t cb_in, uint32_t cb_fused_attn_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
 void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, uint32_t cb_length_t, uint32_t blk);
+template <PoolType reduce_type>
 void reduce_cb(
-    const PoolType reduce_type,
     uint32_t cb_in,
     uint32_t cb_scaler,
     uint32_t cb_prev_out,
@@ -85,7 +85,7 @@ void MAIN {
     DPRINT << "cb_length_t: " << cb_length_t << ENDL();
 
     // First loop is to parse and find the sum
-    uint32_t dst0 = 0;
+    constexpr uint32_t dst0 = 0;
     uint32_t ht = start_ht;
 
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
@@ -98,12 +98,12 @@ void MAIN {
 #ifdef NUMERIC_STABLE
         // reads through and finds the max value
         constexpr bool use_prev_reduce_max = false;
-        reduce_cb(PoolType::MAX, cb_in0, cb_scaler, cb_prev_reduce, cb_max, use_prev_reduce_max, Wt);
+        reduce_cb<PoolType::MAX>(cb_in0, cb_scaler, cb_prev_reduce, cb_max, use_prev_reduce_max, Wt);
 #endif
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             exp_cb(cb_in0, cb_exps, cb_max, cur_cb_length_t, blk);
 
-            reduce_cb(PoolType::SUM, cb_exps, cb_scaler, cb_prev_reduce, cb_sumexps, use_prev_reduce, cur_cb_length_t);
+            reduce_cb<PoolType::SUM>(cb_exps, cb_scaler, cb_prev_reduce, cb_sumexps, use_prev_reduce, cur_cb_length_t);
             use_prev_reduce = true;  // We want to accumulate the previous cb reductions
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
@@ -113,7 +113,9 @@ void MAIN {
         }
         cb_wait_front(cb_sumexps, 1);
 
+        DPRINT << "F0" << ENDL();
         reconfig_data_format_srca(cb_sumexps);
+        DPRINT << "F1" << ENDL();
         pack_reconfig_data_format(cb_recip);
         init_sfpu(cb_sumexps, cb_recip);
         tile_regs_acquire();
@@ -139,8 +141,6 @@ void MAIN {
         cur_cb_length_t = cb_length_t;
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             exp_cb(cb_in0, cb_exps, cb_max, cur_cb_length_t, blk);
-            prev_srca_cb = cb_in0;
-            prev_pack_cb = cb_exps;
 
             apply_recip(prev_pack_cb, cb_recip, cb_out0, cur_cb_length_t, blk);
             length_left_t -= cur_cb_length_t;
@@ -229,6 +229,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     //      Also if numeric stable calcs e^(cb_in- BCASTCOL(cb_max))
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
+    init_sfpu(cb_in, cb_out);
 #ifdef NUMERIC_STABLE
     reconfig_data_format_srcb(cb_max);
     init_bcast<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(cb_in, cb_max, cb_out);
@@ -265,8 +266,8 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     }
 }
 
+template <PoolType reduce_type>
 void reduce_cb(
-    const PoolType reduce_type,
     uint32_t cb_in,
     uint32_t cb_scaler,
     uint32_t cb_prev_out,
@@ -280,8 +281,8 @@ void reduce_cb(
 
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_out);
-    const uint32_t dst0 = 0;
-    const uint32_t dst1 = 1;
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
     tile_regs_acquire();
     tile_regs_wait();
     cb_wait_front(cb_in, 1);
@@ -296,6 +297,7 @@ void reduce_cb(
 
     if (use_prev_reduce) {
         reconfig_data_format_srca(cb_prev_out);
+        init_sfpu(cb_prev_out, cb_out);
         cb_wait_front(cb_prev_out, 1);
         copy_tile_init(cb_prev_out);
         copy_tile(cb_prev_out, 0, dst1);
@@ -304,7 +306,6 @@ void reduce_cb(
         cb_pop_front(cb_prev_out, 1);
     }
 
-    // dprint_tensix_dest_reg(0);
     tile_regs_commit();
     cb_reserve_back(cb_out, 1);
     pack_tile(dst0, cb_out);
