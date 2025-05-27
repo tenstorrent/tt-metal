@@ -157,12 +157,17 @@ std::vector<TensorSpec> RingJointScaledDotProductAttention::compute_output_specs
     const std::vector<Tensor>& input_tensors) const {
     auto& input = input_tensors.at(0);
     auto& joint_input = input_tensors.at(3);
+    auto lse_shape = input.get_logical_shape();
+    lse_shape[3] = 1;
+    lse_shape[2] = input.get_padded_shape()[2] + joint_input.get_padded_shape()[2];
+
     return {
         TensorSpec(
             input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config)),
         TensorSpec(
             joint_input.get_logical_shape(),
-            TensorLayout(joint_input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+            TensorLayout(joint_input.get_dtype(), PageConfig(Layout::TILE), output_mem_config)),
+        TensorSpec(lse_shape, TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_program(
@@ -175,7 +180,7 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
     auto& joint_tensor_v = input_tensors.at(5);
     auto& output_tensor = output_tensors.at(0);
     auto& joint_output_tensor = output_tensors.at(1);
-
+    auto& lse_output_tensor = output_tensors.at(2);
     auto scale = this->scale;
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_logical_shape()[-1]));
@@ -193,6 +198,7 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         joint_tensor_v,
         output_tensor,
         joint_output_tensor,
+        lse_output_tensor,
         scale,
         q_chunk_size,
         k_chunk_size,

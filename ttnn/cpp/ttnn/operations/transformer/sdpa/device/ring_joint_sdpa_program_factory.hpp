@@ -19,6 +19,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_joint_sdpa(
     const Tensor& joint_tensor_v,
     const Tensor& output_tensor,
     const Tensor& joint_output_tensor,
+    const Tensor& lse_output_tensor,
     std::optional<float> scale,
     std::size_t q_chunk_size,
     std::size_t k_chunk_size,

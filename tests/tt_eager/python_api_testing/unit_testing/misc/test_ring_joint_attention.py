@@ -88,7 +88,7 @@ def run_ring_joint_sdpa(
     tt_joint_K = ttnn.from_torch(joint_K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_joint_V = ttnn.from_torch(joint_V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    tt_out, tt_joint_out = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+    tt_out, tt_joint_out, tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_Q,
         tt_K,
         tt_V,
@@ -101,6 +101,7 @@ def run_ring_joint_sdpa(
     )
     tt_out = ttnn.to_torch(tt_out)
     tt_joint_out = ttnn.to_torch(tt_joint_out)
+    tt_lse = ttnn.to_torch(tt_lse)
     # Slice out any tile-padding
     tt_out = tt_out[:, :, :seq_len, :]
     tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
@@ -115,7 +116,7 @@ def run_ring_joint_sdpa(
     gt_out = gt[:, :, :seq_len, :]
     gt_joint_out = gt[:, :, seq_len:, :]
 
-    for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out)]:
+    for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out), (tt_lse, gt_lse)]:
         out_pass, out_pcc = comp_pcc(gt, out, 0.994)
         logger.debug(f"python vs pytorch: {out_pcc}")
         logger.debug(f"mse: {((gt - out) ** 2).mean()}")

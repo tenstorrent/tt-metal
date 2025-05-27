@@ -182,7 +182,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
         compute_kernel_config);
 }
 
-std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -212,7 +212,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::invoke(
         {},
         queue_id);
 
-    return {results.at(0), results.at(1)};
+    return {results.at(0), results.at(1), results.at(2)};
 }
 
 }  // namespace ttnn::operations::transformer

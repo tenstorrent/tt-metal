@@ -32,6 +32,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     const Tensor& joint_tensor_v,
     const Tensor& output_tensor,
     const Tensor& joint_output_tensor,
+    const Tensor& lse_output_tensor,
     std::optional<float> scale,
     std::size_t q_chunk_size,
     std::size_t k_chunk_size,
@@ -387,19 +388,19 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
 
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/joint_reader.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/joint_writer.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/joint_sdpa.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp",
         core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -515,6 +516,11 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
                              .set_page_size(tt::CBIndex::c_16, out_tile_size);
     auto cb_out0_id = CreateCircularBuffer(program, core_grid, c_out0_config);
 
+    // lse output
+    auto c_out1_config = CircularBufferConfig(statistics_tiles * out_tile_size, {{tt::CBIndex::c_17, out_df}})
+                             .set_page_size(tt::CBIndex::c_17, out_tile_size);
+    auto cb_out1_id = CreateCircularBuffer(program, core_grid, c_out1_config);
+
     uint32_t q_addr = input_tensor_q.buffer()->address();
     uint32_t k_addr = input_tensor_k.buffer()->address();
     uint32_t v_addr = input_tensor_v.buffer()->address();
@@ -523,6 +529,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     uint32_t joint_v_addr = joint_tensor_v.buffer()->address();
     uint32_t out_addr = output_tensor.buffer()->address();
     uint32_t joint_out_addr = joint_output_tensor.buffer()->address();
+    uint32_t lse_addr = lse_output_tensor.buffer()->address();
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -577,6 +584,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             core,
             {out_addr,
              joint_out_addr,
+             lse_addr,
              local_batch_start,
              local_batch_end,
              local_nh_start,
@@ -610,6 +618,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             // Get addresses for output tensors
             auto out_buffer = output_tensors.at(0).buffer();
             auto joint_out_buffer = output_tensors.at(1).buffer();
+            auto lse_buffer = output_tensors.at(2).buffer();
 
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();
@@ -619,6 +628,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             uint32_t joint_v_addr = joint_v_buffer->address();
             uint32_t out_addr = out_buffer->address();
             uint32_t joint_out_addr = joint_out_buffer->address();
+            uint32_t lse_addr = lse_buffer->address();
 
             auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
             auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
@@ -642,6 +652,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
                 // Update writer args
                 writer_args[0] = out_addr;
                 writer_args[1] = joint_out_addr;
+                writer_args[2] = lse_addr;
             }
         };
 
