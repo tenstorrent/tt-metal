@@ -29,41 +29,68 @@
 namespace ttnn::operations::experimental::ccl {
 
 struct AllGatherRS {
+    using spec_return_value_t = ttnn::TensorSpec;
+    using tensor_return_value_t = Tensor;
     struct matmul_tensor_args_t {
         const Tensor input_tensor;
         const Tensor weight_tensor;
     };
-    void validate_on_program_cache_miss(
-        const LlamaReduceScatterDeviceOperation&,
-        const LlamaReduceScatterDeviceOperation::operation_attributes_t&,
-        const LlamaReduceScatterDeviceOperation::tensor_args_t&,
-        const operations::matmul::Matmul&,
-        const matmul_tensor_args_t&) const;
-    void validate_on_program_cache_hit(
-        const LlamaReduceScatterDeviceOperation&,
-        const LlamaReduceScatterDeviceOperation::operation_attributes_t&,
-        const LlamaReduceScatterDeviceOperation::tensor_args_t&,
-        const operations::matmul::Matmul&,
-        const matmul_tensor_args_t&) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(
-        const LlamaReduceScatterDeviceOperation&,
-        const LlamaReduceScatterDeviceOperation::operation_attributes_t&,
-        const LlamaReduceScatterDeviceOperation::tensor_args_t&,
-        const operations::matmul::Matmul&,
-        const matmul_tensor_args_t&) const;
-    std::vector<Tensor> create_output_tensors(
-        const LlamaReduceScatterDeviceOperation&,
-        const LlamaReduceScatterDeviceOperation::operation_attributes_t&,
-        const LlamaReduceScatterDeviceOperation::tensor_args_t&,
-        const operations::matmul::Matmul&,
-        const matmul_tensor_args_t&) const;
-    std::tuple<
-        LlamaReduceScatterDeviceOperation,
-        LlamaReduceScatterDeviceOperation::operation_attributes_t,
-        LlamaReduceScatterDeviceOperation::tensor_args_t,
-        operations::matmul::Matmul,
-        matmul_tensor_args_t>
-    invoke(
+    struct tensor_args_t {
+        LlamaReduceScatterDeviceOperation::tensor_args_t rs;
+        matmul_tensor_args_t matmul;
+    };
+    struct operation_attributes_t {
+        LlamaReduceScatterDeviceOperation rs;
+        LlamaReduceScatterDeviceOperation::operation_attributes_t rs_op;
+        operations::matmul::Matmul matmul;
+    };
+    struct Matmul_RS_PF {
+        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle quaternary_reduce_reader_kernel_id;
+            tt::tt_metal::KernelHandle quaternary_reduce_writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
+            std::vector<tt::tt_metal::CBHandle> cb_handles;
+            CoreRangeSet core_range;
+        };
+        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+        static cached_mesh_workload_t create_mesh_workload(
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            std::vector<Tensor>& tensor_return_value);
+
+        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at_helper(
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
+            const tensor_args_t& tensor_args,
+            std::vector<Tensor>& tensor_return_value);
+        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
+            const tensor_args_t& tensor_args,
+            std::vector<Tensor>& tensor_return_value,
+            tt::tt_metal::Program& program);
+
+        static void override_runtime_arguments(
+            cached_mesh_workload_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            std::vector<Tensor>& tensor_return_value);
+    };
+    using program_factory_t = std::variant<Matmul_RS_PF>;
+
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static std::vector<spec_return_value_t> compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static std::vector<tensor_return_value_t> create_output_tensors(
+        const operation_attributes_t&, const tensor_args_t&);
+    std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         const ttnn::Tensor& rs_tensor,
@@ -89,3 +116,7 @@ struct AllGatherRS {
 };
 
 }  // namespace ttnn::operations::experimental::ccl
+namespace ttnn::prim {
+constexpr auto rs_matmul =
+    ttnn::register_operation<"ttnn::prim::rs_matmul", ttnn::operations::experimental::ccl::AllGatherRS>();
+}

@@ -32,7 +32,32 @@ std::vector<ttnn::Tensor> ExecuteReduceScatterMatmul::invoke(
     const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 std::nullopt
     const std::optional<Tensor>& optional_output_tensor                                  // mm11 std::nullopt
 ) {
-    return {input_tensor};
+    const auto& mesh_view = mesh_device.get_view();
+    const uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
+    return ttnn::prim::rs_matmul(
+        input_tensor,
+        weight_tensor,
+        rs_tensor,
+        intermediate_packet_buffer,
+        dim,
+        cross_device_semaphore,
+        sub_device_id,
+        cluster_axis,
+        ring_devices,
+        num_links,
+        memory_config_rs,
+        memory_config_mm,
+        compute_kernel_config,
+        global_cb,
+        core_grid,
+        transpose_a,
+        transpose_b,
+        dtype,
+        program_config,
+        activation,
+        output_tile,
+        optional_output_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

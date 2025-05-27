@@ -9,7 +9,8 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_matmul/device/rs_matmul_op.hpp"
 #include "ttnn/distributed/api.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn {
+namespace operations::experimental::ccl {
 
 struct ExecuteReduceScatterMatmul {
     static std::vector<ttnn::Tensor> invoke(
@@ -42,7 +43,10 @@ struct ExecuteReduceScatterMatmul {
     );
 };
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace operations::experimental::ccl
+namespace experimental {
 constexpr auto reduce_scatter_matmul = ttnn::register_operation<
     "ttnn::experimental::rs_matmul",
     ttnn::operations::experimental::ccl::ExecuteReduceScatterMatmul>();
+}  // namespace experimental
+}  // Namespace ttnn
