@@ -373,7 +373,9 @@ def test_untilize_single_core(
 ):
     num_cores_x = 8
     num_cores_y = 8
-    shard_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+
+    # TODO: Going to want separate core ranges for input and ouput, since they may have a different number of shards
+    shard_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))])
 
     tensor_shape = [1, 1, 256, 256]
 
@@ -408,8 +410,8 @@ def test_untilize_single_core(
         memory_config=output_memory_config,
         use_multicore=False,
         use_pack_untilize=use_pack_untilize
-        # input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize -> tensor_shape = [1, 2, 256, 8192] -> !enough_space
-        # input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize, sub_core_grids=shard_core_grid
+        # input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize # -> tensor_shape = [1, 2, 256, 8192] -> !enough_space -> now failing for inter->shard and shard->inter with old impl
+        # input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize, sub_core_grids=shard_core_grid # -> with input and/or output sharded
     )
 
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
