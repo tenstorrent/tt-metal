@@ -325,7 +325,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 }
 
 void FDMeshCommandQueue::enqueue_write_shard_to_core(
-    DeviceMemoryAddress& address,
+    DeviceMemoryAddress address,
     const void* src,
     uint32_t size_bytes,
     bool blocking,
@@ -357,7 +357,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
 }
 
 void FDMeshCommandQueue::enqueue_read_shard_from_core(
-    DeviceMemoryAddress& address,
+    DeviceMemoryAddress address,
     void* dst,
     uint32_t size_bytes,
     bool blocking,
@@ -420,12 +420,11 @@ void FDMeshCommandQueue::write_shard_to_device(
             const auto virtual_core =
                 shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                DeviceMemoryAddress address = {
-                    .device_coord = device_coord,
-                    .virtual_core_coord = virtual_core,
-                    .address = shard_view->address() + chunk_mapping_in_bytes.dst};
                 enqueue_write_shard_to_core(
-                    address,
+                    DeviceMemoryAddress{
+                        .device_coord = device_coord,
+                        .virtual_core_coord = virtual_core,
+                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
                     (char*)src + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
                     /*blocking=*/false,
@@ -470,12 +469,11 @@ void FDMeshCommandQueue::read_shard_from_device(
             const auto virtual_core =
                 shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                DeviceMemoryAddress address = {
-                    .device_coord = device_coord,
-                    .virtual_core_coord = virtual_core,
-                    .address = shard_view->address() + chunk_mapping_in_bytes.dst};
                 enqueue_read_shard_from_core(
-                    address,
+                    DeviceMemoryAddress{
+                        .device_coord = device_coord,
+                        .virtual_core_coord = virtual_core,
+                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
                     (char*)dst + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
                     /*blocking=*/false,
