@@ -49,6 +49,8 @@
 #include "ttnn/operations/experimental/gather/tosa/gather_tosa_pybind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
 
+namespace py = pybind11;
+
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {

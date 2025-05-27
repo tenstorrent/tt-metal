@@ -15,7 +15,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
+namespace {
 
 template <typename ccl_operation_t>
 void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -83,10 +83,10 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("subdevice_id") = std::nullopt});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_all_gather_async(pybind11::module& module) {
-    detail::bind_all_gather_async(
+    bind_all_gather_async(
         module,
         ttnn::experimental::all_gather_async,
         R"doc(
