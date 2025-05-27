@@ -237,12 +237,9 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     std::iota(host_data.begin(), host_data.end(), 0);
     Tensor input_host_tensor_sharded = distribute_tensor(Tensor::from_vector(host_data, tensor_spec), *mapper);
     EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::MULTI_DEVICE_HOST);
-    std::vector<Tensor> input_host_shards = get_device_tensors(input_host_tensor_sharded);
+    EXPECT_EQ(input_host_tensor_sharded.get_distributed_tensor_config(), mapper->config());
 
-    auto* multi_device_host_storage =
-        std::get_if<tt::tt_metal::MultiDeviceHostStorage>(&input_host_tensor_sharded.get_storage());
-    ASSERT_NE(multi_device_host_storage, nullptr);
-    EXPECT_EQ(multi_device_host_storage->strategy, mapper->config());
+    std::vector<Tensor> input_host_shards = get_device_tensors(input_host_tensor_sharded);
 
     auto device_tensor = [&]() {
         if (GetParam().use_pre_allocated_tensor) {
@@ -256,9 +253,10 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
         }
     }();
 
+    EXPECT_EQ(device_tensor.get_distributed_tensor_config(), mapper->config());
+
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.get_storage());
     ASSERT_NE(device_storage, nullptr);
-    EXPECT_EQ(device_storage->strategy, mapper->config());
 
     std::vector<distributed::MeshCoordinate> device_shard_coords;
     std::vector<ttnn::Shape> device_shard_shapes;
@@ -271,13 +269,14 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
 
     // Read the tensor back, and compare it with input data.
     auto output_host_tensor = tensor_impl::to_host_mesh_tensor_wrapper(device_tensor);
+    EXPECT_EQ(output_host_tensor.get_distributed_tensor_config(), mapper->config());
+
     auto* output_multi_device_host_storage =
         std::get_if<tt::tt_metal::MultiDeviceHostStorage>(&output_host_tensor.get_storage());
     ASSERT_NE(output_multi_device_host_storage, nullptr);
-    EXPECT_EQ(output_multi_device_host_storage->strategy, mapper->config());
     std::vector<ttnn::Shape> output_host_shapes;
-    for (const auto& spec : output_multi_device_host_storage->specs) {
-        output_host_shapes.push_back(spec.logical_shape());
+    for (size_t i = 0; i < output_multi_device_host_storage->num_buffers(); i++) {
+        output_host_shapes.push_back(output_multi_device_host_storage->get_tensor_spec(i).logical_shape());
     }
     EXPECT_THAT(output_host_shapes, ElementsAreArray(shape_matchers));
 

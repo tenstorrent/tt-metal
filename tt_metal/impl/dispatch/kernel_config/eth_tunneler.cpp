@@ -40,6 +40,8 @@ void EthTunnelerKernel::GenerateStaticConfigs() {
         logical_core_ =
             MetalContext::instance().get_dispatch_core_manager().us_tunneler_core_local(device_->id(), channel, cq_id_);
     }
+    kernel_type_ = FDKernelType::ROUTING;
+
     static_config_.endpoint_id_start_index = 0xDACADACA;
     static_config_.in_queue_start_addr_words = 0x19A00 >> 4;
     // Input queue size can be extended based on number of tunnel lanes
@@ -335,8 +337,8 @@ void EthTunnelerKernel::CreateKernel() {
         {"UPSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
         {"DOWNSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
         {"DOWNSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
         {"SKIP_NOC_LOGGING", "1"}};
     configure_kernel_variant(
         dispatch_kernel_file_names[is_remote_ ? US_TUNNELER_REMOTE : US_TUNNELER_LOCAL],

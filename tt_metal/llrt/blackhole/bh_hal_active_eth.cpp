@@ -6,7 +6,7 @@
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -66,7 +66,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     // TODO: this is wrong, need eth specific value. For now use same value as idle
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_ERISC_KERNEL_CONFIG_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        MEM_ETH_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)];
+        MEM_ERISC_MAX_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)];
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_AERISC_BANK_TO_NOC_SIZE;
@@ -84,8 +84,9 @@ HalCoreInfoType create_active_eth_mem_map() {
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
             .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-            .fw_launch_addr = SLAVE_IERISC_RESET_PC,
+            .fw_launch_addr = SUBORDINATE_IERISC_RESET_PC,
             .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
+            .memory_load = ll_api::memory::Loading::CONTIGUOUS,
         };
         processor_classes[processor_class_idx] = processor_types;
     }

@@ -79,12 +79,15 @@ constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(30);
 constexpr uint32_t outbound_eth_chan = get_compile_time_arg_val(31);
 constexpr uint32_t client_interface_addr = get_compile_time_arg_val(32);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(33);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(34);
+constexpr uint32_t ringbuffer_size = get_compile_time_arg_val(33);
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(34);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(35);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 constexpr uint32_t scratch_db_end = scratch_db_base + scratch_db_size;
+constexpr uint32_t ringbuffer_end = scratch_db_base + ringbuffer_size;
 
 // hd and h: fetch_q, cmddat_q, scratch_db
 static_assert(
@@ -108,7 +111,7 @@ constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
-constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SLAVE_NOC_X, DOWNSTREAM_SLAVE_NOC_Y));
+constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
 constexpr uint32_t downstream_cb_page_size = 1 << downstream_cb_log_page_size;
@@ -145,7 +148,7 @@ uint32_t my_downstream_cb_sem_additional_count = 0;
 uint32_t my_dispatch_s_cb_sem_additional_count = 0;
 
 // Define these constexpr structs for a cleaner interface for process_relay_inline_cmd and
-// process_exec_buf_relay_inline_cmd while ensuring that state for dispatch_master and dispatch_slave is passed in
+// process_exec_buf_relay_inline_cmd while ensuring that state for dispatch_master and dispatch_subordinate is passed in
 // during compile time.
 struct DispatchRelayInlineState {
     static constexpr uint32_t my_downstream_cb_sem = my_downstream_cb_sem_id;
@@ -1191,7 +1194,7 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
     }
 
     ASSERT(length % DRAM_ALIGNMENT == 0);
-    ASSERT(length + ringbuffer_wp <= scratch_db_end);
+    ASSERT(length + ringbuffer_wp <= ringbuffer_end);
 
     const bool is_dram = true;
     InterleavedPow2AddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .log_base_2_of_page_size = log2_page_size};

@@ -17,6 +17,9 @@ on:
           - N300
           - P100
           - P150
+          - config-tg
+          - config-t3000
+          - topology-6u
       timeout:
         required: false
         type: number

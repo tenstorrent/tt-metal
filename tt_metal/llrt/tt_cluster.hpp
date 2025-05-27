@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,6 +40,8 @@ class RunTimeOptions;
 }
 namespace tt_fabric {
 class ControlPlane;
+class GlobalControlPlane;
+class FabricNodeId;
 }
 namespace tt_metal {
 class Hal;
@@ -105,16 +107,18 @@ public:
 
     size_t number_of_devices() const { return this->driver_->get_target_device_ids().size(); }
 
-    const std::set<chip_id_t> all_chip_ids() const { return this->driver_->get_target_device_ids(); };
+    std::set<chip_id_t> all_chip_ids() const { return this->driver_->get_target_device_ids(); };
 
     size_t number_of_pci_devices() const { return this->driver_->get_target_mmio_device_ids().size(); }
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
-    const std::unordered_map<chip_id_t, uint64_t> get_unique_chip_ids() const {
+    std::unordered_map<chip_id_t, uint64_t> get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
+
+    chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
 
     ARCH arch() const { return this->arch_; }
 
@@ -224,10 +228,16 @@ public:
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
 
     // Returns whether `logical_core` has an eth link to a core on a connected chip
+    // Cores that connect to another cluster will show up as connected
     bool is_ethernet_link_up(chip_id_t chip_id, const CoreCoord& logical_core) const;
 
     // Returns connected ethernet core on the other chip
+    // If the core is connected to a device not accessible through this Cluster, it will assert
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
+
+    // Returns connected ethernet core on the other chip that is not managed by this Cluster
+    std::tuple<uint64_t, CoreCoord> get_connected_ethernet_core_to_remote_mmio_device(
+        std::tuple<chip_id_t, CoreCoord> eth_core) const;
 
     // Returns a ethernet sockets between local chip and remote chip
     // get_ethernet_sockets(a, b)[0] is connected to get_ethernet_sockets(b, a)[0]
@@ -267,6 +277,12 @@ public:
         return this->cluster_desc_->get_ethernet_connections();
     }
 
+    // TODO: unify uint64_t with ChipUID
+    std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>
+    get_ethernet_connections_to_remote_mmio_devices() const {
+        return this->cluster_desc_->get_ethernet_connections_to_remote_mmio_devices();
+    }
+
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
         return this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
@@ -296,6 +312,12 @@ public:
     }
 
     tt::tt_fabric::ControlPlane* get_control_plane();
+
+    void set_custom_control_plane_mesh_graph(
+        const std::string& mesh_graph_desc_file,
+        const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+
+    void set_default_control_plane_mesh_graph();
 
     void initialize_fabric_config(tt_metal::FabricConfig fabric_config);
 
@@ -393,7 +415,7 @@ private:
 
     tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
 
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
+    std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
 
     // Tunnels setup in cluster
     std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};

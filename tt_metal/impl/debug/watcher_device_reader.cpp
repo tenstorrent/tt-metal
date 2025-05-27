@@ -6,7 +6,7 @@
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <ctype.h>
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <fmt/base.h>
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
@@ -58,7 +58,7 @@ const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
         case DebugNCrisc: return "ncrisc";
         case DebugErisc: return "erisc";
         case DebugIErisc: return "ierisc";
-        case DebugSlaveIErisc: return "slave_ierisc";
+        case DebugSubordinateIErisc: return "subordinate_ierisc";
         case DebugTrisc0: return "trisc0";
         case DebugTrisc1: return "trisc1";
         case DebugTrisc2: return "trisc2";
@@ -309,36 +309,37 @@ void WatcherDeviceReader::Dump(FILE* file) {
         for (auto& risc_id_and_stack_info : highest_stack_usage) {
             stack_usage_info_t& info = risc_id_and_stack_info.second;
             const char* riscv_name = get_riscv_name(info.core.coord, risc_id_and_stack_info.first);
-            uint16_t stack_size = get_riscv_stack_size(info.core, risc_id_and_stack_info.first);
+            // Threshold of free space for warning.
+            constexpr uint32_t min_threshold = 64;
             fprintf(
                 f,
-                "\n\t%s highest stack usage: %4d/%4d, on core %s, running kernel %s",
+                "\n\t%s highest stack usage: %u bytes free, on core %s, running kernel %s",
                 riscv_name,
-                info.stack_usage,
-                stack_size,
+                info.stack_free,
                 info.core.coord.str().c_str(),
                 kernel_names[info.kernel_id].c_str());
-            if (info.stack_usage >= stack_size) {
+            if (info.stack_free == 0) {
+                // We had no free stack, this probably means we
+                // overflowed, but it could be a remarkable coincidence.
                 fprintf(f, " (OVERFLOW)");
                 log_fatal(
-                    "Watcher detected stack overflow on Device {} Core {}: {}! Kernel {} uses {}/{} of the stack.",
+                    "Watcher detected stack overflow on Device {} Core {}: "
+                    "{}! Kernel {} uses (at least) all of the stack.",
                     device_id,
                     info.core.coord.str(),
                     riscv_name,
-                    kernel_names[info.kernel_id].c_str(),
-                    info.stack_usage,
-                    stack_size);
-            } else if (stack_size - info.stack_usage <= std::min(32, stack_size / 10)) {
+                    kernel_names[info.kernel_id].c_str());
+            } else if (info.stack_free < min_threshold) {
                 fprintf(f, " (Close to overflow)");
                 log_warning(
-                    "Watcher detected stack usage within 10\% of max on Device {} Core {}: {}! Kernel {} uses "
-                    "{}/{} of the stack.",
+                    "Watcher detected stack had fewer than {} bytes free on Device {} Core {}: "
+                    "{}! Kernel {} leaves {} bytes unused.",
+                    min_threshold,
                     device_id,
                     info.core.coord.str(),
                     riscv_name,
                     kernel_names[info.kernel_id].c_str(),
-                    info.stack_usage,
-                    stack_size);
+                    info.stack_free);
             }
         }
         fprintf(f, "\n");
@@ -813,7 +814,7 @@ void WatcherDeviceReader::DumpRunState(CoreDescriptor& core, const launch_msg_t*
 void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxes_t* mbox_data) {
     bool is_eth = (core.type == CoreType::ETH);
     const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
-    const slave_sync_msg_t* slave_sync = &mbox_data->slave_sync;
+    const subordinate_sync_msg_t* subordinate_sync = &mbox_data->subordinate_sync;
     fprintf(f, "rmsg:");
     if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
         fprintf(f, "D");
@@ -889,14 +890,14 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
 
     if (!is_eth) {
         fprintf(f, "smsg:");
-        DumpRunState(core, launch_msg, slave_sync->dm1);
-        DumpRunState(core, launch_msg, slave_sync->trisc0);
-        DumpRunState(core, launch_msg, slave_sync->trisc1);
-        DumpRunState(core, launch_msg, slave_sync->trisc2);
+        DumpRunState(core, launch_msg, subordinate_sync->dm1);
+        DumpRunState(core, launch_msg, subordinate_sync->trisc0);
+        DumpRunState(core, launch_msg, subordinate_sync->trisc1);
+        DumpRunState(core, launch_msg, subordinate_sync->trisc2);
         fprintf(f, " ");
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
         fprintf(f, "smsg:");
-        DumpRunState(core, launch_msg, slave_sync->dm1);
+        DumpRunState(core, launch_msg, subordinate_sync->dm1);
         fprintf(f, " ");
     }
 }
@@ -967,11 +968,11 @@ void WatcherDeviceReader::DumpSyncRegs(CoreDescriptor& core) {
 void WatcherDeviceReader::DumpStackUsage(CoreDescriptor& core, const mailboxes_t* mbox_data) {
     const debug_stack_usage_t* stack_usage_mbox = &mbox_data->watcher.stack_usage;
     for (int risc_id = 0; risc_id < DebugNumUniqueRiscs; risc_id++) {
-        uint16_t stack_usage = stack_usage_mbox->max_usage[risc_id];
-        if (stack_usage != watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
-            if (stack_usage > highest_stack_usage[static_cast<riscv_id_t>(risc_id)].stack_usage) {
-                highest_stack_usage[static_cast<riscv_id_t>(risc_id)] = {
-                    core, stack_usage, stack_usage_mbox->watcher_kernel_id[risc_id]};
+        const auto &usage = stack_usage_mbox->cpu[risc_id];
+        if (usage.min_free) {
+            auto &slot = highest_stack_usage[static_cast<riscv_id_t>(risc_id)];
+            if (usage.min_free <= slot.stack_free) {
+                slot = {core, usage.min_free - 1, stack_usage_mbox->cpu[risc_id].watcher_kernel_id};
             }
         }
     }
@@ -1053,7 +1054,7 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor& core, const launch_msg
         case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
         case DebugErisc:
         case DebugIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
-        case DebugSlaveIErisc:
+        case DebugSubordinateIErisc:
             return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]];
         case DebugNCrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];
         case DebugTrisc0:

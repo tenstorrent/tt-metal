@@ -7,15 +7,9 @@
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/assert.hpp>
 
-#include <functional>
 #include <vector>
 
 namespace tt::tt_metal {
-
-DistributedHostBuffer DistributedHostBuffer::create(size_t global_size) {
-    return DistributedHostBuffer(
-        [](size_t global_index) { return global_index; }, std::vector<HostBuffer>(global_size));
-}
 
 DistributedHostBuffer DistributedHostBuffer::create(
     const distributed::MeshShape& global_shape,
@@ -41,65 +35,73 @@ DistributedHostBuffer DistributedHostBuffer::create(
             local_shape[dim],
             global_shape[dim]);
     }
+    return DistributedHostBuffer(
+        std::move(global_shape),
+        std::move(local_offset),
+        distributed::MeshContainer<HostBuffer>(local_shape, HostBuffer()));
+}
 
-    auto global_to_local_index = [global_shape, local_shape, local_offset](size_t global_idx) -> std::optional<size_t> {
-        TT_FATAL(
-            global_idx < global_shape.mesh_size(),
-            "Global index {} is out of bounds for global shape {}",
-            global_idx,
-            global_shape);
-
-        size_t local_idx = 0;
-        size_t remaining = global_idx;
-        for (size_t dim = 0; dim < global_shape.dims(); ++dim) {
-            const uint32_t coord = remaining / global_shape.get_stride(dim);
-            remaining %= global_shape.get_stride(dim);
-
-            if (coord < local_offset[dim] || coord >= local_offset[dim] + local_shape[dim]) {
-                return std::nullopt;
-            }
-
-            local_idx += (coord - local_offset[dim]) * local_shape.get_stride(dim);
+std::optional<distributed::MeshCoordinate> DistributedHostBuffer::global_to_local(
+    const distributed::MeshCoordinate& coord) const {
+    const auto& local_shape = local_buffers_.shape();
+    tt::stl::SmallVector<uint32_t> local_coord(coord.dims());
+    for (size_t dim = 0; dim < coord.dims(); ++dim) {
+        if (coord[dim] < local_offset_[dim] || coord[dim] >= local_offset_[dim] + local_shape[dim]) {
+            return std::nullopt;
         }
-
-        return local_idx;
-    };
-    return DistributedHostBuffer(std::move(global_to_local_index), std::vector<HostBuffer>(local_shape.mesh_size()));
+        local_coord[dim] = coord[dim] - local_offset_[dim];
+    }
+    return distributed::MeshCoordinate(local_coord);
 }
 
-std::optional<HostBuffer> DistributedHostBuffer::get_shard(size_t linear_index) const {
-    const auto local_index = global_to_local_index_(linear_index);
-    return local_index.has_value() ? std::make_optional(local_buffers_.at(local_index.value())) : std::nullopt;
+std::optional<HostBuffer> DistributedHostBuffer::get_shard(const distributed::MeshCoordinate& coord) const {
+    TT_FATAL(
+        distributed::MeshCoordinateRange(global_shape_).contains(coord),
+        "Coordinate {} is outside the global shape bounds {}",
+        coord,
+        global_shape_);
+
+    auto local_coord_opt = global_to_local(coord);
+    return local_coord_opt.has_value() ? std::optional<HostBuffer>(local_buffers_.at(*local_coord_opt)) : std::nullopt;
 }
 
-void DistributedHostBuffer::emplace_shard(size_t linear_index, HostBuffer buffer) {
-    const auto local_index = global_to_local_index_(linear_index);
-    if (local_index.has_value()) {
-        local_buffers_.at(local_index.value()) = std::move(buffer);
+void DistributedHostBuffer::emplace_shard(const distributed::MeshCoordinate& coord, HostBuffer buffer) {
+    TT_FATAL(
+        distributed::MeshCoordinateRange(global_shape_).contains(coord),
+        "Coordinate {} is outside the global shape bounds {}",
+        coord,
+        global_shape_);
+
+    populated_shards_.insert(coord);
+    auto local_coord_opt = global_to_local(coord);
+    if (local_coord_opt.has_value()) {
+        local_buffers_.at(*local_coord_opt) = std::move(buffer);
     }
 }
 
-void DistributedHostBuffer::transform(const TransformFn& fn) {
-    for (size_t i = 0; i < local_buffers_.size(); ++i) {
-        local_buffers_.at(i) = fn(local_buffers_.at(i), i);
+DistributedHostBuffer DistributedHostBuffer::transform(const TransformFn& fn) const {
+    std::vector<HostBuffer> transformed_buffers;
+    transformed_buffers.reserve(local_buffers_.shape().mesh_size());
+    for (const auto& local_buffer : local_buffers_.values()) {
+        transformed_buffers.push_back(fn(local_buffer));
+    }
+    DistributedHostBuffer transformed_buffer(
+        global_shape_,
+        local_offset_,
+        distributed::MeshContainer<HostBuffer>(local_buffers_.shape(), std::move(transformed_buffers)));
+    return transformed_buffer;
+}
+
+void DistributedHostBuffer::apply(const ApplyFn& fn) const {
+    for (const auto& local_buffer : local_buffers_.values()) {
+        fn(local_buffer);
     }
 }
 
-void DistributedHostBuffer::apply(const ApplyFn& fn) {
-    for (size_t i = 0; i < local_buffers_.size(); ++i) {
-        fn(local_buffers_.at(i), i);
-    }
-}
+distributed::MeshShape DistributedHostBuffer::shape() const { return global_shape_; }
 
-bool DistributedHostBuffer::is_allocated() const {
-    return std::all_of(
-        local_buffers_.begin(), local_buffers_.end(), [](const HostBuffer& b) { return b.is_allocated(); });
-}
-
-void DistributedHostBuffer::deallocate() {
-    for (auto& buffer : local_buffers_) {
-        buffer.deallocate();
-    }
+std::unordered_set<distributed::MeshCoordinate> DistributedHostBuffer::shard_coords() const {
+    return populated_shards_;
 }
 
 }  // namespace tt::tt_metal

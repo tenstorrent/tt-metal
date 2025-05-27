@@ -4,7 +4,7 @@
 
 #define COMPILE_FOR_IDLE_ERISC
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -74,6 +74,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
             .local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH,
             .fw_launch_addr = 0x0,
             .fw_launch_addr_value = generate_risc_startup_addr(MEM_IERISC_FIRMWARE_BASE),
+            .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
         };
         processor_classes[processor_class_idx] = processor_types;
     }

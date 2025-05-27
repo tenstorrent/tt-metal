@@ -4,7 +4,7 @@
 
 #define COMPILE_FOR_ERISC
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -92,6 +92,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
             .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
             .fw_launch_addr = eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG,
             .fw_launch_addr_value = 0x1,
+            .memory_load = ll_api::memory::Loading::DISCRETE,
         };
         processor_classes[processor_class_idx] = processor_types;
     }

@@ -12,6 +12,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/utils.hpp>
+#include <tt_memory.h>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -38,6 +39,7 @@ struct HalJitBuildConfig {
     DeviceAddr local_init_addr;
     DeviceAddr fw_launch_addr;
     uint32_t fw_launch_addr_value;
+    ll_api::memory::Loading memory_load;
 };
 
 class Hal;
@@ -120,6 +122,9 @@ private:
     std::vector<uint32_t> mem_alignments_with_pcie_;
     uint32_t num_nocs_;
     uint32_t noc_addr_node_id_bits_;
+    uint32_t noc_node_id_ = 0;
+    uint32_t noc_node_id_mask_ = 0;
+    uint32_t noc_encoding_reg_ = 0;
     uint32_t noc_coord_reg_offset_;
     uint32_t noc_overlay_start_addr_;
     uint32_t noc_stream_reg_space_size_;
@@ -127,6 +132,8 @@ private:
     uint32_t noc_stream_remote_dest_buf_start_reg_index_;
     uint32_t noc_stream_remote_dest_buf_space_available_reg_index_;
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_;
+    std::vector<uint32_t> noc_x_id_translate_table_;
+    std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_;
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
@@ -162,9 +169,11 @@ public:
     tt::ARCH get_arch() const { return arch_; }
 
     uint32_t get_num_nocs() const { return num_nocs_; }
+    uint32_t get_noc_node_id() const { return noc_node_id_; }
+    uint32_t get_noc_node_id_mask() const { return noc_node_id_mask_; }
     uint32_t get_noc_addr_node_id_bits() const { return noc_addr_node_id_bits_; }
     uint32_t get_noc_coord_reg_offset() const { return noc_coord_reg_offset_; }
-
+    uint32_t get_noc_encoding_reg() const { return noc_encoding_reg_; }
     uint32_t get_noc_overlay_start_addr() const { return noc_overlay_start_addr_; }
     uint32_t get_noc_stream_reg_space_size() const { return noc_stream_reg_space_size_; }
     uint32_t get_noc_stream_remote_dest_buf_size_reg_index() const {
@@ -252,6 +261,9 @@ public:
     uint32_t valid_reg_addr(uint32_t addr) const { return valid_reg_addr_func_(addr); }
 
     uint32_t get_stack_size(uint32_t type) const { return stack_size_func_(type); }
+
+    const std::vector<uint32_t>& get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
+    const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
@@ -372,20 +384,16 @@ uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix 
 }  // namespace tt_metal
 }  // namespace tt
 
-#define HAL_MEM_L1_BASE                                        \
-    tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_L1_SIZE                                        \
-    tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_L1_BASE                                               \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr(      \
+        ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_L1_SIZE                                               \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size(      \
+        ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
 
-#define HAL_MEM_ETH_BASE                                                              \
-    ((tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::GRAYSKULL) \
-         ? 0                                                                          \
-         : tt::tt_metal::MetalContext::instance().hal().get_dev_addr(                 \
-               tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE))
-#define HAL_MEM_ETH_SIZE                                                              \
-    ((tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::GRAYSKULL) \
-         ? 0                                                                          \
-         : tt::tt_metal::MetalContext::instance().hal().get_dev_size(                 \
-               tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE))
+#define HAL_MEM_ETH_BASE                                              \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr(      \
+        ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_ETH_SIZE                                              \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size(      \
+        ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)

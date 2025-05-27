@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
@@ -117,7 +117,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
             case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
             case DebugErisc: return 0;  // Not managed/checked by us.
             case DebugIErisc: return MEM_IERISC_STACK_SIZE;
-            case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
+            case DebugSubordinateIErisc: return MEM_BRISC_STACK_SIZE;
             case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
             case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
             case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
@@ -126,7 +126,10 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     };
 
     this->num_nocs_ = NUM_NOCS;
+    this->noc_node_id_ = NOC_NODE_ID;
+    this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;
     this->noc_stream_reg_space_size_ = NOC_STREAM_REG_SPACE_SIZE;
@@ -145,6 +148,18 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->eps_ = EPS_WHB0;
     this->nan_ = NAN_WHB0;
     this->inf_ = INF_WHB0;
+
+    this->noc_x_id_translate_table_ = {
+        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
+        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_1),
+        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_2),
+        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_3)};
+
+    this->noc_y_id_translate_table_ = {
+        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_0),
+        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_1),
+        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_2),
+        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3)};
 }
 
 }  // namespace tt_metal

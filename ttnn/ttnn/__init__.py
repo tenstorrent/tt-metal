@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -188,6 +188,14 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    CBFormatDescriptor,
+    CBDescriptor,
+    ReaderConfigDescriptor,
+    WriterConfigDescriptor,
+    ComputeConfigDescriptor,
+    KernelDescriptor,
+    SemaphoreDescriptor,
+    ProgramDescriptor,
 )
 
 from ttnn.device import (
@@ -347,6 +355,9 @@ from ttnn.operations.conv2d import (
     Conv2dSliceWidth,
     prepare_conv_weights,
     prepare_conv_bias,
+    prepare_conv_transpose2d_weights,
+    prepare_conv_transpose2d_bias,
+    SlidingWindowParallelConfig,
 )
 from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,

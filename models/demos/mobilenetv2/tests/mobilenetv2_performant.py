@@ -15,17 +15,6 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-def buffer_address(tensor):
-    addr = []
-    for ten in ttnn.get_device_tensors(tensor):
-        addr.append(ten.buffer_address())
-    return addr
-
-
-# TODO: Create ttnn apis for this
-ttnn.buffer_address = buffer_address
-
-
 def run_mobilenetv2_inference(
     device,
     device_batch_size,
@@ -82,16 +71,17 @@ def run_mobilenetv2_trace_inference(
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.run()
     test_infra.validate()
-    test_infra.dealloc_output()
 
     # Capture
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
+
+    test_infra.dealloc_output()
+    trace_input_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
     tt_image_res = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert trace_input_addr == ttnn.buffer_address(tt_image_res)
+    assert trace_input_addr == tt_image_res.buffer_address()
 
     # More optimized run with caching
     if use_signpost:
@@ -150,12 +140,12 @@ def run_mobilenetv2_trace_2cqs_inference(
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     op_event = ttnn.record_event(device, 0)
     test_infra.dealloc_output()
-    trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
+    trace_input_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
     input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert trace_input_addr == ttnn.buffer_address(input_tensor)
+    assert trace_input_addr == input_tensor.buffer_address()
 
     # More optimized run with caching
     if use_signpost:

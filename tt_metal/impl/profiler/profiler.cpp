@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <device.hpp>
 #include <distributed.hpp>
+#include "device_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
 #include <host_api.hpp>
@@ -35,6 +36,7 @@
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/arch.h>
 #include <umd/device/types/xy_pair.h>
+#include <tt-metalium/device_pool.hpp>
 
 namespace tt {
 
@@ -45,7 +47,7 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data) {
-    TT_ASSERT(device->dispatch_firmware_active());
+    TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
     if (auto mesh_device = device->get_mesh_device()) {
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
         distributed::WriteShard(mesh_device->mesh_command_queue(), buffer.get_mesh_buffer(), data, device_coord, true);
@@ -56,7 +58,7 @@ void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* 
 
 void issue_fd_read_from_profiler_buffer(
     const distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& host_data) {
-    TT_ASSERT(device->dispatch_firmware_active());
+    TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
     if (auto mesh_device = device->get_mesh_device()) {
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
         distributed::ReadShard(
@@ -71,7 +73,7 @@ std::vector<uint32_t> read_control_buffer_from_core(
     std::vector<uint32_t> control_buffer;
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (device->dispatch_firmware_active()) {
+    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             if (core_type == HalProgrammableCoreType::TENSIX) {
                 distributed::FDMeshCommandQueue& mesh_cq =
@@ -118,7 +120,7 @@ void write_control_buffer_to_core(
     const std::vector<uint32_t>& control_buffer) {
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    if (device->dispatch_firmware_active()) {
+    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
             if (core_type == HalProgrammableCoreType::TENSIX) {
                 distributed::FDMeshCommandQueue& mesh_cq =
@@ -146,6 +148,54 @@ void write_control_buffer_to_core(
             device->id(), core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
     }
 }
+HalProgrammableCoreType get_core_type(chip_id_t device_id, const CoreCoord& core) {
+    ZoneScoped;
+
+    HalProgrammableCoreType CoreType;
+
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(core, device_id)) {
+        CoreType = HalProgrammableCoreType::TENSIX;
+    } else {
+        auto active_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        bool is_active_eth_core =
+            active_eth_cores.find(
+                tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+                    device_id, core)) != active_eth_cores.end();
+
+        CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+                                      : tt_metal::HalProgrammableCoreType::IDLE_ETH;
+    }
+
+    return CoreType;
+}
+
+void DeviceProfiler::readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state) {
+    ZoneScoped;
+    chip_id_t device_id = device->id();
+
+    HalProgrammableCoreType CoreType = get_core_type(device_id, worker_core);
+
+    std::vector<uint32_t> control_buffer = read_control_buffer_from_core(device, worker_core, CoreType, state);
+    core_control_buffers[worker_core] = control_buffer;
+}
+
+void DeviceProfiler::resetControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state) {
+    ZoneScoped;
+
+    chip_id_t device_id = device->id();
+    HalProgrammableCoreType CoreType = get_core_type(device_id, worker_core);
+
+    std::vector<uint32_t> control_buffer = core_control_buffers.at(worker_core);
+    std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+
+    control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] =
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
+    control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
+    control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
+
+    write_control_buffer_to_core(device, worker_core, CoreType, state, control_buffer_reset);
+}
 
 void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
@@ -157,27 +207,14 @@ void DeviceProfiler::readRiscProfilerResults(
     ZoneScoped;
     chip_id_t device_id = device->id();
 
-    HalProgrammableCoreType CoreType;
-    int riscCount;
+    HalProgrammableCoreType CoreType = get_core_type(device_id, worker_core);
+    int riscCount = 1;
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(worker_core, device_id)) {
-        CoreType = HalProgrammableCoreType::TENSIX;
+    if (CoreType == HalProgrammableCoreType::TENSIX) {
         riscCount = 5;
-    } else {
-        auto active_eth_cores =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
-        bool is_active_eth_core =
-            active_eth_cores.find(
-                tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
-                    device_id, worker_core)) != active_eth_cores.end();
-
-        CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
-                                      : tt_metal::HalProgrammableCoreType::IDLE_ETH;
-
-        riscCount = 1;
     }
 
-    std::vector<uint32_t> control_buffer = read_control_buffer_from_core(device, worker_core, CoreType, state);
+    std::vector<uint32_t> control_buffer = core_control_buffers.at(worker_core);
 
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
@@ -359,14 +396,6 @@ void DeviceProfiler::readRiscProfilerResults(
         }
         riscNum++;
     }
-
-    std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] =
-        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
-    control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
-    control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
-
-    write_control_buffer_to_core(device, worker_core, CoreType, state, control_buffer_reset);
 }
 
 void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
@@ -861,6 +890,9 @@ void DeviceProfiler::dumpResults(
         output_dram_buffer_ptr = output_dram_buffer.get_buffer();
     }
     if (output_dram_buffer_ptr != nullptr) {
+        for (const auto& worker_core : worker_cores) {
+            readControlBuffers(device, worker_core, state);
+        }
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE || state == ProfilerDumpState::FORCE_UMD_READ) {
@@ -874,6 +906,9 @@ void DeviceProfiler::dumpResults(
             if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
             }
+        }
+        for (const auto& worker_core : worker_cores) {
+            resetControlBuffers(device, worker_core, state);
         }
 
         if (rtoptions.get_profiler_noc_events_enabled()) {

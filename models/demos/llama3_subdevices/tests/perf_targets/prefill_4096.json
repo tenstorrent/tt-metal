@@ -1,0 +1,317 @@
+{
+    "LayerNormPreAllGather_0": {
+        "op_name": "LayerNormPreAllGather_0",
+        "kernel_duration": 79414.03125,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.2
+    },
+    "AllGatherAsync_0": {
+        "op_name": "AllGatherAsync_0",
+        "kernel_duration": 166703.5,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.2
+    },
+    "LayerNormPostAllGather_0": {
+        "op_name": "LayerNormPostAllGather_0",
+        "kernel_duration": 139022.375,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.2
+    },
+    "Matmul_0": {
+        "op_name": "QKV_MM",
+        "kernel_duration": 321577,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.1
+    },
+    "ReduceScatterAsync_0": {
+        "op_name": "ReduceScatterAsync_QKV",
+        "kernel_duration": 1598599.5,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "AllGatherAsync_1": {
+        "op_name": "AllGatherAsync_QKV",
+        "kernel_duration": 531154.65625,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "NlpCreateHeadsDeviceOperation_0": {
+        "op_name": "CreateQKVHeads",
+        "kernel_duration": 63626,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "UnaryDeviceOperation_0": {
+        "op_name": "typecast_0",
+        "kernel_duration": 84974,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "RotaryEmbeddingLlama_0": {
+        "op_name": "rotary_emb_Q",
+        "kernel_duration": 186934,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "UnaryDeviceOperation_1": {
+        "op_name": "typecast_1",
+        "kernel_duration": 12772,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "RotaryEmbeddingLlama_1": {
+        "op_name": "rotary_emb_K",
+        "kernel_duration": 36217,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "UnaryDeviceOperation_2": {
+        "op_name": "typecast_2",
+        "kernel_duration": 10182,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "UnaryDeviceOperation_3": {
+        "op_name": "typecast_3",
+        "kernel_duration": 7877,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "PagedUpdateCacheDeviceOperation_0": {
+        "op_name": "update_cache_K",
+        "kernel_duration": 59391,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "PagedUpdateCacheDeviceOperation_1": {
+        "op_name": "update_cache_V",
+        "kernel_duration": 59397,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "UnaryDeviceOperation_4": {
+        "op_name": "typecast_4",
+        "kernel_duration": 65570,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "ScaledDotProductAttention_0": {
+        "op_name": "sdpa",
+        "kernel_duration": 1713781,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "NLPConcatHeadsDeviceOperation_0": {
+        "op_name": "concat_heads",
+        "kernel_duration": 49767,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "Matmul_1": {
+        "op_name": "matmul_attn_out",
+        "kernel_duration": 323563,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "ReduceScatterAsync_1": {
+        "op_name": "ReduceScatterAsync_attn_out",
+        "kernel_duration": 2517008.71875,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "AllGatherAsync_2": {
+        "op_name": "AllGatherAsync_attn_out",
+        "kernel_duration": 922623.84375,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "BinaryNgDeviceOperation_0": {
+        "op_name": "sum_attn_out",
+        "kernel_duration": 136313,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "LayerNormPreAllGather_1": {
+        "op_name": "LayerNormPreAllGather_1",
+        "kernel_duration": 79290.96875,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "AllGatherAsync_3": {
+        "op_name": "AllGatherAsync_1",
+        "kernel_duration": 176278.84375,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "LayerNormPostAllGather_1": {
+        "op_name": "LayerNormPostAllGather_1",
+        "kernel_duration": 135537.625,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "Matmul_2": {
+        "op_name": "matmul_ffn_1",
+        "kernel_duration": 670000,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "ReduceScatterAsync_2": {
+        "op_name": "ReduceScatterAsync_ffn_1",
+        "kernel_duration": 4475455.03125,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "Matmul_3": {
+        "op_name": "matmul_ffn_3",
+        "kernel_duration": 670000,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "ReduceScatterAsync_3": {
+        "op_name": "ReduceScatterAsync_ffn_3",
+        "kernel_duration": 4274902.875,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "BinaryNgDeviceOperation_1": {
+        "op_name": "binary_mul_ffn_1_3",
+        "kernel_duration": 123502,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "AllGatherAsync_4": {
+        "op_name": "AllGatherAsync_ffn_2",
+        "kernel_duration": 1455945.46875,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "Matmul_4": {
+        "op_name": "matmul_ffn_2",
+        "kernel_duration": 1000000,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "ReduceScatterAsync_4": {
+        "op_name": "reduce_scatter_ffn_2",
+        "kernel_duration": 2491399.84375,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "AllGatherAsync_5": {
+        "op_name": "all_gather_ffn_2",
+        "kernel_duration": 925333.65625,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    },
+    "BinaryNgDeviceOperation_2": {
+        "op_name": "binary_sum_mlp",
+        "kernel_duration": 137512,
+        "op_to_op": 1.0,
+        "non-overlapped-dispatch-time": 0.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3
+    }
+}

@@ -16,7 +16,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
+namespace {
 
 template <typename ccl_operation_t>
 void bind_all_reduce(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -46,10 +46,10 @@ void bind_all_reduce(pybind11::module& module, const ccl_operation_t& operation,
             py::arg("num_buffers_per_channel") = std::nullopt});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_all_reduce(pybind11::module& module) {
-    detail::bind_all_reduce(
+    bind_all_reduce(
         module,
         ttnn::experimental::all_reduce,
         R"doc(
