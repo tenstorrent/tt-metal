@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[upstream-tests] running metalium section. Note that skips should be treated as failures"
-./build/test/tt_metal/tt_fabric/test_system_health
-TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
-TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"
-TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-
 echo "[upstream-tests] Running minimal model unit tests"
 pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
 pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py
@@ -30,6 +23,14 @@ fi
 echo "[upstream-tests] Running validation model tests with weights"
 pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick"
 pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py
+pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
 
 echo "[upstream-tests] Unsetting LLAMA_DIR to ensure later tests can't use it"
 unset LLAMA_DIR
+
+echo "[upstream-tests] running metalium section. Note that skips should be treated as failures"
+./build/test/tt_metal/tt_fabric/test_system_health
+TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
+TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"
+TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
