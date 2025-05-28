@@ -46,7 +46,7 @@ struct ExecuteReduceScatterMatmul {
 
 }  // namespace operations::experimental::ccl
 namespace experimental {
-constexpr auto reduce_scatter_matmul = ttnn::register_operation<
+constexpr auto rs_matmul = ttnn::register_operation<
     "ttnn::experimental::rs_matmul",
     ttnn::operations::experimental::ccl::ExecuteReduceScatterMatmul>();
 }  // namespace experimental

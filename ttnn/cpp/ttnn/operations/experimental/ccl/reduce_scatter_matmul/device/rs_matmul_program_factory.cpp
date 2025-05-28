@@ -43,7 +43,7 @@ AllGatherRS::Matmul_RS_PF::create_at(
     return {
         std::move(program),
         shared_variables_t{LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_processing(
-            operation_attributes.rs_op, mesh_coordinate, tensor_args.rs, tensor_return_value.at(0), program)}};
+            operation_attributes.rs_op, mesh_coordinate, tensor_args.rs, tensor_return_value.at(1), program)}};
 }
 
 void AllGatherRS::Matmul_RS_PF::override_runtime_arguments(
@@ -51,6 +51,14 @@ void AllGatherRS::Matmul_RS_PF::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
-    ;
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& shared_variables = cached_workload.shared_variables.at(range);
+        LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_arguments_per_program(
+            shared_variables.rs_shared_vars,
+            program,
+            operation_attributes.rs_op,
+            tensor_args.rs,
+            tensor_return_value.at(1));
+    }
 }
 }  // namespace ttnn::operations::experimental::ccl

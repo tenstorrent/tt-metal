@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/experimental/ccl/llama_reduce_scatter/rs_matmul.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_matmul/rs_matmul.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::ccl {
@@ -65,12 +65,12 @@ void py_bind_rs_matmul(pybind11::module& module) {
                const std::optional<const ttnn::DeviceComputeKernelConfig>
                    compute_kernel_config,                                   // mm8 used but default std::nullopt
                const std::optional<const GlobalCircularBuffer>& global_cb,  // mm12 used but default std::nullopt
-               const std::optional<tt::tt_metal::SubDeviceId>& const
-                   sub_device_id                                       // rs and mm13 used same but default std::nullopt
-                       std::optional<const ttnn::CoreGrid> core_grid,  // mm9 may use but default std::nullopt
-               const bool transpose_a,                                 // mm2 set false
-               const bool transpose_b,                                 // mm3 set false
-               const std::optional<const DataType> dtype,              // mm5 set false
+               const std::optional<tt::tt_metal::SubDeviceId>&
+                   sub_device_id,                              // rs and mm13 used same but default std::nullopt
+               std::optional<const ttnn::CoreGrid> core_grid,  // mm9 may use but default std::nullopt
+               const bool transpose_a,                         // mm2 set false
+               const bool transpose_b,                         // mm3 set false
+               const std::optional<const DataType> dtype,      // mm5 set false
                const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,  // mm6 std::nullopt
                const std::optional<const std::string>& activation,                                  // mm7 set false
                const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 std::nullopt
@@ -79,7 +79,8 @@ void py_bind_rs_matmul(pybind11::module& module) {
 
                ) -> std::vector<ttnn::Tensor> {
                 return self(
-                    queue_id input_tensor,
+                    queue_id,
+                    input_tensor,
                     weight_tensor,
                     rs_tensor,
                     intermediate_packet_buffer,
