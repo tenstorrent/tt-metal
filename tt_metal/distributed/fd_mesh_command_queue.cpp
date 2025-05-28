@@ -400,19 +400,21 @@ void FDMeshCommandQueue::write_shard_to_device(
     const auto region_value = region.value_or(BufferRegion(0, shard_view->size()));
 
     if (shard_view->is_nd_sharded()) {
-        TT_FATAL(
-            shard_view->is_l1(),
-            "Local device shard with BufferDistributionSpec must be L1 for write_shard_to_device!");
         const auto& [banks, bank_mapping_in_bytes] = shard_view->get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
                 shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
+            uint32_t offset = 0;
+            if (shard_view->is_dram()) {
+                auto dram_channel = shard_view->device()->dram_channel_from_logical_core(banks[i]);
+                offset = shard_view->device()->dram_channel_offset(dram_channel);
+            }
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
                 enqueue_write_shard_to_core(
                     DeviceMemoryAddress{
                         .device_coord = device_coord,
                         .virtual_core_coord = virtual_core,
-                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
+                        .address = shard_view->address() + chunk_mapping_in_bytes.dst + offset},
                     (char*)src + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
                     /*blocking=*/false,
@@ -449,19 +451,21 @@ void FDMeshCommandQueue::read_shard_from_device(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     if (shard_view->is_nd_sharded()) {
-        TT_FATAL(
-            shard_view->is_l1(),
-            "Local device shard with BufferDistributionSpec must be L1 for read_shard_from_device!");
         const auto& [banks, bank_mapping_in_bytes] = shard_view->get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
                 shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
+            uint32_t offset = 0;
+            if (shard_view->is_dram()) {
+                auto dram_channel = shard_view->device()->dram_channel_from_logical_core(banks[i]);
+                offset = shard_view->device()->dram_channel_offset(dram_channel);
+            }
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
                 enqueue_read_shard_from_core(
                     DeviceMemoryAddress{
                         .device_coord = device_coord,
                         .virtual_core_coord = virtual_core,
-                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
+                        .address = shard_view->address() + chunk_mapping_in_bytes.dst + offset},
                     (char*)dst + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
                     /*blocking=*/false,

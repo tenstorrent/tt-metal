@@ -226,16 +226,20 @@ void HWCommandQueue::enqueue_read_buffer(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     if (buffer_obj.is_nd_sharded()) {
-        TT_FATAL(buffer_obj.is_l1(), "Buffer with BufferDistributionSpec must be L1 for enqueue_read_buffer!");
         const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
                 buffer_obj.device()->virtual_core_from_logical_core(banks[i], buffer_obj.core_type());
+            uint32_t offset = 0;
+            if (buffer_obj.is_dram()) {
+                auto dram_channel = buffer_obj.device()->dram_channel_from_logical_core(banks[i]);
+                offset = buffer_obj.device()->dram_channel_offset(dram_channel);
+            }
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
                 enqueue_read_from_core(
                     virtual_core,
                     (char*)dst + chunk_mapping_in_bytes.src,
-                    buffer_obj.address() + chunk_mapping_in_bytes.dst,
+                    buffer_obj.address() + chunk_mapping_in_bytes.dst + offset,
                     chunk_mapping_in_bytes.size,
                     false,
                     sub_device_ids);
@@ -311,16 +315,20 @@ void HWCommandQueue::enqueue_write_buffer(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     if (buffer_obj.is_nd_sharded()) {
-        TT_FATAL(buffer_obj.is_l1(), "Buffer with BufferDistributionSpec must be L1 for enqueue_write_buffer!");
         const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
                 buffer_obj.device()->virtual_core_from_logical_core(banks[i], buffer_obj.core_type());
+            uint32_t offset = 0;
+            if (buffer_obj.is_dram()) {
+                auto dram_channel = buffer_obj.device()->dram_channel_from_logical_core(banks[i]);
+                offset = buffer_obj.device()->dram_channel_offset(dram_channel);
+            }
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
                 enqueue_write_to_core(
                     virtual_core,
                     (char*)data + chunk_mapping_in_bytes.src,
-                    buffer_obj.address() + chunk_mapping_in_bytes.dst,
+                    buffer_obj.address() + chunk_mapping_in_bytes.dst + offset,
                     chunk_mapping_in_bytes.size,
                     false,
                     sub_device_ids);

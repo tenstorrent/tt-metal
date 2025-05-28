@@ -1284,14 +1284,17 @@ CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel) const {
 
 CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_logical_core_for_dram_view(
-        dram_channel);
+    return soc_desc.get_logical_core_for_dram_view(dram_channel);
 }
 
 uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_dram_channel_from_logical_core(
-        logical_core);
+    return soc_desc.get_dram_channel_from_logical_core(logical_core);
+}
+
+uint32_t Device::dram_channel_offset(uint32_t dram_channel) const {
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+    return soc_desc.get_address_offset(dram_channel);
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {

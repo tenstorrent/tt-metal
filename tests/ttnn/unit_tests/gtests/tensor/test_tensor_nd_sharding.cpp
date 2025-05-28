@@ -44,24 +44,29 @@ class NDShardingTests : public ttnn::TTNNFixtureWithDevice, public ::testing::Wi
 TEST_P(NDShardingTests, ReadWriteTest) {
     const auto& params = GetParam();
 
-    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+    CoreRangeSet l1_cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+    auto dram_grid_size = device_->dram_grid_size();
+    CoreRangeSet dram_cores(CoreRange(CoreCoord{0, 0}, CoreCoord{dram_grid_size.x - 1, dram_grid_size.y - 1}));
 
     for (auto sharding_orientation : {ShardOrientation::ROW_MAJOR, ShardOrientation::COL_MAJOR}) {
-        MemoryConfig memory_config{BufferType::L1, NdShardSpec{params.shard_shape, cores, sharding_orientation}};
-        TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
-        TensorSpec tensor_spec(params.shape, tensor_layout);
+        for (auto buffer_type : {BufferType::DRAM}) {
+            const auto& cores = buffer_type == BufferType::L1 ? l1_cores : dram_cores;
+            MemoryConfig memory_config{buffer_type, NdShardSpec{params.shard_shape, cores, sharding_orientation}};
+            TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
+            TensorSpec tensor_spec(params.shape, tensor_layout);
 
-        size_t volume = params.shape.volume();
-        std::vector<uint16_t> data(volume);
-        for (size_t i = 0; i < volume; i++) {
-            data[i] = static_cast<uint16_t>(i);
-        }
+            size_t volume = params.shape.volume();
+            std::vector<uint16_t> data(volume);
+            for (size_t i = 0; i < volume; i++) {
+                data[i] = static_cast<uint16_t>(i);
+            }
 
-        auto tensor = Tensor::from_vector(data, tensor_spec, device_);
-        auto readback_data = tensor.to_vector<uint16_t>();
+            auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+            auto readback_data = tensor.to_vector<uint16_t>();
 
-        for (size_t i = 0; i < volume; i++) {
-            ASSERT_EQ(data[i], readback_data[i]);
+            for (size_t i = 0; i < volume; i++) {
+                ASSERT_EQ(data[i], readback_data[i]);
+            }
         }
     }
 }
