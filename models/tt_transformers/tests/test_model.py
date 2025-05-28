@@ -17,6 +17,7 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from models.tt_transformers.tt.alspec_common import ALSpec
 
 
 @torch.no_grad()
@@ -198,6 +199,10 @@ def test_model_inference(
     generation_start_pos = 30 * 1024
     generation_length = iterations
 
+    # ALSpec setup
+    alspec = None
+    alspec = ALSpec(mesh_device, model_args.head_dim, model_args.n_heads, k_chunk_size=128)
+
     page_table_tt = None
     paged_attention_config = None
 
@@ -234,6 +239,7 @@ def test_model_inference(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        alspec=alspec,
     )
     logger.info("Model and caches loaded.")
 

@@ -43,7 +43,7 @@ class ALSpec:
         head_dim,
         nh,
         k_chunk_size,
-        lambda_=0.1,
+        lambda_=1.0,
         # lambda_=1000.0,
     ):
         """

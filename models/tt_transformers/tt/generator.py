@@ -277,6 +277,7 @@ class Generator:
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
             )
+            self.model[i].set_done_compile(True)  # Set done compile to True after first decode forward
             tt_logits.append(tt_logits_i)
 
         return tt_logits

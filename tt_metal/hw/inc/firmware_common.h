@@ -113,7 +113,7 @@ FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_
 }
 #endif
 
-#if defined(SPECULATION_MODE)
+#if defined(SPECULATION_MODE) && !defined(DISPATCH_KERNEL)
 bool skip_kernel() {
     int32_t skip_tensor_data = (int32_t)(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SKIP_TENSOR_ADDR));
 

@@ -24,6 +24,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.tt_transformers.tt.alspec_common import ALSpec
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -236,7 +237,7 @@ def prepare_generator_args(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_256.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -250,12 +251,12 @@ def prepare_generator_args(
             1,
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             32 * 1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            400,  # max_generated_tokens
             False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -279,13 +280,23 @@ def prepare_generator_args(
         "accuracy",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 23887872,
+            "num_command_queues": 2,
+        }
     ],
     indirect=True,
 )
@@ -475,6 +486,7 @@ def test_demo_text(
         iteration = 0
         users_decoding = True
         done_prefill = False  # Flag to indicate when prefill is done
+        done_alspec_setup = False
 
         out_tok = input_tokens_prefill_pt[:, 0:1]  # Take the first token from the prefill input
 
@@ -483,6 +495,28 @@ def test_demo_text(
         # Log total inference (accounting for compile_decode as well)
         profiler.start(f"inference_decode", iteration=batch_idx)
         while users_decoding:
+            if done_prefill and not done_alspec_setup:
+                # Remove trace
+                ttnn.release_trace(mesh_device, generator.trace_id_text)
+                del generator.trace_id_text
+
+                # Clear program cache
+                for device in mesh_device.get_devices():
+                    device.disable_and_clear_program_cache()
+                    device.enable_program_cache()
+
+                # Create ALSpec for the model
+                alspec = ALSpec(
+                    mesh_device,
+                    model_args[0].head_dim,
+                    model_args[0].n_heads,
+                    k_chunk_size=128 if true_input_tokens_lens[0] > 1024 else 64,
+                )
+                generator.model[0].propagate_alspec(alspec)
+                generator.model[0].set_done_compile(False)
+
+                done_alspec_setup = True
+
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
             else:

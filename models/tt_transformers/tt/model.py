@@ -15,7 +15,6 @@ from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.rope import RotarySetup
 from models.tt_transformers.tt.embedding import Embedding
 from models.tt_transformers.tt.model_config import TensorGroup
-from models.tt_transformers.tt.alspec_common import ALSpec
 
 
 class Transformer(LightweightModule):
@@ -28,6 +27,7 @@ class Transformer(LightweightModule):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        alspec=None,
     ):
         super().__init__()
         self.args = args
@@ -42,11 +42,8 @@ class Transformer(LightweightModule):
 
         # Set up ALSpec
         self.use_sfd = args.use_sfd
-        self.alspec = None
+        self.alspec = alspec
         self.done_compile = False
-
-        if self.use_sfd:
-            self.alspec = ALSpec(mesh_device, args.head_dim, args.n_heads, k_chunk_size=128)
 
         self.embd = Embedding(
             mesh_device=mesh_device,
@@ -115,6 +112,16 @@ class Transformer(LightweightModule):
 
         for layer in self.layers:
             layer.set_done_compile(done_compile)
+
+    def propagate_alspec(self, alspec):
+        """
+        Propagate ALSpec to all layers.
+        """
+        self.alspec = alspec
+        if self.alspec:
+            for layer in self.layers:
+                layer.alspec = alspec
+                layer.attention.alspec = alspec
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
@@ -265,8 +272,17 @@ class Transformer(LightweightModule):
                     dims=(3, 1) if self.args.is_galaxy else (1, -1),
                     mesh_shape=self.args.cluster_shape,
                 ),
-            )[0, 0, 0, :B]
+            )
+
+            # If ALSpec is used, we need to get the correct tensor
+            if self.alspec:
+                tt_out = self.alspec.get_correct_tensor(tt_out, dim=3)
+
+            tt_out = tt_out[0, 0, 0, :B]
+
             return tt_out
+
+        assert self.alspec is None, "ALSpec implementation not extended here."
 
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
