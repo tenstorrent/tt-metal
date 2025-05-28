@@ -409,7 +409,7 @@ def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
     return None, pt_out
 
 
-def get_padded_prefill_len(seq_len):
+def get_padded_prefill_len(seq_len: int) -> int:
     """
     If seq_len is less than 128, pad to 128
     If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 2048
