@@ -916,6 +916,71 @@ mcast_in0_shared_variables_t process_program_mcast_in0(
         num_cores_with_work};
 }
 
+void override_program_mcast_in0(
+    const mcast_in0_shared_variables_t& shared_variables,
+    const void* operation,
+    tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::Tensor>& input_tensors,
+    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+    const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+    TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
+    TT_ASSERT(output_tensors.size() == 1);
+
+    auto src_buffer_a = input_tensors.at(0).buffer();
+    auto src_buffer_b = input_tensors.at(1).buffer();
+    auto bias_tensor = optional_input_tensors.at(0);
+
+    std::optional<tt::tt_metal::Buffer*> bias_buffer;
+    if (bias_tensor.has_value()) {
+        bias_buffer = bias_tensor.value().buffer();
+    }
+
+    auto dst_buffer = output_tensors.at(0).buffer();
+
+    bool src0_sharded = input_tensors[0].is_sharded();
+    bool src1_sharded = input_tensors[1].is_sharded();
+    bool out_sharded = output_tensors[0].is_sharded();
+
+    // Manually unroll sender core
+    if (src0_sharded) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src2, *src_buffer_a);
+    } else {
+        // in0 sender
+        auto& reader_sender_runtime_args = GetRuntimeArgs(
+            program,
+            shared_variables.mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
+            shared_variables.start_core);
+        reader_sender_runtime_args[0] = src_buffer_a->address();
+    }
+
+    if (src1_sharded) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src1, *src_buffer_b);
+    }
+
+    if (bias_tensor.has_value() && bias_tensor.value().is_sharded()) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src3, *bias_buffer.value());
+    }
+
+    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.mm_kernel_in1_sender_writer_id);
+
+    for (uint32_t i = 0; i < shared_variables.num_cores_with_work; ++i) {
+        const auto& core = shared_variables.cores[i];
+
+        auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+
+        // in1 sender
+        writer_runtime_args[0] = src_buffer_b->address();
+        writer_runtime_args[6] = dst_buffer->address();
+        if (bias_tensor.has_value()) {
+            writer_runtime_args[17] = (*bias_buffer)->address();
+        }
+    }
+
+    if (out_sharded) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
+    }
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
@@ -1003,63 +1068,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
-            TT_ASSERT(output_tensors.size() == 1);
-
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
-            auto bias_tensor = optional_input_tensors.at(0);
-
-            std::optional<tt::tt_metal::Buffer*> bias_buffer;
-            if (bias_tensor.has_value()) {
-                bias_buffer = bias_tensor.value().buffer();
-            }
-
-            auto dst_buffer = output_tensors.at(0).buffer();
-
-            bool src0_sharded = input_tensors[0].is_sharded();
-            bool src1_sharded = input_tensors[1].is_sharded();
-            bool out_sharded = output_tensors[0].is_sharded();
-
-            // Manually unroll sender core
-            if (src0_sharded) {
-                UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src2, *src_buffer_a);
-            } else {
-                // in0 sender
-                auto& reader_sender_runtime_args = GetRuntimeArgs(
-                    program,
-                    shared_variables.mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
-                    shared_variables.start_core);
-                reader_sender_runtime_args[0] = src_buffer_a->address();
-            }
-
-            if (src1_sharded) {
-                UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src1, *src_buffer_b);
-            }
-
-            if (bias_tensor.has_value() && bias_tensor.value().is_sharded()) {
-                UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src3, *bias_buffer.value());
-            }
-
-            auto& writer_runtime_args_by_core =
-                GetRuntimeArgs(program, shared_variables.mm_kernel_in1_sender_writer_id);
-
-            for (uint32_t i = 0; i < shared_variables.num_cores_with_work; ++i) {
-                const auto& core = shared_variables.cores[i];
-
-                auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-
-                // in1 sender
-                writer_runtime_args[0] = src_buffer_b->address();
-                writer_runtime_args[6] = dst_buffer->address();
-                if (bias_tensor.has_value()) {
-                    writer_runtime_args[17] = (*bias_buffer)->address();
-                }
-            }
-
-            if (out_sharded) {
-                UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
-            }
+            override_program_mcast_in0(
+                shared_variables, operation, program, input_tensors, optional_input_tensors, output_tensors);
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
