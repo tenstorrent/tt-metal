@@ -66,11 +66,25 @@ def tensor_map():
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
+@pytest.mark.parametrize(
+    "use_program_cache",
+    [True, False],
+)
 def test_avg_pool2d_post_commit(
-    device, tensor_map, input_shape, kernel_size, stride, padding, ceil_mode, divisor_override, shard_scheme
+    device,
+    use_program_cache,
+    tensor_map,
+    input_shape,
+    kernel_size,
+    stride,
+    padding,
+    ceil_mode,
+    divisor_override,
+    shard_scheme,
 ):
     run_avg_pool2d(
         device=device,
+        use_program_cache=use_program_cache,
         tensor_map=tensor_map,
         input_shape=input_shape,
         kernel_size=kernel_size,

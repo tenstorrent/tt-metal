@@ -472,7 +472,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
         log_debug(tt::LogOp, "in_addr: {}", src_dram_buffer->address());
         log_debug(tt::LogOp, "in_reader_indices_addr: {}", reader_indices_storage.get_buffer()->address());
-        log_debug(tt::LogOp, "scalar_config_addr: {}", scalar_config_storage.get_buffer()->address());
+        if (scalar_config_storage.is_allocated()) {
+            log_debug(tt::LogOp, "scalar_config_addr: {}", scalar_config_storage.get_buffer()->address());
+        } else {
+            log_debug(tt::LogOp, "scalar_config_addr: not set");
+        }
         log_debug(tt::LogOp, "out_addr: {}", dst_dram_buffer->address());
         log_debug(tt::LogOp, "kernel_size_h: {}", kernel_size_h);
         log_debug(tt::LogOp, "kernel_size_w: {}", kernel_size_w);
