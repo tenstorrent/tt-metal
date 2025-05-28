@@ -329,8 +329,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     const void* src,
     uint32_t size_bytes,
     bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    DeviceAddr address_offset) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
@@ -347,8 +346,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
         size_bytes,
         id_,
         expected_num_workers_completed_,
-        sub_device_ids,
-        address_offset);
+        sub_device_ids);
 
     if (blocking) {
         this->finish(sub_device_ids);
@@ -360,8 +358,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     void* dst,
     uint32_t size_bytes,
     bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    DeviceAddr address_offset) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
@@ -375,7 +372,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     if (size_bytes > 0) {
         device_dispatch::CoreReadDispatchParams dispatch_params{
             address.virtual_core_coord,
-            address.address + address_offset,
+            address.address,
             size_bytes,
             device,
             id_,
@@ -413,11 +410,6 @@ void FDMeshCommandQueue::write_shard_to_device(
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
                 shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
-            uint32_t offset = 0;
-            if (shard_view->is_dram()) {
-                auto dram_channel = shard_view->device()->dram_channel_from_logical_core(banks[i]);
-                offset = shard_view->device()->dram_channel_offset(dram_channel);
-            }
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
                 enqueue_write_shard_to_core(
                     DeviceMemoryAddress{
@@ -427,8 +419,7 @@ void FDMeshCommandQueue::write_shard_to_device(
                     (char*)src + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
                     /*blocking=*/false,
-                    sub_device_ids,
-                    offset);
+                    sub_device_ids);
             }
         }
     } else {
@@ -465,11 +456,6 @@ void FDMeshCommandQueue::read_shard_from_device(
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
                 shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
-            uint32_t offset = 0;
-            if (shard_view->is_dram()) {
-                auto dram_channel = shard_view->device()->dram_channel_from_logical_core(banks[i]);
-                offset = shard_view->device()->dram_channel_offset(dram_channel);
-            }
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
                 enqueue_read_shard_from_core(
                     DeviceMemoryAddress{
@@ -479,8 +465,7 @@ void FDMeshCommandQueue::read_shard_from_device(
                     (char*)dst + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
                     /*blocking=*/false,
-                    sub_device_ids,
-                    offset);
+                    sub_device_ids);
             }
         }
     } else if (is_sharded(shard_view->buffer_layout())) {
