@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -92,7 +92,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+    uint32_t last_ktile_w = a.get_logical_shape()[-1] % TILE_WIDTH;
+    std::vector<uint32_t> reader_compile_time_args = {
+        (uint32_t)src0_is_dram, (uint32_t)src1_is_dram, (uint32_t)last_ktile_w};
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
