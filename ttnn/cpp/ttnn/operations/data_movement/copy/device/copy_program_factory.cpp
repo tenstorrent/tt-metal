@@ -12,6 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include <algorithm>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -66,6 +67,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
     auto dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool sharded = input.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
@@ -88,19 +90,24 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
             (std::uint32_t)dst_log2_stick_size};
     }
     std::map<string, string> kernel_defines;
+    if (sharded) {
+        kernel_defines["SHARDED"] = "1";
+        shard_builder::extend_sharding_compile_time_args(input, writer_compile_time_args);
+        shard_builder::extend_sharding_compile_time_args(input, reader_compile_time_args);
+    }
     if (backwards) {
         kernel_defines["BACKWARDS"] = "1";
     }
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp"
+        tilized ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/reader_unary_start_id.cpp"
                 : "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"
+        tilized ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/writer_unary_start_id.cpp"
                 : "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
@@ -137,11 +144,14 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
         uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
         if (tilized) {
-            tt::tt_metal::SetRuntimeArgs(
-                program, unary_reader_kernel_id, core, {src_buffer->address(), num_units_per_core, start_id});
-
-            tt::tt_metal::SetRuntimeArgs(
-                program, unary_writer_kernel_id, core, {dst_buffer->address(), num_units_per_core, start_id});
+            std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), num_units_per_core, start_id};
+            std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), num_units_per_core, start_id};
+            if (sharded) {
+                shard_builder::extend_sharding_run_time_args(input, reader_runtime_args);
+                shard_builder::extend_sharding_run_time_args(input, writer_runtime_args);
+            }
+            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
         } else {
             tt::tt_metal::SetRuntimeArgs(
                 program,
