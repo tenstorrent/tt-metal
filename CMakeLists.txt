@@ -136,10 +136,10 @@ endif()
 if(WITH_PYTHON_BINDINGS)
     set(Python3_FIND_STRATEGY LOCATION)
     find_package(
-        Python3
+        Python3 REQUIRED
         COMPONENTS
             Interpreter
-            Development
+            Development.Module
     )
     message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
 endif()
