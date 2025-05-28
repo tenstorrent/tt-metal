@@ -32,7 +32,7 @@ Alignment legacyShapeToAlignment(
         alignment_can_be_2D &= logical_shape[i] == legacy_padded_shape[i];
     }
 
-    // SHARDED
+    // 2D SHARDED
     if (memory_config.shard_spec().has_value()) {
         TT_FATAL(
             alignment_can_be_2D,
@@ -87,7 +87,7 @@ void validate_alignment(const TensorLayout& tensor_layout) {
     const auto& alignment = tensor_layout.get_alignment();
     const auto& memory_config = tensor_layout.get_memory_config();
     TT_FATAL(
-        alignment.size() <= 2 || !memory_config.is_sharded(),
+        alignment.size() <= 2 || !memory_config.shard_spec().has_value(),
         "Tensor must be interleaved if alignment has rank greater than 2!");
 
     const auto& page_config = tensor_layout.get_page_config();
@@ -98,15 +98,24 @@ void validate_alignment(const TensorLayout& tensor_layout) {
 void validate_shard_spec(const TensorLayout& tensor_layout) {
     const auto& memory_config = tensor_layout.get_memory_config();
     const auto& layout = tensor_layout.get_layout();
-    if (memory_config.is_sharded() and memory_config.shard_spec().has_value() and layout == Layout::TILE) {
-        const auto& physical_shard_shape = tensor_layout.get_physical_shard_shape();
+    if (memory_config.is_sharded() && layout == Layout::TILE) {
         const auto& tile_shape = tensor_layout.get_tile().get_tile_shape();
-        // TODO (issue #17060): Flip to TT_FATAL
-        TT_FATAL(
-            (physical_shard_shape.height() % tile_shape[0] == 0 && physical_shard_shape.width() % tile_shape[1] == 0),
-            "Physical shard shape {} must be tile {} sized!",
-            physical_shard_shape,
-            tile_shape);
+        if (memory_config.shard_spec().has_value()) {
+            const auto& physical_shard_shape = tensor_layout.get_physical_shard_shape();
+            TT_FATAL(
+                (physical_shard_shape.height() % tile_shape[0] == 0 &&
+                 physical_shard_shape.width() % tile_shape[1] == 0),
+                "Physical shard shape {} must be tile {} sized!",
+                physical_shard_shape,
+                tile_shape);
+        } else {
+            const auto& shard_shape = memory_config.nd_shard_spec().value().shard_shape;
+            TT_FATAL(
+                (shard_shape[-2] % tile_shape[0] == 0 && shard_shape[-1] % tile_shape[1] == 0),
+                "Physical shard shape {} must be tile {} sized!",
+                shard_shape,
+                tile_shape);
+        }
     }
 }
 
@@ -161,13 +170,14 @@ void TensorLayout::initialize_alignment() {
     alignment_ = Alignment(std::move(result));
 }
 
-std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttnn::Shape& shape) const {
+std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> TensorLayout::compute_distribution_spec(
+    const ttnn::Shape& shape) const {
     if (!memory_config_.is_sharded()) {
         return std::nullopt;
     }
 
     TT_FATAL(
-        memory_config_.shard_spec().has_value(),
+        memory_config_.shard_spec().has_value() || memory_config_.nd_shard_spec().has_value(),
         "MemoryConfig must have Shard Spec specified for sharded memory layout");
 
     const Shape2D physical_size = compute_physical_shape(shape);
@@ -183,24 +193,29 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
         "Physical height {} must be multiple of page height {}",
         physical_size.height(),
         page_shape.height());
-    const auto width_in_pages = physical_size.width() / page_shape.width();
-    const auto height_in_pages = physical_size.height() / page_shape.height();
-    const std::array<uint32_t, 2> tensor2d_shape_in_pages{height_in_pages, width_in_pages};
 
-    auto shard_spec = memory_config_.shard_spec().value();
+    if (auto shard_spec = memory_config_.shard_spec()) {
+        const auto width_in_pages = physical_size.width() / page_shape.width();
+        const auto height_in_pages = physical_size.height() / page_shape.height();
+        const std::array<uint32_t, 2> tensor2d_shape_in_pages{height_in_pages, width_in_pages};
 
-    switch (shard_spec.mode) {
-        case ShardMode::PHYSICAL: break;
-        case ShardMode::LOGICAL: {
-            const auto& physical_shard_shape = get_physical_shard_shape();
-            shard_spec.shape = physical_shard_shape;
-            break;
+        switch (shard_spec->mode) {
+            case ShardMode::PHYSICAL: break;
+            case ShardMode::LOGICAL: {
+                const auto& physical_shard_shape = get_physical_shard_shape();
+                shard_spec->shape =
+                    std::array<uint32_t, 2>{physical_shard_shape.height(), physical_shard_shape.width()};
+                break;
+            }
+            default: TT_THROW("Unsupported shard mode {} in compute_distribution_spec!", shard_spec->mode);
         }
-        default: TT_THROW("Unsupported shard mode {} in compute_shard_spec_buffer!", shard_spec.mode);
+
+        return ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
     }
 
-    ShardSpecBuffer shard_spec_buffer(shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
-    return shard_spec_buffer;
+    auto& nd_shard_spec = memory_config_.nd_shard_spec().value();
+    return BufferDistributionSpec::from_shard_spec(
+        shape, nd_shard_spec.shard_shape, page_shape, nd_shard_spec.cores, nd_shard_spec.shard_orientation);
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const {

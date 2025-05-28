@@ -111,10 +111,6 @@ TEST_F(DPrintFixture, TensixTestPrintPrependDeviceCoreRisc) {
 }
 
 TEST_F(DPrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
-    if (this->arch_ == ARCH::BLACKHOLE) {  // TODO: Re-enable when this is supported on BH
-        log_info(tt::LogTest, "DPrint on BH active eth not yet supported");
-        GTEST_SKIP();
-    }
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (IDevice* device : this->devices_) {
