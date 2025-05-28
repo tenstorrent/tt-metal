@@ -136,11 +136,20 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
     endif()
 endfunction()
 
-# Define the compiler command
-set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++)
+# Option to use system-installed SFPI
+option(TT_USE_SYSTEM_SFPI "Use system-installed SFPI compiler" OFF)
 
-# May switch to this someday
-# set(GPP_CMD /opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++)
+if(TT_USE_SYSTEM_SFPI)
+    set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++")
+else()
+    set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++")
+endif()
+
+if(NOT EXISTS "${GPP_CMD}")
+    message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
+endif()
+
+message(STATUS "Using SFPI compiler: ${GPP_CMD}")
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
