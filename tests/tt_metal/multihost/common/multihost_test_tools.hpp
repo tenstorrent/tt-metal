@@ -105,7 +105,6 @@ inline int multihost_main(int argc, char** argv) {
 
     // Skip all tests if lacking fault tolerance.
     if (!ctx->supports_fault_tolerance()) {
-        ::testing::GTEST_FLAG(filter) = "-*";
         fmt::println("ULFM support is not available in this build, skipping fault tolerance tests.");
         return 0;
     }
