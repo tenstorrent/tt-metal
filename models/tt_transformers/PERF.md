@@ -35,7 +35,7 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Llama3.1-70B      | TG          | 95        | 100       | 12.7          |           |
 | Llama3.1-70B      | TG   (DP=4) |           |           | 14.8          | 189       |
 | Llama3.2-90B      | T3K         | 87        | 99        | 6             | 5535      |
-| Qwen2.5-7B        | N300        | 86        | 97        | 31.0          | 89        |
+| Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.2          | 225       |
 | Phi3.5-mini       | N150        |           |           | 43.2          | 98        |
 | Phi3.5-mini       | N300        |           |           | 57.8          | 62        |
@@ -70,7 +70,7 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Llama3.1-70B      | T3K         | 95        | 100       | 16.5          | 168       |
 | Llama3.1-70B      | TG          | 95        | 100       | 12.7          |           |
 | Llama3.2-90B      | T3K         | 97        | 100       | 6             | 5600      |
-| Qwen2.5-7B        | N300        | 86        | 97        | 31.3          | 86        |
+| Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.1          | 216       |
 | Phi3.5-mini       | N150        |           |           | 38.8          | 92        |
 | Phi3.5-mini       | N300        |           |           | 53.9          | 63        |
