@@ -4,6 +4,7 @@
 
 import ttnn
 import pytest
+from tests.ttnn.nightly.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
 
 
 @pytest.fixture(scope="module")
