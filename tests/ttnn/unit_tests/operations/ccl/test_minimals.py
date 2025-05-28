@@ -363,7 +363,7 @@ def test_all_gather_only(
     [
         {
             "trace_region_size": 23887872,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
@@ -394,12 +394,13 @@ def test_tg_trace_rms_fuse(
         function_level_defaults,
         input_shard_grid,
         output_shard_grid,
-        ttnn.Topology.Ring,
+        ttnn.Topology.Linear,
         fused_add,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         profiler=profiler,
         use_new_version=use_new_version,
+        trace_mode=trace_mode,
     )
 
 
