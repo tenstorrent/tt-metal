@@ -6,7 +6,7 @@
 
 #include "compile_time_args.h"
 #include <dev_mem_map.h>
-#include "stack_usage.h"
+#include "debug/stack_usage.h"
 
 #if defined(COMPILE_FOR_TRISC)
 #include "compute_kernel_api/common.h"
