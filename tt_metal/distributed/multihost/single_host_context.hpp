@@ -8,62 +8,31 @@
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
-
-class SingleHostContext;
-class SingleHostRequest;
-
-class SingleHostException : public DistributedException {
-public:
-    SingleHostException(Rank rank, int error_code, std::string msg);
-
-    // implement interface
-    Rank rank() const noexcept override;
-
-    int error_code() const noexcept override;
-
-    const std::string& message() const noexcept override;
-
-    const std::string& error_string() const noexcept override;
-
-private:
-    Rank rank_{0};
-    int error_code_{0};
-    std::string message_;
-    std::string error_string_;
-};
-
-// ---------------------------------------------------------------------
-//                           Non‑blocking request
-// ---------------------------------------------------------------------
-class SingleHostRequest : public Request {
-public:
-    explicit SingleHostRequest() : done_(false) {}
-
-    Status wait() override;
-    std::optional<Status> test() override;
-    void cancel() override;
-    bool active() const override;
-
-private:
-    bool done_{};
-};
-
 // ---------------------------------------------------------------------
 //                       Main distributed context
 // ---------------------------------------------------------------------
 class SingleHostContext : public DistributedContext {
 public:
-    // factory (no-op for single host implementation)
+    /* ----------------- single host constructor ---------------- */
+    explicit SingleHostContext();
+
+    // factory
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
 
     // destructor – no-op
     ~SingleHostContext() override = default;
 
-    /* ---------------- basic info / sync ---------------- */
+    /* ---------------- basic info ---------------- */
     [[nodiscard]] Rank rank() const override;
     [[nodiscard]] Size size() const override;
     [[nodiscard]] bool supports_fault_tolerance() const override;
+    [[nodiscard]] virtual bool is_revoked() override;
+    [[nodiscard]] virtual bool is_revoked() override;
+
+    void abort(int error_code) const override;
+
+    /* --------------- the rest of the methods are unsupported and throw --------- */
     void barrier() const override;
 
     /* ---------------- point‑to‑point ------------------- */
@@ -99,14 +68,7 @@ public:
     [[nodiscard]] ContextPtr duplicate() const override;
     [[nodiscard]] ContextPtr split(Color color, Key key) const override;
     [[nodiscard]] ContextPtr create_sub_context(tt::stl::Span<int> ranks) const override;
-    void abort(int error_code) const override;
     void revoke_and_shrink() override;
-    [[nodiscard]] virtual bool is_revoked() override;
-
-    /* ----------------- single host constructors ---------------- */
-    explicit SingleHostContext();
-
-    static void set_current_world(const ContextPtr& ctx);
 
 private:
     int rank_{0};
