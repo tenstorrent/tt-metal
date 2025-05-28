@@ -56,9 +56,15 @@ DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_
             auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
             const auto logical_core =
                 soc_desc.translate_coord_to(virtual_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-            const uint32_t bank_id =
-                device->allocator()->get_bank_ids_from_logical_core(BufferType::L1, logical_core)[0];
-            address += device->allocator()->get_bank_offset(BufferType::L1, bank_id);
+            const DispatchCoreConfig dispatch_core_config = get_dispatch_core_config();
+            const std::vector<CoreCoord> logical_dispatch_cores =
+                tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
+            if (std::find(logical_dispatch_cores.begin(), logical_dispatch_cores.end(), logical_core) ==
+                logical_dispatch_cores.end()) {
+                const uint32_t bank_id =
+                    device->allocator()->get_bank_ids_from_logical_core(BufferType::L1, logical_core)[0];
+                address += device->allocator()->get_bank_offset(BufferType::L1, bank_id);
+            }
         }
     }
     return address;
