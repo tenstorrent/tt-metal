@@ -7,7 +7,6 @@
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
 #include "dispatch/system_memory_manager.hpp"
-#include "allocator.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -36,9 +35,11 @@ void validate_core_read_write_bounds(
     } else {
         TT_ASSERT(mem_type == HalMemType::DRAM);
 
+        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
+        const DeviceAddr dram_base_address = soc_desc.get_address_offset(dram_channel);
+
         const DeviceAddr dram_channel_size = device->dram_size_per_channel();
-        const DeviceAddr dram_base_address = device->allocator()->get_bank_offset(
-            BufferType::DRAM, device->dram_channel_from_virtual_core(virtual_core));
 
         TT_FATAL(address >= dram_base_address, "Region in DRAM is out of bounds");
         TT_FATAL(address + size_bytes <= dram_base_address + dram_channel_size, "Region in DRAM is out of bounds");
@@ -48,24 +49,9 @@ void validate_core_read_write_bounds(
 DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address) {
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::DRAM) {
-        address += device->allocator()->get_bank_offset(
-            BufferType::DRAM, device->dram_channel_from_virtual_core(virtual_core));
-    } else {
-        TT_ASSERT(mem_type == HalMemType::L1);
-        if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, device->id())) {
-            auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-            const auto logical_core =
-                soc_desc.translate_coord_to(virtual_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-            const DispatchCoreConfig dispatch_core_config = get_dispatch_core_config();
-            const std::vector<CoreCoord> logical_dispatch_cores =
-                tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
-            if (std::find(logical_dispatch_cores.begin(), logical_dispatch_cores.end(), logical_core) ==
-                logical_dispatch_cores.end()) {
-                const uint32_t bank_id =
-                    device->allocator()->get_bank_ids_from_logical_core(BufferType::L1, logical_core)[0];
-                address += device->allocator()->get_bank_offset(BufferType::L1, bank_id);
-            }
-        }
+        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
+        address += soc_desc.get_address_offset(dram_channel);
     }
     return address;
 }
