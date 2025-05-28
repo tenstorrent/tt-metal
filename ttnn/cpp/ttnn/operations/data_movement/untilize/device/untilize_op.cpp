@@ -51,21 +51,6 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
             "sub_core_grid implementation only supported when use_multicore flag argument is set to true");
     }
 
-    /* TODO (GR): Cleanup
-     * Allowed Configs:
-     * - height shard -> height shard (multicore)
-     * - width shard -> width shard (multicore)
-     * - block shard -> block shard (multicore)
-     *   - input block shard must be on a single rectangle of cores
-     * - height shard -> interleaved (multicore)
-     * - width shard -> interleaved (multicore)
-     * - block shard -> interleaved (multicore)
-     *   - input block shard must be on a single rectangle of cores
-     * - interleaved -> height shard (multicore)
-     *   - other shape restrictions too
-     * - interleaved -> interleaved
-     */
-
     if (!this->use_multicore) {
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::SINGLE_BANK,
@@ -75,20 +60,21 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
             "Output layout must be interleaved or sharded");
 
         if (input_tensor_a.memory_config().is_sharded()) {
+            std::array<uint32_t, 2> input_shard_shape = input_tensor_a.memory_config().shard_spec().value().shape;
             TT_FATAL(
-                input_tensor_a.get_padded_shape()[-1] % input_tensor_a.memory_config().shard_spec().value().shape[1] ==
-                        0 &&
-                    (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) %
-                            input_tensor_a.memory_config().shard_spec().value().shape[0] ==
-                        0,
+                input_tensor_a.get_padded_shape()[-1] % input_shard_shape[1] == 0,
+                "Uneven input shard shape not supported");
+            TT_FATAL(
+                (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) % input_shard_shape[0] == 0,
                 "Uneven input shard shape not supported");
         }
         if (this->output_mem_config.is_sharded()) {
+            std::array<uint32_t, 2> output_shard_shape = this->output_mem_config.shard_spec().value().shape;
             TT_FATAL(
-                input_tensor_a.get_padded_shape()[-1] % this->output_mem_config.shard_spec().value().shape[1] == 0 &&
-                    (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) %
-                            this->output_mem_config.shard_spec().value().shape[0] ==
-                        0,
+                input_tensor_a.get_padded_shape()[-1] % output_shard_shape[1] == 0,
+                "Uneven output shard shape not supported");
+            TT_FATAL(
+                (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) % output_shard_shape[0] == 0,
                 "Uneven output shard shape not supported");
         }
     } else if (input_tensor_a.memory_config().is_sharded()) {

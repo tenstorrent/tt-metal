@@ -1211,7 +1211,7 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    uint32_t num_tiles = a.volume() / TILE_HEIGHT / TILE_WIDTH;
+    uint32_t num_tiles = a.volume() / TILE_HW;
 
     uint32_t num_blocks_across_height = (a.volume() / a.get_padded_shape()[-1]) / TILE_HEIGHT;
     uint32_t num_columns_of_blocks = 1;
