@@ -100,6 +100,19 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         q_shape[3],
         joint_q_shape[3]);
 
+    // Check shapes based on ring
+    TT_FATAL(
+        q_shape[2] * this->ring_size == k_shape[2],
+        "Q sequence length times ring size must be equal to K sequence length. Got Q: {}, K: {}, ring_size: {}",
+        q_shape[2],
+        k_shape[2],
+        this->ring_size);
+    TT_FATAL(
+        k_shape[2] == v_shape[2],
+        "K sequence length must be equal to V sequence length. Got K: {}, V: {}",
+        k_shape[2],
+        v_shape[2]);
+
     // Validate num_heads relationship
     const auto nqh = q_shape[1];
     const auto nkv = k_shape[1];
@@ -160,6 +173,7 @@ std::vector<TensorSpec> RingJointScaledDotProductAttention::compute_output_specs
     auto lse_shape = input.get_logical_shape();
     lse_shape[3] = 1;
     lse_shape[2] = input.get_padded_shape()[2] + joint_input.get_padded_shape()[2];
+    lse_shape[0] = this->ring_size;  // DEBUG: Returning intermediate LSEs for testing
 
     return {
         TensorSpec(
@@ -202,6 +216,7 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         scale,
         q_chunk_size,
         k_chunk_size,
+        this->ring_size,
         this->compute_kernel_config,
         this->program_config);
 }

@@ -6,6 +6,7 @@
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
+#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -28,6 +29,11 @@ void kernel_main() {
     constexpr bool use_joint_mask = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(18);
     constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(19);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(20);
+    constexpr uint32_t N_k_num_chunks_local = get_compile_time_arg_val(21);
+    constexpr uint32_t L_k_num_chunks = get_compile_time_arg_val(22);
+
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -41,8 +47,10 @@ void kernel_main() {
     const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
 
     constexpr bool is_dram = true;
+    constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;
+    constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_lse = tt::CBIndex::c_17;
+    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr DataFormat data_format = get_dataformat(cb_out);
@@ -68,40 +76,70 @@ void kernel_main() {
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
 
-    for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-        for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
-                if constexpr (use_joint_mask) {
-                    /*
-                    If `use_joint_mask`, then one or both of input tensors are padded.
-                    We already know that input tensors are padded up to Sk_chunk_t.
-                    Therefore, for the last K chunk of the first tensor and the last K chunk of the joint tensor,
-                    we should generate the vertical mask.
-                    */
-                    if (mask_chunk_0 != (uint32_t)(-1)) {
-                        generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_N);
+    for (uint32_t ring_id = 0; ring_id < ring_size; ++ring_id) {
+        DPRINT << "WRITER: ring_id: " << ring_id << ENDL();
+        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
+                    if constexpr (use_joint_mask) {
+                        /*
+                        If `use_joint_mask`, then one or both of input tensors are padded.
+                        We already know that input tensors are padded up to Sk_chunk_t.
+                        Therefore, for the last K chunk of the first tensor and the last K chunk of the joint tensor,
+                        we should generate the vertical mask.
+                        */
+                        if (mask_chunk_0 != (uint32_t)(-1)) {
+                            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_N);
+                        }
+                        if (mask_chunk_1 != (uint32_t)(-1)) {
+                            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_L);
+                        }
                     }
-                    if (mask_chunk_1 != (uint32_t)(-1)) {
-                        generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_L);
+
+                    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+                    const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+
+                    // If ring_id > 0, read LSE input and previous output chunk.
+                    // No race condition because writer kernel writes previous output before reading it again
+
+                    if (ring_id > 0) {
+                        // Read previous output for this Q chunk
+                        read_block(cat_out_generator, dst_slice, cb_prev_out, tile_bytes, barrier_threshold, false);
+
+                        // Read previous LSE for this Q chunk
+                        cb_reserve_back(cb_lse_in, Sq_chunk_t);
+                        // DEBUG: logging each LSE to different element in batch. Remove
+                        uint32_t lse_tile_id = (ring_id - 1) * B * NH * (padded_Nqt + padded_Lqt) +
+                                               nb * NH * (padded_Nqt + padded_Lqt) + nq * (padded_Nqt + padded_Lqt) +
+                                               q_chunk * Sq_chunk_t;
+                        uint32_t lse_addr = get_write_ptr(cb_lse_in);
+                        for (uint32_t i = 0; i < Sq_chunk_t; i++) {
+                            noc_async_read_tile(lse_tile_id, lse_writer, lse_addr);
+                            lse_tile_id++;
+                            lse_addr += tile_bytes;
+                        }
+                        noc_async_read_barrier();
+                        cb_push_back(cb_lse_in, Sq_chunk_t);
                     }
-                }
 
-                const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
-                const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+                    write_block(cat_out_generator, dst_slice, cb_out, tile_bytes, barrier_threshold);
 
-                write_block(cat_out_generator, dst_slice, cb_out, tile_bytes, barrier_threshold);
-                cb_wait_front(cb_lse, Sq_chunk_t);
-                uint32_t lse_tile_id =
-                    nb * NH * (padded_Nqt + padded_Lqt) + nq * (padded_Nqt + padded_Lqt) + q_chunk * Sq_chunk_t;
-                uint32_t lse_addr = get_read_ptr(cb_lse);
-                for (uint32_t i = 0; i < Sq_chunk_t; i++) {
-                    noc_async_write_tile(lse_tile_id, lse_writer, lse_addr);
-                    lse_tile_id++;
-                    lse_addr += tile_bytes;
+                    cb_wait_front(cb_lse_out, Sq_chunk_t);
+                    // DEBUG: logging each LSE to different element in batch. Remove
+                    uint32_t lse_tile_id = ring_id * B * NH * (padded_Nqt + padded_Lqt) +
+                                           nb * NH * (padded_Nqt + padded_Lqt) + nq * (padded_Nqt + padded_Lqt) +
+                                           q_chunk * Sq_chunk_t;
+                    uint32_t lse_addr = get_read_ptr(cb_lse_out);
+                    for (uint32_t i = 0; i < Sq_chunk_t; i++) {
+                        noc_async_write_tile(lse_tile_id, lse_writer, lse_addr);
+                        lse_tile_id++;
+                        lse_addr += tile_bytes;
+                    }
+                    noc_async_writes_flushed();
+                    cb_pop_front(cb_lse_out, Sq_chunk_t);
                 }
-                noc_async_writes_flushed();
-                cb_pop_front(cb_lse, Sq_chunk_t);
             }
         }
+        noc_async_write_barrier();
     }
 }

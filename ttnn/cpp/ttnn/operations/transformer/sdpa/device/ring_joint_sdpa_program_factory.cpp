@@ -36,6 +36,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     std::optional<float> scale,
     std::size_t q_chunk_size,
     std::size_t k_chunk_size,
+    std::size_t ring_size,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config) {
     /*
@@ -49,13 +50,14 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     */
 
     const auto q_shape = input_tensor_q.get_logical_shape();
+    const auto k_shape = input_tensor_k.get_logical_shape();
     const auto joint_q_shape = joint_tensor_q.get_logical_shape();
     const uint32_t B = q_shape[0], NH = q_shape[1], N = q_shape[2], DH = q_shape[3];
     const uint32_t L = joint_q_shape[2];
 
     // Calculate padded sequence length
     const uint32_t padded_Nq = tt::round_up(N, q_chunk_size);
-    const uint32_t padded_Nk = tt::round_up(N, k_chunk_size);
+    const uint32_t padded_Nk = tt::round_up(N, k_chunk_size);  // local Nk, calculated from Q shape
     const uint32_t padded_Lq = tt::round_up(L, q_chunk_size);
     const uint32_t padded_Lk = tt::round_up(L, k_chunk_size);
 
@@ -96,6 +98,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
     const uint32_t q_num_chunks = cat_Sq / q_chunk_size;
     const uint32_t k_num_chunks = cat_Sk / k_chunk_size;
+    const uint32_t N_k_num_chunks_local = padded_Nk / k_chunk_size;
+    const uint32_t L_k_num_chunks = padded_Lk / k_chunk_size;
 
     tt::log_debug("B: {}", B);
     tt::log_debug("NH: {}", NH);
@@ -316,6 +320,9 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         padded_Lqt,
         padded_Lkt,
         num_cores,
+        ring_size,
+        N_k_num_chunks_local,
+        L_k_num_chunks,
     };
 
     // Calculate which K chunks contain the mask boundaries
@@ -348,6 +355,9 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         (uint32_t)use_joint_mask,
         mask_chunk_0,
         mask_chunk_1,
+        ring_size,
+        N_k_num_chunks_local,
+        L_k_num_chunks,
     };
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -373,6 +383,9 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         (uint32_t)use_joint_mask,
         mask_chunk_0,
         mask_chunk_1,
+        ring_size,
+        N_k_num_chunks_local,
+        L_k_num_chunks,
     };
 
     std::map<string, string> defines;
@@ -470,6 +483,16 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
                             .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
     auto cb_in5_id = CreateCircularBuffer(program, core_grid, c_in5_config);
+
+    // lse input
+    auto c_in6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_6, stats_df}})
+                            .set_page_size(tt::CBIndex::c_6, stats_tile_size);
+    auto cb_in6_id = CreateCircularBuffer(program, core_grid, c_in6_config);
+
+    // previous block output as input
+    auto c_in7_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_7, im_df}})
+                            .set_page_size(tt::CBIndex::c_7, im_tile_size);
+    auto cb_in7_id = CreateCircularBuffer(program, core_grid, c_in7_config);
 
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})

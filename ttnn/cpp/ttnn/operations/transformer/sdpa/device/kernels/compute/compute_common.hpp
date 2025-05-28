@@ -11,6 +11,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/softplus.h"
+#include "compute_kernel_api/eltwise_unary/negative.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
@@ -331,6 +333,71 @@ void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
         cb_push_back(out_cb, 1);
         release_dst();
     }
+}
+
+void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    // out_cb = sigmoid(in0_cb - in1_cb)
+
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+    sub_tiles_init(in0_cb, in1_cb);
+    sigmoid_tile_init();
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        sub_tiles(in0_cb, in1_cb, i, i, 0);
+        sigmoid_tile(0);
+        pack_tile(0, out_cb);
+        release_dst();
+    }
+    cb_push_back(out_cb, num_tiles);
+}
+
+void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    // out_cb = logsigmoid(in0_cb - in1_cb)
+
+    // Implemented as softplus. logsigmoid(x) = -softplus(-x)
+
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+    sub_tiles_init(in0_cb, in1_cb);
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        // Remove negate by swapping inputs
+        sub_tiles(in1_cb, in0_cb, i, i, 0);
+        // negative_tile_init();
+        // negative_tile(0);
+        softplus_tile_init();
+        softplus_tile(0, 0x3F800000, 0x3F800000, 0x41A00000);  // beta, beta_reciprocal, threshold
+        negative_tile_init();
+        negative_tile(0);
+        // sigmoid_tile_init();
+        // sigmoid_tile(0);
+        // log_tile_init();
+        // log_tile(0);
+        pack_tile(0, out_cb);
+        release_dst();
+    }
+    cb_push_back(out_cb, num_tiles);
+}
+void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    // out_cb = in0_cb - in1_cb
+
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+    sub_tiles_init(in0_cb, in1_cb);
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        sub_tiles(in0_cb, in1_cb, i, i, 0);
+        pack_tile(0, out_cb);
+        release_dst();
+    }
+    cb_push_back(out_cb, num_tiles);
 }
 
 void matmul_blocks(

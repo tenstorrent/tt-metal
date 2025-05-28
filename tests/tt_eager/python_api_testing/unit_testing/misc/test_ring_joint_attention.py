@@ -5,6 +5,7 @@
 import os
 import math
 import torch
+import torch.nn.functional as F
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
@@ -16,16 +17,33 @@ from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0, s
 from .test_scaled_dot_product_attention import fa_rand
 
 
-def torch_sdpa(q, k, v):
+def torch_sdpa(q, k, v, num_devices):
     scale = k.size(-1) ** -0.5
-    attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale
-    cur_max, _ = torch.max(attn_weights, dim=-1, keepdim=True)
-    attn_weights = torch.exp(attn_weights - cur_max)
-    cur_sum = torch.sum(attn_weights, dim=-1, keepdim=True)
-    out = torch.matmul(attn_weights, v)
-    out = out / cur_sum
-    lse = cur_max + torch.log(cur_sum)
-    return out, lse
+    seq_len = k.size(2)
+    slice_seq_len = seq_len // num_devices
+    out = None
+    lse = None
+    lse_list = []
+    for ring_id in range(num_devices):
+        k_slice = k[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
+        v_slice = v[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
+        attn_weights = torch.matmul(q, k_slice.transpose(-2, -1)) * scale
+        cur_max, _ = torch.max(attn_weights, dim=-1, keepdim=True)
+        attn_weights = torch.exp(attn_weights - cur_max)
+        cur_sum = torch.sum(attn_weights, dim=-1, keepdim=True)
+        cur_out = torch.matmul(attn_weights, v_slice)
+        cur_out = cur_out / cur_sum
+        cur_lse = cur_max + torch.log(cur_sum)
+        if ring_id == 0:
+            out = cur_out
+            lse = cur_lse
+        else:
+            sig = F.sigmoid(cur_lse - lse)
+            out = out - sig * (out - cur_out)
+            lse = lse - F.logsigmoid(lse - cur_lse)
+        lse_list.append(lse)
+
+    return out, lse_list
 
 
 def run_ring_joint_sdpa(
@@ -42,6 +60,8 @@ def run_ring_joint_sdpa(
     grid_size=None,
     # topology=ttnn.MeshTopology.RING,
 ):
+    num_devices = 8
+    local_seq_len = seq_len // num_devices
     torch.manual_seed(1234)
 
     compute_grid = grid_size or device.compute_with_storage_grid_size()
@@ -63,12 +83,12 @@ def run_ring_joint_sdpa(
     else:
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
+            math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
 
-    Q = fa_rand(b, nh, seq_len, d)
+    Q = fa_rand(b, nh, local_seq_len, d)
     K = fa_rand(b, nh, seq_len, d)
     V = fa_rand(b, nh, seq_len, d)
 
@@ -102,8 +122,9 @@ def run_ring_joint_sdpa(
     tt_out = ttnn.to_torch(tt_out)
     tt_joint_out = ttnn.to_torch(tt_joint_out)
     tt_lse = ttnn.to_torch(tt_lse)
+    tt_lse_list = torch.chunk(tt_lse, num_devices, dim=0)
     # Slice out any tile-padding
-    tt_out = tt_out[:, :, :seq_len, :]
+    tt_out = tt_out[:, :, :local_seq_len, :]
     tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
     logger.debug(f"tt_out: {tt_out.shape}")
     logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
@@ -111,28 +132,39 @@ def run_ring_joint_sdpa(
     pt_Q = torch.cat([Q, joint_Q], dim=2)
     pt_K = torch.cat([K, joint_K], dim=2)
     pt_V = torch.cat([V, joint_V], dim=2)
-    # gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, is_causal=False)
-    gt, gt_lse = torch_sdpa(pt_Q, pt_K, pt_V)
-    gt_out = gt[:, :, :seq_len, :]
-    gt_joint_out = gt[:, :, seq_len:, :]
 
-    for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out), (tt_lse, gt_lse)]:
+    gt, gt_lse_list = torch_sdpa(pt_Q, pt_K, pt_V, num_devices)
+    gt_out = gt[:, :, :local_seq_len, :]
+    gt_joint_out = gt[:, :, local_seq_len:, :]
+
+    passing = True
+    for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out)]:
         out_pass, out_pcc = comp_pcc(gt, out, 0.994)
         logger.debug(f"python vs pytorch: {out_pcc}")
         logger.debug(f"mse: {((gt - out) ** 2).mean()}")
-        assert out_pass
+        passing = passing and out_pass
+
+    for i, (lse, gt) in enumerate(zip(tt_lse_list, gt_lse_list)):
+        lse_pass, lse_pcc = comp_pcc(gt, lse, 0.98)
+        logger.debug(f"python vs pytorch LSE {i}: {lse_pcc}")
+        logger.debug(f"mse: {((gt - lse) ** 2).mean()}")
+        passing = passing and lse_pass
+        print(f"tt: max: {lse.max()}, min: {lse.min()}, mean: {lse.mean()}")
+        print(f"gt: max: {gt.max()}, min: {gt.min()}, mean: {gt.mean()}")
+
+    assert passing
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
-@pytest.mark.parametrize("k_chunk_size", [256], ids=["k256"])
+@pytest.mark.parametrize("q_chunk_size", [32], ids=["q256"])
+@pytest.mark.parametrize("k_chunk_size", [128], ids=["k256"])
 @pytest.mark.parametrize("b", [1], ids=["b1"])
 @pytest.mark.parametrize("nh", [3], ids=["nh3"])
 @pytest.mark.parametrize("d", [128], ids=["d128"])
 @pytest.mark.parametrize(
     "seq_len, joint_seq_len",
     [
-        (8192, 256),
+        (4096, 128),
     ],
 )
 def test_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype):

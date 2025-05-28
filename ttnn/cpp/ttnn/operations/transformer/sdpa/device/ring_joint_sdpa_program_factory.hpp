@@ -23,6 +23,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_joint_sdpa(
     std::optional<float> scale,
     std::size_t q_chunk_size,
     std::size_t k_chunk_size,
+    std::size_t ring_size,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config);
 
