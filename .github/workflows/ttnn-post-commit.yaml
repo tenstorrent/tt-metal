@@ -98,6 +98,8 @@ jobs:
             fast_runtime_mode_off: true
           - name: ttnn example tests
             cmd: ./tests/scripts/run_ttnn_examples.sh
+          - name: ttnn import test
+            cmd: python -c "import ttnn"
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
