@@ -24,7 +24,7 @@ import torch
     [None, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
-    "activations_dtype",
+    "output_dtype",
     [ttnn.bfloat8_b, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
@@ -54,7 +54,7 @@ def test_conv_features(
     torch_tensor_map,
     use_program_cache,
     math_fidelity,
-    activations_dtype,
+    output_dtype,
     weights_dtype,
     batch_size,
     output_channels,
@@ -74,17 +74,17 @@ def test_conv_features(
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and shard_layout == WS:
         pytest.skip("Bug in Width Sharded Row Major Tensor Creation when height%32!=0. #19408")
 
-    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
-    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
         pytest.skip("skipping due to pack_untilize_dst issue!")
 
     run_conv(
         device,
         torch_tensor_map,
         math_fidelity,
-        activations_dtype,
+        output_dtype,
         weights_dtype,
         batch_size,
         output_channels,
@@ -115,7 +115,7 @@ SliceWidth = ttnn.Conv2dSliceWidth
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, activations_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
+    "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, output_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
     # fmt: off
     (
         (2, 512,  512,  128,   128,   SliceWidth,    4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32 * 8,  ttnn.MathFidelity.LoFi  ),
@@ -139,7 +139,7 @@ def test_conv_dram(
     input_width,
     has_bias,
     weights_dtype,
-    activations_dtype,
+    output_dtype,
     slice_type,
     num_slices,
     kernel,
@@ -160,7 +160,7 @@ def test_conv_dram(
         device,
         torch_tensor_map,
         math_fidelity,
-        activations_dtype,
+        output_dtype,
         weights_dtype,
         batch_size,
         output_channels,
