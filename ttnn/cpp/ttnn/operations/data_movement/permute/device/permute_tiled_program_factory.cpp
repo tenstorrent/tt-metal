@@ -21,7 +21,10 @@ uint32_t num_tiles(const ttnn::Tensor& input_tensor) {
     return shape.volume() / tile_vol;
 }
 
-uint32_t tile_size(const ttnn::Tensor& input_tensor) { return tile_volume(input_tensor) * input_tensor.element_size(); }
+uint32_t tile_size(const ttnn::Tensor& input_tensor) {
+    auto dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    return tt::tt_metal::detail::TileSize(dataformat);
+}
 
 ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
     const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();

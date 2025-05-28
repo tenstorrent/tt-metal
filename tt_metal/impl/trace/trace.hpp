@@ -14,7 +14,6 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/trace_buffer.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -23,6 +22,7 @@ class CommandQueue;
 }  // namespace tt
 
 namespace tt::tt_metal {
+class TraceBuffer;
 
 class Trace {
 private:
