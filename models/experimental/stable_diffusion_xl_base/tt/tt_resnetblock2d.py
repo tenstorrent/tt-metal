@@ -91,29 +91,54 @@ class TtResnetBlock2D(nn.Module):
 
         if self.split_conv:
             (
-                self.compute_config,
-                self.conv_config,
+                self.compute1_config,
+                self.conv1_config,
                 self.tt_conv1_weights,
                 self.tt_conv1_bias,
                 self.conv1_params,
             ) = prepare_split_conv_params(
-                device, conv_weights_1, conv_bias_1, split_in, split_out, conv_weights_dtype, act_block_h_override=32
+                device,
+                conv_weights_1,
+                conv_bias_1,
+                split_in,
+                split_out,
+                conv_weights_dtype,
+                act_block_h_override=32,
+                conv_path=f"{module_path}.conv1",
             )
         else:
             (
-                self.compute_config,
-                self.conv_config,
+                self.compute1_config,
+                self.conv1_config,
                 self.tt_conv1_weights,
                 self.tt_conv1_bias,
                 self.conv1_params,
-            ) = prepare_conv_params(device, conv_weights_1, conv_bias_1, conv_weights_dtype, act_block_h_override=32)
-        _, _, self.tt_conv2_weights, self.tt_conv2_bias, self.conv2_params = prepare_conv_params(
-            device, conv_weights_2, conv_bias_2, conv_weights_dtype, act_block_h_override=32
+            ) = prepare_conv_params(
+                device,
+                conv_weights_1,
+                conv_bias_1,
+                conv_weights_dtype,
+                act_block_h_override=32,
+                conv_path=f"{module_path}.conv1",
+            )
+        (
+            self.compute2_config,
+            self.conv2_config,
+            self.tt_conv2_weights,
+            self.tt_conv2_bias,
+            self.conv2_params,
+        ) = prepare_conv_params(
+            device,
+            conv_weights_2,
+            conv_bias_2,
+            conv_weights_dtype,
+            act_block_h_override=32,
+            conv_path=f"{module_path}.conv2",
         )
         if conv_shortcut:
             (
                 self.compute_config_conv_linear,
-                _,
+                self.conv3_config,
                 self.tt_conv3_weights,
                 self.tt_conv3_bias,
                 self.conv3_params,
@@ -181,13 +206,15 @@ class TtResnetBlock2D(nn.Module):
 
         hidden_states = ttnn.silu(hidden_states)
         # TBD: reshard
-        if C >= 1920:
+        if C >= 1920 or (C == 640 and H == 64 and W == 64 and self.conv1_params["output_channels"] == 1280):
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        self.conv_config.shard_layout = (
-            hidden_states.memory_config().memory_layout if hidden_states.is_sharded() else None
-        )
-        self.conv_config.act_block_h_override = 32 if hidden_states.is_sharded() else 0
-
+        if hidden_states.is_sharded() and self.conv1_config.shard_layout is None:
+            self.conv1_config.shard_layout = hidden_states.memory_config().memory_layout
+        # self.conv1_config.shard_layout = (
+        #     hidden_states.memory_config().memory_layout if hidden_states.is_sharded() else None
+        # )
+        # self.conv1_config.act_block_h_override = 32 if hidden_states.is_sharded() else 0
+        print(B, C, H, W)
         if self.split_conv:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states, [C, H, W], [d_w, d_b] = split_conv2d(
@@ -198,8 +225,8 @@ class TtResnetBlock2D(nn.Module):
                 conv_bias=self.tt_conv1_bias,
                 split_in=self.split_in,
                 split_out=self.split_out,
-                compute_config=self.compute_config,
-                conv_config=self.conv_config,
+                compute_config=self.compute1_config,
+                conv_config=self.conv1_config,
                 conv_params=self.conv1_params,
                 stride=self.stride,
                 padding=self.padding,
@@ -221,8 +248,8 @@ class TtResnetBlock2D(nn.Module):
                 batch_size=B,
                 input_height=H,
                 input_width=W,
-                conv_config=self.conv_config,
-                compute_config=self.compute_config,
+                conv_config=self.conv1_config,
+                compute_config=self.compute1_config,
                 groups=self.groups,
                 memory_config=None,
                 return_output_dim=True,
@@ -253,6 +280,12 @@ class TtResnetBlock2D(nn.Module):
         sharded_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
+
+        # hs_interleaved = hidden_states
+        # hidden_states = ttnn.to_memory_config(hs_interleaved, sharded_mem_config)
+        # ttnn.deallocate(hs_interleaved)
+        # hidden_states = ttnn.move(hidden_states)
+
         hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
 
         hidden_states = ttnn.group_norm(
@@ -267,9 +300,11 @@ class TtResnetBlock2D(nn.Module):
         )
 
         hidden_states = ttnn.silu(hidden_states)
-
-        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        self.conv_config.shard_layout = None
+        if C >= 1920:
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        if hidden_states.is_sharded() and self.conv2_config.shard_layout is None:
+            self.conv2_config.shard_layout = hidden_states.memory_config().memory_layout
+        # self.conv2_config.shard_layout = None
         [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,
@@ -284,8 +319,8 @@ class TtResnetBlock2D(nn.Module):
             batch_size=B,
             input_height=H,
             input_width=W,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
+            conv_config=self.conv2_config,
+            compute_config=self.compute2_config,
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
@@ -299,8 +334,8 @@ class TtResnetBlock2D(nn.Module):
             if input_tensor.shape[3] >= 1920:
                 input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
-            self.conv_config.shard_layout = None
-            self.conv_config.act_block_h_override = 0
+            self.conv3_config.shard_layout = None
+            # self.conv3_config.act_block_h_override = 0
             [input_tensor, [H, W], [d_w, d_b]] = ttnn.conv2d(
                 input_tensor=input_tensor,
                 weight_tensor=self.tt_conv3_weights,
@@ -315,7 +350,7 @@ class TtResnetBlock2D(nn.Module):
                 batch_size=input_shape[0],
                 input_height=input_shape[2],
                 input_width=input_shape[3],
-                conv_config=self.conv_config,
+                conv_config=self.conv3_config,
                 compute_config=self.compute_config_conv_linear,
                 groups=self.groups,
                 memory_config=None,
@@ -328,9 +363,14 @@ class TtResnetBlock2D(nn.Module):
             if input_tensor.is_sharded():
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
+            self.conv3_config.preprocess_weights_on_device = False
+            self.conv3_config.always_preprocess_weights = False
+
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.add(input_tensor, hidden_states)
 
-        self.conv_config.preprocess_weights_on_device = False
-        self.conv_config.always_preprocess_weights = False
+        self.conv1_config.preprocess_weights_on_device = False
+        self.conv1_config.always_preprocess_weights = False
+        self.conv2_config.preprocess_weights_on_device = False
+        self.conv2_config.always_preprocess_weights = False
         return hidden_states, [C, H, W]

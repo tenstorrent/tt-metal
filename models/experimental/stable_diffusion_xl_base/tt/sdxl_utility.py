@@ -5,6 +5,10 @@
 import torch
 import ttnn
 
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+
+op_configs = ModelOptimisations()
+
 
 def to_channel_last_ttnn(torch_tensor, dtype, device, memory_config, layout):
     torch_tensor = torch.permute(torch_tensor, (0, 2, 3, 1))
@@ -67,6 +71,7 @@ def prepare_conv_params(
     fp32_dest_acc_en=False,
     math_fidelity=ttnn.MathFidelity.HiFi4,
     packer_l1_acc=False,
+    conv_path=None,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -75,22 +80,24 @@ def prepare_conv_params(
         packer_l1_acc=packer_l1_acc,
     )
 
-    conv_config = ttnn.Conv2dConfig(
-        dtype=act_dtype,
-        weights_dtype=dtype,
-        shard_layout=None,
-        deallocate_activation=True,
-        reallocate_halo_output=False,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        reshard_if_not_optimal=True,
-        act_block_w_div=1,
-        act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=True,
-        always_preprocess_weights=True,
-        transpose_shards=True,
-    )
+    conv_config = op_configs.get_conv_config(conv_path)
+    if conv_config is None:
+        conv_config = ttnn.Conv2dConfig(
+            dtype=act_dtype,
+            weights_dtype=dtype,
+            shard_layout=None,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=act_block_h_override,
+            preprocess_weights_on_device=True,
+            always_preprocess_weights=True,
+            transpose_shards=True,
+        )
 
     dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype
     tt_weights = ttnn.from_torch(weights, dtype)
@@ -116,6 +123,7 @@ def prepare_split_conv_params(
     act_block_h_override=0,
     fp32_dest_acc_en=False,
     math_fidelity=ttnn.MathFidelity.HiFi4,
+    conv_path=None,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -124,21 +132,23 @@ def prepare_split_conv_params(
         packer_l1_acc=False,
     )
 
-    conv_config = ttnn.Conv2dConfig(
-        dtype=act_dtype,
-        weights_dtype=dtype,
-        shard_layout=None,
-        deallocate_activation=True,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        reshard_if_not_optimal=True,
-        act_block_w_div=1,
-        act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=True,
-        always_preprocess_weights=True,
-        transpose_shards=True,
-    )
+    conv_config = op_configs.get_conv_config(conv_path)
+    if conv_config is None:
+        conv_config = ttnn.Conv2dConfig(
+            dtype=act_dtype,
+            weights_dtype=dtype,
+            shard_layout=None,
+            deallocate_activation=True,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=act_block_h_override,
+            preprocess_weights_on_device=True,
+            always_preprocess_weights=True,
+            transpose_shards=True,
+        )
 
     Cout, Cin, _, _ = weights.shape
     Cout_split = Cout // split_out

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -129,15 +129,21 @@ class TtUNet2DConditionModel(nn.Module):
         conv_bias_out = state_dict["conv_out.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         (
-            self.compute_config,
-            self.conv_config,
+            self.compute1_config,
+            self.conv1_config,
             self.tt_conv1_weights,
             self.tt_conv1_bias,
             self.conv1_params,
-        ) = prepare_conv_params(device, conv_weights_in, conv_bias_in, conv_weights_dtype, act_block_h_override=32)
-        _, _, self.tt_conv2_weights, self.tt_conv2_bias, self.conv2_params = prepare_conv_params(
-            device, conv_weights_out, conv_bias_out, conv_weights_dtype, act_block_h_override=32
+        ) = prepare_conv_params(
+            device, conv_weights_in, conv_bias_in, conv_weights_dtype, act_block_h_override=32, conv_path="conv_in"
         )
+        (
+            self.compute2_config,
+            self.conv2_config,
+            self.tt_conv2_weights,
+            self.tt_conv2_bias,
+            self.conv2_params,
+        ) = prepare_conv_params(device, conv_weights_out, conv_bias_out, conv_weights_dtype, act_block_h_override=32)
 
         self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
@@ -183,8 +189,8 @@ class TtUNet2DConditionModel(nn.Module):
             batch_size=B,
             input_height=H,
             input_width=W,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
+            conv_config=self.conv1_config,
+            compute_config=self.compute1_config,
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
@@ -258,8 +264,8 @@ class TtUNet2DConditionModel(nn.Module):
         sample = ttnn.silu(sample)
 
         sample = ttnn.sharded_to_interleaved(sample, ttnn.DRAM_MEMORY_CONFIG)
-        self.conv_config.shard_layout = sample.memory_config().memory_layout if sample.is_sharded() else None
-        self.conv_config.act_block_h_override = 32 if sample.is_sharded() else 0
+        self.conv2_config.shard_layout = sample.memory_config().memory_layout if sample.is_sharded() else None
+        self.conv2_config.act_block_h_override = 32 if sample.is_sharded() else 0
 
         [sample, [H, W], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=sample,
@@ -275,8 +281,8 @@ class TtUNet2DConditionModel(nn.Module):
             batch_size=B,
             input_height=H,
             input_width=W,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
+            conv_config=self.conv2_config,
+            compute_config=self.compute2_config,
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
@@ -286,7 +292,9 @@ class TtUNet2DConditionModel(nn.Module):
         self.tt_conv2_weights = d_w
         self.tt_conv2_bias = d_b
 
-        self.conv_config.preprocess_weights_on_device = False
-        self.conv_config.always_preprocess_weights = False
+        self.conv1_config.preprocess_weights_on_device = False
+        self.conv1_config.always_preprocess_weights = False
+        self.conv2_config.preprocess_weights_on_device = False
+        self.conv2_config.always_preprocess_weights = False
 
         return sample, [C, H, W]

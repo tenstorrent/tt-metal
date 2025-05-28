@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ class TtDownsample2D(nn.Module):
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         self.compute_config, self.conv_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device, weights, bias, conv_weights_dtype
+            device, weights, bias, conv_weights_dtype, conv_path=module_path
         )
         self.conv_config.deallocate_activation = False
 
