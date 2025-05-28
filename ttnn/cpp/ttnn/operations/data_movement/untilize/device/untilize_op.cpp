@@ -73,6 +73,24 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(
             this->output_mem_config.memory_layout() != TensorMemoryLayout::SINGLE_BANK,
             "Output layout must be interleaved or sharded");
+
+        if (input_tensor_a.memory_config().is_sharded()) {
+            TT_FATAL(
+                input_tensor_a.get_padded_shape()[-1] % input_tensor_a.memory_config().shard_spec().value().shape[1] ==
+                        0 &&
+                    (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) %
+                            input_tensor_a.memory_config().shard_spec().value().shape[0] ==
+                        0,
+                "Uneven input shard shape not supported");
+        }
+        if (this->output_mem_config.is_sharded()) {
+            TT_FATAL(
+                input_tensor_a.get_padded_shape()[-1] % this->output_mem_config.shard_spec().value().shape[1] == 0 &&
+                    (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) %
+                            this->output_mem_config.shard_spec().value().shape[0] ==
+                        0,
+                "Uneven output shard shape not supported");
+        }
     } else if (input_tensor_a.memory_config().is_sharded()) {
         if (this->output_mem_config.is_sharded()) {
             TT_FATAL(
