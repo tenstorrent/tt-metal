@@ -351,8 +351,7 @@ void HWCommandQueue::enqueue_read_from_core(
     DeviceAddr address,
     uint32_t size_bytes,
     bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    DeviceAddr address_offset) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_enqueue_read_from_core");
 
     address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
@@ -364,7 +363,7 @@ void HWCommandQueue::enqueue_read_from_core(
     if (size_bytes > 0) {
         device_dispatch::CoreReadDispatchParams dispatch_params{
             virtual_core,
-            address + address_offset,
+            address,
             size_bytes,
             this->device_,
             this->id_,
@@ -389,8 +388,7 @@ void HWCommandQueue::enqueue_write_to_core(
     DeviceAddr address,
     uint32_t size_bytes,
     bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    DeviceAddr address_offset) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_enqueue_write_to_core");
 
     address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
@@ -401,7 +399,7 @@ void HWCommandQueue::enqueue_write_to_core(
         this->device_,
         virtual_core,
         src,
-        address + address_offset,
+        address,
         size_bytes,
         this->id_,
         this->expected_num_workers_completed_,
