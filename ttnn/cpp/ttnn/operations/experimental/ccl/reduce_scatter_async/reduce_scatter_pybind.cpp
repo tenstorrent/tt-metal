@@ -7,16 +7,16 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
+namespace {
 
 template <typename ccl_operation_t>
 void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -100,10 +100,10 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
             py::arg("subdevice_id") = std::nullopt});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_reduce_scatter_async(pybind11::module& module) {
-    detail::bind_reduce_scatter(
+    bind_reduce_scatter(
         module,
         ttnn::experimental::reduce_scatter_async,
         R"doc(

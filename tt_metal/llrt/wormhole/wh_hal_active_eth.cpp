@@ -4,7 +4,7 @@
 
 #define COMPILE_FOR_ERISC
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -15,6 +15,7 @@
 #include "llrt/hal.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "wormhole/wh_hal.hpp"
+#include "wormhole/wh_hal_eth_asserts.hpp"
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
     ((uint64_t)&(((mailboxes_t*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
@@ -91,6 +92,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
             .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
             .fw_launch_addr = eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG,
             .fw_launch_addr_value = 0x1,
+            .memory_load = ll_api::memory::Loading::DISCRETE,
         };
         processor_classes[processor_class_idx] = processor_types;
     }

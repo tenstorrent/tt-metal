@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "reduction_pybind.hpp"
+
+#include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/ttnn-pybind/export_enum.hpp"
+#include "ttnn-pybind/export_enum.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions_pybind.hpp"

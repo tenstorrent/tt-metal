@@ -7,7 +7,7 @@
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "device/all_reduce_async_op.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -43,7 +43,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
-    uint32_t dim = find_scatter_dim(input_tensor.get_padded_shape(), input_tensor.get_workers().size());
+    uint32_t dim = find_scatter_dim(input_tensor.get_padded_shape(), input_tensor.active_physical_devices().size());
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
         input_tensor,
         dim,

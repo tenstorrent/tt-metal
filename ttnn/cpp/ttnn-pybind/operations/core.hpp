@@ -9,7 +9,7 @@
 #include <optional>
 
 #include "pybind11/cast.h"
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -215,31 +215,11 @@ void py_module(py::module& module) {
 
     module.def(
         "allocate_tensor_on_device",
-        py::overload_cast<const ttnn::TensorSpec&, IDevice*>(&ttnn::operations::core::allocate_tensor_on_device),
-        py::arg("tensor_spec"),
-        py::arg("device"));
-
-    module.def(
-        "allocate_tensor_on_device",
         [](const ttnn::TensorSpec& spec, MeshDevice* device) {
             return tt::tt_metal::allocate_tensor_on_mesh(spec, device);
         },
         py::arg("tensor_spec"),
         py::arg("mesh_device"));
-
-    module.def(
-        "allocate_tensor_on_device",
-        py::overload_cast<
-            const ttnn::Shape&,
-            ttnn::DataType,
-            ttnn::Layout,
-            IDevice*,
-            const std::optional<ttnn::MemoryConfig>&>(&ttnn::operations::core::allocate_tensor_on_device),
-        py::arg("shape"),
-        py::arg("dtype"),
-        py::arg("layout"),
-        py::arg("device"),
-        py::arg("memory_config") = std::nullopt);
 
     module.def(
         "allocate_tensor_on_device",

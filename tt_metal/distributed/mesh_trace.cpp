@@ -2,11 +2,11 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include "mesh_trace.hpp"
 
 #include <boost/move/utility_core.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
-#include <mesh_trace.hpp>
 #include <stdint.h>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
@@ -31,8 +31,8 @@
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
-#include "system_memory_manager.hpp"
-#include "trace_buffer.hpp"
+#include "dispatch/system_memory_manager.hpp"
+#include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 

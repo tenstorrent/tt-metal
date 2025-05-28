@@ -1,11 +1,13 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 
 class HostEmbedding(torch.nn.Module):
@@ -57,8 +59,14 @@ def preprocess_inputs_prefill(
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
     # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
-    if max_prefill_len == 128 * 1024:
-        max_prefill_len = 128 * 1024 - max_generated_tokens
+
+    for m_args in model_args:
+        if max_prefill_len >= m_args.max_context_len:
+            max_prefill_len -= max_generated_tokens
+            # all model_args should have the same max_context_len as
+            # it's assumed that all models are the same. break out of the loop once we find the first one
+            # with the max_prefill_len >= max_context_len
+            break
 
     encoded_prompts = [
         model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
@@ -88,10 +96,15 @@ def preprocess_inputs_prefill(
                 for idx, prompt in enumerate(input_prompts)
             ]
             overhead = [len(e) - len(r) for e, r in zip(encoded_prompts, raw_prompts)]
-            shortened = [
-                tokenizer[idx % len(model_args)].decode(e[-(max_prefill_len - o) :])
-                for idx, e, o in enumerate(zip(raw_prompts, overhead))
-            ]
+
+            shortened = []
+            for idx, (e, o) in enumerate(zip(raw_prompts, overhead)):
+                if isinstance(tokenizer, list):
+                    sp = tokenizer[idx % len(model_args)].decode(e[-(max_prefill_len - o) :])
+                else:
+                    sp = tokenizer.decode(e[-(max_prefill_len - o) :])
+                shortened.append(sp)
+
             encoded_prompts = [
                 model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
                 for idx, prompt in enumerate(shortened)
@@ -396,7 +409,7 @@ def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
     return None, pt_out
 
 
-def get_padded_prefill_len(seq_len):
+def get_padded_prefill_len(seq_len: int) -> int:
     """
     If seq_len is less than 128, pad to 128
     If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 2048

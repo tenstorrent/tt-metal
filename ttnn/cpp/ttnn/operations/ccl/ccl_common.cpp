@@ -269,23 +269,19 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     std::optional<uint32_t> sender_device_id) {
     auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::tt_metal::hal::get_arch());
     auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::tt_metal::hal::get_arch());
-    uint32_t sender_socket_idx = 0;
-    uint32_t receiver_socket_idx = 0;
-    if (receiver_device_id == sender_device_id) {
-        if (topology_config.ring_index == 0) {
-            receiver_socket_idx = 1;
-        } else {
-            sender_socket_idx = 1;
-        }
-    }
     for (uint32_t i = 0; i < topology_config.num_links; ++i) {
         bool is_clockwise_direction_edm_enabled =
             !topology_config.is_linear || topology_config.ring_index != topology_config.ring_size - 1;
         if (is_clockwise_direction_edm_enabled) {
             auto eth_sender_core = topology_config.eth_sender_cores.at(i);
             log_trace(tt::LogOp, "EDM CLOCKWISE KERNEL RT ARGS: ");
-            auto eth_sender_kernel =
-                generate_edm_kernel(program, device, clockwise_edm_builders.at(i), eth_sender_core, sender_noc);
+            auto eth_sender_kernel = generate_edm_kernel(
+                program,
+                device,
+                clockwise_edm_builders.at(i),
+                eth_sender_core,
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                sender_noc);
             log_trace(
                 tt::LogOp,
                 "RingIndex: {}. Link {}. Clockwise EDM Core (x={},y={})",
@@ -300,7 +296,12 @@ void generate_edm_kernels_for_ring_or_linear_topology(
             log_trace(tt::LogOp, "EDM COUNTER CLOCKWISE KERNEL RT ARGS: ");
             auto eth_receiver_core = topology_config.eth_receiver_cores.at(i);
             auto eth_receiver_kernel = generate_edm_kernel(
-                program, device, counter_clockwise_edm_builders.at(i), eth_receiver_core, receiver_noc);
+                program,
+                device,
+                counter_clockwise_edm_builders.at(i),
+                eth_receiver_core,
+                tt::tt_metal::DataMovementProcessor::RISCV_0,
+                receiver_noc);
             log_trace(
                 tt::LogOp,
                 "RingIndex: {}. Link {}. Counter-clockwise EDM Core (x={},y={})",
@@ -319,20 +320,22 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     const EDMBuilder& edm_builder,
     const std::string& kernel_path,
     const CoreCoord& eth_core,
+    tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id,
     std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level = std::nullopt) {
     edm_builder.dump_to_log();
 
     std::vector<uint32_t> const edm_kernel_rt_args = edm_builder.get_runtime_args();
     // Ethernet Kernels
-    std::vector<uint32_t> const eth_sender_ct_args = edm_builder.get_compile_time_args();
+    const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
     log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
     log_trace(tt::LogOp, "CT ARGS:");
     for (auto const& s : eth_sender_ct_args) {
         log_trace(tt::LogOp, "\t{}", s);
     }
 
-    auto kernel_config = tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args};
+    auto kernel_config =
+        tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = risc_id, .compile_args = eth_sender_ct_args};
     if (opt_level.has_value()) {
         kernel_config.opt_level = opt_level.value();
     }
@@ -359,6 +362,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     const IDevice* device,
     const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
+    const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
         program,
@@ -366,6 +370,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
         edm_builder,
         "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
         eth_core,
+        risc_id,
         noc_id,
         tt::tt_metal::KernelBuildOptLevel::O3);
 }
@@ -375,9 +380,16 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     const IDevice* device,
     const ccl::EriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
+    const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
     return generate_edm_kernel_impl(
-        program, device, edm_builder, "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp", eth_core, noc_id);
+        program,
+        device,
+        edm_builder,
+        "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
+        eth_core,
+        risc_id,
+        noc_id);
 }
 
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(

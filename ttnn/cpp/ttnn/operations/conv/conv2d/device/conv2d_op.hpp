@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,13 +19,13 @@ namespace conv2d {
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 struct Conv2dConfig {
     tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16;
-    tt::tt_metal::DataType weights_dtype = tt::tt_metal::DataType::BFLOAT16;
+
+    // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
+    // prepare_conv_bias needs this to always be set to the same dtype as the weights.
+    std::optional<tt::tt_metal::DataType> weights_dtype = std::nullopt;
 
     // Either "relu" or ""
     string activation = "";
-
-    // Used in the beginning of a network, when in_channels is small, set to 16.
-    uint32_t input_channels_alignment = 32;
 
     // If user tensor will be deallocated if it's on device.
     bool deallocate_activation = false;
@@ -78,7 +78,7 @@ struct Conv2dConfig {
     bool enable_weights_double_buffer = false;
 
     // Only for height sharding.
-    // Increases perf. Act_block_h should be a multiple of 64, if true
+    // Increases perf if op is reader bound. Act_block_h should be >= 64, if true
     bool enable_split_reader = false;
 
     bool enable_subblock_padding = false;
@@ -86,11 +86,22 @@ struct Conv2dConfig {
     // Re-use input tensor storage when creating output tensor
     bool in_place = false;
 
+    // ==================== EXPERIMENTAL FEATURES ====================
+    // Features in this section are under development.
+    // Use with caution.
+
+    // Kernel Stride Folding (Issue: #22378)
+    // Enables tensor folding optimization where:
+    // - Input tensor (NHWC) is reshaped to (N, H/stride[0], W/stride[1], C * stride[0] * stride[1])
+    // - Weight tensor (OC, IC, kernel[0], kernel[1]) is reshaped and permuted to (1, 1, IC * kernel[0] * kernel[1], OC)
+    // Currently only applied when strides match kernel dimensions
+    bool enable_kernel_stride_folding = false;
+    // ===============================================================
+
     static constexpr auto attribute_names = std::make_tuple(
         "dtype",
         "weights_dtype",
         "activation",
-        "input_channels_alignment",
         "deallocate_activation",
         "reallocate_halo_output",
         "act_block_h_override",
@@ -106,13 +117,13 @@ struct Conv2dConfig {
         "enable_weights_double_buffer",
         "enable_split_reader",
         "enable_subblock_padding",
-        "in_place");
+        "in_place",
+        "enable_kernel_stride_folding");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->dtype),
             std::cref(this->weights_dtype),
             std::cref(this->activation),
-            std::cref(this->input_channels_alignment),
             std::cref(this->deallocate_activation),
             std::cref(this->reallocate_halo_output),
             std::cref(this->act_block_h_override),
@@ -128,7 +139,8 @@ struct Conv2dConfig {
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_split_reader),
             std::cref(this->enable_subblock_padding),
-            std::cref(this->in_place));
+            std::cref(this->in_place),
+            std::cref(this->enable_kernel_stride_folding));
     }
 };
 

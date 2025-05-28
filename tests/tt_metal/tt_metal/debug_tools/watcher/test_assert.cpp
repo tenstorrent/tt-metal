@@ -17,7 +17,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -78,7 +78,7 @@ static void RunTest(
                     .noc = tt_metal::NOC::RISCV_0_default
                 }
             );
-            risc = "brisc";
+            risc = " brisc";
             break;
         case DebugNCrisc:
             assert_kernel = CreateKernel(
@@ -188,7 +188,7 @@ static void RunTest(
             "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: "
             "{}.",
             device->id(),
-            (riscv_type == DebugErisc) ? "active ethnet" : "worker",
+            (riscv_type == DebugErisc) ? "acteth" : "worker",
             logical_core.x,
             logical_core.y,
             virtual_core.x,
@@ -216,7 +216,7 @@ static void RunTest(
             "kernel completing with pending NOC transactions (missing {} barrier). Current kernel: "
             "{}.",
             device->id(),
-            (riscv_type == DebugErisc) ? "active ethnet" : "worker",
+            (riscv_type == DebugErisc) ? "acteth" : "worker",
             logical_core.x,
             logical_core.y,
             virtual_core.x,

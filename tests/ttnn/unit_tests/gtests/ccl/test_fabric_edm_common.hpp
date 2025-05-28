@@ -1404,9 +1404,19 @@ int TestLoopbackEntrypoint(
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        fabric_sender_program, sender_device, chip_0_edm_builder, eth_sender_core, NOC::NOC_0);
+        fabric_sender_program,
+        sender_device,
+        chip_0_edm_builder,
+        eth_sender_core,
+        DataMovementProcessor::RISCV_0,
+        NOC::NOC_0);
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        fabric_receiver_program, receiver_device, chip_1_edm_builder, eth_receiver_core, NOC::NOC_0);
+        fabric_receiver_program,
+        receiver_device,
+        chip_1_edm_builder,
+        eth_receiver_core,
+        DataMovementProcessor::RISCV_0,
+        NOC::NOC_0);
 
     if (enable_persistent_fabric) {
         tt::tt_metal::detail::CompileProgram(sender_device, fabric_sender_program);
@@ -2636,7 +2646,6 @@ void Run1DFabricPacketSendTest(
             bool unicast_forward;
             size_t num_fwd_hops;
             size_t num_bwd_hops;
-            size_t unicast_hops;
             size_t sync_num_fwd_hops;
             size_t sync_num_bwd_hops;
             size_t sync_count_per_link;
@@ -2704,10 +2713,8 @@ void Run1DFabricPacketSendTest(
                 }
                 if (num_fwd_hops >= num_bwd_hops) {
                     unicast_forward = true;
-                    unicast_hops = num_fwd_hops;
                 } else {
                     unicast_forward = false;
-                    unicast_hops = num_bwd_hops;
                 }
             } else {
                 backward_device = i == 0 ? nullptr : devices[i - 1];
@@ -3164,19 +3171,15 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
 
         IDevice* backward_device;
         IDevice* forward_device;
-        bool unicast_forward;
         size_t mcast_fwd_hops;
         size_t mcast_bwd_hops;
-        size_t unicast_hops;
 
         backward_device = i == 0 ? devices.back() : devices[i - 1];
         forward_device = i == line_size - 1 ? devices.front() : devices[i + 1];
 
         // Initialize the fabric handle for worker connection
-        unicast_forward = false;
         mcast_fwd_hops = has_forward_connection ? line_size - 1 : 0;
         mcast_bwd_hops = has_backward_connection ? line_size - 1 : 0;
-        unicast_hops = has_forward_connection ? mcast_fwd_hops : mcast_bwd_hops;
 
         // reserve CB
         tt_metal::CircularBufferConfig cb_src0_config =

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,12 +20,17 @@ public:
         const CoreRangeSet& corerangeset,
         const ShardOrientation shard_orientation);
 
+    tt::tt_metal::Shape get_tensor_shape_in_pages() const { return page_distribution_spec_.get_tensor_shape(); }
+    tt::tt_metal::Shape get_shard_shape_in_pages() const { return page_distribution_spec_.get_shard_shape(); }
+
     size_t num_dev_pages_per_core() const {
         return page_distribution_spec_.get_shard_shape().volume() *
                page_distribution_spec_.get_max_num_shards_per_target();
     }
     size_t num_cores() const { return cores_.size(); }
-    std::vector<CoreCoord> get_cores() const { return cores_; }
+    const std::vector<CoreCoord>& get_cores() const { return cores_; }
+
+    const std::vector<DistributionSpec::TargetData>& get_page_mapping(DistributionSpec::MappingMode mapping_mode);
 
 private:
     BufferDistributionSpec(const DistributionSpec& page_distribution_spec, const std::vector<CoreCoord>& cores);

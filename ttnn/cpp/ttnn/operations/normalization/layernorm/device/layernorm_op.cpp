@@ -97,11 +97,11 @@ void LayerNorm::validate(
     if (a.is_sharded()) {
         // TODO: Add support for this (should be similar to interleaved)
         TT_FATAL(
-            a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED,
+            a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
             "Hight sharded inputs are not supported.");
         TT_FATAL(
             this->output_mem_config.is_sharded() &&
-                this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED,
+                this->output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
             "Sharded inputs require sharded outputs.");
         if (b.has_value()) {
             TT_FATAL(b.value().is_sharded(), "residual tensor b should be sharded if input a is sharded");
@@ -142,8 +142,8 @@ void LayerNorm::validate(
                 if (program_config.inplace) {
                     TT_FATAL(this->output_mem_config.is_sharded(), "Error");
                 }
-                TT_FATAL(a.memory_config().buffer_type == this->output_mem_config.buffer_type, "Error");
-                TT_FATAL(a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
+                TT_FATAL(a.memory_config().buffer_type() == this->output_mem_config.buffer_type(), "Error");
+                TT_FATAL(a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
 
                 // tensor shape
                 const auto shape = a.get_padded_shape();
@@ -175,7 +175,7 @@ void LayerNorm::validate(
                         tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
                         "block_w must equal to K / num_cores.");
                     TT_FATAL(Mt == program_config.block_h, "block_h must equal to M.");
-                    TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+                    TT_FATAL(a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
                 } else {
                     if (row_wise) {
                         TT_FATAL(
@@ -207,8 +207,8 @@ void LayerNorm::validate(
                     const auto stats_shard_spec = stats.value().shard_spec().value();
                     TT_FATAL(stats_shard_spec.num_cores() == 1, "Stats must be sharded with num_cores = 1");
 
-                    if (this->output_mem_config.shard_spec.has_value()) {
-                        const auto output_shard_spec = this->output_mem_config.shard_spec.value();
+                    if (this->output_mem_config.shard_spec().has_value()) {
+                        const auto output_shard_spec = this->output_mem_config.shard_spec().value();
                         TT_FATAL(
                             output_shard_spec.shape[0] == shard_spec.shape[0],
                             "Output shard spec must have the same height as input shard spec.");
@@ -238,12 +238,11 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                     CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
                     CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
                     shard_spec.grid = output_grid;
-                    auto mem_config = this->output_mem_config;
-                    mem_config.shard_spec = shard_spec;
+                    auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
                     return {TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config))};
                 } else if (this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
-                    auto output_shard_spec = this->output_mem_config.shard_spec.value();
+                    auto output_shard_spec = this->output_mem_config.shard_spec().value();
                     auto input_shard_spec = input_tensor.shard_spec().value();
                     if (output_shard_spec != input_shard_spec) {
                         output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
@@ -255,8 +254,8 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                 }
 
                 auto mem_config = this->output_mem_config;
-                if (!mem_config.shard_spec.has_value()) {
-                    mem_config.shard_spec = input_tensor.shard_spec().value();
+                if (!mem_config.shard_spec().has_value()) {
+                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec().value());
                 }
 
                 return {ttnn::TensorSpec(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,5 +56,16 @@ BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
 
     return BufferDistributionSpec(page_distribution_spec, cores);
 }
+
+const std::vector<DistributionSpec::TargetData>& BufferDistributionSpec::get_page_mapping(
+    DistributionSpec::MappingMode mapping_mode) {
+    const auto& page_mapping = page_distribution_spec_.get_metadata_for_targets(mapping_mode);
+    TT_FATAL(
+        page_mapping.size() == cores_.size(),
+        "Number of targets for page mapping {} must match number of cores {}!",
+        page_mapping.size(),
+        cores_.size());
+    return page_mapping;
+};
 
 }  // namespace tt::tt_metal

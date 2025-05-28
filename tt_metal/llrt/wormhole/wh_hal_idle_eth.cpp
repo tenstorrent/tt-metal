@@ -4,7 +4,7 @@
 
 #define COMPILE_FOR_IDLE_ERISC
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +17,7 @@
 #include "noc/noc_parameters.h"
 #include <umd/device/tt_core_coordinates.h>
 #include "wormhole/wh_hal.hpp"
+#include "wormhole/wh_hal_eth_asserts.hpp"
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 
@@ -73,6 +74,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
             .local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH,
             .fw_launch_addr = 0x0,
             .fw_launch_addr_value = generate_risc_startup_addr(MEM_IERISC_FIRMWARE_BASE),
+            .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
         };
         processor_classes[processor_class_idx] = processor_types;
     }

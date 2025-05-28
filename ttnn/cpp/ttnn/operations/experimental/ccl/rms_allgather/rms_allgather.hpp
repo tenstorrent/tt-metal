@@ -10,7 +10,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 #include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn {
 namespace operations::fused::normalization {
@@ -32,8 +32,7 @@ struct ExecuteFusedRMSNorm {
         const std::optional<const ttnn::Tensor>& residual_input_tensor = std::nullopt,
         float epsilon = 1e-12,
         const std::optional<const ttnn::Tensor>& weight = std::nullopt,
-        const std::optional<const ttnn::Tensor>& stats = std::nullopt,
-        bool is_pre = true);
+        const std::optional<const ttnn::Tensor>& stats = std::nullopt);
 };
 
 }  // namespace operations::fused::normalization

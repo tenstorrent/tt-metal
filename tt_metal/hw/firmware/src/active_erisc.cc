@@ -21,6 +21,7 @@
 #include "dataflow_api.h"
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
+#include "dev_mem_map.h"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
@@ -68,10 +69,10 @@ int main() {
     configure_csr();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
-    do_crt1((uint32_t*)eth_l1_mem::address_map::MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+    do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     // put this into scratch space similar to idle erisc
-    noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
+    noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;
@@ -80,7 +81,7 @@ int main() {
 
     risc_init();
 
-    mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
+    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {

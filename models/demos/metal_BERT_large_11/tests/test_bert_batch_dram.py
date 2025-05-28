@@ -4,24 +4,21 @@
 
 import pytest
 import torch
-
 from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import ttnn
-
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
     skip_unsupported_config,
 )
-
 from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    comp_pcc,
     comp_allclose,
+    comp_pcc,
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
     profiler,
 )
 

@@ -54,7 +54,7 @@ public:
     DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple("type", "axis");
-    const auto attribute_values() const { return std::forward_as_tuple(this->type_, this->axis_); }
+    auto attribute_values() const { return std::forward_as_tuple(this->type_, this->axis_); }
 
     CoreType get_core_type() const {
         switch (type_) {

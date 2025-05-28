@@ -5,10 +5,6 @@
 import ttnn
 import torch
 
-from models.demos.llama3_subdevices.tt.llama_common import (
-    check_mesh_tensor_alloc,
-)
-
 
 class TT_CCL:
     def __init__(
@@ -59,7 +55,7 @@ class TT_CCL:
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
         if mode == "prefill":
-            self.support_seqlens = [8192, 4096, 1024, 2048, 128]
+            self.support_seqlens = [16 * 1024, 8192, 4096, 1024, 2048, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
                 self.all_gather_buffers = self.get_prefill_all_gather_buffers()
@@ -114,7 +110,6 @@ class TT_CCL:
             memory_config=intermediate_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=[8, 4]),
         )
-        check_mesh_tensor_alloc(tt_intermediate_tensor)
         tt_intermediate_tensors = [tt_intermediate_tensor]
         return tt_intermediate_tensors
 
@@ -146,7 +141,6 @@ class TT_CCL:
             memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        check_mesh_tensor_alloc(tt_buffer)
         persistent_buffers["SDPA"] = tt_buffer
 
         # Layernorm
@@ -155,6 +149,7 @@ class TT_CCL:
             shape=(32, 128),
             core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
             strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
 
@@ -166,7 +161,6 @@ class TT_CCL:
             memory_config=tt_stats_sharded_config,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        check_mesh_tensor_alloc(tt_buffer)
         persistent_buffers["LAYERNORM"] = tt_buffer
 
         tt_buffer = ttnn.from_torch(
@@ -177,7 +171,6 @@ class TT_CCL:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        check_mesh_tensor_alloc(tt_buffer)
         persistent_buffers["SAMPLING"] = tt_buffer
 
         # Binary Mult + Silu
@@ -189,7 +182,6 @@ class TT_CCL:
             memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        check_mesh_tensor_alloc(tt_buffer)
         persistent_buffers["BINARY_MUL"] = tt_buffer
 
         return persistent_buffers
@@ -341,7 +333,6 @@ class TT_CCL:
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                         cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_{i}_{seqlen}"),
                     )
-                    check_mesh_tensor_alloc(tt_buffer)
                     tt_buffers.append(tt_buffer)
                 for i in range(2):
                     tt_buffer = ttnn.as_tensor(
@@ -353,7 +344,6 @@ class TT_CCL:
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                         cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_{i}_{seqlen}"),
                     )
-                    check_mesh_tensor_alloc(tt_buffer)
                     tt_buffers.append(tt_buffer)
                 for i in range(2):
                     tt_buffer = ttnn.as_tensor(
@@ -365,7 +355,6 @@ class TT_CCL:
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                         cache_file_name=self.weight_cache_path / (f"pb_rs_02_{key}_{i}_{seqlen}"),
                     )
-                    check_mesh_tensor_alloc(tt_buffer)
                     tt_buffers.append(tt_buffer)
                 persistent_buffers[key] = tt_buffers
             persistent_buffers_all[seqlen] = persistent_buffers
@@ -401,7 +390,6 @@ class TT_CCL:
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
                 )
-                check_mesh_tensor_alloc(tt_buffer)
                 ag_persistent_buffers[key] = tt_buffer
             ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
         return ag_persistent_buffers_all
@@ -746,37 +734,20 @@ def tt_sharded_distributed_rmsnorm(
     # Run distributed rmsnorm part 1
     cluster_axis = 1
     semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
-    grid_offset = ttnn.CoreCoord(1, 0)
     persistent_buffer = tt_ccl.all_gather_buffers.get("LAYERNORM", None)
-    tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(32, 128),
-        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        use_height_and_width_as_shard_shape=True,
-    )
-    tt_stats = ttnn.fused_rms_1_1_32_8192(
-        inp,
-        ln_sharded_progcfg,
-        cluster_axis,
-        tt_ccl.mesh_device,
-        semaphore,
-        residual_input_tensor=res,
-        num_links=1,
-        memory_config=tt_stats_sharded_config,
-        persistent_output_tensor=persistent_buffer,
-        is_pre=True,
-    )
     tt_out = ttnn.fused_rms_1_1_32_8192(
         inp,
         ln_sharded_progcfg,
         cluster_axis,
         tt_ccl.mesh_device,
         semaphore,
+        topology=ttnn.Topology.Linear,
+        residual_input_tensor=res,
+        num_links=1,
         epsilon=epsilon,
         weight=gamma,
-        stats=tt_stats,
+        stats=persistent_buffer,
         memory_config=output_mem_config,
-        is_pre=False,
     )
     tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
-    return tt_out, inp
+    return tt_out, res

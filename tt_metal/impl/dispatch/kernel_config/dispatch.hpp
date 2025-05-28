@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,10 +11,12 @@
 #include "core_coord.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
-#include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/tt_xy_pair.h>
+
+namespace tt {
+namespace tt_metal {
 
 struct dispatch_static_config_t {
     std::optional<uint32_t> dispatch_cb_base;  // 0
@@ -109,6 +111,7 @@ public:
         } else if (d_variant) {
             this->logical_core_ = core_manager.dispatcher_d_core(device_id, channel, cq_id);
         }
+        this->kernel_type_ = FDKernelType::DISPATCH;
     }
 
     void CreateKernel() override;
@@ -136,3 +139,6 @@ private:
     dispatch_static_config_t static_config_;
     dispatch_dependent_config_t dependent_config_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt

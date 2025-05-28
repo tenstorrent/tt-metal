@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -16,6 +16,7 @@
 #include "noc/noc_parameters.h"
 #include <umd/device/tt_core_coordinates.h>
 #include "wormhole/wh_hal.hpp"
+#include "wormhole/wh_hal_tensix_asserts.hpp"
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 
@@ -66,8 +67,9 @@ HalCoreInfoType create_tensix_mem_map() {
         std::uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
         processor_types.resize(num_processors);
         for (std::size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
-            DeviceAddr fw_base, local_init, fw_launch;
-            uint32_t fw_launch_value;
+            DeviceAddr fw_base{}, local_init{}, fw_launch{};
+            uint32_t fw_launch_value{};
+            ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
             switch (processor_class_idx) {
                 case 0: {
                     fw_base = MEM_BRISC_FIRMWARE_BASE;
@@ -81,6 +83,7 @@ HalCoreInfoType create_tensix_mem_map() {
                     local_init = MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH;
                     fw_launch = 0;//fix me;
                     fw_launch_value = fw_base;
+                    memory_load = ll_api::memory::Loading::CONTIGUOUS;
                 }
                 break;
                 case 2: {
@@ -115,8 +118,8 @@ HalCoreInfoType create_tensix_mem_map() {
                 .fw_base_addr = fw_base,
                 .local_init_addr = local_init,
                 .fw_launch_addr = fw_launch,
-                .fw_launch_addr_value = fw_launch_value
-            };
+                .fw_launch_addr_value = fw_launch_value,
+                .memory_load = memory_load};
         }
         processor_classes[processor_class_idx] = processor_types;
     }

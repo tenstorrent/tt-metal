@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -57,19 +57,28 @@ def prepare_linear_params(device, weights, bias, dtype):
     return tt_weights, tt_bias
 
 
-def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, act_block_h_override=0):
+def prepare_conv_params(
+    device,
+    weights,
+    bias,
+    dtype,
+    act_dtype=ttnn.bfloat16,
+    act_block_h_override=0,
+    fp32_dest_acc_en=False,
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    packer_l1_acc=False,
+):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=packer_l1_acc,
     )
 
     conv_config = ttnn.Conv2dConfig(
         dtype=act_dtype,
         weights_dtype=dtype,
         shard_layout=None,
-        input_channels_alignment=32,
         deallocate_activation=True,
         reallocate_halo_output=False,
         enable_act_double_buffer=False,
@@ -97,12 +106,21 @@ def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, a
 
 
 def prepare_split_conv_params(
-    device, weights, bias, split_in, split_out, dtype, act_dtype=ttnn.bfloat16, act_block_h_override=0
+    device,
+    weights,
+    bias,
+    split_in,
+    split_out,
+    dtype,
+    act_dtype=ttnn.bfloat16,
+    act_block_h_override=0,
+    fp32_dest_acc_en=False,
+    math_fidelity=ttnn.MathFidelity.HiFi4,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=False,
     )
 
@@ -110,7 +128,6 @@ def prepare_split_conv_params(
         dtype=act_dtype,
         weights_dtype=dtype,
         shard_layout=None,
-        input_channels_alignment=32,
         deallocate_activation=True,
         enable_act_double_buffer=False,
         enable_split_reader=False,

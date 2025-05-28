@@ -53,8 +53,7 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
         grid);
 
     tt::tt_metal::ShardSpec shard_spec(grid_set, shard_shape, shard_orientation);
-    tt::tt_metal::MemoryConfig sharded_mem_config =
-        tt::tt_metal::MemoryConfig{.memory_layout = shard_scheme, .buffer_type = BufferType::L1};
+    tt::tt_metal::MemoryConfig sharded_mem_config = tt::tt_metal::MemoryConfig{shard_scheme, BufferType::L1};
     return operation::run(
                InterleavedToShardedPartialDeviceOperation{
                    .grid_size = grid_size,

@@ -15,8 +15,8 @@ from models.utility_functions import torch_random
     "input_shape, block_id, resnet_id, conv_shortcut, block, pcc",
     [
         ((1, 512, 128, 128), 0, 0, False, "mid_block", 0.999),
-        ((1, 512, 128, 128), 0, 0, False, "up_blocks", 0.998),
-        ((1, 512, 256, 256), 1, 0, False, "up_blocks", 0.998),
+        ((1, 512, 128, 128), 0, 0, False, "up_blocks", 0.999),
+        ((1, 512, 256, 256), 1, 0, False, "up_blocks", 0.999),
         ((1, 512, 256, 256), 2, 0, True, "up_blocks", 0.999),
         ((1, 256, 256, 256), 2, 1, False, "up_blocks", 0.999),
     ],
@@ -28,7 +28,6 @@ def test_vae_resnetblock2d(
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
     )
-    # vae = pipe.vae
     vae.eval()
     state_dict = vae.state_dict()
 

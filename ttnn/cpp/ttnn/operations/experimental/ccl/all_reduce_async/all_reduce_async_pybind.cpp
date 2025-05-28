@@ -7,16 +7,16 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
+namespace {
 
 template <typename ccl_operation_t>
 void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -133,10 +133,10 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("subdevice_id") = std::nullopt});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_all_reduce_async(pybind11::module& module) {
-    detail::bind_all_reduce_async(
+    bind_all_reduce_async(
         module,
         ttnn::experimental::all_reduce_async,
         R"doc(

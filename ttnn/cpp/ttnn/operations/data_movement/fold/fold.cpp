@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,8 +54,8 @@ std::vector<Tensor> fold_with_transpose_(
     tt::log_info("padded_h32: {}", padded_h32);
     tt::log_info("padded_w32: {}", padded_w32);
 
-    auto L1_mem_config = tt::tt_metal::MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1};
+    auto L1_mem_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
 
     tt::log_debug("input: {}", input.get_logical_shape());
 
@@ -134,9 +134,9 @@ ttnn::MemoryConfig create_sharded_memory_config(
     uint32_t shard_width = tensor_width;
 
     auto sharded_memory_config = ttnn::MemoryConfig{
-        .memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
-        .buffer_type = ttnn::BufferType::L1,
-        .shard_spec = tt::tt_metal::ShardSpec{grid_size, {shard_height, shard_width}, orientation}};
+        ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
+        ttnn::BufferType::L1,
+        tt::tt_metal::ShardSpec{grid_size, {shard_height, shard_width}, orientation}};
 
     tt::log_debug(tt::LogOp, "sharded_memory_config: {}", sharded_memory_config);
 
@@ -301,7 +301,7 @@ Tensor FoldOperation::invoke(
     const std::optional<MemoryConfig>& override_memory_config) {
     if (use_transpose_as_fold) {
         if (input_tensor.is_sharded()) {
-            if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 return fold_with_transpose_sharded_(
                            queue_id,
                            input_tensor,
@@ -321,6 +321,21 @@ Tensor FoldOperation::invoke(
             return fold_with_transpose_(queue_id, input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w)
                 .at(0);
         }
+    }
+    if (input_tensor.memory_config().is_dram()) {
+        if (pad_h != 0 || pad_w != 0 || pad_c != 0) {
+            TT_THROW("Padding is not supported for DRAM folding");
+        }
+        auto batch_size = input_tensor.get_logical_shape()[0];
+        auto input_height = input_tensor.get_logical_shape()[1];
+        auto input_width = input_tensor.get_logical_shape()[2];
+        auto in_channels = input_tensor.get_logical_shape()[3];
+        auto output_tensor =
+            ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
+        return ttnn::reshape(
+            output_tensor,
+            ttnn::Shape(
+                {batch_size, input_height / stride_h, input_width / stride_w, (in_channels)*stride_h * stride_w}));
     }
     return ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }
