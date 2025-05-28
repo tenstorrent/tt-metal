@@ -146,6 +146,16 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
     }
 }
 
+MeshTraceBuffer::MeshTraceBuffer(std::shared_ptr<MeshTraceDescriptor> desc, std::shared_ptr<MeshBuffer> mesh_buffer) :
+    desc(desc), mesh_buffer(mesh_buffer) {}
+
+MeshTraceBuffer::~MeshTraceBuffer() {
+    if (this->mesh_buffer and this->mesh_buffer->device()) {
+        auto current_trace_buffers_size = this->mesh_buffer->device()->get_trace_buffers_size();
+        this->mesh_buffer->device()->set_trace_buffers_size(current_trace_buffers_size - this->mesh_buffer->size());
+    }
+}
+
 std::shared_ptr<MeshTraceBuffer> MeshTrace::create_empty_mesh_trace_buffer() {
     return std::make_shared<MeshTraceBuffer>(std::make_shared<MeshTraceDescriptor>(), nullptr);
 }

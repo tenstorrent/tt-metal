@@ -61,10 +61,12 @@ public:
 // Ties a MeshTraceDescriptor (host side state) to a MeshBuffer (device side state)
 struct MeshTraceBuffer {
     // The trace descriptor associated with a MeshTrace
-    std::shared_ptr<MeshTraceDescriptor> desc;
+    std::shared_ptr<MeshTraceDescriptor> desc = nullptr;
     // The MeshBuffer this trace will be serialized to, before being run on a
     // MeshDevice
-    std::shared_ptr<MeshBuffer> mesh_buffer;
+    std::shared_ptr<MeshBuffer> mesh_buffer = nullptr;
+    MeshTraceBuffer(std::shared_ptr<MeshTraceDescriptor> desc, std::shared_ptr<MeshBuffer> mesh_buffer);
+    ~MeshTraceBuffer();
 };
 
 // Top level class - Manages MeshTrace
