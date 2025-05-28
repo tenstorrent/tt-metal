@@ -136,9 +136,6 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
     endif()
 endfunction()
 
-# Option to use system-installed SFPI
-option(TT_USE_SYSTEM_SFPI "Use system-installed SFPI compiler" OFF)
-
 if(TT_USE_SYSTEM_SFPI)
     set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++")
 else()
