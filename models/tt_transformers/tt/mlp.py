@@ -107,6 +107,7 @@ class MLP(LightweightModule):
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
+        memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -114,7 +115,7 @@ class MLP(LightweightModule):
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_1,
-            memory_config=x.memory_config(),
+            memory_config=memory_config,
         )
 
         w3_out = ttnn.linear(
@@ -124,7 +125,7 @@ class MLP(LightweightModule):
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_3,
-            memory_config=x.memory_config(),
+            memory_config=memory_config,
         )
         ttnn.deallocate(x)
 
@@ -211,11 +212,7 @@ class MLP(LightweightModule):
             compute_kernel_config=li_ff2_compute_kernel_cfg,
             dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
             program_config=pc_2,
-            memory_config=(
-                (ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
-                if TG
-                else w2_in.memory_config()
-            ),
+            memory_config=memory_config,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
         ttnn.deallocate(w2_in)
