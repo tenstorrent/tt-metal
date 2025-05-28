@@ -355,7 +355,7 @@ def test_all_gather_only(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("use_new_version", [True])
-@pytest.mark.parametrize("num_iters, warmup_iters", [[20, 5]])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize("fused_add", [True])
 @pytest.mark.parametrize(

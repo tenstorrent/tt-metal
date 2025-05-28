@@ -192,6 +192,7 @@ def run_rms_trace(
                     residual_input_tensor=residual_tensor,
                     stats=tt_stats,
                 )
+                tt_out.deallocate(True)
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             ttnn.synchronize_device(mesh_device)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -209,6 +210,7 @@ def run_rms_trace(
                 residual_input_tensor=residual_tensor,
                 stats=tt_stats,
             )
+            tt_out.deallocate(True)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     else:
         tt_stats = ttnn.rms_norm_pre_all_gather(
