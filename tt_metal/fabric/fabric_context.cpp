@@ -32,7 +32,7 @@ std::unordered_map<mesh_id_t, bool> FabricContext::check_for_wrap_around_mesh() 
         const uint32_t corner_chip_id = 0;
         uint32_t corner_chip_connections = 0;
         for (const auto& direction : FabricContext::routing_directions) {
-            if (!control_plane->get_intra_chip_neighbors(mesh_id, corner_chip_id, direction).empty()) {
+            if (!control_plane->get_intra_chip_neighbors(FabricNodeId(mesh_id, corner_chip_id), direction).empty()) {
                 corner_chip_connections++;
             }
         }

@@ -55,7 +55,7 @@ class TT_CCL:
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
         if mode == "prefill":
-            self.support_seqlens = [8192, 4096, 1024, 2048, 128]
+            self.support_seqlens = [16 * 1024, 8192, 4096, 1024, 2048, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
                 self.all_gather_buffers = self.get_prefill_all_gather_buffers()

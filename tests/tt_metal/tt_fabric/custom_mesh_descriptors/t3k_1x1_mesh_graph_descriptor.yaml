@@ -20,42 +20,42 @@ Mesh: [
   id: 0,
   board:  1x1,
   topology: [1, 1],
-  host_mapping: [[]]},
+  host_ranks: [[0]]},
 {
   id: 1,
   board: 1x1,
   topology: [1, 1],
-  host_mapping: [[]]},
+  host_ranks: [[0]]},
 {
   id: 2,
   board: 1x1,
   topology: [1, 1],
-  host_mapping: [[]]},
+  host_ranks: [[0]]},
 {
   id: 3,
   board: 1x1,
   topology: [1, 1],
-  host_mapping: [[]]},
+  host_ranks: [[0]]},
 {
   id: 4,
   board:  1x1,
   topology: [1, 1],
-  host_mapping: [[]]},
+  host_ranks: [[0]]},
 {
   id: 5,
   board: 1x1,
   topology: [1, 1],
-  host_mapping: [[]]},
+  host_ranks: [[0]]},
 {
   id: 6,
   board: 1x1,
   topology: [1, 1],
-  host_mapping: [[]]},
+  host_ranks: [[0]]},
 {
   id: 7,
   board: 1x1,
   topology: [1, 1],
-  host_mapping: [[]]}
+  host_ranks: [[0]]}
 ]
 
 Graph: [
