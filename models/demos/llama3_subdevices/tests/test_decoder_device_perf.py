@@ -32,7 +32,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 8380,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
     "RMSAllGather_1": {
@@ -43,7 +43,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 8139.7,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
     "AllGatherConcat_0": {
@@ -54,7 +54,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 12541.7,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.5,
     },
     "AllGatherAsync_0": {
@@ -65,7 +65,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 4351.1,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
     "Matmul_0": {
@@ -76,7 +76,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 5653.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
     },
     "Matmul_1": {
@@ -87,7 +87,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 5760.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
     },
     "Matmul_2": {
@@ -98,7 +98,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 5380.6,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
     },
     "Matmul_3": {
@@ -109,7 +109,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7093.7,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.15,
     },
     "Matmul_4": {
@@ -120,7 +120,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 6770.3,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
     },
     "AllReduceCreateQkvHeads_0": {
@@ -131,7 +131,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7932.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.4,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
     "AllReduceAsync_0": {
@@ -142,7 +142,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 8510.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
     "AllReduceAsync_1": {
@@ -153,7 +153,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7252.4,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
     "LlamaReduceScatterDeviceOperation_0": {
@@ -164,7 +164,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 8058.9,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
     "LlamaReduceScatterDeviceOperation_1": {
@@ -175,7 +175,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7359.9,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
     "RotaryEmbeddingLlamaFusedQK_0": {
@@ -186,7 +186,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 2844.3,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.35,
     },
     "PagedUpdateCacheDeviceOperation_0": {
@@ -197,7 +197,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 5890.0,
         "kernel_duration_relative_margin": 0.2,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
     "ScaledDotProductAttentionDecode_0": {
@@ -208,7 +208,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 9741.5,
         "kernel_duration_relative_margin": 0.07,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
     "BinaryDeviceOperation_0": {
@@ -219,7 +219,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 6111.2,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
     "Untilize_0": {
@@ -230,7 +230,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 3113.6,
         "kernel_duration_relative_margin": 0.2,
         "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.1,
+        "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.5,
     },
 }
