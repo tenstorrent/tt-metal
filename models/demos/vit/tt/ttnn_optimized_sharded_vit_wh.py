@@ -134,6 +134,12 @@ def update_model_config(config, batch_size):
             transpose_mcast=False,
             fused_activation=None,
         ),
+        "ln_conmpute_config": ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        ),
     }
 
     return DotAccessDict(
@@ -403,6 +409,7 @@ def vit_layer(
         bias=parameters.layernorm_before.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         program_config=config.program_configs["layernorm_before_program_config"],
+        compute_kernel_config=config.program_configs["ln_conmpute_config"],
     )
 
     multi_head_attention_output = vit_attention(
@@ -434,6 +441,7 @@ def vit_layer(
         bias=parameters.layernorm_after.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         program_config=config.program_configs["layernorm_after_output_program_config"],
+        compute_kernel_config=config.program_configs["ln_conmpute_config"],
     )
 
     feedforward_output = vit_feedforward(
