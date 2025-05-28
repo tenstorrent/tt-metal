@@ -533,23 +533,22 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
     if (buffer.is_nd_sharded()) {
+        auto device_id = buffer.device()->id();
         const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
             uint32_t offset = 0;
             if (buffer.is_dram()) {
-                auto dram_channel = buffer.device()->dram_channel_from_logical_core(banks[i]);
-                offset = buffer.device()->dram_channel_offset(dram_channel);
+                const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+                auto dram_channel = buffer.device()->dram_channel_from_virtual_core(virtual_core);
+                offset = soc_desc.get_address_offset(dram_channel);
             }
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
                 // TODO: subspan is in elements; here 1 element is 1 byte (ie. uint8_t) so using bytes here is fine
                 auto chunk_span = tt::stl::make_const_span(
                     host_buffer.subspan(chunk_mapping_in_bytes.src, chunk_mapping_in_bytes.size));
                 llrt::write_hex_vec_to_core(
-                    buffer.device()->id(),
-                    virtual_core,
-                    chunk_span,
-                    buffer.address() + chunk_mapping_in_bytes.dst + offset);
+                    device_id, virtual_core, chunk_span, buffer.address() + chunk_mapping_in_bytes.dst + offset);
             }
         }
     } else if (
@@ -663,20 +662,22 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
 void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
     ZoneScoped;
     if (buffer.is_nd_sharded()) {
+        auto device_id = buffer.device()->id();
         const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
             uint32_t offset = 0;
             if (buffer.is_dram()) {
-                auto dram_channel = buffer.device()->dram_channel_from_logical_core(banks[i]);
-                offset = buffer.device()->dram_channel_offset(dram_channel);
+                const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+                auto dram_channel = buffer.device()->dram_channel_from_virtual_core(virtual_core);
+                offset = soc_desc.get_address_offset(dram_channel);
             }
             for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
                 // Using cluster read_core API (as opposed to ReadFromDeviceL1) because it is inplace
                 tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                     host_buffer + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
-                    tt_cxy_pair(buffer.device()->id(), virtual_core),
+                    tt_cxy_pair(device_id, virtual_core),
                     buffer.address() + chunk_mapping_in_bytes.dst + offset);
             }
         }

@@ -670,12 +670,6 @@ uint32_t MeshDevice::dram_channel_from_virtual_core(const CoreCoord& virtual_cor
     });
 }
 
-uint32_t MeshDevice::dram_channel_offset(uint32_t dram_channel) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [dram_channel](const auto& device) {
-        return device->dram_channel_offset(dram_channel);
-    });
-}
-
 // Core management and network operations
 const std::set<CoreCoord>& MeshDevice::ethernet_cores() const {
     return validate_and_get_reference_value(
