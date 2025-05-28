@@ -16,7 +16,7 @@ fi
 echo "[upstream-tests] Running validation model tests with weights"
 pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick"
 pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py
-pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
+pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat"
 
 echo "[upstream-tests] Unsetting LLAMA_DIR to ensure later tests can't use it"
 unset LLAMA_DIR
