@@ -66,6 +66,6 @@ jobs:
                 "Thank you for your contribution! 🚀\n\n" +
                 "You can run tt-metal integration tests by adding the `blackhole-integration-tests` and/or " +
                 "`wormhole-integration-tests` labels to this pull request.\n\n" +
-                "📖 For more information, please refer to our [CONTRIBUTING.md](" +
-                "https://github.com/tenstorrent/tt-llk/blob/main/CONTRIBUTING.md)."
+                "📖 For more information, please refer to our [CONTRIBUTING](" +
+                "https://github.com/tenstorrent/tt-llk/blob/main/CONTRIBUTING.md) guide."
             });

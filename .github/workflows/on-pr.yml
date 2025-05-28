@@ -8,6 +8,11 @@ on:
     branches: ["main"]
   merge_group:
 
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
 concurrency:
   # Use github.run_id on main branch (or any protected branch)
   # This ensures that no runs get cancelled on main.
