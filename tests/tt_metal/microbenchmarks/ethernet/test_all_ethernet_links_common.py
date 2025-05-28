@@ -158,6 +158,7 @@ def write_results_to_csv(file_name, test_latency):
     if test_latency == 1:
         header = [
             "Benchmark ID",
+            "Summary Statistics",
             "Sender Device ID",
             "Sender Eth Channel",
             "Receiver Device ID",
@@ -190,6 +191,7 @@ def write_results_to_csv(file_name, test_latency):
     else:
         header = [
             "Benchmark ID",
+            "Summary Statistics",
             "Sender Device ID",
             "Sender Eth Channel",
             "Receiver Device ID",
@@ -235,6 +237,7 @@ def write_results_to_csv(file_name, test_latency):
                 file_name,
                 [
                     benchmark_type,
+                    0,
                     sender_info[0],
                     sender_info[1],
                     receiver_info[0],
@@ -250,6 +253,14 @@ def write_results_to_csv(file_name, test_latency):
         mean = np.mean(measurements)
         std_dev = np.std(measurements)
         summary_stats = [""] * len(header)
+        summary_stats[0] = benchmark_type
+        summary_stats[1] = 1
+        summary_stats[2] = sender_info[0]
+        summary_stats[3] = sender_info[1]
+        summary_stats[4] = receiver_info[0]
+        summary_stats[5] = receiver_info[1]
+        summary_stats[6] = num_packets
+        summary_stats[7] = packet_size
         summary_stats[-1] = std_dev
         summary_stats[-2] = mean
         summary_stats[-3] = max_val
