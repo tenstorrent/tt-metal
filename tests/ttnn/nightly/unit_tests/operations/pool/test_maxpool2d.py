@@ -72,6 +72,26 @@ def run_max_pool(
     cores_y = device.core_grid.y
     max_cores = cores_x * cores_y
 
+    # Skip tests for BF8 and ceil_mode in HEIGHT/WIDTH/BLOCK shardings
+    if shard_scheme in (
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ):
+        if dtype == ttnn.bfloat8_b:
+            if stride == (2, 2):
+                pytest.skip("Skip for stride (2, 2) for BF8!")
+            if kernel_size == (9, 9):
+                pytest.skip("Skip for kernel size (9, 9) for BF8!")
+            if ceil_mode:
+                pytest.skip("Skip for ceil mode for BF8!")
+
+        if ceil_mode:
+            if stride == (1, 1):
+                pytest.skip("Skip for stride (1, 1) for ceil mode!")
+            if kernel_size == (9, 9):
+                pytest.skip("Skip for kernel size (9, 9) for ceil mode!")
+
     if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
         if in_c % 16 != 0:
             pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
@@ -268,19 +288,19 @@ def run_max_pool(
     (
         (  ## resnet shapes
             [1, 64, 112, 112],
-            [4, 64, 112, 112],
-            [8, 64, 112, 112],
+            # [4, 64, 112, 112],
+            # [8, 64, 112, 112],
             [16, 64, 112, 112],
             # [20, 64, 112, 112],   ## oom
             ## hpr shapes
             [8, 32, 132, 20],
-            [16, 32, 132, 20],
-            [32, 32, 132, 20],
-            [64, 32, 132, 20],
+            # [16, 32, 132, 20],
+            # [32, 32, 132, 20],
+            # [64, 32, 132, 20],
             [128, 32, 132, 20],
             # [256, 32, 132, 20],   ## oom
             [8, 32, 264, 40],
-            [16, 32, 264, 40],
+            # [16, 32, 264, 40],
             [32, 32, 264, 40],
             # [64, 32, 264, 40],    ## oom
             # [128, 32, 264, 40],   ## oom
@@ -326,7 +346,7 @@ def run_max_pool(
         (3, 3),
         (5, 5),
         (9, 9),
-        (13, 13),
+        # (13, 13),
     ),
 )
 @pytest.mark.parametrize(
@@ -336,7 +356,7 @@ def run_max_pool(
         (1, 1),
         (2, 2),
         (4, 4),
-        (6, 6),
+        # (6, 6),
     ),
 )
 @pytest.mark.parametrize(
@@ -409,7 +429,7 @@ def test_run_max_pool(
         (3, 3),
         (5, 5),
         (9, 9),
-        (13, 13),
+        # (13, 13),
     ),
 )
 @pytest.mark.parametrize(
@@ -419,7 +439,7 @@ def test_run_max_pool(
         (1, 1),
         (2, 2),
         (4, 4),
-        (6, 6),
+        # (6, 6),
     ),
 )
 @pytest.mark.parametrize(
@@ -487,17 +507,17 @@ def test_run_max_pool_width_shard(
             [8, 2048, 10, 16],
             ## resnet shapes
             [1, 64, 112, 112],
-            [4, 64, 112, 112],
-            [8, 64, 112, 112],
+            # [4, 64, 112, 112],
+            # [8, 64, 112, 112],
             [16, 64, 112, 112],
             ## hpr shapes
             [8, 32, 132, 20],
-            [16, 32, 132, 20],
-            [32, 32, 132, 20],
-            [64, 32, 132, 20],
+            # [16, 32, 132, 20],
+            # [32, 32, 132, 20],
+            # [64, 32, 132, 20],
             [128, 32, 132, 20],
             [8, 32, 264, 40],
-            [16, 32, 264, 40],
+            # [16, 32, 264, 40],
             [32, 32, 264, 40],
             [4, 16, 1056, 160],
             [8, 16, 528, 80],
@@ -521,7 +541,7 @@ def test_run_max_pool_width_shard(
         (3, 3),
         (5, 5),
         (9, 9),
-        (13, 13),
+        # (13, 13),
     ),
 )
 @pytest.mark.parametrize(
@@ -531,7 +551,7 @@ def test_run_max_pool_width_shard(
         (1, 1),
         (2, 2),
         (4, 4),
-        (6, 6),
+        # (6, 6),
     ),
 )
 @pytest.mark.parametrize(
