@@ -170,9 +170,10 @@ void TensorLayout::initialize_alignment() {
     alignment_ = Alignment(std::move(result));
 }
 
-TensorLayout::BufferDistributionSpecVariant TensorLayout::compute_distribution_spec(const ttnn::Shape& shape) const {
+std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> TensorLayout::compute_distribution_spec(
+    const ttnn::Shape& shape) const {
     if (!memory_config_.is_sharded()) {
-        return std::monostate{};
+        return std::nullopt;
     }
 
     TT_FATAL(
