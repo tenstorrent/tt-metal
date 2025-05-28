@@ -5,12 +5,6 @@
 
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
-// #define cb_scaler tt::CBIndex::c_2
-// #define cb_fused_scale tt::CBIndex::c_3
-// #define cb_fused_attn tt::CBIndex::c_4
-// #define cb_mask_padded tt::CBIndex::c_5
-// #define cb_exps tt::CBIndex::c_6
-// #define cb_scale_mask tt::CBIndex::c_9
 
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -31,7 +25,7 @@ void apply_fused_scale_mask(
     uint32_t cb_in, uint32_t cb_fused_scale_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
 void apply_fused_attn_mask(
     uint32_t cb_in, uint32_t cb_fused_attn_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
-void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, uint32_t cb_length_t, uint32_t blk);
+void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, uint32_t cb_length_t, uint32_t blk, bool do_mask);
 template <PoolType reduce_type>
 void reduce_cb(
     uint32_t cb_in,
@@ -57,7 +51,6 @@ void MAIN {
     // auto cb_scaler = tt::CBIndex::c_2;
     auto cb_fused_scale = tt::CBIndex::c_3;
     auto cb_fused_attn = tt::CBIndex::c_4;
-    auto cb_mask_padded = tt::CBIndex::c_5;
     auto cb_exps = tt::CBIndex::c_6;
     auto cb_scale_mask = tt::CBIndex::c_9;
     auto cb_sumexps = tt::CBIndex::c_7;
@@ -66,6 +59,26 @@ void MAIN {
     auto cb_out0 = tt::CBIndex::c_11;
     auto cb_max = tt::CBIndex::c_8;
     auto cb_recip = tt::CBIndex::c_10;
+    constexpr auto cb_mask_padded = tt::CBIndex::c_5;
+    constexpr auto cb_mask_padded_bcast = tt::CBIndex::c_13;
+
+    if (mask_padded_data) {
+        (DPRINT << "BC" << ENDL());
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb_mask_padded);
+        pack_reconfig_data_format(cb_mask_padded_bcast);
+        cb_wait_front(cb_mask_padded, 1);
+        unary_bcast_init<BroadcastType::ROW>(cb_mask_padded, cb_mask_padded_bcast);
+        unary_bcast<BroadcastType::ROW>(cb_mask_padded, 0, 0);
+        tile_regs_wait();
+        tile_regs_commit();
+        cb_reserve_back(cb_mask_padded_bcast, 1);
+        pack_tile(0, cb_mask_padded_bcast);
+        cb_push_back(cb_mask_padded_bcast, 1);
+        tile_regs_release();
+        cb_pop_front(cb_mask_padded, 1);
+    }
+
     cb_wait_front(tt::CBIndex::c_2, 1);  // comes from the reader
 
 #if FUSED_SCALE_MASK
@@ -92,12 +105,11 @@ void MAIN {
 #ifdef NUMERIC_STABLE
         // reads through and finds the max value
         constexpr bool use_prev_reduce_max = false;
-        cb_wait_front(cb_in0, 1);
-        UNPACK(tt::compute::common::print_full_tile(cb_in0, 0, true));
         reduce_cb<PoolType::MAX>(cb_in0, tt::CBIndex::c_2, cb_prev_reduce, cb_max, use_prev_reduce_max, Wt);
 #endif
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
-            exp_cb(cb_in0, cb_exps, cb_max, cur_cb_length_t, blk);
+            bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
+            exp_cb(cb_in0, cb_exps, cb_max, cur_cb_length_t, blk, do_mask);
 
             reduce_cb<PoolType::SUM>(
                 cb_exps, tt::CBIndex::c_2, cb_prev_reduce, cb_sumexps, use_prev_reduce, cur_cb_length_t);
@@ -109,6 +121,8 @@ void MAIN {
             }
         }
         cb_wait_front(cb_sumexps, 1);
+        // for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        // }
 
         // DPRINT << "F0" << ENDL();
         reconfig_data_format_srca(cb_sumexps);
@@ -135,11 +149,12 @@ void MAIN {
         tile_regs_release();
 
         cb_wait_front(cb_recip, 1);
-        // DPRINT << "F4" << ENDL();
+        DPRINT << "F4" << ENDL();
         length_left_t = Wt;
         cur_cb_length_t = cb_length_t;
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
-            exp_cb(cb_in0, cb_exps, cb_max, cur_cb_length_t, blk);
+            bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
+            exp_cb(cb_in0, cb_exps, cb_max, cur_cb_length_t, blk, do_mask);
 
             apply_recip(cb_exps, cb_recip, cb_out0, cur_cb_length_t, blk);
             length_left_t -= cur_cb_length_t;
@@ -150,7 +165,6 @@ void MAIN {
     }
     // DPRINT << "DONE COMPUTE FINAL " << ENDL();
 }
--
 
     // for scale+mask+softmax:
     // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
@@ -167,8 +181,6 @@ void MAIN {
     reconfig_data_format(cb_in, cb_fused_scale_mask);
     pack_reconfig_data_format(cb_out);
     mul_tiles_bcast_scalar_init_short(cb_in, cb_fused_scale_mask);
-    cb_wait_front(cb_in, 1);
-    UNPACK(tt::compute::common::print_full_tile(cb_in, 0, true));
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
         tile_regs_acquire();
         tile_regs_wait();
@@ -221,12 +233,14 @@ void apply_fused_attn_mask(
     }
 }
 
-void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_length_t, const uint32_t blk) {
+void exp_cb(
+    uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_length_t, const uint32_t blk, bool do_mask) {
     // requirements:
     //   cb_length_t of cb_in and cb_out are the same.
     //   blk is a divisor of cb_length_t
     //   Calculates e^cb_in for cb_length_t num of tiles
     //      Also if numeric stable calcs e^(cb_in- BCASTCOL(cb_max))
+    constexpr auto cb_mask_padded_bcast = tt::CBIndex::c_13;
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
     init_sfpu(cb_in, cb_out);
@@ -251,10 +265,16 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
             copy_tile(cb_in, cur_dst, cur_dst);
         }
 #endif
+        if (do_mask && cur_blk == cb_length_t - blk) {
+            reconfig_data_format_srca(cb_mask_padded_bcast);
+            binary_dest_reuse_tiles_init(cb_mask_padded_bcast);
+            cb_wait_front(cb_mask_padded_bcast, 1);
+            binary_dest_reuse_tiles(cb_mask_padded_bcast, 0, blk - 1);
+            exp_tile_init<EXP_APPROX>();
+        }
         cb_pop_front(cb_in, blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             exp_tile<EXP_APPROX>(cur_dst);  // exp on DST[0]
-            dprint_tensix_dest_reg(0);
         }
         tile_regs_wait();
         tile_regs_commit();
@@ -282,18 +302,15 @@ void reduce_cb(
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_out);
     tile_regs_acquire();
-    tile_regs_wait();
-    binary_op_init_common(cb_in, cb_scaler, cb_out);
     cb_reserve_back(cb_out, 1);
     cb_wait_front(cb_scaler, 1);
-    reduce_init<false, reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, cb_out);
+    reduce_init_delta<false, reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, cb_out);
     for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
         cb_wait_front(cb_in, 1);
         reduce_tile<reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, 0, 0, 0);
-        dprint_tensix_dest_reg(0);
         cb_pop_front(cb_in, 1);
     }
-    // reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_out);
+    reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_out);
 
     if (use_prev_reduce) {
         reconfig_data_format_srca(cb_prev_out);
@@ -305,11 +322,13 @@ void reduce_cb(
         add_binary_tile(0, 1);
         cb_pop_front(cb_prev_out, 1);
     }
-
+    dprint_tensix_dest_reg(0);
+    tile_regs_wait();
     tile_regs_commit();
     pack_tile(0, cb_out);
     cb_push_back(cb_out, 1);
     cb_wait_front(cb_out, 1);
+    UNPACK(tt::compute::common::print_full_tile(cb_out, 0, true));
     tile_regs_release();
 }
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
