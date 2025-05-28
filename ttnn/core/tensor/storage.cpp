@@ -30,7 +30,12 @@ MemoryConfig DeviceStorage::memory_config() const {
 DeviceStorage::DeviceStorage(
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
     std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_) :
-    specs(std::move(specs_)), mesh_buffer(std::move(mesh_buffer_)) {}
+    specs(std::move(specs_)), mesh_buffer(std::move(mesh_buffer_)) {
+    TT_FATAL(
+        std::all_of(
+            specs.begin(), specs.end(), [this](const auto& spec) { return spec.second == specs.front().second; }),
+        "All specs in device storage must be the same");
+}
 
 Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() != nullptr) {
@@ -72,6 +77,13 @@ bool DeviceStorage::is_uniform_storage() const {
     }
     return specs.size() == mesh_buffer->device()->num_devices() &&
            std::all_of(specs.begin(), specs.end(), [this](const auto& spec) { return spec.second == specs[0].second; });
+}
+
+MultiDeviceHostStorage::MultiDeviceHostStorage(std::vector<HostBuffer> buffers, std::vector<TensorSpec> specs) :
+    buffers_(std::move(buffers)), specs_(std::move(specs)) {
+    TT_FATAL(
+        std::all_of(specs_.begin(), specs_.end(), [this](const auto& spec) { return spec == specs_.front(); }),
+        "All specs in multi-device host storage must be the same");
 }
 
 HostBuffer MultiDeviceHostStorage::get_buffer(int buffer_index) const {
