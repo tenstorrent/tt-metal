@@ -45,6 +45,7 @@ struct Pool2D {
             uint32_t ncores;
             uint32_t ncores_w;
             tt::tt_metal::DeviceStorage reader_indices_storage;
+            tt::tt_metal::DeviceStorage scalar_config_storage;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
