@@ -12,22 +12,6 @@ using tt::tt_metal::distributed::multihost::DistributedException;
 using tt::tt_metal::distributed::multihost::Key;
 using tt::tt_metal::distributed::multihost::Rank;
 
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-
-    auto ctx = DistributedContext::get_current_world();
-
-    // Check if we have an MPIContext and if so, skip tests when we don't have ULFM support
-    auto mpi_ctx = dynamic_cast<tt::tt_metal::distributed::multihost::MPIContext*>(ctx.get());
-    if (!mpi_ctx || (mpi_ctx && !mpi_ctx->have_ulfm_extensions())) {
-        ::testing::GTEST_FLAG(filter) = "-*";
-        fmt::println("ULFM support is not available in this build, skipping fault tolerance tests.");
-        return 0;
-    }
-
-    return RUN_ALL_TESTS();
-}
-
 TEST(FaultTolerance, ShrinkAfterRankFailure) {
     //----------------------------------------------------------------------
     // 0 · Create world communicator and install MPI_ERRORS_RETURN
