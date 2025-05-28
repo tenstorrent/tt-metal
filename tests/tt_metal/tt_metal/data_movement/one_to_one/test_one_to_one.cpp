@@ -217,13 +217,19 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
             = 128 pages * 32 (or 64) bytes/page
             = 4096 bytes for WH; 8192 bytes for BH
         - Max total transaction size
-            = 180 * 8192 bytes
-            = 1474560 bytes
-            = 1.4 MB = L1 capacity (for BH, half for WH)
+            = 128 transactions * 4096 bytes
+            = 524,288 Bytes
+            < 1.25 MB ~= L1 buffer capacity (.25 MB is allocated for the kernel code and other overheads)
     */
-    uint32_t num_of_transactions = 128;  // 180;
+    uint32_t page_size_bytes, num_of_transactions;
     uint32_t transaction_size_pages = 4 * 32;
-    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // (=flit size): 32 bytes for WH, 64 for BH
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes = 64;  // (=flit size): 64 bytes for BH
+        num_of_transactions = 64;
+    } else {
+        page_size_bytes = 32;  // (=flit size): 32 bytes for WH
+        num_of_transactions = 128;
+    }
 
     // Cores
     /*
