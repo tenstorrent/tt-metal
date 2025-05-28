@@ -371,7 +371,15 @@ auto get_mesh_tensor_write_test_params() {
                 [](MeshDevice* device) {
                     // Replicate to a submesh 2x3
                     // Replicate within each row, then split by second dimension.
-                    return shard_tensor_to_2d_mesh_mapper(*device, MeshShape{2, 3}, Shard2dConfig{std::nullopt, 1});
+                    return create_mesh_mapper(
+                        *device,
+                        MeshMapperConfig{
+                            .placements =
+                                {
+                                    MeshMapperConfig::Replicate(),
+                                    MeshMapperConfig::Shard(1),
+                                }},
+                        MeshShape(2, 3));
                 },
         },
     };

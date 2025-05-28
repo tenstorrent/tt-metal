@@ -29,19 +29,12 @@ auto chunk_xexpression(XtExpr& expr, int num_chunks, int dim) {
         dim,
         expr.dimension());
 
-    const int size_along_dim = static_cast<int>(expr.shape()[dim]);
-    TT_FATAL(
-        num_chunks <= size_along_dim,
-        "num_chunks cannot exceed the size of the tensor along the given dimension; got num_chunks: {}, "
-        "size_along_dim: {}",
-        num_chunks,
-        size_along_dim);
-
     if (num_chunks == 1) {
         xt::xstrided_slice_vector indices(expr.dimension(), xt::all());
         return std::vector<StridedView>{xt::strided_view(expr, indices)};
     }
 
+    const int size_along_dim = static_cast<int>(expr.shape()[dim]);
     const int chunk_size = (size_along_dim + num_chunks - 1) / num_chunks;
     int remaining_size = size_along_dim;
 
