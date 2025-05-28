@@ -83,7 +83,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
             static_config_.output_depacketize_local_sem[idx] =
                 tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
             // Forwward VCs are the ones that don't connect to a prefetch
-            if (auto pk = dynamic_cast<PrefetchKernel*>(downstream_kernels_[idx])) {
+            if (dynamic_cast<PrefetchKernel*>(downstream_kernels_[idx]) != nullptr) {
                 static_config_.fwd_vc_count = this->static_config_.fwd_vc_count.value() - 1;
             }
         }
