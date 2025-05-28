@@ -83,7 +83,7 @@ int main() {
         const uint32_t output_bank_id = 0;
 
         // Initialize the input buffer with random data.
-        std::vector<bfloat16> input_vec(tile_size_bytes * num_tiles);
+        std::vector<bfloat16> input_vec(elemnts_per_tile * num_tiles);
         std::mt19937 rng(std::random_device{}());
         std::uniform_real_distribution<float> distribution(0.0f, 100.0f);
         for (auto& val : input_vec) {
@@ -123,7 +123,11 @@ int main() {
         EnqueueReadBuffer(cq, output_dram_buffer, result_vec, /*blocking*/ true);
 
         // Compare the result with the input. The result should be the esame as the input.
-        TT_FATAL(result_vec.size() == input_vec.size(), "Result vector size does not match input vector size");
+        TT_FATAL(
+            result_vec.size() == input_vec.size(),
+            "Result vector size {} does not match input vector size {}",
+            result_vec.size(),
+            input_vec.size());
         for (int i = 0; i < input_vec.size(); i++) {
             if (input_vec[i] != result_vec[i]) {
                 pass = false;
