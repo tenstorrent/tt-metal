@@ -59,17 +59,19 @@ uint32_t get_preferred_noc(
     return use_dedicated_noc ? 1 : noc;
 }
 
-std::tuple<
-    tt::tt_metal::KernelHandle,
-    tt::tt_metal::KernelHandle,
-    tt::tt_metal::CBHandle,
-    tt::tt_metal::CBHandle,
-    tt::tt_metal::CBHandle,
-    tt::tt_metal::CBHandle,
-    CoreCoord,
-    std::vector<CoreCoord>,
-    uint32_t>
-process_program_mcast_in0(
+struct mcast_in0_shared_variables_t {
+    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id;
+    tt::tt_metal::KernelHandle mm_kernel_in1_sender_writer_id;
+    tt::tt_metal::CBHandle cb_src1;
+    tt::tt_metal::CBHandle cb_src2;
+    tt::tt_metal::CBHandle cb_src3;
+    tt::tt_metal::CBHandle cb_output;
+    CoreCoord start_core;
+    std::vector<CoreCoord> cores;
+    uint32_t num_cores_with_work;
+};
+
+mcast_in0_shared_variables_t process_program_mcast_in0(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
@@ -902,7 +904,7 @@ process_program_mcast_in0(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
         }
     }
-    return {
+    return mcast_in0_shared_variables_t{
         mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
         mm_kernel_in1_sender_writer_id,
         cb_src1,
@@ -954,66 +956,48 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
     bool output_is_sharded,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
-    auto
-        [mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
-         mm_kernel_in1_sender_writer_id,
-         cb_src1,
-         cb_src2,
-         cb_src3,
-         cb_output,
-         start_core,
-         cores,
-         num_cores_with_work] =
-            process_program_mcast_in0(
-                program,
-                a,
-                device,
-                math_fidelity,
-                fp32_dest_acc_en,
-                math_approx_mode,
-                packer_l1_acc,
-                compute_with_storage_grid_size,
-                B,
-                M,
-                N,
-                K,
-                bcast_batch,
-                in0_block_w,
-                out_subblock_h,
-                out_subblock_w,
-                out_block_h,
-                out_block_w,
-                per_core_M,
-                per_core_N,
-                fused_activation,
-                in0_buffer,
-                in1_buffer,
-                bias_buffer,
-                out_buffer,
-                in0_tile,
-                in1_tile,
-                bias_tile,
-                output_tile,
-                in0_data_format,
-                in1_data_format,
-                bias_data_format,
-                output_data_format,
-                in0_is_sharded,
-                in1_is_sharded,
-                bias_is_sharded,
-                output_is_sharded,
-                untilize_out,
-                fused_op_signaler);
+    mcast_in0_shared_variables_t shared_variables = process_program_mcast_in0(
+        program,
+        a,
+        device,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode,
+        packer_l1_acc,
+        compute_with_storage_grid_size,
+        B,
+        M,
+        N,
+        K,
+        bcast_batch,
+        in0_block_w,
+        out_subblock_h,
+        out_subblock_w,
+        out_block_h,
+        out_block_w,
+        per_core_M,
+        per_core_N,
+        fused_activation,
+        in0_buffer,
+        in1_buffer,
+        bias_buffer,
+        out_buffer,
+        in0_tile,
+        in1_tile,
+        bias_tile,
+        output_tile,
+        in0_data_format,
+        in1_data_format,
+        bias_data_format,
+        output_data_format,
+        in0_is_sharded,
+        in1_is_sharded,
+        bias_is_sharded,
+        output_is_sharded,
+        untilize_out,
+        fused_op_signaler);
     auto override_runtime_arguments_callback =
-        [mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
-         mm_kernel_in1_sender_writer_id,
-         cb_src1,
-         cb_src2,
-         cb_src3,
-         cb_output,
-         start_core,
-         cores,
-         num_cores_with_work](
+        [shared_variables](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
@@ -1039,26 +1023,29 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
 
             // Manually unroll sender core
             if (src0_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
+                UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src2, *src_buffer_a);
             } else {
                 // in0 sender
-                auto& reader_sender_runtime_args =
-                    GetRuntimeArgs(program, mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, start_core);
+                auto& reader_sender_runtime_args = GetRuntimeArgs(
+                    program,
+                    shared_variables.mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
+                    shared_variables.start_core);
                 reader_sender_runtime_args[0] = src_buffer_a->address();
             }
 
             if (src1_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
+                UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src1, *src_buffer_b);
             }
 
             if (bias_tensor.has_value() && bias_tensor.value().is_sharded()) {
-                UpdateDynamicCircularBufferAddress(program, cb_src3, *bias_buffer.value());
+                UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src3, *bias_buffer.value());
             }
 
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
+            auto& writer_runtime_args_by_core =
+                GetRuntimeArgs(program, shared_variables.mm_kernel_in1_sender_writer_id);
 
-            for (uint32_t i = 0; i < num_cores_with_work; ++i) {
-                const auto& core = cores[i];
+            for (uint32_t i = 0; i < shared_variables.num_cores_with_work; ++i) {
+                const auto& core = shared_variables.cores[i];
 
                 auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
 
@@ -1071,7 +1058,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
             }
 
             if (out_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+                UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
             }
         };
 
