@@ -563,8 +563,82 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc == 1
+
+    assert torch.equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+        torch.Size([1, 3, 320, 384]),
+    ],
+)
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (0, 2),  # Small range
+        (0, 65535),  # Full uint16 range
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.eqz,
+        ttnn.nez,
+    ],
+)
+def test_unary_zero_comp_uint16_ttnn(input_shapes, low, high, ttnn_function, device):
+    in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    cq_id = 0
+    output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    golden_tensor = golden_function(in_data)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.eqz,
+        ttnn.nez,
+    ],
+)
+def test_unary_zero_comp_with_majority_zeros(input_shapes, ttnn_function, device):
+    rows, cols = input_shapes[-2], input_shapes[-1]
+    total_elements = rows * cols
+    num_zeros = total_elements * 3 // 4
+    num_nonzeros = total_elements - num_zeros
+
+    flat_tensor = torch.zeros(total_elements, dtype=torch.int32)
+    random_ints = torch.randint(0, 100, (num_nonzeros,), dtype=torch.int32)
+    flat_tensor[:num_nonzeros] = random_ints
+    flat_tensor = flat_tensor[torch.randperm(total_elements)]
+
+    in_data = flat_tensor.reshape(input_shapes)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    cq_id = 0
+    output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    golden_tensor = golden_function(in_data)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -607,8 +681,7 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc == 1
+    assert torch.equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
