@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
 void kernel_main() {
@@ -34,9 +33,21 @@ void kernel_main() {
 
     uint32_t end_row = start_row + num_rows_to_process;
 
+    uint32_t indices[TILE_HEIGHT];
+
     for (uint32_t r = start_row; r < end_row; r++) {
         cb_wait_front(cb_target_idx, onetile);
         auto target_indexes_l1_ptr = reinterpret_cast<uint32_t *>(get_read_ptr(cb_target_idx));
+
+        for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {
+            indices[i] = i;
+        }
+        std::sort(
+            indices, indices + TILE_HEIGHT, [&target_indexes_l1_ptr](const uint32_t &idx_1, const uint32_t &idx_2) {
+                return target_indexes_l1_ptr[idx_1] < target_indexes_l1_ptr[idx_2];
+            });
+
+        uint32_t target_indices_idx = 0;
 
         for (uint32_t c = 0, idx = r * Wt; c < Wt; c += block_size) {
             cb_wait_front(cb_output_idx, block_size);
@@ -44,20 +55,22 @@ void kernel_main() {
 
             auto write_output_l1_ptr = reinterpret_cast<uint16_t *>(l1_read_addr);
 
-            for (uint32_t h = 0; h < TILE_HEIGHT; ++h) {
-                auto target_value = target_indexes_l1_ptr[h];
-
+            while (target_indices_idx < TILE_HEIGHT) {
+                uint32_t h = indices[target_indices_idx];
+                uint32_t target_value = target_indexes_l1_ptr[h];
                 uint32_t tile_idx = target_value / TILE_WIDTH;
-
-                if (tile_idx >= c && tile_idx < c + block_size) {
-                    uint32_t local_tile_idx = tile_idx - c;
-                    uint32_t index_inside_tile =
-                        (TILE_WIDTH * TILE_HEIGHT * local_tile_idx) + get_tilized_idx(h, target_value);
-
-                    float value = bfloat16_to_float(write_output_l1_ptr[index_inside_tile]);
-                    value -= scaler;
-                    write_output_l1_ptr[index_inside_tile] = float_to_bfloat16(value);
+                if (tile_idx >= c + block_size) {
+                    break;
                 }
+
+                uint32_t local_tile_idx = tile_idx - c;
+                uint32_t index_inside_tile =
+                    (TILE_WIDTH * TILE_HEIGHT * local_tile_idx) + get_tilized_idx(h, target_value);
+
+                float value = bfloat16_to_float(write_output_l1_ptr[index_inside_tile]);
+                value -= scaler;
+                write_output_l1_ptr[index_inside_tile] = float_to_bfloat16(value);
+                ++target_indices_idx;
             }
 
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++idx) {

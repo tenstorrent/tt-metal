@@ -115,58 +115,5 @@ void kernel_main() {
         // read input buffer by blocks to calculate softmax in row
         read_block_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 #endif
-
-        // #ifdef EVERYTHING_FITS_IN_L1
-        //         // read input buffer by blocks
-        //         for (uint32_t j = 0; j < Wt; j += block_size) {
-        //             cb_reserve_back(cb_input_idx, block_size);
-        //             uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-        //             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        //                 noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-        //                 l1_write_addr += tile_bytes;
-        //             }
-
-        //             noc_async_read_barrier();
-        //             cb_push_back(cb_input_idx, block_size);
-        //         }
-
-        // #else
-        //         // read input buffer by blocks to calculate max value in row
-        //         for (uint32_t j = 0; j < Wt; j += block_size) {
-        //             cb_reserve_back(cb_input_idx, block_size);
-        //             uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-        //             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        //                 noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-        //                 l1_write_addr += tile_bytes;
-        //             }
-        //             noc_async_read_barrier();
-        //             cb_push_back(cb_input_idx, block_size);
-        //         }
-
-        //         // read input buffer by blocks to calculate sum(exp(x - max(x))) in row
-        //         for (uint32_t j = 0; j < Wt; j += block_size) {
-        //             cb_reserve_back(cb_input_idx, block_size);
-        //             uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-        //             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        //                 noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-        //                 l1_write_addr += tile_bytes;
-        //             }
-        //             noc_async_read_barrier();
-        //             cb_push_back(cb_input_idx, block_size);
-        //         }
-
-        //         // read input buffer by blocks to calculate softmax in row
-        //         for (uint32_t j = 0; j < Wt; j += block_size) {
-        //             cb_reserve_back(cb_input_idx, block_size);
-        //             uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-        //             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        //                 noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-        //                 l1_write_addr += tile_bytes;
-        //             }
-        //             noc_async_read_barrier();
-        //             cb_push_back(cb_input_idx, block_size);
-        //         }
-
-        // #endif
     }
 }
