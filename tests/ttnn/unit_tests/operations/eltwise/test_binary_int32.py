@@ -10,7 +10,7 @@ import ttnn
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        (torch.Size([1, 1, 10, 10])),
+        (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
     ],
@@ -235,7 +235,5 @@ def test_binary_logical_int32_edge_cases(logical_op, device):
 
     output_tensor = logical_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
-    print(output_tensor)
-    print(torch_output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
