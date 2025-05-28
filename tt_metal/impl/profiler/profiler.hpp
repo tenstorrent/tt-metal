@@ -219,8 +219,6 @@ public:
 
     ~DeviceProfiler();
 
-    // DRAM buffer for device side results
-    distributed::AnyBuffer output_dram_buffer;
     std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
 
     // Device-core Syncdata
@@ -228,6 +226,9 @@ public:
 
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
+
+    // Number of bytes reserved in each DRAM bank for storing device profiling data
+    uint32_t profile_buffer_bank_size_bytes;
 
     // (Device ID, Core Coord) pairs that keep track of cores which need to have their Tracy contexts updated
     std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
@@ -266,9 +267,13 @@ public:
 
     // Update sync info for this device
     void setSyncInfo(const std::tuple<double, double, double>& sync_info);
-};
 
-void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data);
+    // Read data from profiler buffer using fast dispatch
+    void issueFastDispatchReadFromProfilerBuffer(IDevice* device);
+
+    // Read data from profiler buffer using slow dispatch
+    void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
+};
 
 void write_control_buffer_to_core(
     IDevice* device,
@@ -276,6 +281,8 @@ void write_control_buffer_to_core(
     const HalProgrammableCoreType core_type,
     const ProfilerDumpState state,
     const std::vector<uint32_t>& control_buffer);
+
+HalProgrammableCoreType get_core_type(chip_id_t device_id, const CoreCoord& core);
 
 }  // namespace tt_metal
 
