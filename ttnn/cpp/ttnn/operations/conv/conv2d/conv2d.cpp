@@ -15,6 +15,7 @@
 #include "tt-metalium/math.hpp"
 #include "tt-metalium/small_vector.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -355,14 +356,9 @@ Result conv2d_DRAM(
             sliced_output_tensor = ttnn::to_memory_config(
                 sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         }
-        // Error in UntilizeWithUnpad.
-        // Reshape to padded_shape makes to_layout call just untilize.
-        // https://github.com/tenstorrent/tt-metal/issues/22580
-        sliced_output_tensor = ttnn::reshape(sliced_output_tensor, sliced_output_tensor.get_padded_shape());
 
         if (sliced_output_tensor.layout() != Layout::ROW_MAJOR) {
-            sliced_output_tensor =
-                ttnn::to_layout(sliced_output_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
+            sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
         }
         ttnn::experimental::slice_write(
             queue_id,
