@@ -101,7 +101,7 @@ inline int multihost_main(int argc, char** argv) {
 
     ::testing::InitGoogleTest(&argc, argv);
 
-    auto ctx = DistributedContext::get_current_world();
+    auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     // Skip all tests if lacking fault tolerance.
     if (!ctx->supports_fault_tolerance()) {
