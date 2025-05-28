@@ -15,6 +15,7 @@
 #include "tt-metalium/math.hpp"
 #include "tt-metalium/small_vector.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -188,6 +189,9 @@ Result conv2d_DRAM(
 
     ttnn::Tensor weight_tensor_on_device;
     std::optional<ttnn::Tensor> bias_tensor_on_device;
+    TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
+    TT_FATAL(
+        !conv_config.deallocate_activation, "Deallocate activation is not supported for Conv2D with DRAM Slicing.");
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
     TT_FATAL(
@@ -352,9 +356,9 @@ Result conv2d_DRAM(
             sliced_output_tensor = ttnn::to_memory_config(
                 sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         }
+
         if (sliced_output_tensor.layout() != Layout::ROW_MAJOR) {
-            sliced_output_tensor =
-                ttnn::to_layout(sliced_output_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
+            sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
         }
         ttnn::experimental::slice_write(
             queue_id,
