@@ -80,17 +80,16 @@ public:
 
     Tensor compose(const std::vector<Tensor>& tensors) const override {
         TT_FATAL(
-            tensors.size() == shape_.mesh_size(),
-            "NdMeshToTensor: Composition failed. Expected {} tensors for mesh shape {}, but got {}.",
-            shape_.mesh_size(),
-            shape_,
-            tensors.size());
+            shape_.dims() == 1 || tensors.size() == shape_.mesh_size(),
+            "ND composition requires the number of tensors {} to match the mesh shape {}",
+            tensors.size(),
+            shape_);
 
         std::vector<Tensor> current_tensors = tensors;
-        size_t outer_stride = shape_.mesh_size();
+        size_t outer_stride = shape_.dims() == 1 ? tensors.size() : shape_.mesh_size();
 
         for (int mesh_dim_idx = shape_.dims() - 1; mesh_dim_idx >= 0; --mesh_dim_idx) {
-            const size_t mesh_dim_size = shape_[mesh_dim_idx];
+            const size_t mesh_dim_size = shape_.dims() == 1 ? tensors.size() : shape_[mesh_dim_idx];
             const int concat_dim = config_.dims[mesh_dim_idx];
             outer_stride /= mesh_dim_size;
 
@@ -146,19 +145,18 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_devic
 }
 
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_device, int dim) {
-    return create_mesh_composer(
-        mesh_device,
+    return std::make_unique<NdMeshToTensor>(
+        MeshShape(mesh_device.num_devices()),
         MeshComposerConfig{
             .dims = {dim},
-        },
-        MeshShape(mesh_device.num_devices()));
+        });
 }
 
 std::unique_ptr<TensorToMesh> create_mesh_mapper(
     MeshDevice& mesh_device, const MeshMapperConfig& config, const std::optional<ttnn::MeshShape>& shape) {
     const auto distributed_shape = shape.value_or(mesh_device.shape());
     TT_FATAL(
-        mesh_device.shape().mesh_size() <= distributed_shape.mesh_size(),
+        distributed_shape.mesh_size() <= mesh_device.shape().mesh_size(),
         "The size of the supplied mesh shape {} does not match the device shape size {}",
         distributed_shape,
         mesh_device.shape());
@@ -186,7 +184,7 @@ std::unique_ptr<MeshToTensor> create_mesh_composer(
     MeshDevice& mesh_device, const MeshComposerConfig& config, const std::optional<ttnn::MeshShape>& shape) {
     const auto distributed_shape = shape.value_or(mesh_device.shape());
     TT_FATAL(
-        mesh_device.shape().mesh_size() == distributed_shape.mesh_size(),
+        distributed_shape.mesh_size() <= mesh_device.shape().mesh_size(),
         "The size of the supplied mesh shape {} does not match the device shape size {}",
         distributed_shape,
         mesh_device.shape());
