@@ -24,19 +24,19 @@ jobs:
       matrix:
         test-group: [
           {
-            name: "whisper_performance",
+            name: "whisper performance",
             arch: blackhole,
             cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
-            owner_id: U05RWH3QUPM #Salar Hosseini
+            owner_id: U05RWH3QUPM # Salar Hosseini
           },
           {
-            name: "Llama3-8B_performance",
+            name: "llama3-8b performance",
             arch: blackhole,
             cmd:  HF_HOME=/localdev/blackhole_demos/huggingface_data TT_CACHE_PATH=/localdev/blackhole_demos/tt_cache HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1",
             owner_id: U03PUAKE719 # Miguel Tairum
           },
           { # This should be moved to a BH perf regression pipeline in the future
-            name: "unet_shallow_performance",
+            name: "unet-shallow performance",
             arch: blackhole,
             cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device",
             owner_id: U06ECNVR0EN # Evan Smal
@@ -81,7 +81,7 @@ jobs:
             -v /localdev/blackhole_demos:/localdev/blackhole_demos:ro
           install_wheel: true
           run_args: |
-            if [[ "${{ matrix.test-group.name }}" == *"Llama"* ]]; then
+            if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
               pip install -r ${{ github.workspace }}/models/tt_transformers/requirements.txt
             fi
             ${{ matrix.test-group.cmd }}
