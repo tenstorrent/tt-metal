@@ -9,11 +9,11 @@ import os
 import pytest
 import torch
 import ttnn
+import math
 
 from ..reference import SD3Transformer2DModel
 from ..tt.fun_patch_embedding import sd_patch_embed, TtPatchEmbedParameters
-from ..tt.utils import assert_quality, to_torch
-from ..tt.parallel_config import create_dit_parallel_config, ParallelConfig
+from ..tt.utils import assert_quality, from_torch_fast_2d, initialize_sd_parallel_config
 
 if TYPE_CHECKING:
     from ..reference.patch_embedding import PatchEmbed
@@ -24,16 +24,27 @@ TILE_SIZE = 32
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    ("model_name", "batch_size"),
+    (
+        "model_name",
+        "batch_size",
+        "in_channels",
+        "height",
+        "width",
+        "cfg_factor",
+        "sp_factor",
+        "tp_factor",
+        "topology",
+    ),
     [
-        ("large", 2),
+        ("large", 1, 16, 128, 128, 1, 2, 4, ttnn.Topology.Linear),
+        ("large", 2, 16, 128, 128, 1, 2, 4, ttnn.Topology.Linear),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -42,35 +53,36 @@ def test_patch_embedding(
     mesh_device: ttnn.MeshDevice,
     model_name,
     batch_size: int,
+    in_channels: int,
+    height: int,
+    width: int,
+    cfg_factor: int,
+    sp_factor: int,
+    tp_factor: int,
+    topology: ttnn.Topology,
 ) -> None:
     mesh_shape = tuple(mesh_device.shape)
-    cfg_parallel = ParallelConfig(mesh_shape=mesh_shape, factor=1, mesh_axis=0)
-    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1], mesh_axis=1)
-    dit_parallel_config = create_dit_parallel_config(
-        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel
-    )
-    dtype = ttnn.bfloat16
+    dit_parallel_config = initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, topology)
+    torch_dtype = torch.float32
+    ttnn_dtype = ttnn.bfloat16
 
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch.bfloat16
+        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch_dtype
     )
-    if model_name == "medium":
-        embedding_dim = 1536
-    else:
-        embedding_dim = 2432
-
-    num_devices = mesh_device.get_num_devices()
-    pad_embedding_dim = False
-    if os.environ["MESH_DEVICE"] == "T3K" and embedding_dim == 2432:
-        pad_embedding_dim = True
-        hidden_dim_padding = (
-            ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE
-        ) * num_devices - embedding_dim
-    else:
-        hidden_dim_padding = 0
+    embedding_dim = 1536 if model_name == "medium" else 2432
 
     torch_model: PatchEmbed = parent_torch_model.pos_embed
     torch_model.eval()
+
+    ## heads padding
+    assert not embedding_dim % parent_torch_model.transformer_blocks[0].num_heads, "Embedding_dim % num_heads != 0"
+    pad_embedding_dim = (bool)(parent_torch_model.transformer_blocks[0].num_heads) % tp_factor
+    if pad_embedding_dim:
+        head_size = embedding_dim // parent_torch_model.transformer_blocks[0].num_heads
+        num_heads = math.ceil(parent_torch_model.transformer_blocks[0].num_heads / tp_factor) * tp_factor
+        hidden_dim_padding = (num_heads * head_size) - embedding_dim
+    else:
+        num_heads = parent_torch_model.transformer_blocks[0].num_heads
 
     parameters = TtPatchEmbedParameters.from_torch(
         torch_model.state_dict(),
@@ -78,24 +90,35 @@ def test_patch_embedding(
         hidden_dim_padding=hidden_dim_padding,
         out_channels=embedding_dim,
         parallel_config=dit_parallel_config,
+        dtype=ttnn_dtype,
+        height=height,
+        width=width,
     )
 
-    torch_input_tensor = torch.randn((batch_size, 16, 128, 128), dtype=torch.bfloat16)
+    torch_input_tensor = torch.randn((batch_size, in_channels, height, width), dtype=torch_dtype)
 
-    torch_output = torch_model(torch_input_tensor)
+    with torch.no_grad():
+        torch_output = torch_model(torch_input_tensor)
 
-    tt_input_tensor = ttnn.from_torch(
+    seq_parallel_shard_dim = 1  # 1 is height
+    tt_input_tensor = from_torch_fast_2d(
         torch_input_tensor.permute([0, 2, 3, 1]),  # BCYX -> BYXC
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_device=mesh_device,
+        mesh_shape=dit_parallel_config.cfg_parallel.mesh_shape,
+        dims=[seq_parallel_shard_dim, None],
+        dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
-        dtype=dtype,
     )
 
     tt_output = sd_patch_embed(tt_input_tensor, parameters, parallel_config=dit_parallel_config)
-
-    tt_output_torch = to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=-1).squeeze(1)[
-        :batch_size, :, :embedding_dim
-    ]
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device,
+            mesh_shape=tuple(mesh_device.shape),
+            dims=[-2, -1],
+        ),
+    )
+    tt_output_torch = tt_output_torch.squeeze(1)[:batch_size, :, :embedding_dim]
 
     assert_quality(torch_output, tt_output_torch, pcc=0.999_990, shard_dim=0, num_devices=mesh_device.get_num_devices())
