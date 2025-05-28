@@ -303,7 +303,15 @@ inline void llk_pack_fast_tilize_hw_configure_disaggregated(const std::uint32_t 
 
 inline void llk_pack_fast_tilize_init() { _llk_pack_fast_tilize_init_(); }
 
-inline void llk_pack_fast_tilize_uninit() { _llk_pack_fast_tilize_uninit_(); }
+inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
+    const std::uint32_t output_id = get_output_id(pack_output);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const bool partial_face = get_output_partial_face(output_id);
+    const bool narrow_tile = get_output_narrow_tile(output_id);
+
+    _llk_pack_fast_tilize_uninit_(pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
+}
 
 inline void llk_pack_fast_tilize_block(
     const std::uint32_t tile_index,
