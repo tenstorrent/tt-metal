@@ -70,13 +70,13 @@ void FabricRouterVC::GenerateDependentConfigs() {
                 ds_kernel->GetDeviceId(), *router_chans_rev.begin());
 
         bool valid_path{false};
-        if (nullptr != dynamic_cast<PrefetchKernel*>(us_kernel) &&
-            nullptr != dynamic_cast<PrefetchKernel*>(ds_kernel)) {
+        if (dynamic_cast<PrefetchKernel*>(us_kernel) != nullptr &&
+            dynamic_cast<PrefetchKernel*>(ds_kernel) != nullptr) {
             valid_path = true;
         }
 
-        if (nullptr != dynamic_cast<DispatchKernel*>(us_kernel) &&
-            nullptr != dynamic_cast<DispatchKernel*>(ds_kernel)) {
+        if (dynamic_cast<DispatchKernel*>(us_kernel) != nullptr &&
+            dynamic_cast<DispatchKernel*>(ds_kernel) != nullptr) {
             valid_path = true;
         }
 
