@@ -236,13 +236,10 @@ DistributedStorage load_multi_device_host_storage(
     }
 }
 
-template <typename T>
 DistributedStorage load_storage(
-    FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, T device) {
+    FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, MeshDevice* device) {
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
-        if constexpr (std::is_same_v<T, MeshDevice*>) {
-            return load_multi_device_host_storage(input_file, data_type, layout, device);
-        }
+        return load_multi_device_host_storage(input_file, data_type, layout, device);
     }
     return DistributedStorage{load_host_storage(input_file, data_type), ReplicateTensor{}};
 }
