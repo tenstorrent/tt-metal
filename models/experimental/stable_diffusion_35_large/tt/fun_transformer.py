@@ -9,7 +9,6 @@ from dataclasses import dataclass
 import torch
 import ttnn
 
-from . import utils
 from .substate import indexed_substates, substate
 from .fun_linear import sd_linear, TtLinearParameters
 from .fun_normalization import sd_layer_norm, TtLayerNormParameters
@@ -42,6 +41,8 @@ class TtSD3Transformer2DModelParameters:
         device: ttnn.MeshDevice,
         parallel_config: DiTParallelConfig,
         guidance_cond: int,
+        height: int,
+        width: int,
     ) -> TtSD3Transformer2DModelParameters:
         return cls(
             pos_embed=TtPatchEmbedParameters.from_torch(
@@ -50,12 +51,24 @@ class TtSD3Transformer2DModelParameters:
                 hidden_dim_padding=hidden_dim_padding,
                 out_channels=embedding_dim,
                 parallel_config=parallel_config,
+                height=height,
+                width=width,
             ),
             time_text_embed=TtCombinedTimestepTextProjEmbeddingsParameters.from_torch(
-                substate(state, "time_text_embed"), dtype=dtype, device=device, guidance_cond=guidance_cond
+                substate(state, "time_text_embed"),
+                dtype=dtype,
+                device=device,
+                guidance_cond=guidance_cond,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             ),
             context_embedder=TtLinearParameters.from_torch(
-                substate(state, "context_embedder"), dtype=dtype, device=device, shard_dim=-1
+                substate(state, "context_embedder"),
+                dtype=dtype,
+                device=device,
+                shard_dim=-1,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             ),
             transformer_blocks=[
                 TtTransformerBlockParameters.from_torch(
@@ -70,29 +83,26 @@ class TtSD3Transformer2DModelParameters:
                 for s in indexed_substates(state, "transformer_blocks")
             ],
             time_embed_out=TtLinearParameters.from_torch(
-                substate(state, "norm_out.linear"), dtype=dtype, device=device, shard_dim=None, unsqueeze_bias=True
+                substate(state, "norm_out.linear"),
+                dtype=dtype,
+                device=device,
+                shard_dim=None,
+                unsqueeze_bias=True,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             ),
             norm_out=TtLayerNormParameters.from_torch(
                 substate(state, "norm_out.norm"), dtype=dtype, device=device, distributed=False
             ),
             proj_out=TtLinearParameters.from_torch(
-                substate(state, "proj_out"), dtype=dtype, device=device, shard_dim=None
+                substate(state, "proj_out"),
+                dtype=dtype,
+                device=device,
+                shard_dim=None,
+                hidden_dim_padding=hidden_dim_padding,
+                parallel_config=parallel_config,
             ),
         )
-
-
-class ShardingProjection:
-    def __init__(self, *, dim: int, device: ttnn.MeshDevice) -> None:
-        params = TtLinearParameters.from_torch(
-            dict(weight=torch.eye(dim)),
-            dtype=ttnn.bfloat8_b,
-            device=device,
-            shard_dim=-1,
-        )
-        self._projection = TtLinear(params)
-
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return self._projection(x)
 
 
 def sd_transformer(
@@ -106,6 +116,9 @@ def sd_transformer(
     num_heads: int,
     N: int,
     L: int,
+    ag_global_semaphore,
+    rs_from_global_semaphore,
+    rs_to_global_semaphore,
 ) -> ttnn.Tensor:
     spatial = sd_patch_embed(spatial, parameters.pos_embed, parallel_config=parallel_config)
     time_embed = sd_combined_timestep_embed(
@@ -126,14 +139,35 @@ def sd_transformer(
             num_heads=num_heads,
             N=N,  # spatial_sequence_length
             L=L,  # prompt_sequence_length
+            ag_global_semaphore=ag_global_semaphore,
+            rs_from_global_semaphore=rs_from_global_semaphore,
+            rs_to_global_semaphore=rs_to_global_semaphore,
         )
         if prompt_out is not None:
             prompt = prompt_out
     spatial_time = sd_linear(ttnn.silu(time_embed), parameters.time_embed_out)
     [scale, shift] = chunk_time(spatial_time, 2)
+    if parallel_config.sequence_parallel.factor > 1:
+        spatial = ttnn.experimental.all_gather_async(
+            spatial,
+            dim=-2,
+            cluster_axis=parallel_config.sequence_parallel.mesh_axis,
+            mesh_device=spatial.device(),
+            topology=parallel_config.topology,
+            multi_device_global_semaphore=ag_global_semaphore,
+            num_links=1,
+        )
     if parallel_config.tensor_parallel.factor > 1:
-        spatial = utils.all_gather(spatial, dim=-1, topology=parallel_config.topology)
-    spatial = sd_layer_norm(spatial, parameters.norm_out) * (1 + scale) + shift
+        spatial = ttnn.experimental.all_gather_async(
+            spatial,
+            dim=-1,
+            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=spatial.device(),
+            topology=parallel_config.topology,
+            multi_device_global_semaphore=ag_global_semaphore,
+            num_links=1,
+        )
+    spatial = sd_layer_norm(spatial, parameters.norm_out, parallel_config, ag_global_semaphore) * (1 + scale) + shift
     return sd_linear(spatial, parameters.proj_out)
 
     # def cache_and_trace(
