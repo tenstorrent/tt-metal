@@ -133,13 +133,15 @@ void kernel_main() {
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
-    uint32_t config_l1_addr = get_read_ptr(config_cb_id);
-    volatile tt_l1_ptr uint32_t* config_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
+    uint32_t config_l1_addr;
+    volatile tt_l1_ptr uint32_t* config_ptr;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr uint32_t is_wide_reduction = in_c > MAX_TILES_PER_REDUCTION * TILE_WIDTH;
 
     if constexpr (!one_scalar_per_core) {
+        config_l1_addr = get_read_ptr(config_cb_id);
+        config_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
         scalar_start = config_ptr[3 * scalar_index];
         scalar_value = config_ptr[3 * scalar_index + 1];
         scalar_end = config_ptr[3 * scalar_index + 2];

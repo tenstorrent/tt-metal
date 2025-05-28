@@ -95,8 +95,8 @@ void kernel_main() {
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
-    uint32_t config_l1_addr = get_read_ptr(config_cb_id);
-    volatile tt_l1_ptr uint32_t* config_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
+    uint32_t config_l1_addr;
+    volatile tt_l1_ptr uint32_t* config_ptr;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
@@ -108,6 +108,8 @@ void kernel_main() {
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
     if constexpr (!one_scalar_per_core) {
+        config_l1_addr = get_read_ptr(config_cb_id);
+        config_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
         scalar_start = config_ptr[3 * scalar_index];
         scalar_value = config_ptr[3 * scalar_index + 1];
         scalar_end = config_ptr[3 * scalar_index + 2];
@@ -159,11 +161,10 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(in_cb_id, 1);
             }
-
-            counter++;
-            if constexpr (split_reader) {
-                counter++;  // interleave the indices
-            }
+        }
+        counter++;
+        if constexpr (split_reader) {
+            counter++;  // interleave the indices
         }
     }
 }  // kernel_main()
