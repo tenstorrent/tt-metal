@@ -293,11 +293,11 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         auto c_intermed2_config = CircularBufferConfig(im2_t * im_tile_size, {{tt::CBIndex::c_8, im_cb_data_format}})
                                       .set_page_size(tt::CBIndex::c_8, im_tile_size);
         cb_intermed2_id = CreateCircularBuffer(program, all_device_cores, c_intermed2_config);
-        // cb_x
-        auto c_x_config = CircularBufferConfig(im4_t * im_tile_size, {{tt::CBIndex::c_10, im_cb_data_format}})
-                              .set_page_size(tt::CBIndex::c_10, im_tile_size);
-        cb_intermed4_id = CreateCircularBuffer(program, all_device_cores, c_x_config);
     }
+    // cb_x
+    auto c_x_config = CircularBufferConfig(im4_t * im_tile_size, {{tt::CBIndex::c_10, im_cb_data_format}})
+                          .set_page_size(tt::CBIndex::c_10, im_tile_size);
+    cb_intermed4_id = CreateCircularBuffer(program, all_device_cores, c_x_config);
 
     uint32_t src_addr = src0_buffer->address();
     uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;

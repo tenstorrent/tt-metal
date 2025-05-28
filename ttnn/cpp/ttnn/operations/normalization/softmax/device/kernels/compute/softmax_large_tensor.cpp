@@ -73,9 +73,10 @@ void MAIN {
 #endif
 
     uint32_t num_cb_passes = 1 + ((Wt - 1) / cb_length_t);  // ceiling divide
-    // UNPACK(DPRINT << "num_cb_passes: " << num_cb_passes << ENDL());
-    // DPRINT << "Wt: " << Wt << ENDL();
+    // (DPRINT << "num_cb_passes: " << num_cb_passes << ENDL());
+    // DPRINT << "Wt" << Wt << ENDL();
     // DPRINT << "cb_length_t: " << cb_length_t << ENDL();
+    // DPRINT << "blk" <<  blk<< ENDL();
 
     // First loop is to parse and find the sum
     uint32_t dst0 = 0;
@@ -91,6 +92,8 @@ void MAIN {
 #ifdef NUMERIC_STABLE
         // reads through and finds the max value
         constexpr bool use_prev_reduce_max = false;
+        cb_wait_front(cb_in0, 1);
+        UNPACK(tt::compute::common::print_full_tile(cb_in0, 0, true));
         reduce_cb<PoolType::MAX>(cb_in0, tt::CBIndex::c_2, cb_prev_reduce, cb_max, use_prev_reduce_max, Wt);
 #endif
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
@@ -125,12 +128,14 @@ void MAIN {
         tile_regs_wait();
 
         cb_reserve_back(cb_recip, 1);
+        // DPRINT << "F3" << ENDL();
         pack_tile(dst0, cb_recip);
         cb_push_back(cb_recip, 1);
 
         tile_regs_release();
 
         cb_wait_front(cb_recip, 1);
+        // DPRINT << "F4" << ENDL();
         length_left_t = Wt;
         cur_cb_length_t = cb_length_t;
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
@@ -145,15 +150,17 @@ void MAIN {
     }
     // DPRINT << "DONE COMPUTE FINAL " << ENDL();
 }
+-
 
-// for scale+mask+softmax:
-// bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
-// bcast add H               example: ( [2,1,1024,64] + [2,1,32,64] ) (bcast W -> H)
-// Note that the attention mask will not fit in L1 for the entire tensor
-// The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
-// then read another Wt tiles of mask for the next batch
-void apply_fused_scale_mask(
-    uint32_t cb_in, uint32_t cb_fused_scale_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
+    // for scale+mask+softmax:
+    // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
+    // bcast add H               example: ( [2,1,1024,64] + [2,1,32,64] ) (bcast W -> H)
+    // Note that the attention mask will not fit in L1 for the entire tensor
+    // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
+    // then read another Wt tiles of mask for the next batch
+    void
+    apply_fused_scale_mask(
+        uint32_t cb_in, uint32_t cb_fused_scale_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
     // Requirements:
     //   cb_length_t of cb_in and cb_out are the same.
     //   blk is a divisor of cb_length_t
@@ -161,7 +168,7 @@ void apply_fused_scale_mask(
     pack_reconfig_data_format(cb_out);
     mul_tiles_bcast_scalar_init_short(cb_in, cb_fused_scale_mask);
     cb_wait_front(cb_in, 1);
-    // UNPACK(tt::compute::common::print_full_tile(cb_in, 0, true));
+    UNPACK(tt::compute::common::print_full_tile(cb_in, 0, true));
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
         tile_regs_acquire();
         tile_regs_wait();
@@ -247,6 +254,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
         cb_pop_front(cb_in, blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             exp_tile<EXP_APPROX>(cur_dst);  // exp on DST[0]
+            dprint_tensix_dest_reg(0);
         }
         tile_regs_wait();
         tile_regs_commit();
@@ -275,15 +283,17 @@ void reduce_cb(
     pack_reconfig_data_format(cb_out);
     tile_regs_acquire();
     tile_regs_wait();
-    cb_wait_front(cb_in, 1);
-    reduce_init_delta<false, reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, cb_out);
+    binary_op_init_common(cb_in, cb_scaler, cb_out);
+    cb_reserve_back(cb_out, 1);
+    cb_wait_front(cb_scaler, 1);
+    reduce_init<false, reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, cb_out);
     for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
         cb_wait_front(cb_in, 1);
         reduce_tile<reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, 0, 0, 0);
+        dprint_tensix_dest_reg(0);
         cb_pop_front(cb_in, 1);
     }
-    // cb_pop_front(cb_in, cb_length_t);
-    reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_out);
+    // reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_out);
 
     if (use_prev_reduce) {
         reconfig_data_format_srca(cb_prev_out);
@@ -297,7 +307,6 @@ void reduce_cb(
     }
 
     tile_regs_commit();
-    cb_reserve_back(cb_out, 1);
     pack_tile(0, cb_out);
     cb_push_back(cb_out, 1);
     cb_wait_front(cb_out, 1);
