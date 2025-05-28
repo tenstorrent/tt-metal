@@ -377,33 +377,30 @@ static Tensor conv_depthwise_weight_bcast_helper(
     const ttnn::Shape& original_weight_shape,
     const ttnn::Shape& output_weight_shape,
     DataType output_dtype) {
-    auto compute =
-        [&original_weight_shape, &output_weight_shape, &output_dtype](const auto& conv_weight_tensor_buffer) {
-            ttnn::Shape output_shape = output_weight_shape;
-            // Create a new buffer with the output shape
-            auto output_buffer = std::vector<T>(output_weight_shape.volume());
+    auto compute = [&original_weight_shape, &output_weight_shape, &output_dtype](
+                       const auto& conv_weight_tensor_buffer) {
+        ttnn::Shape output_shape = output_weight_shape;
+        // Create a new buffer with the output shape
+        auto output_buffer = std::vector<T>(output_weight_shape.volume());
 
-            // Copy the original weight tensor to the output tensor
-            for (int i = 0; i < output_weight_shape[0]; i++) {
-                for (int j = 0; j < output_weight_shape[1]; j++) {
-                    for (int k = 0; k < output_weight_shape[2]; k++) {
-                        for (int l = 0; l < output_weight_shape[3]; l++) {
-                            auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                                ttnn::SmallVector<int>{i, 0, k, l}, compute_strides(original_weight_shape));
-                            auto value = conv_weight_tensor_buffer[value_flat_input_index];
-                            auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                                ttnn::SmallVector<int>{i, j, k, l}, compute_strides(output_weight_shape));
-                            output_buffer[output_flat_input_index] = value;
-                        }
+        // Copy the original weight tensor to the output tensor
+        for (int i = 0; i < output_weight_shape[0]; i++) {
+            for (int j = 0; j < output_weight_shape[1]; j++) {
+                for (int k = 0; k < output_weight_shape[2]; k++) {
+                    for (int l = 0; l < output_weight_shape[3]; l++) {
+                        auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
+                            ttnn::SmallVector<int>{i, 0, k, l}, compute_strides(original_weight_shape));
+                        auto value = conv_weight_tensor_buffer[value_flat_input_index];
+                        auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
+                            ttnn::SmallVector<int>{i, j, k, l}, compute_strides(output_weight_shape));
+                        output_buffer[output_flat_input_index] = value;
                     }
                 }
             }
-            return Tensor(
-                tt::tt_metal::HostBuffer(std::move(output_buffer)),
-                output_weight_shape,
-                output_dtype,
-                Layout::ROW_MAJOR);
-        };
+        }
+        return Tensor(
+            tt::tt_metal::HostBuffer(std::move(output_buffer)), output_weight_shape, output_dtype, Layout::ROW_MAJOR);
+    };
     return convert_tensor<T>(conv_weight_tensor, compute);
 }
 
@@ -1042,9 +1039,16 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     }
 
     if (parameters_on_device) {
-        const auto core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({0, 0}));
+        uint32_t number_of_banks = 2;
+        const auto core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({number_of_banks - 1, 0}));
+        TT_FATAL(
+            padded_target_shape[-2] % number_of_banks == 0,
+            "Weights must evenly divide by number of banks ({} % {} == 0)",
+            padded_target_shape[-2],
+            number_of_banks);
         const auto grid = CoreRangeSet({core_range});
-        const auto shard_spec = tt::tt_metal::ShardSpec(grid, {padded_target_shape[-2], padded_target_shape[-1]});
+        const auto shard_spec =
+            tt::tt_metal::ShardSpec(grid, {padded_target_shape[-2] / number_of_banks, padded_target_shape[-1]});
         const MemoryConfig config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::DRAM, shard_spec};
         bool skip_shard = original_weights_window_h == 1 && original_weights_window_w == 1;
         if (skip_shard) {

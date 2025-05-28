@@ -817,21 +817,21 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         log_debug(LogOp, "num_blocks_act_w: {}", num_blocks_act_w);
         log_debug(LogOp, "num_blocks_weight_w: {}", num_blocks_weight_w);
         log_debug(LogOp, "num_blocks_out_h: {}", num_blocks_out_h);
-        log_debug(LogOp, "act_block_h_ntiles: {}", act_block_h_ntiles);
-        log_debug(LogOp, "act_block_h_datums: {}", act_block_h_datums);
-        log_debug(LogOp, "act_block_w_ntiles: {}", act_block_w_ntiles);
-        log_debug(LogOp, "act_block_w_datums: {}", act_block_w_datums);
-        log_debug(LogOp, "out_block_h_ntiles: {}", out_block_h_ntiles);
-        log_debug(LogOp, "act_num_subblocks: {}", act_num_subblocks);
-        log_debug(LogOp, "act_block_num_tiles: {}", act_block_num_tiles);
-        log_debug(LogOp, "act_subblock_h_ntiles: {}", act_subblock_h_ntiles);
-        log_debug(LogOp, "act_subblock_num_tiles: {}", act_subblock_num_tiles);
-        log_debug(LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
+        tt::log_info(LogOp, "act_block_h_ntiles: {}", act_block_h_ntiles);
+        tt::log_info(LogOp, "act_block_h_datums: {}", act_block_h_datums);
+        tt::log_info(LogOp, "act_block_w_ntiles: {}", act_block_w_ntiles);
+        tt::log_info(LogOp, "act_block_w_datums: {}", act_block_w_datums);
+        tt::log_info(LogOp, "out_block_h_ntiles: {}", out_block_h_ntiles);
+        tt::log_info(LogOp, "act_num_subblocks: {}", act_num_subblocks);
+        tt::log_info(LogOp, "act_block_num_tiles: {}", act_block_num_tiles);
+        tt::log_info(LogOp, "act_subblock_h_ntiles: {}", act_subblock_h_ntiles);
+        tt::log_info(LogOp, "act_subblock_num_tiles: {}", act_subblock_num_tiles);
+        tt::log_info(LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
         log_debug(LogOp, "weight_dram_addr: {}", weight_dram_addr);
-        log_debug(LogOp, "weight_num_subblocks: {}", weight_num_subblocks);
-        log_debug(LogOp, "weight_block_num_tiles: {}", weight_block_num_tiles);
-        log_debug(LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
-        log_debug(LogOp, "weight_block_h_ntiles: {}", weight_block_h_ntiles);
+        tt::log_info(LogOp, "weight_num_subblocks: {}", weight_num_subblocks);
+        tt::log_info(LogOp, "weight_block_num_tiles: {}", weight_block_num_tiles);
+        tt::log_info(LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
+        tt::log_info(LogOp, "weight_block_h_ntiles: {}", weight_block_h_ntiles);
         log_debug(LogOp, "has_bias: {}", has_bias);
         log_debug(LogOp, "bias_dram_addr: {}", bias_dram_addr);
         log_debug(LogOp, "bias_ntiles: {}", bias_ntiles);
@@ -848,7 +848,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const auto weight_core_grid = b.memory_config().shard_spec().value();
     const auto weight_cores = corerange_to_cores(weight_core_grid.grid);  // TODO: fix this call
     const auto bank_id = device->allocator()->get_bank_ids_from_logical_core(BufferType::DRAM, weight_cores[0]);
-    tt::log_info("dram cores = {}, bank_id={}", weight_cores, bank_id);
+    const auto bank_id2 = device->allocator()->get_bank_ids_from_logical_core(BufferType::DRAM, weight_cores[1]);
+    tt::log_info("dram cores = {}, bank_id={},{}", weight_cores, bank_id, bank_id2);
 
     uint32_t window_outer;
     uint32_t window_inner;
@@ -1066,13 +1067,17 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         weight_block_h_ntiles,
         weight_block_w_ntiles,
         conv_act_c_blocks);
-    bool fully_buffer_weights = false;
+
     uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles / conv_act_c_blocks;
 
     if (block_sharded) {
         num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles;
         num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles;
     }
+
+    bool using_dram_sharded_weights = true;
+    bool fully_buffer_weights = true;
+
     uint32_t num_act_cb_second_reader_tiles = 0;
     // TODO: This flag should be set in kernel logic but need this for create_CB
     if (weight_width_sliced) {
@@ -1084,19 +1089,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             num_weight_cb_tiles *= filter_h * filter_w;
             num_act_cb_tiles *= filter_h * filter_w;
         }
-    } else if (num_blocks_act_h_per_core > 1) {
+    } else if (num_blocks_act_h_per_core > 1 || using_dram_sharded_weights) {
         fully_buffer_weights = true;
+        tt::log_info(
+            "enabling fully buffer weights because act_h > 1 or using diram sharded weights ({}, {})",
+            num_blocks_act_h,
+            using_dram_sharded_weights);
     }
     uint32_t num_cb0_tilized_tiles = num_act_cb_tiles;
     tt::log_info("num weight cb_tiles {} ", num_weight_cb_tiles);
 
     if (fully_buffer_weights) {
         num_weight_cb_tiles *= window_outer;
-        tt::log_info("fully bufer weights {}", num_weight_cb_tiles);
+        tt::log_info("because we have fully bufer weights the weights cb size is now {}", num_weight_cb_tiles);
     } else if (enable_weights_double_buffer) {
         num_weight_cb_tiles = num_weight_cb_tiles * 2;
         tt::log_info("enable double buf: {}", num_weight_cb_tiles);
     }
+
+    tt::log_info("fully bufer weights??? {}, num_weight_cb_tiles={}", fully_buffer_weights, num_weight_cb_tiles);
 
     if (enable_split_reader) {
         if (enable_act_double_buffer) {
