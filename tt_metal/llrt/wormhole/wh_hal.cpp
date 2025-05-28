@@ -25,6 +25,18 @@ constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE =
     ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
+constexpr static std::uint32_t DRAM_PROFILER_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE;
+#if defined(TRACY_ENABLE)
+constexpr static std::uint32_t DRAM_PROFILER_CORE_COUNT_PER_DRAM_BANK = 20;
+constexpr static std::uint32_t DRAM_PROFILER_SIZE =
+    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * DRAM_PROFILER_CORE_COUNT_PER_DRAM_BANK) +
+      DRAM_ALIGNMENT - 1) /
+     DRAM_ALIGNMENT) *
+    DRAM_ALIGNMENT;
+#else
+constexpr static std::uint32_t DRAM_PROFILER_SIZE = 0;
+#endif
+
 static constexpr float EPS_WHB0 = 1.19209e-7f;
 static constexpr float NAN_WHB0 = 7.0040e+19;
 static constexpr float INF_WHB0 = 1.7014e+38;
@@ -55,6 +67,8 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BARRIER)] = DRAM_BARRIER_BASE;
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BARRIER)] = DRAM_BARRIER_SIZE;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_SIZE;
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
