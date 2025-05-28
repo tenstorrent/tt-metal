@@ -14,7 +14,7 @@
 template <
     DataCopyType type,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    bool is_fp32_dest_acc_en = false,
+    bool is_fp32_dest_acc_en,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy(uint dst_index, uint operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -25,7 +25,7 @@ inline void llk_math_eltwise_unary_datacopy(uint dst_index, uint operand = 0) {
 template <
     DataCopyType type,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    bool is_fp32_dest_acc_en = false,
+    bool is_fp32_dest_acc_en,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_block(uint start_dst_index, uint ntiles, uint operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -39,7 +39,7 @@ inline void llk_math_eltwise_unary_datacopy_block(uint start_dst_index, uint nti
 template <
     DataCopyType type,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    bool is_fp32_dest_acc_en = false,
+    bool is_fp32_dest_acc_en,
     bool is_int_fpu_en = false,
     bool tilize = false>
 // within_face_16x16_transpose is used by unpacker, math does not transpose

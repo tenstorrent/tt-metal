@@ -9,7 +9,7 @@
 /*************************************************************************
  * LLK UNPACK UNTILIZE
  *************************************************************************/
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t* unpack_untilize_params) {
     constexpr bool is_row_pool = false;
     constexpr bool within_face_16x16_transpose = false;
@@ -19,7 +19,7 @@ inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t* unpack
     const uint32_t unpA_num_faces = 4;
     const uint32_t unpA_face_r_dim = FACE_R_DIM;
 
-    _llk_unpack_untilize_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
+    __<is_fp32_dest_acc_en, stoch_rnd_mode>(
         unpack_src_format[unpA_operand_id],
         unpack_dst_format[unpA_operand_id],
         unpA_face_r_dim,
@@ -27,7 +27,7 @@ inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t* unpack
         unpA_num_faces);
 }
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_untilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
     const llk_unpack_A_params_t unpack_untilize_params = {
         .unpA_operand = unpA_operand,

@@ -47,7 +47,7 @@ template <
     BroadcastType src_b_bcast_type,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool is_fp32_dest_acc_en = false>
+    bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
     const std::uint32_t num_faces = 4;
 
@@ -65,12 +65,12 @@ template <
     BroadcastType src_b_bcast_type,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool is_fp32_dest_acc_en = false>
+    bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_binary(
     const std::uint32_t operand_A,
     const std::uint32_t operand_B,
     uint dst_index,
-    const bool clear_fp32_dst_acc = true) {
+    const bool clear_fp32_dst_acc) {
     const std::uint32_t operand_id = get_operand_id(operand_A);  // both operands must have same number of faces
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
