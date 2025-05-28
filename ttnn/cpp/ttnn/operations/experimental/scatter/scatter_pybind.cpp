@@ -37,9 +37,20 @@ void bind_scatter_operation(py::module& module) {
             .. code-block:: python
 
                 import ttnn
+                import torch
 
-                # Create a tensor
-                //
+                input_torch = torch.randn([10,20,30,20,10], dtype=torch.float32)
+                index_torch = torch.randint(0, 10, [10,20,30,20,5], dtype=torch.int64)
+                source_torch = torch.randn([10,20,30,20,10], dtype=input_torch.dtype)
+
+                device = ttnn.open_device(device_id=0)
+                # input tensors must be interleaved, tiled and on device
+                input_ttnn = ttnn.from_torch(input_torch, dtype=ttnn.float32, device=device, layout=ttnn.Layout.TILE)
+                index_ttnn = ttnn.from_torch(index_torch, dtype=ttnn.int32, device=device, layout=ttnn.Layout.TILE)
+                source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.float32, device=device, layout=ttnn.Layout.TILE)
+                dim = -1
+
+                output = ttnn.experimental.scatter_(input_ttnn, dim, index_ttnn, source_ttnn)
         )doc";
 
     using OperationType = decltype(ttnn::experimental::scatter_);
