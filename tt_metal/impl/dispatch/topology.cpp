@@ -1241,9 +1241,9 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
         for (uint32_t risc_id = 0; risc_id < num_risc_cores; risc_id++) {
             std::vector<uint32_t> ct_args = edm_builder.get_compile_time_args(risc_id);
 
-            ct_args.push_back(eth_chan == master_router_chan);
+            ct_args.push_back(eth_chan == master_router_chan && risc_id == 0);
             ct_args.push_back(master_router_chan);
-            ct_args.push_back(edm_builders.size());
+            ct_args.push_back(num_risc_cores * edm_builders.size());
             ct_args.push_back(router_channels_mask);
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
