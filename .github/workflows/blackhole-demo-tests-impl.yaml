@@ -81,7 +81,7 @@ jobs:
             -v /localdev/blackhole_demos:/localdev/blackhole_demos:ro
           install_wheel: true
           run_args: |
-            if [[ "${{ matrix.test-group.name }}" == *"Llama"* ]]; then
+            if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
               pip install -r ${{ github.workspace }}/models/tt_transformers/requirements.txt
             fi
             ${{ matrix.test-group.cmd }}
