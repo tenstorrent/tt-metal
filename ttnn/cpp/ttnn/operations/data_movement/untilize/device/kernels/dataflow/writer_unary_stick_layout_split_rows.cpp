@@ -6,13 +6,12 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
-#include "debug/dprint.h"
-
 void kernel_main() {
-    // Constexpr
+    // const-expr variables
     constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
 
+    // run-time args
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_blocks_across_height = get_arg_val<uint32_t>(1);
     const uint32_t num_columns_of_blocks = get_arg_val<uint32_t>(2);
@@ -21,18 +20,10 @@ void kernel_main() {
     const uint32_t single_block_width_size = get_arg_val<uint32_t>(5);
     const uint32_t stick_size = get_arg_val<uint32_t>(6);
 
+    // compile-time args
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
-
-    DPRINT << "------" << ENDL();
-    DPRINT << "num_blocks_across_height: " << num_blocks_across_height << ENDL();
-    DPRINT << "num_columns_of_blocks: " << num_columns_of_blocks << ENDL();
-    DPRINT << "num_blocks_per_column_row: " << num_blocks_per_column_row << ENDL();
-    DPRINT << "num_tiles_per_block: " << num_tiles_per_block << ENDL();
-    DPRINT << "single_block_width_size: " << single_block_width_size << ENDL();
-    DPRINT << "stick_size: " << stick_size << ENDL();
-    DPRINT << "------" << ENDL();
 
 #ifdef SHARDED
     using tensor_shard_info = ShardedInfo<

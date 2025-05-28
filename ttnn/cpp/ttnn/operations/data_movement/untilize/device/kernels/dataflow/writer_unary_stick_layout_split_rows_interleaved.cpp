@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
     // Constexpr
@@ -23,22 +22,9 @@ void kernel_main() {
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(1) == 1;
+
+#if (stick_size_is_power_of_two)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
-
-#ifdef SHARDED
-    using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(3),   // Memory layout
-        get_compile_time_arg_val(4),   // The number of sharding cores
-        get_compile_time_arg_val(5),   // The page size we offset each write to
-        get_compile_time_arg_val(6),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(7),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(8),   // pages_per_shard_x
-        get_compile_time_arg_val(9)>;  // pages_per_shard_y
-
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(9));
-    experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
-#elif (stick_size_is_power_of_two)
     const InterleavedPow2AddrGen<dst_is_dram> s = {
         .bank_base_address = dst_addr,
         .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
@@ -63,38 +49,11 @@ void kernel_main() {
     };
 
     uint32_t stick_id = start_stick_id;
-
-    /* TODO (GR): Remove
-    DPRINT << "----" << ENDL();
-    DPRINT << "start_stick_id: " << start_stick_id << ENDL();
-    DPRINT << "num_sticks: " << num_sticks << ENDL();
-    DPRINT << "num_tiles_per_block: " << num_tiles_per_block << ENDL();
-    DPRINT << "block_width_size: " << block_width_size << ENDL();
-    DPRINT << "num_full_blocks_in_row: " << num_full_blocks_in_row << ENDL();
-
-    DPRINT << ENDL();
-    DPRINT << "compile 5: " << get_compile_time_arg_val(5) << ENDL();
-    DPRINT << "compile 6: " << get_compile_time_arg_val(6) << ENDL();
-    DPRINT << "pages_per_shard_x: " << get_compile_time_arg_val(8) << ENDL();
-    DPRINT << "pages_per_shard_y: " << get_compile_time_arg_val(9) << ENDL();
-
-    DPRINT << "----" << ENDL();
-    */
-
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         // Get Base Addresses
         for (uint32_t j = 0; j < tile_height; j++) {
             base_dst_noc_addr[j] = get_noc_addr(stick_id, s);
             stick_id++;
-
-            /* TODO (GR): Remove
-            std::pair<uint64_t, uint32_t> p = get_contiguous_noc_addr(stick_id, s);
-            DPRINT << "----" << ENDL();
-            DPRINT << stick_id << ENDL();
-            DPRINT << get_noc_addr(stick_id, s) << ENDL();
-            DPRINT << p.first << ENDL();
-            DPRINT << p.second << ENDL();
-            */
         }
 
         for (uint32_t j = 0; j < num_full_blocks_in_row; j++) {

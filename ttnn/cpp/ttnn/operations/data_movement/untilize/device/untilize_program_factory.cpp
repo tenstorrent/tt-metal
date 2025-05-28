@@ -1290,11 +1290,11 @@ operation::ProgramWithCallbacks untilize_single_core(
     }
 
     // Writer compile-time args
-    bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool output_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(stick_size) - 1) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)out_is_dram,
+        (std::uint32_t)output_is_dram,
         (std::uint32_t)stick_size_is_power_of_two,
         (std::uint32_t)log2_stick_size,
     };
@@ -1346,14 +1346,14 @@ operation::ProgramWithCallbacks untilize_single_core(
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
 
     // Reader run-time args
-    std::vector<uint32_t> reader_kernel_args = {src0_buffer->address(), uint32_t(num_tiles), 0};
+    std::vector<uint32_t> reader_run_time_args = {src0_buffer->address(), uint32_t(num_tiles), 0};
     if (input_is_sharded) {
-        shard_builder::extend_sharding_run_time_args(a, reader_kernel_args);
+        shard_builder::extend_sharding_run_time_args(a, reader_run_time_args);
     }
-    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
+    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
 
     // Writer run-time args
-    std::vector<uint32_t> writer_kernel_args = {
+    std::vector<uint32_t> writer_run_time_args = {
         dst_buffer->address(),
         num_blocks_across_height,
         num_columns_of_blocks,
@@ -1363,9 +1363,9 @@ operation::ProgramWithCallbacks untilize_single_core(
         stick_size,
     };
     if (output_is_sharded) {
-        shard_builder::extend_sharding_run_time_args(output, writer_kernel_args);
+        shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
     }
-    tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
+    tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
 
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
                                            writer_kernel_id = unary_writer_kernel_id](

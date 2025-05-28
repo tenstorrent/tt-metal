@@ -6,17 +6,22 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
+/**
+ * Iterates through num_tiles total tiles in increasing page_id order, pushing them to src CB one by one.
+ * Supports reading tensors that are in either interleaved or sharded format.
+ */
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
-
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-
+    // constexpr variables
     constexpr uint32_t cb_id_in0 = 0;
 
-    // ublocks size defined in tiles
-    constexpr uint32_t onetile = 1;
+    // run-time args
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    uint32_t start_page_id = get_arg_val<uint32_t>(2);
+
+    // compile-time args
+    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
+
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
 #ifdef SHARDED
@@ -38,15 +43,15 @@ void kernel_main() {
         .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
 #endif
 
-    uint32_t end_id = start_id + num_tiles;
-    for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_reserve_back(cb_id_in0, onetile);
+    uint32_t end_page_id = start_page_id + num_tiles;
+    for (uint32_t page_id = start_page_id; page_id < end_page_id; ++page_id) {
+        cb_reserve_back(cb_id_in0, 1);
 
-        uint64_t noc_read_addr = get_noc_addr(i, s);
+        uint64_t noc_read_addr = get_noc_addr(page_id, s);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         noc_async_read(noc_read_addr, l1_write_addr, tile_bytes);
 
         noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        cb_push_back(cb_id_in0, 1);
     }
 }
