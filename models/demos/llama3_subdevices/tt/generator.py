@@ -27,7 +27,7 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.generator import SamplingParams
 
 
-def get_padded_prefill_len(seq_len):
+def get_padded_prefill_len(seq_len: int) -> int:
     """
     Get the padded prefill length for a given sequence length.
     This is used to pad the sequence length to the nearest power of 2.
@@ -91,7 +91,7 @@ class Generator:
 
         for user_id in range(batch):
             logger.info(f"Prefilling User {user_id + 1}")
-            seq_len = prompt_lens[user_id]
+            seq_len = int(prompt_lens[user_id])
             last_token_idx = seq_len - 1
 
             prefill_seq_len = get_padded_prefill_len(seq_len)

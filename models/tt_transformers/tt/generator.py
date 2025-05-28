@@ -76,7 +76,7 @@ class Generator:
                 user_id = group_user_id + model_id * batch_per_device
 
                 logger.info(f"Prefilling User {user_id + 1}")
-                seq_len = prompt_lens[user_id]
+                seq_len = int(prompt_lens[user_id])
                 last_token_idx = seq_len - 1
 
                 prefill_seq_len = get_padded_prefill_len(seq_len)
@@ -104,7 +104,7 @@ class Generator:
             group_user_id = idx // self.data_parallel
             user_id = group_user_id + model_id * batch_per_device
 
-            seq_len = prompt_lens[user_id]
+            seq_len = int(prompt_lens[user_id])
             last_token_idx = seq_len - 1
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
@@ -504,7 +504,7 @@ class Generator:
                 user_id = group_user_id + model_id * batch_per_device
 
                 logger.info(f"Prefilling User {user_id + 1}")
-                seq_len = prompt_lens[user_id]
+                seq_len = int(prompt_lens[user_id])
                 user_page_table = page_table[model_id] if page_table is not None else None
                 user_kv_cache = kv_cache[model_id] if kv_cache is not None else None
                 user_cross_page_table = cross_page_table[model_id] if kv_cache is not None else None
