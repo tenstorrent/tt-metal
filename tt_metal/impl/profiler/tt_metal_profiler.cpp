@@ -119,32 +119,14 @@ void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
     const auto& hal = MetalContext::instance().hal();
     for (auto core :
          tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id)) {
-        HalProgrammableCoreType CoreType;
-        auto curr_core = core.first;
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(curr_core, device_id)) {
-            CoreType = HalProgrammableCoreType::TENSIX;
-        } else {
-            CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-            auto active_eth_cores =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
-            if (active_eth_cores.find(
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
-                        device_id, curr_core)) != active_eth_cores.end()) {
-                CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-            }
-            auto idle_eth_cores =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id);
-            if (idle_eth_cores.find(
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
-                        device_id, curr_core)) != idle_eth_cores.end()) {
-                CoreType = tt_metal::HalProgrammableCoreType::IDLE_ETH;
-            }
-        }
-        profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+        const CoreCoord curr_core = core.first;
+        const HalProgrammableCoreType core_type = get_core_type(device_id, curr_core);
+
+        profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
 
-        write_control_buffer_to_core(device, curr_core, CoreType, ProfilerDumpState::NORMAL, control_buffer);
+        write_control_buffer_to_core(device, curr_core, core_type, ProfilerDumpState::NORMAL, control_buffer);
     }
 #endif
 }
@@ -699,7 +681,7 @@ void InitDeviceProfiler(IDevice* device) {
     if (getDeviceProfilerState()) {
         static std::atomic<bool> firstInit = true;
 
-        auto device_id = device->id();
+        const chip_id_t device_id = device->id();
 
         if (tt_metal_device_profiler_map.find(device_id) == tt_metal_device_profiler_map.end()) {
             if (firstInit.exchange(false)) {
@@ -709,44 +691,21 @@ void InitDeviceProfiler(IDevice* device) {
             }
         }
 
-        uint32_t dramBankCount =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_num_dram_views();
-        uint32_t coreCountPerDram = tt::tt_metal::MetalContext::instance()
-                                        .get_cluster()
-                                        .get_soc_desc(device_id)
-                                        .profiler_ceiled_core_count_perf_dram_bank;
+        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
-        uint32_t pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * coreCountPerDram;
+        const uint32_t num_cores_per_dram_bank = soc_desc.profiler_ceiled_core_count_perf_dram_bank;
+        const uint32_t bank_size_bytes =
+            PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * num_cores_per_dram_bank;
 
-        auto mesh_device = device->get_mesh_device();
+        const uint32_t num_dram_banks = soc_desc.get_num_dram_views();
+
         auto& profiler = tt_metal_device_profiler_map.at(device_id);
-        if (profiler.output_dram_buffer.get_buffer() == nullptr && mesh_device) {
-            // If buffer is not allocated, trying to re-use a buffer already allocated for another device within a
-            // single MeshDevice
-            for (auto neighbor_device : mesh_device->get_devices()) {
-                auto neighbor_profiler_it = tt_metal_device_profiler_map.find(neighbor_device->id());
-                if (neighbor_profiler_it != tt_metal_device_profiler_map.end()) {
-                    auto& neighbor_profiler = neighbor_profiler_it->second;
-                    if (neighbor_profiler.output_dram_buffer.get_buffer() != nullptr) {
-                        profiler.output_dram_buffer = neighbor_profiler.output_dram_buffer;
-                        break;
-                    }
-                }
-            }
-        }
-        if (profiler.output_dram_buffer.get_buffer() == nullptr) {
-            tt::tt_metal::InterleavedBufferConfig dram_config{
-                .device = mesh_device ? mesh_device.get() : device,
-                .size = pageSize * dramBankCount,
-                .page_size = pageSize,
-                .buffer_type = tt::tt_metal::BufferType::DRAM};
-            profiler.output_dram_buffer = distributed::AnyBuffer::create(dram_config);
-            profiler.profile_buffer.resize(profiler.output_dram_buffer.get_buffer()->size() / sizeof(uint32_t));
-        }
-        auto output_dram_buffer_ptr = tt_metal_device_profiler_map.at(device_id).output_dram_buffer.get_buffer();
+        profiler.profile_buffer_bank_size_bytes = bank_size_bytes;
+        profiler.profile_buffer.resize(profiler.profile_buffer_bank_size_bytes * num_dram_banks / sizeof(uint32_t));
 
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer_ptr->address();
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] =
+            MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
         setControlBuffer(device, control_buffer);
     }
 #endif
@@ -825,22 +784,8 @@ void DumpDeviceProfileResults(
                     bool coreDone = false;
 
                     auto curr_core = device->virtual_core_from_logical_core(dispatchCores[0], dispatch_core_type);
+                    HalProgrammableCoreType CoreType = get_core_type(device_id, curr_core);
 
-                    HalProgrammableCoreType CoreType;
-                    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(curr_core, device_id)) {
-                        CoreType = HalProgrammableCoreType::TENSIX;
-                    } else {
-                        auto active_eth_cores =
-                            tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
-                        bool is_active_eth_core =
-                            active_eth_cores.find(tt::tt_metal::MetalContext::instance()
-                                                      .get_cluster()
-                                                      .get_logical_ethernet_core_from_virtual(device_id, curr_core)) !=
-                            active_eth_cores.end();
-
-                        CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
-                                                      : tt_metal::HalProgrammableCoreType::IDLE_ETH;
-                    }
                     profiler_msg_t* profiler_msg =
                         hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
                     for (int i = 0; i < maxLoopCount; i++) {
@@ -882,7 +827,6 @@ void DumpDeviceProfileResults(
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the
                 // last owner. Sync program also contains a buffer so it is safter to release it here
-                tt_metal_device_profiler_map.at(device_id).output_dram_buffer = {};
                 tt_metal_device_profiler_map.at(device_id).sync_program.reset();
             }
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
