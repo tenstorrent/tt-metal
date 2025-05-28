@@ -6,10 +6,6 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
-/**
- * Iterates through num_tiles total tiles in increasing page_id order, pushing them to src CB one by one.
- * Supports reading tensors that are in either interleaved or sharded format.
- */
 void kernel_main() {
     // constexpr variables
     constexpr uint32_t cb_id_in0 = 0;

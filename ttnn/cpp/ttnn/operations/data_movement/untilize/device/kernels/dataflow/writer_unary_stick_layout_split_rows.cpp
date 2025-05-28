@@ -66,11 +66,11 @@ void kernel_main() {
         for (uint32_t j = 0; j < num_columns_of_blocks; ++j) {
             // Determine the base addresses for the row of blocks in the current column
             for (uint32_t k = 0; k < tile_height; ++k) {
-                uint32_t stick_id = (i * 32 + k) * num_columns_of_blocks + j;
+                uint32_t num_complete_rows_already_processed = (i * tile_height + k) * num_columns_of_blocks;
+                uint32_t stick_id = num_complete_rows_already_processed + j;
                 base_dst_noc_addr[k] = get_noc_addr(stick_id, s);
             }
 
-            // For each block in the current column, write all tiles in that block starting at our dst_noc_address
             for (uint32_t k = 0; k < num_blocks_per_column_row; ++k) {
                 write_tiles_in_current_block();
             }
