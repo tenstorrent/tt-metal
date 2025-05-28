@@ -104,7 +104,8 @@ public:
         DeviceAddr address,
         uint32_t size_bytes,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        DeviceAddr address_offset = 0);
 
     void enqueue_write_to_core(
         const CoreCoord& virtual_core,
@@ -112,7 +113,8 @@ public:
         DeviceAddr address,
         uint32_t size_bytes,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        DeviceAddr address_offset = 0);
 
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
 

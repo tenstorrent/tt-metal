@@ -239,10 +239,11 @@ void HWCommandQueue::enqueue_read_buffer(
                 enqueue_read_from_core(
                     virtual_core,
                     (char*)dst + chunk_mapping_in_bytes.src,
-                    buffer_obj.address() + chunk_mapping_in_bytes.dst + offset,
+                    buffer_obj.address() + chunk_mapping_in_bytes.dst,
                     chunk_mapping_in_bytes.size,
                     false,
-                    sub_device_ids);
+                    sub_device_ids,
+                    offset);
             }
         }
     } else if (is_sharded(buffer_obj.buffer_layout())) {
@@ -328,10 +329,11 @@ void HWCommandQueue::enqueue_write_buffer(
                 enqueue_write_to_core(
                     virtual_core,
                     (char*)data + chunk_mapping_in_bytes.src,
-                    buffer_obj.address() + chunk_mapping_in_bytes.dst + offset,
+                    buffer_obj.address() + chunk_mapping_in_bytes.dst,
                     chunk_mapping_in_bytes.size,
                     false,
-                    sub_device_ids);
+                    sub_device_ids,
+                    offset);
             }
         }
     } else {
@@ -361,7 +363,8 @@ void HWCommandQueue::enqueue_read_from_core(
     DeviceAddr address,
     uint32_t size_bytes,
     bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    DeviceAddr address_offset) {
     ZoneScopedN("HWCommandQueue_enqueue_read_from_core");
 
     device_dispatch::validate_core_read_write_bounds(this->device_, virtual_core, address, size_bytes);
@@ -371,7 +374,7 @@ void HWCommandQueue::enqueue_read_from_core(
     if (size_bytes > 0) {
         device_dispatch::CoreReadDispatchParams dispatch_params{
             virtual_core,
-            address,
+            address + address_offset,
             size_bytes,
             this->device_,
             this->id_,
@@ -396,7 +399,8 @@ void HWCommandQueue::enqueue_write_to_core(
     DeviceAddr address,
     uint32_t size_bytes,
     bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    DeviceAddr address_offset) {
     ZoneScopedN("HWCommandQueue_enqueue_write_to_core");
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
@@ -405,7 +409,7 @@ void HWCommandQueue::enqueue_write_to_core(
         this->device_,
         virtual_core,
         src,
-        address,
+        address + address_offset,
         size_bytes,
         this->id_,
         this->expected_num_workers_completed_,
