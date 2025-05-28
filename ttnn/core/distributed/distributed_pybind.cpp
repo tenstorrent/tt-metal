@@ -410,7 +410,7 @@ void py_module(py::module& module) {
         py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
 
-    // TODO(omilyutin): make this more flexible and useful.
+    // TODO: #22258 - make this more flexible and useful.
     auto py_mesh_mapper_config = static_cast<py::class_<MeshMapperConfig>>(module.attr("MeshMapperConfig"));
     py_mesh_mapper_config.def(
         py::init([](size_t row_dim, size_t col_dim) {
