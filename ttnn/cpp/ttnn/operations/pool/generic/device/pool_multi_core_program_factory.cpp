@@ -85,7 +85,7 @@ static Tensor create_scalar_config_tensor(
         config_vector.size(),
         entries_per_core);
 
-    auto config_shape = ttnn::Shape({tt::div_up(config_vector.size(), entries_per_core), entries_per_core});
+    ttnn::Shape config_shape = ttnn::Shape({tt::div_up(config_vector.size(), entries_per_core), entries_per_core});
     tt::tt_metal::HostBuffer buffer(std::move(config_vector));
     return Tensor(std::move(buffer), config_shape, DataType::UINT32, Layout::ROW_MAJOR);
 }
@@ -119,7 +119,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
-    auto reader_indices_storage = reader_indices.device_storage();
+    tt::tt_metal::DeviceStorage reader_indices_storage = reader_indices.device_storage();
     tt::tt_metal::Buffer* dst_dram_buffer = output.buffer();
 
     const auto input_shape = input.get_padded_shape();
@@ -347,17 +347,18 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         };
         config_tensor = create_scalar_config_tensor(avg_pool_config, in_n, num_shards_c, out_nhw_per_core, all_cores);
 
-        auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
-        auto config_tensor_shard_orientation = input.shard_spec().value().orientation;
+        std::array<uint32_t, 2> shard_shape =
+            std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
+        tt::tt_metal::ShardOrientation config_tensor_shard_orientation = input.shard_spec().value().orientation;
         tt::tt_metal::ShardSpec config_shard_spec(
             input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
         MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
-        auto config_tensor_device = config_tensor.to_device(device, memory_config);
+        Tensor config_tensor_device = config_tensor.to_device(device, memory_config);
 
         tt::DataFormat config_df = tt::DataFormat::RawUInt32;
         scalar_config_storage = config_tensor_device.device_storage();
-        auto config_buffer = scalar_config_storage.get_buffer();
-        auto config_buffer_page_size = config_buffer->page_size();
+        tt::tt_metal::Buffer* config_buffer = scalar_config_storage.get_buffer();
+        uint32_t config_buffer_page_size = config_buffer->page_size();
 
         std::tie(config_cb_id, config_cb) = tt::tt_metal::create_cb(
             next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
