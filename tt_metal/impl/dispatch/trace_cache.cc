@@ -491,7 +491,7 @@ bool WorkerBufferManager::check_rb_evictable_at_idx(
 
     while (size_left > 0) {
         // Don't re-use too soon
-        if ((std::int32_t)rb.size() > idx && rb[idx].get_prev_use() + reuse_window < trace_idx) {
+        if ((std::int32_t)rb.size() > idx && rb[idx].get_prev_use() + reuse_window <= trace_idx) {
             alloc_addr = rb[idx].get_addr();
             std::uint32_t size_avail = rb[idx].get_size() - (alloc_addr - rb[idx].get_addr());
             size_left -= size_avail;
