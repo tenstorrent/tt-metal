@@ -328,6 +328,7 @@ bool ReadFromDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer) {
     bool pass = true;
     tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
+    host_buffer.resize((size + sizeof(uint32_t) - 1) / sizeof(uint32_t));
     tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
         host_buffer.data(), size, device->id(), dram_channel, address);
     return pass;
