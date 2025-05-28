@@ -772,8 +772,8 @@ void noc_async_write_multicast_one_packet(
     std::uint32_t size,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    constexpr bool multicast_path_reserve = true;
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST,dst_noc_addr_multicast,size, NOC_MULTICAST_WRITE_VC);
 
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -1186,11 +1186,10 @@ inline void noc_async_write_multicast(
     std::uint32_t size,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    constexpr bool multicast_path_reserve = true;
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_multicast_one_packet(
-            src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, multicast_path_reserve);
+        noc_async_write_multicast_one_packet(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
     } else {
         WAYPOINT("NMWW");
         DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
@@ -1241,8 +1240,8 @@ inline void noc_semaphore_set_multicast(
     std::uint64_t dst_noc_addr_multicast,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    constexpr bool multicast_path_reserve = true;
     WAYPOINT("NSNW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
     ncrisc_noc_fast_write_any_len<noc_mode>(
@@ -1289,8 +1288,8 @@ inline void noc_semaphore_set_multicast_loopback_src(
     std::uint64_t dst_noc_addr_multicast,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    constexpr bool multicast_path_reserve = true;
     WAYPOINT("NSLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
@@ -1313,8 +1312,8 @@ inline void noc_async_write_multicast_loopback_src(
     std::uint32_t size,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    constexpr bool multicast_path_reserve = true;
     WAYPOINT("NMLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(

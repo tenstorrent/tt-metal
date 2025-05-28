@@ -107,7 +107,7 @@ void kernel_main() {
 #ifndef SKIP_MCAST
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_async_write_multicast(
-                local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores - 1, true, true);
+                local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores - 1, true);
 #endif
 
             noc_semaphore_set_multicast(
@@ -144,7 +144,7 @@ void kernel_main() {
                 }
 #ifndef SKIP_MCAST
                 noc_async_write_multicast_loopback_src(
-                    local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true, true);
+                    local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true);
 #endif
                 noc_semaphore_set_multicast_loopback_src(
                     in0_mcast_sender_valid_semaphore, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
