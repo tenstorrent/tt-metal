@@ -165,7 +165,7 @@ def is_collective_op(op_code):
 # If all looks good, update the expected_kernel_times_dict and expected_dispatch_times_dict with the new average values
 # If the op list changed (new ops, less ops, fused ops), then update mapping_op_code_to_name and give the new ops meaningful names
 # Run at least once again to verify the new expected values are correct and margins hold
-@pytest.mark.parametrize("seqlen", [4096, 128])
+@pytest.mark.parametrize("seqlen", [8192, 4096, 128])
 def test_llama_TG_perf_device(
     seqlen,
     reset_seeds,
