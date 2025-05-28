@@ -1211,16 +1211,21 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
+    const auto& tile_shape = a.get_tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
+    uint32_t tile_volume = tile_height * tile_width;
 
-    uint32_t num_blocks_across_height = (a.volume() / a.get_padded_shape()[-1]) / TILE_HEIGHT;
+    uint32_t num_tiles = a.volume() / tile_volume;
+
+    uint32_t num_blocks_across_height = a.volume() / a.get_padded_shape()[-1] / tile_height;
     uint32_t num_columns_of_blocks = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        num_columns_of_blocks = a.get_padded_shape()[-1] / output.memory_config().shard_spec()->shape[1];
+        num_columns_of_blocks = a.get_padded_shape()[-1] / output.shard_spec().value().shape[1];
     }
 
-    uint32_t num_tiles_per_column_row = a.get_padded_shape()[-1] / num_columns_of_blocks / TILE_WIDTH;
+    uint32_t num_tiles_per_column_row = a.get_padded_shape()[-1] / num_columns_of_blocks / tile_width;
 
     // Determine how much L1 space we can use for input and output CBs,
     // ensuring that we don't intrude into other L1 storage space
@@ -1235,7 +1240,6 @@ operation::ProgramWithCallbacks untilize_single_core(
     // equivalently the number of tiles in a row is divisible by the number of tiles in a block.
     uint32_t num_tiles_per_block = num_tiles_per_column_row;
     if (num_tiles_per_block > max_tiles_per_cb) {
-        num_tiles_per_block = 1;
         for (uint32_t i = max_tiles_per_cb; i > 0; --i) {
             if (num_tiles_per_column_row % i == 0) {
                 num_tiles_per_block = i;
@@ -1284,7 +1288,7 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram};
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(a, reader_compile_time_args);
     }
@@ -1294,9 +1298,10 @@ operation::ProgramWithCallbacks untilize_single_core(
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(stick_size) - 1) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_is_dram,
-        (std::uint32_t)stick_size_is_power_of_two,
-        (std::uint32_t)log2_stick_size,
+        (uint32_t)tile_height,
+        (uint32_t)output_is_dram,
+        (uint32_t)stick_size_is_power_of_two,
+        (uint32_t)log2_stick_size,
     };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
@@ -1330,13 +1335,12 @@ operation::ProgramWithCallbacks untilize_single_core(
     }
 
     // Compute compile-time args
+    uint32_t num_blocks = num_columns_of_blocks * num_blocks_per_column_row * num_blocks_across_height;
     std::vector<uint32_t> compute_compile_time_args = {
-        uint32_t(
-            num_columns_of_blocks * num_blocks_per_column_row *
-            num_blocks_across_height),  // per_core_block_cnt (total number of blocks)
-        uint32_t(num_tiles_per_block),  // per_core_block_tile_cnt (tiles per block)
-        uint32_t(src0_cb_index),
-        uint32_t(output_cb_index)};
+        (uint32_t)num_blocks,           // per_core_block_cnt
+        (uint32_t)num_tiles_per_block,  // per_core_block_tile_cnt
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
 
     // Compute kernel
     auto untilize_kernel_id = tt::tt_metal::CreateKernel(
