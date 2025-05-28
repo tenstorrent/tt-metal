@@ -55,9 +55,7 @@ struct DeviceStorage {
 
 class MultiDeviceHostStorage {
 public:
-    MultiDeviceHostStorage() = default;
-    MultiDeviceHostStorage(std::vector<HostBuffer> buffers, std::vector<TensorSpec> specs) :
-        buffers_(std::move(buffers)), specs_(std::move(specs)) {}
+    MultiDeviceHostStorage(std::vector<HostBuffer> buffers, std::vector<TensorSpec> specs);
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
