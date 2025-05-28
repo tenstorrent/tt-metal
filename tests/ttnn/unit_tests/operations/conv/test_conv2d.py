@@ -21,7 +21,7 @@ import torch
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16],
+    [None, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
@@ -99,6 +99,7 @@ def test_conv_features(
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=True,
         run_twice=True,
+        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
     )
 
 

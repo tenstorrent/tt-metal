@@ -54,12 +54,11 @@ class TtDownsample2D(nn.Module):
         )
         C = self.conv_params["output_channels"]
 
-        # reuse of weights produces pcc issues
-        # self.tt_weights = d_w
-        # self.tt_bias = d_b
+        self.tt_weights = d_w
+        self.tt_bias = d_b
 
-        # self.conv_config.preprocess_weights_on_device = False
-        # self.conv_config.always_preprocess_weights = False
+        self.conv_config.preprocess_weights_on_device = False
+        self.conv_config.always_preprocess_weights = False
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         return hidden_states, [C, H, W]

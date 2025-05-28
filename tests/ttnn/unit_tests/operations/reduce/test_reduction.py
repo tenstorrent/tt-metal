@@ -64,20 +64,21 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 @pytest.mark.parametrize("w", [77])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_prod(device, batch_size, c, h, w, dim, keepdim):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_prod(device, batch_size, c, h, w, dim, keepdim, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.prod(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=dtype
     )
 
     output_tensor = ttnn.prod(input_tensor, dim=dim, keepdim=keepdim, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.bfloat16)
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
     # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
