@@ -43,7 +43,7 @@ static inline uint32_t get_stack_base() {
 constexpr uint32_t stack_usage_pattern = 0xBABABABA;
 
 static inline void mark_stack_usage() {
-    uint32_t tt_l1_pt *base = (uint32_t tt_l1_ptr *)get_stack_base();
+    uint32_t tt_l1_ptr *base = (uint32_t tt_l1_ptr *)get_stack_base();
     uint32_t tt_l1_ptr *ptr;
     asm ("mv %0,sp" : "=r"(ptr));
 
@@ -53,7 +53,7 @@ static inline void mark_stack_usage() {
 
 // Returns unused stack + 1. (0 means unknown.)
 static inline int measure_stack_usage() {
-    uint32_t tt_l1_pt *base = (uint32_t tt_l1_ptr *)get_stack_base();
+    uint32_t tt_l1_ptr *base = (uint32_t tt_l1_ptr *)get_stack_base();
     uint32_t tt_l1_ptr* stack_ptr = base;
 
     // We don't need to check size here, as we know we'll hit a
