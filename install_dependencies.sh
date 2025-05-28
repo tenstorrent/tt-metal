@@ -246,7 +246,7 @@ install_sfpi() {
     rm -rf $TEMP_DIR
 }
 
-install_mpi_uflm(){
+install_mpi_ulfm(){
     DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
     DEB_FILE="$(basename "$DEB_URL")"
 
@@ -287,13 +287,13 @@ install() {
             runtime)
                 prep_ubuntu_runtime
                 install_sfpi
-                install_mpi_uflm
+                install_mpi_ulfm
                 ;;
             build)
                 prep_ubuntu_build
                 install_llvm
                 install_gcc
-                install_mpi_uflm
+                install_mpi_ulfm
                 ;;
             baremetal)
                 prep_ubuntu_runtime
@@ -302,7 +302,7 @@ install() {
                 install_llvm
                 install_gcc
                 configure_hugepages
-                install_mpi_uflm
+                install_mpi_ulfm
                 ;;
         esac
 
