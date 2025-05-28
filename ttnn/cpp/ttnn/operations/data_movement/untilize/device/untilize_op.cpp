@@ -34,7 +34,10 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only untilize tile major data");
 
-    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
+    TT_FATAL(input_tensor_a.get_padded_shape()[-1] % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
+    TT_FATAL(
+        (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) % TILE_HEIGHT == 0,
+        "Height must be evenly divisible into tiles");
 
     if (this->sub_core_grids.has_value()) {
         TT_FATAL(
