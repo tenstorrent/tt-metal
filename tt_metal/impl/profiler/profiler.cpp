@@ -151,10 +151,6 @@ HalProgrammableCoreType get_core_type(chip_id_t device_id, const CoreCoord& core
 
 void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
     ZoneScoped;
-    tt::log_info(
-        "Issue fast dispatch read from profiler buffer - profile_buffer_bank_size_bytes: {}, profile_buffer size: {}",
-        profile_buffer_bank_size_bytes,
-        profile_buffer.size());
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
     uint32_t profile_buffer_idx = 0;
 
@@ -163,7 +159,6 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
         for (uint32_t y = 0; y < dram_grid_size.y; ++y) {
             const CoreCoord dram_core = device->virtual_core_from_logical_core({x, y}, CoreType::DRAM);
             if (auto mesh_device = device->get_mesh_device()) {
-                tt::log_info("Using FDMeshCommandQueue");
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
                     .enqueue_read_shard_from_core(
@@ -190,13 +185,9 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
 
 void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
     ZoneScoped;
-    tt::log_info("Issue slow dispatch read from profiler buffer");
     uint32_t profile_buffer_idx = 0;
     const int num_dram_channels = device->num_dram_channels();
     for (int dram_channel = 0; dram_channel < num_dram_channels; ++dram_channel) {
-        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-        auto logical_core = soc_desc.get_logical_core_for_dram_view(dram_channel);
-        tt::log_info("dram_channel: {}, logical_core: {}", dram_channel, logical_core.str());
         std::vector<uint32_t> profile_buffer_bank_data;
         tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
             profile_buffer_bank_data,
@@ -204,18 +195,12 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
             device->id(),
             dram_channel,
             MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER));
-        // const std::vector<uint32_t> profile_buffer_bank_data = llrt::read_hex_vec_from_core(
-        //     device->id(),
-        //     dram_core,
-        //     MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER),
-        //     profile_buffer_bank_size_bytes);
-        tt::log_info("profile_buffer_bank_data size: {}", profile_buffer_bank_data.size());
+
         std::copy(
             profile_buffer_bank_data.begin(),
             profile_buffer_bank_data.end(),
             profile_buffer.begin() + profile_buffer_idx);
         profile_buffer_idx += profile_buffer_bank_size_bytes / sizeof(uint32_t);
-        tt::log_info("profile_buffer_idx: {}", profile_buffer_idx);
     }
 }
 
@@ -351,12 +336,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                 if (opTime_L == 0) {
                                     opTime_L = time_L;
                                 }
-                                // tt::log_info("index: {}", index);
-                                auto& soc_desc =
-                                    tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
-                                auto logical_core = soc_desc.translate_coord_to(
-                                    worker_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-                                // tt::log_info("worker_core_logical: {}", logical_core.str());
+
                                 TT_ASSERT(
                                     riscNumRead == riscNum,
                                     "Unexpected risc id, expected {}, read {}. In core {},{} {} at run {}, index {}",
@@ -935,8 +915,7 @@ void DeviceProfiler::dumpResults(
 
     const chip_id_t device_id = device->id();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    const uint32_t device_core_frequency =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
+    device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
 
     generateZoneSourceLocationsHashes();
 
