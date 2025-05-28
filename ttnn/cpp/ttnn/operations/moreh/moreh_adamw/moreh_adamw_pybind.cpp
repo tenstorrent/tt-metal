@@ -11,8 +11,6 @@
 #include "ttnn/operations/moreh/moreh_adamw/moreh_adamw.hpp"
 #include "ttnn/types.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::moreh::moreh_adamw {
 
 void bind_moreh_adamw_operation(py::module& module) {
