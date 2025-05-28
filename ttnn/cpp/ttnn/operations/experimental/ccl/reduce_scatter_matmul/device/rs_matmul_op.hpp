@@ -48,13 +48,8 @@ struct AllGatherRS {
     struct Matmul_RS_PF {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle quaternary_reduce_reader_kernel_id;
-            tt::tt_metal::KernelHandle quaternary_reduce_writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
-            std::vector<tt::tt_metal::CBHandle> cb_handles;
-            CoreRangeSet core_range;
+            LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::shared_variables_t rs_shared_vars;
+            ttnn::operations::matmul::mcast_in0_shared_variables_t matmul_shared_vars;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

@@ -59,19 +59,7 @@ uint32_t get_preferred_noc(
     return use_dedicated_noc ? 1 : noc;
 }
 
-struct mcast_in0_shared_variables_t {
-    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id;
-    tt::tt_metal::KernelHandle mm_kernel_in1_sender_writer_id;
-    tt::tt_metal::CBHandle cb_src1;
-    tt::tt_metal::CBHandle cb_src2;
-    tt::tt_metal::CBHandle cb_src3;
-    tt::tt_metal::CBHandle cb_output;
-    CoreCoord start_core;
-    std::vector<CoreCoord> cores;
-    uint32_t num_cores_with_work;
-};
-
-mcast_in0_shared_variables_t process_program_mcast_in0(
+ttnn::operations::matmul::mcast_in0_shared_variables_t process_program_mcast_in0(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
@@ -904,7 +892,7 @@ mcast_in0_shared_variables_t process_program_mcast_in0(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
         }
     }
-    return mcast_in0_shared_variables_t{
+    return ttnn::operations::matmul::mcast_in0_shared_variables_t{
         mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
         mm_kernel_in1_sender_writer_id,
         cb_src1,
@@ -917,7 +905,7 @@ mcast_in0_shared_variables_t process_program_mcast_in0(
 }
 
 void override_program_mcast_in0(
-    const mcast_in0_shared_variables_t& shared_variables,
+    const ttnn::operations::matmul::mcast_in0_shared_variables_t& shared_variables,
     const void* operation,
     tt::tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
@@ -1021,7 +1009,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
     bool output_is_sharded,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
-    mcast_in0_shared_variables_t shared_variables = process_program_mcast_in0(
+    ttnn::operations::matmul::mcast_in0_shared_variables_t shared_variables = process_program_mcast_in0(
         program,
         a,
         device,
