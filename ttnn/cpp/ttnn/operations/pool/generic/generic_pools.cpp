@@ -45,7 +45,6 @@ static Tensor pool2d_invoke(
         .padding = {padding.at(0), padding.at(0), padding.at(1), padding.at(1)},
         .dilation_hw = {dilation_h, dilation_w},
         .ceil_mode = ceil_mode,
-        .count_include_pad = count_include_pad,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
     auto output_shape = sliding_window_config.get_output_shape();  // last dim/width is 0
@@ -61,7 +60,7 @@ static Tensor pool2d_invoke(
     uint32_t num_cores_c = 0;
 
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
-    if (!out_memory_config.shard_spec.has_value()) {
+    if (!out_memory_config.shard_spec().has_value()) {
         // Input is not sharded. Perform sharding.
         if (applied_shard_scheme.has_value()) {
             TT_FATAL(
@@ -92,9 +91,9 @@ static Tensor pool2d_invoke(
         out_memory_config = input_tensor_sharded.memory_config();
     } else {
         // input is already sharded, use it as is
-        const auto shard_grid = out_memory_config.shard_spec.value().grid;
-        const auto shard_scheme = out_memory_config.memory_layout;
-        const auto shard_orientation = out_memory_config.shard_spec.value().orientation;
+        const auto shard_grid = out_memory_config.shard_spec().value().grid;
+        const auto shard_scheme = out_memory_config.memory_layout();
+        const auto shard_orientation = out_memory_config.shard_spec().value().orientation;
         TT_FATAL(
             !applied_shard_scheme.has_value(), "A sharding scheme should not be specified for a sharded input tensor.");
         TT_FATAL(shard_orientation == ShardOrientation::ROW_MAJOR, "Only row major orientation is supported.");
@@ -106,7 +105,7 @@ static Tensor pool2d_invoke(
     }
 
     // update the shard spec to match the output shape
-    auto shard_spec = out_memory_config.shard_spec.value();
+    auto shard_spec = out_memory_config.shard_spec().value();
     uint32_t output_shard_width_padded =
         input_tensor.dtype() == DataType::BFLOAT8_B
             ? tt::round_up(channels / num_cores_c, tt::constants::TILE_WIDTH)
@@ -125,9 +124,8 @@ static Tensor pool2d_invoke(
         output_nhw_padded,
         output_shard_height_padded,
         output_shard_width_padded);
-    out_memory_config.shard_spec = tt::tt_metal::ShardSpec{
-        shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR};
-
+    out_memory_config.with_shard_spec(tt::tt_metal::ShardSpec{
+        shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR});
     sliding_window_config = sliding_window::SlidingWindowConfig{
         .batch_size = batch_size,
         .input_hw = {input_h, input_w},
@@ -140,7 +138,6 @@ static Tensor pool2d_invoke(
         .core_range_set = parallel_config.grid,
         .snap_to_tile = false,
         .ceil_mode = ceil_mode,
-        .count_include_pad = count_include_pad,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
 
@@ -163,8 +160,7 @@ static Tensor pool2d_invoke(
         pool_type,
         DataType::BFLOAT16,  // input_tensor.dtype(), // currently only bfp16 output is supported
         out_memory_config,
-        divisor_override);
-        out_memory_config,
+        count_include_pad,
         divisor_override);
 
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
