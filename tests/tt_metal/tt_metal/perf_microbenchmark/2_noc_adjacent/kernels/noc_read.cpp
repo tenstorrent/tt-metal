@@ -20,10 +20,17 @@ void kernel_main() {
     cb_reserve_back(cb0_id, 1);
     cb0_addr = get_write_ptr(cb0_id);
 
+    int count = 0;
     for (uint32_t i = 0; i < iter_count; i++) {
         uint64_t target_noc_addr = get_noc_addr(adjacent_noc_x, adjacent_noc_y, adjacent_noc_cb1);
 
         noc_async_read(target_noc_addr, cb0_addr, transfer_size);
+        count++;
+        if (count % 16 == 0) {
+            noc_async_read_barrier();
+        }
+    }
+    if (count % 16 != 0) {
         noc_async_read_barrier();
     }
 }

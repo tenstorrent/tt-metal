@@ -211,17 +211,22 @@ int main(int argc, char** argv) {
                 CoreCoord adjacent_core_logical = {(std::size_t)j, (std::size_t)i};
                 if (noc_direction == 0) {
                     // right (+x direction)
-                    adjacent_core_logical.x = (adjacent_core_logical.x + 1) % num_cores_c;
+                    adjacent_core_logical.x = (adjacent_core_logical.x + 1) % grid_coord.x;
                 } else if (noc_direction == 1) {
                     // down (-y direction)
-                    adjacent_core_logical.y = (adjacent_core_logical.y + num_cores_r - 1) % num_cores_r;
+                    adjacent_core_logical.y = (adjacent_core_logical.y + num_cores_r - 1) % grid_coord.y;
                 } else if (noc_direction == 2) {
                     // left (-x direction)
-                    adjacent_core_logical.x = (adjacent_core_logical.x + num_cores_c - 1) % num_cores_c;
+                    adjacent_core_logical.x = (adjacent_core_logical.x + num_cores_c - 1) % grid_coord.x;
                 } else {
                     // up (+y direction)
-                    adjacent_core_logical.y = (adjacent_core_logical.y + 1) % num_cores_r;
+                    adjacent_core_logical.y = (adjacent_core_logical.y + 1) % grid_coord.y;
+                    std::cout << "here" << std::endl;
                 }
+
+                std::cout << "logical_core(x,y)=" << logical_core.x << ", " << logical_core.y << std::endl;
+                std::cout << "adjacent_core_logical(x,y)=" << adjacent_core_logical.x << ", " << adjacent_core_logical.y
+                          << std::endl;
 
                 CoreCoord adjacent_core_noc = device->worker_core_from_logical_core(adjacent_core_logical);
 
@@ -250,6 +255,8 @@ int main(int argc, char** argv) {
             auto t_end = std::chrono::steady_clock::now();
             unsigned long elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             unsigned long elapsed_cc = clock_freq_mhz * elapsed_us;
+
+            DumpDeviceProfileResults(device, program);
 
             log_info(LogTest, "Time elapsed for NOC transfers: {}us ({}cycles)", elapsed_us, elapsed_cc);
 

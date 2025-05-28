@@ -48,6 +48,8 @@
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
+#include <iostream>
+
 using namespace tt;
 using std::chrono::duration_cast;
 using std::chrono::microseconds;
@@ -125,6 +127,17 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     uint32_t cb_size = block_h * block_w * single_tile_size;
     uint32_t page_size, num_pages;
     get_max_page_size_and_num_pages(block_num_tiles, single_tile_size, page_size, num_pages);
+
+    page_size *= 8;
+    num_pages /= 8;
+    std::cout << "num_banks: " << num_banks << std::endl;
+    std::cout << "k: " << k << std::endl;
+    std::cout << "n: " << n << std::endl;
+
+    std::cout << "num_blocks: " << num_blocks << std::endl;
+    std::cout << "cb_size: " << cb_size << std::endl;
+    std::cout << "num_pages: " << num_pages << std::endl;
+    std::cout << "page_size: " << page_size << std::endl;
 
     uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     tt_metal::CircularBufferConfig cb_config =
@@ -265,6 +278,7 @@ void get_optimal_dram_bank_to_reader_assignment(
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
         all_cores_set.insert(CoreRange(worker_core));
+        // std::cout << worker_core.x << worker_core.y << std::endl;
     }
     all_worker_cores = CoreRangeSet(all_cores_set);
 }
@@ -315,7 +329,7 @@ int main(int argc, char** argv) {
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--data-type", 0);
 
             std::tie(num_banks, input_args) =
-                test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-banks", 12);
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-banks", 1);
 
             std::tie(bank_start_id, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--bank-start-id", 0);

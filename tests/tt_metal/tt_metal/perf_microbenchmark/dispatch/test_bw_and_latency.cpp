@@ -326,6 +326,11 @@ int main(int argc, char** argv) {
                 .set_page_size(0, page_size_g);
         tt_metal::CreateCircularBuffer(program, worker_g, cb_config);
 
+        std::cout << "----------------Kernel Defines-------------------" << std::endl;
+        for (auto d_pair : defines) {
+            std::cout << d_pair.first << ": " << d_pair.second << std::endl;
+        }
+
         auto dm0 = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/bw_and_latency.cpp",
