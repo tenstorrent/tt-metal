@@ -3576,6 +3576,7 @@ def test_conv2d_with_fold(
         device=device,
         torch_tensor_map=torch_tensor_map,
         math_fidelity=ttnn.MathFidelity.LoFi,
+        packer_l1_acc = True,
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         batch_size=batch_size,
