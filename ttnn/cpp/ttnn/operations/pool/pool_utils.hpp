@@ -26,7 +26,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type);
 std::map<std::string, std::string> get_defines(Pool2DType pool_type);
 
 std::optional<sliding_window::ParallelConfig> determine_parallel_config(
-    const TensorMemoryLayout shard_layout,
+    const tt::tt_metal::TensorMemoryLayout shard_layout,
     uint32_t batch_size,
     uint32_t channels,
     uint32_t output_height,
@@ -50,8 +50,8 @@ uint32_t calculate_L1_usage(
     const uint32_t kernel_w,
     const uint32_t out_h,
     const uint32_t out_w,
-    const MemoryConfig& input_memory,
-    const MemoryConfig& output_memory,
+    const tt::tt_metal::MemoryConfig& input_memory,
+    const tt::tt_metal::MemoryConfig& output_memory,
     Pool2DType pool_type);
 
 }  // namespace operations::pool
