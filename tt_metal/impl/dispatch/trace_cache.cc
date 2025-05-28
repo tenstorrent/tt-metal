@@ -11,9 +11,7 @@
 #include <assert.h>
 
 // TODOs (some sprinkled throughout below):
-// Don't use global rb size (shrink after peak(s))
 // Score reuse_window of eg 4, 3, 2, 1, pick best
-// On failure, fall back to ring buffer.  Maybe fallback on too many stalls
 // Re-enter pre-allocate mode w/ large free node at bottom
 // Re-enter pre-allocate mode after sync
 
@@ -48,13 +46,6 @@ std::string Program::get_name(std::uint32_t pgm_id) {
     return name;
 }
 
-// Track the trace node index for the next ring buffer use of the included address range
-struct RingBufferUse {
-    std::int32_t trace_idx;
-    std::uint32_t addr;
-    std::uint32_t size;
-};
-
 class TraceNode {
 private:
     static constexpr std::int32_t next_use_unused = 0x7fffffff;
@@ -66,16 +57,8 @@ private:
     float weight_;                // normalized pgm_cost * uses remaining
 
     std::uint32_t addr_;         // allocation address
-    std::uint32_t rb_size_;      // size of the rb at this point
-    std::int32_t rb_reset_idx_;  // TraceNode to stall on to reset rb (or -1)
     bool does_dispatch_;         // True when data is not resident
     std::int32_t stall_idx_;     // TraceNode idx this node must stall on (memory reuse)
-    std::int32_t min_dist_to_rb_;  // Min of downstream uses of this alloc to RB
-
-    // Track ring buffer allocations that would require a sync if this node
-    // used a ring buffer addr.  Read only after delayed init
-    std::vector<RingBufferUse> prev_rb_use_;
-    std::vector<RingBufferUse> next_rb_use_;
 
 public:
     TraceNode(uint32_t program_id);
@@ -84,30 +67,18 @@ public:
     std::int32_t get_next_idx() const { return this->next_idx_; }
     std::int32_t get_remaining() const { return this->remaining_; }
     std::uint32_t get_addr() const { return this->addr_; }
-    std::uint32_t get_rb_size() const { return this->rb_size_; }
-    std::int32_t get_rb_reset_idx() const { return this->rb_reset_idx_; }
     bool does_dispatch() const { return this->does_dispatch_; }
     std::int32_t get_stall_idx() const { return this->stall_idx_; }
     bool does_stall() const { return this->stall_idx_ != -1; }
     float get_weight() const { return this->weight_; }
     bool is_allocated() const { return this->addr_ != unallocated_addr; }
-    bool is_ok_downstream_below_the_line(std::int32_t dist) const { return this->min_dist_to_rb_ >= dist; }
-    bool is_ok_upstream_below_the_line(std::int32_t ok_idx, std::uint32_t addr, std::uint32_t size) const;
-    std::int32_t get_min_dist_to_rb() const { return this->min_dist_to_rb_; }
-    const std::vector<RingBufferUse>& get_prev_rb_use() const { return this->prev_rb_use_; }
-    const std::vector<RingBufferUse>& get_next_rb_use() const { return this->next_rb_use_; }
 
     void set_remaining(std::int32_t remaining) { this->remaining_ = remaining; }
     void set_next_idx(std::uint32_t idx) { this->next_idx_ = idx; }
     void calculate_weight(float weight) { this->weight_ = weight * this->remaining_; }
     void set_addr(std::uint32_t addr) { this->addr_ = addr; }
-    void set_rb_size(std::uint32_t size) { this->rb_size_ = size; }
-    void set_rb_reset_idx(std::int32_t idx) { this->rb_reset_idx_ = idx; }
     void set_does_dispatch() { this->does_dispatch_ = true; }
     void set_stall_idx(std::int32_t idx) { this->stall_idx_ = idx; }
-    void set_min_dist_to_rb(std::int32_t dist) { this->min_dist_to_rb_ = dist; }
-    void set_prev_rb_use(const std::vector<RingBufferUse>& prev_rb_use) { this->prev_rb_use_ = prev_rb_use; }
-    void set_next_rb_use(const std::vector<RingBufferUse>& next_rb_use) { this->next_rb_use_ = next_rb_use; }
 
     void print() const;
 };
@@ -118,11 +89,8 @@ TraceNode::TraceNode(std::uint32_t pgm_id) :
     next_idx_(next_use_unused),
     weight_(0.0f),
     addr_(unallocated_addr),
-    rb_size_(0),
-    rb_reset_idx_(-1),
     does_dispatch_(false),
-    stall_idx_(-1),
-    min_dist_to_rb_(0) {}
+    stall_idx_(-1) {}
 
 void TraceNode::print() const {
     fprintf(
@@ -134,31 +102,12 @@ void TraceNode::print() const {
         this->weight_);
 }
 
-bool TraceNode::is_ok_upstream_below_the_line(std::int32_t ok_idx, std::uint32_t addr, std::uint32_t size) const {
-    std::uint32_t end_addr = addr + size;
-    bool ok = true;
-
-    for (std::uint32_t idx = 0; idx < this->prev_rb_use_.size(); idx++) {
-        if (addr < this->prev_rb_use_[idx].addr + this->prev_rb_use_[idx].size &&
-            end_addr > this->prev_rb_use_[idx].addr) {
-            // Overlap
-            if (this->prev_rb_use_[idx].trace_idx >= ok_idx) {
-                ok = false;
-                break;
-            }
-        }
-    }
-
-    return ok;
-}
-
 // Temporary meta data per program data used for allocating programs in traces
 class TraceProgramData {
 private:
     enum AllocationClass {
         NOT_ALLOCED,
         HEAP,
-        RING_BUFFER,
     };
 
     std::int32_t count_;     // number of times this pgm was used in the trace
@@ -179,7 +128,6 @@ public:
 
     void inc_count() { this->count_++; }
     void alloc_heap() { this->alloced_ = HEAP; }
-    void alloc_rb() { this->alloced_ = RING_BUFFER; }
     void dealloc() { this->alloced_ = NOT_ALLOCED; }
 
     std::int32_t get_count() const { return this->count_; }
@@ -187,19 +135,9 @@ public:
     std::int32_t get_last_used() const { return this->last_used_idx_; }
     bool is_not_alloced() const { return this->alloced_ == NOT_ALLOCED; }
     bool is_heap() const { return this->alloced_ == HEAP; }
-    bool is_rb() const { return this->alloced_ == RING_BUFFER; }
 };
 
 TraceProgramData::TraceProgramData() : count_(0), used_idx_(0), last_used_idx_(0), alloced_(NOT_ALLOCED) {}
-
-// TODO
-class TraceFence {
-private:
-    std::int32_t trace_idx1;
-    std::int32_t trace_idx2;
-
-public:
-};
 
 class AllocNode {
 private:
@@ -209,7 +147,6 @@ private:
     std::uint32_t addr_;       // base address of this allocation unit
     std::uint32_t size_;       // size of this allocation unit
     bool is_free_;             // true if this is just tracking unallocated space
-    bool is_below_the_line_;   // true if this allocation overlaps the RB
     std::int32_t first_use_;   // trace id of when this was first used
     std::int32_t prev_use_;    // trace id of when this was last used
 
@@ -223,33 +160,19 @@ public:
     std::int32_t get_first_use() const { return this->first_use_; }
     std::int32_t get_prev_use() const { return this->prev_use_; }
     bool is_free() const { return this->is_free_; }
-    bool is_below_the_line() const { return this->is_below_the_line_; }
     template <typename Container, typename Method>
     float get_weight(const Container& indexed_items, Method method) const;
 
     void set_prev_use(std::int32_t trace_idx) { this->prev_use_ = trace_idx; }
     void set_addr(std::uint32_t addr) { this->addr_ = addr; }
     void set_size(std::uint32_t size) { this->size_ = size; }
-    void set_below_the_line() { this->is_below_the_line_ = true; }
 };
 
 AllocNode::AllocNode(std::uint32_t pgm_id, std::uint32_t addr, std::uint32_t size, std::int32_t used_idx) :
-    pgm_id_(pgm_id),
-    addr_(addr),
-    size_(size),
-    is_free_(false),
-    is_below_the_line_(false),
-    first_use_(used_idx),
-    prev_use_(used_idx) {}
+    pgm_id_(pgm_id), addr_(addr), size_(size), is_free_(false), first_use_(used_idx), prev_use_(used_idx) {}
 
 AllocNode::AllocNode(std::uint32_t addr, std::uint32_t size) :
-    pgm_id_(-1),
-    addr_(addr),
-    size_(size),
-    is_free_(true),
-    is_below_the_line_(false),
-    first_use_(never_used),
-    prev_use_(never_used) {}
+    pgm_id_(-1), addr_(addr), size_(size), is_free_(true), first_use_(never_used), prev_use_(never_used) {}
 
 // AllocNodes for free blocks don't have trace nodes
 // The weight is in the trace node when alloced, so indirect through the trace
@@ -263,20 +186,10 @@ float AllocNode::get_weight(const Container& indexed_items, Method method) const
     return (indexed_items[this->prev_use_].*method)();
 }
 
-struct RingBufferState {
-    std::vector<AllocNode> rb_;
-    std::int32_t evict_idx_;    // idx into rb of successor rb's next eviction
-    std::uint32_t evict_addr_;  // addr in rb of succsessor rb's next allocation
-
-    RingBufferState() : evict_idx_(0), evict_addr_(0) {}
-};
-
 class WorkerBufferManager {
 private:
     std::uint32_t buffer_size_;  // total size of the managed buffer
     std::vector<TraceProgramData> program_data_;
-    RingBufferState rb_;
-    std::uint32_t rb_max_size_;
 
     std::list<AllocNode> allocator_;
     std::list<std::list<AllocNode>::iterator> lru_;
@@ -287,35 +200,15 @@ private:
 
     // Allocate
     bool handle_trivial_cases(std::vector<TraceNode>& trace, const std::vector<Program>& programs);
-    RingBufferState alloc_ring_buffer(std::vector<TraceNode>& trace, const std::vector<Program>& programs);
-    void update_rb_use(
-        std::int32_t trace_idx,
-        std::vector<RingBufferUse>& next_rb_use,
-        const std::vector<TraceNode>& trace,
-        const std::vector<Program>& programs);
-    void post_process_ring_buffer(
-        const RingBufferState& rb, std::vector<TraceNode>& trace, const std::vector<Program>& programs);
     void alloc_heap(std::vector<TraceNode>& trace, const std::vector<Program>& programs);
 
     // Helpers
-    bool check_rb_evictable_at_idx(
-        std::int32_t& rb_idx,
-        std::uint32_t alloc_addr,
-        const std::vector<AllocNode>& rb,
-        std::int32_t size_left,
-        std::int32_t trace_idx);
     std::list<std::list<AllocNode>::iterator>::iterator find_eviction_candidates(
         bool only_stale,
         std::int32_t window,
         std::uint32_t size_needed,
         std::int32_t node_idx,
         const std::vector<TraceNode>& trace);
-    void set_upstream_rb_stall_idx(
-        std::int32_t trace_idx, std::uint32_t addr, std::uint32_t end_addr, std::vector<TraceNode>& trace);
-    bool try_to_alloc_below_the_line(
-        std::int32_t trace_idx, std::uint32_t size_needed, std::int32_t window, std::vector<TraceNode>& trace);
-    void evict_rb_conflicts(
-        std::int32_t trace_idx, std::vector<TraceNode>& trace, const std::vector<Program>& programs);
     std::list<AllocNode>::iterator evict(
         std::uint32_t& freed_size,
         std::int32_t trace_idx,
@@ -353,8 +246,6 @@ public:
 WorkerBufferManager::WorkerBufferManager(std::uint32_t buffer_size) : buffer_size_(buffer_size) {}
 
 void WorkerBufferManager::dump_allocator() {
-    fprintf(stderr, "RB max size: %d\n", this->rb_max_size_);
-
     // Check consistency
     fprintf(stderr, "Check allocator consistency: #entries(%ld)\n", this->allocator_.size());
     if (this->allocator_.begin() != this->allocator_.end()) {
@@ -475,331 +366,6 @@ bool WorkerBufferManager::handle_trivial_cases(std::vector<TraceNode>& trace, co
     return false;
 }
 
-// Tries to allocate size_left bytes in rb by evicting at alloc_addr in slot
-// rb_idx (and beyond) if those slots are beyond the reuse window of trace_idx
-//
-// Returns true on success w/ rb_idx updated (alloc_addr needs to be udpated
-// by caller)
-bool WorkerBufferManager::check_rb_evictable_at_idx(
-    std::int32_t& rb_idx,
-    std::uint32_t alloc_addr,
-    const std::vector<AllocNode>& rb,
-    std::int32_t size_left,
-    std::int32_t trace_idx) {
-    bool big_enough = false;
-    std::int32_t idx = rb_idx;
-
-    while (size_left > 0) {
-        // Don't re-use too soon
-        if ((std::int32_t)rb.size() > idx && rb[idx].get_prev_use() + reuse_window <= trace_idx) {
-            alloc_addr = rb[idx].get_addr();
-            std::uint32_t size_avail = rb[idx].get_size() - (alloc_addr - rb[idx].get_addr());
-            size_left -= size_avail;
-            if (size_left <= 0) {
-                rb_idx = idx;
-                big_enough = true;
-                break;
-            }
-        } else {
-            break;
-        }
-
-        idx++;
-    }
-
-    if (idx == (std::int32_t)rb.size()) {
-        // If here, we actuallly succeeded but need to extend the RB beyond the prior iteration
-        big_enough = true;
-    }
-
-    return big_enough;
-}
-
-void WorkerBufferManager::update_rb_use(
-    std::int32_t trace_idx,
-    std::vector<RingBufferUse>& next_rb_use,
-    const std::vector<TraceNode>& trace,
-    const std::vector<Program>& programs) {
-    std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
-
-    std::uint32_t addr = trace[trace_idx].get_addr();
-    std::uint32_t size = programs[pgm_id].get_size();
-    std::uint32_t addr_end = addr + size;
-
-    // Remember where to insert new_span to keep descending addr order
-    auto rb_it = next_rb_use.begin();
-    while (rb_it != next_rb_use.end()) {
-        std::uint32_t rb_addr = rb_it->addr;
-        std::uint32_t rb_size = rb_it->size;
-        std::uint32_t rb_end = rb_addr + rb_size;
-
-        // No overlap: completely above or below
-        if (rb_end <= addr || rb_addr >= addr_end) {
-            ++rb_it;
-            continue;
-        }
-
-        // Overlap at the top: adjust the size
-        if (rb_addr < addr && rb_end > addr && rb_end <= addr_end) {
-            rb_it->size = addr - rb_addr;
-            ++rb_it;
-            continue;
-        }
-
-        // Overlap at the bottom: adjust the addr
-        if (rb_addr >= addr && rb_addr < addr_end && rb_end > addr_end) {
-            std::uint32_t overlap = rb_end - addr_end;
-            rb_it->addr = addr_end;
-            rb_it->size = overlap;
-            ++rb_it;
-            continue;
-        }
-
-        // Old span is completely within new_span: erase
-        if (rb_addr >= addr && rb_end <= addr_end) {
-            rb_it = next_rb_use.erase(rb_it);
-            continue;
-        }
-
-        // New span is completely within old: split old
-        if (rb_addr < addr && rb_end > addr_end) {
-            // Split old into two, keeping above and below
-            std::uint32_t above_size = addr - rb_addr;
-            std::uint32_t below_size = rb_end - addr_end;
-            rb_it->size = above_size;
-            RingBufferUse below_span{trace_idx, addr_end, below_size};
-            rb_it = next_rb_use.insert(rb_it + 1, below_span);
-            ++rb_it;  // move to next
-            continue;
-        }
-
-        ++rb_it;
-    }
-
-    // Find the correct place to insert new_span to keep high-to-low order, after modifications
-    auto insert_it = next_rb_use.begin();
-    while (insert_it != next_rb_use.end() && insert_it->addr > addr) {
-        ++insert_it;
-    }
-    next_rb_use.insert(insert_it, {trace_idx, addr, size});
-}
-
-void WorkerBufferManager::post_process_ring_buffer(
-    const RingBufferState& rb, std::vector<TraceNode>& trace, const std::vector<Program>& programs) {
-
-    // Simulate an RB to figure out stalls. We precisely simulate the required region, so the tail may be kept around
-    // after the ringbuffer wraps.
-    struct RingbufferEntry {
-        uint32_t length;
-        int32_t idx;
-    };
-    std::map<uint32_t, RingbufferEntry> rb_entries;
-
-    for (std::int32_t trace_idx = 0; trace_idx < (std::int32_t)trace.size(); trace_idx++) {
-        if (trace[trace_idx].is_allocated()) {
-            std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
-
-            std::optional<int32_t> stall_idx = std::nullopt;
-
-            uint32_t addr = trace[trace_idx].get_addr();
-            uint32_t upper = addr + programs[pgm_id].get_size();
-
-            auto it = rb_entries.upper_bound(addr);
-            if (it != rb_entries.begin()) {
-                --it;
-            }
-            // it is now the last entry that is <= addr, or the first above if there is none.
-            while (it != rb_entries.end()) {
-                if (it->first >= upper) {
-                    // it is now too high.
-                    break;
-                }
-                if (it->first + it->second.length > addr) {
-                    // This entry overlaps.
-                    if (stall_idx == std::nullopt) {
-                        stall_idx = it->second.idx;
-                    } else {
-                        stall_idx = std::max(stall_idx.value(), it->second.idx);
-                    }
-                    it = rb_entries.erase(it);
-
-                } else {
-                    // This entry is too low.
-                    ++it;
-                }
-            }
-
-            if (stall_idx != std::nullopt) {
-                trace[trace_idx].set_stall_idx(*stall_idx);
-            }
-
-            rb_entries[addr] = {programs[pgm_id].get_size(), trace_idx};
-        }
-    }
-
-    // At a given node the RB looks like a set of non-overlapping spans of addresses from addr to
-    // addr+size. Each span contains a trace_idx. Walking the RB from back to front we can
-    // insert the new span into the previous set of spans so that looking forward we see
-    // the next trace_idx for each span of addresses
-    std::vector<RingBufferUse> next_rb_use;
-    std::int32_t dist_to_rb = reuse_window;
-    for (std::int32_t trace_idx = (std::int32_t)trace.size() - 1; trace_idx >= 0; trace_idx--) {
-        if (trace[trace_idx].is_allocated()) {
-            update_rb_use(trace_idx, next_rb_use, trace, programs);
-            // Track the closest RB use to this, which is now 0
-            dist_to_rb = 0;
-            trace[trace_idx].set_min_dist_to_rb(0);
-        } else {
-            // This sets the min dist to the next RB use globally
-            // That is, if the RB is used downstream immediately (or some dist) after this node,
-            // that propogates all the way back upstream through all earlier uses.  This prevents
-            // us from allocating below the line early resulting in a stall later. This isn't
-            // optimal, but is (relatively) easy to compute and safe
-            dist_to_rb++;
-            std::int32_t dist = (trace[trace_idx].get_next_idx() != 0x7fffffff)
-                                    ? std::min(trace[trace[trace_idx].get_next_idx()].get_min_dist_to_rb(), dist_to_rb)
-                                    : dist_to_rb;
-            trace[trace_idx].set_min_dist_to_rb(dist);
-
-            trace[trace_idx].set_next_rb_use(next_rb_use);
-        }
-    }
-
-    std::uint32_t max_size = 0;
-    std::vector<RingBufferUse> prev_rb_use;
-    for (std::int32_t trace_idx = 0; trace_idx < (std::int32_t)trace.size(); trace_idx++) {
-        if (trace[trace_idx].is_allocated()) {
-            std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
-            if (trace[trace_idx].get_addr() + programs[pgm_id].get_size() > max_size) {
-                max_size = trace[trace_idx].get_addr() + programs[pgm_id].get_size();
-            }
-
-            update_rb_use(trace_idx, prev_rb_use, trace, programs);
-        } else {
-            trace[trace_idx].set_prev_rb_use(prev_rb_use);
-        }
-    }
-
-    this->rb_max_size_ = max_size;
-}
-
-// I believe this solution is optimal and O(n) given these simplifications:
-//  - fixed lookback (reuse window)
-//  - no gaps in the allocations
-// (those additions would yield a better solution with higher complexity)
-//
-// It works by looking to the base of the ring buffer and if that allocation
-// is old enough, replacing it. Otherwise, allocate by freeing if possible.
-// If freeing the next node doesn't satisify the lookback, then move the base
-// of the ring buffer to the top and try again from there. Since the lookback
-// is fixed, this isn't restarting back as a f(n) but instead as f(c), hence
-// the overall O(n)
-//
-// A "better" solution could be found at O(n^2) if gaps are allowed. In this
-// case, rather than moving the base to the top, perhaps the previous
-// iteration could have left a gap such that the new allocation wouldn't need
-// to evict.  Doing this could ripple all the way back, so, actually this may
-// be worse than O(n^2)
-//
-// Implementation below keeps each iteration through the ring buffer in
-// a vector of RingBufferState for simplicity of rolling back.  If we roll
-// back (buffer n-1) we need to look at the previous buffer for evictions
-// (n-2), though since we were able to promote previously, no lookback checks
-// will fail, however, bookkeeping that information is messy relative to just
-// looking back and checking the state
-RingBufferState WorkerBufferManager::alloc_ring_buffer(
-    std::vector<TraceNode>& trace, const std::vector<Program>& programs) {
-    // TODO: handle large allocations that won't fit all at once within lookback
-
-    // Track prior ring buffers so we can roll back
-    // Can only go back 2, but simpler to track them all
-    std::vector<RingBufferState> rbs;
-    rbs.push_back({});
-
-    fprintf(stderr, "+++++Starting ring buffer allocation\n");
-
-    for (std::int32_t trace_idx = 0; trace_idx < (std::int32_t)trace.size(); trace_idx++) {
-        fprintf(stderr, "Processing idx %d\n", trace_idx);
-        RingBufferState& rb = rbs.back();
-
-        std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
-        std::uint32_t size_needed = programs[pgm_id].get_size();
-
-        // Only count==1 goes in RB
-        if (this->program_data_[pgm_id].get_count() == 1) {
-            std::uint32_t alloc_addr;
-
-            // Cases:
-            // 1: allocate at the front (wraps the RB) if possible
-            // 2a: allocate in the next slot by evicting from previous iteration
-            // 2b: if slot isn't beyond the lookback window, roll back
-            // 3: we're at the end, grow the RB
-
-            std::int32_t rb_idx = 0;
-            if ((std::int32_t)rbs.size() == 1 && rb.rb_.size() == 0) {
-                // Simplifies code below to insert the first element here
-                fprintf(stderr, "Inserting first element\n");
-                std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
-                std::uint32_t size_needed = programs[pgm_id].get_size();
-                rb.rb_.push_back({pgm_id, 0, size_needed, trace_idx});
-                alloc_addr = 0;
-            } else if (check_rb_evictable_at_idx(rb_idx, 0, rb.rb_, size_needed, trace_idx)) {
-                // Case 1: moved to front, wrapped the current ring buffer
-                fprintf(stderr, "Moving to front\n");
-                rb.evict_idx_ = rb_idx;
-                rb.evict_addr_ = size_needed;
-                rbs.push_back({});
-                alloc_addr = 0;
-                rbs.back().rb_.push_back({pgm_id, alloc_addr, size_needed, trace_idx});
-            } else {
-                if (rbs.size() > 1) {
-                    RingBufferState& prev_rb = rbs[rbs.size() - 2];
-                    std::int32_t evict_idx = prev_rb.evict_idx_;
-                    if (check_rb_evictable_at_idx(
-                            evict_idx, prev_rb.evict_addr_, prev_rb.rb_, size_needed, trace_idx)) {
-                        // Case 2a, evict
-                        fprintf(stderr, "Evicting from prior round\n");
-                        prev_rb.evict_idx_ = evict_idx;
-                        alloc_addr = prev_rb.evict_addr_;
-                        prev_rb.evict_addr_ += size_needed;
-                        rb.rb_.push_back({pgm_id, alloc_addr, size_needed, trace_idx});
-                    } else {
-                        // Case 2b, roll back
-                        fprintf(stderr, "Rolling back\n");
-                        AllocNode old_entry = rb.rb_[0];
-                        rbs.pop_back();
-                        alloc_addr = rb.rb_.back().get_addr() + rb.rb_.back().get_size();
-                        trace_idx = old_entry.get_prev_use();
-                        AllocNode new_entry(old_entry.get_pgm_id(), alloc_addr, old_entry.get_size(), trace_idx);
-                        rb.rb_.push_back(new_entry);
-                    }
-                } else {
-                    // Case 3, grow the rb
-                    fprintf(stderr, "Growing the rb\n");
-                    alloc_addr =
-                        (rbs[0].rb_.size() == 0) ? 0 : rbs[0].rb_.back().get_addr() + rbs[0].rb_.back().get_size();
-                    rbs[0].rb_.push_back({pgm_id, alloc_addr, size_needed, trace_idx});
-                }
-            }
-
-            this->program_data_[pgm_id].alloc_rb();
-            trace[trace_idx].set_addr(alloc_addr);
-            trace[trace_idx].set_does_dispatch();
-        }
-
-        if (rbs.back().rb_.size() != 0) {
-            trace[trace_idx].set_rb_size(rbs.back().rb_.back().get_addr() + rbs.back().rb_.back().get_size());
-            if (!this->program_data_[pgm_id].is_rb()) {
-                trace[trace_idx].set_rb_reset_idx(rbs.back().rb_.back().get_prev_use());
-            }
-        }
-    }
-
-    post_process_ring_buffer(rbs.back(), trace, programs);
-
-    return rbs.back();
-}
-
 void WorkerBufferManager::commit_preallocations(
     std::uint32_t addr_top, std::list<AllocNode>::iterator commit_start, std::vector<TraceNode>& trace) {
     std::uint32_t addr = addr_top;
@@ -854,8 +420,7 @@ std::list<std::list<AllocNode>::iterator>::iterator WorkerBufferManager::find_ev
 
         // Iterates over allocator from high to low memory
         for (auto alloc_it = *lru_it; alloc_it != this->allocator_.end(); ++alloc_it) {
-            if (alloc_it->get_prev_use() + window > trace_idx ||
-                (alloc_it->is_below_the_line() && not trace[trace_idx].is_ok_downstream_below_the_line(window))) {
+            if (alloc_it->get_prev_use() + window > trace_idx) {
                 break;  // failed
             }
 
@@ -882,84 +447,6 @@ std::list<std::list<AllocNode>::iterator>::iterator WorkerBufferManager::find_ev
     }
 
     return match;
-}
-
-// Make the trace node at trace_idx stall on any prior ring buffer uses (upstream) that overlap this node's addresses
-// XXXX move this to TraceNode?
-void WorkerBufferManager::set_upstream_rb_stall_idx(
-    std::int32_t trace_idx, std::uint32_t addr, std::uint32_t end_addr, std::vector<TraceNode>& trace) {
-    std::int32_t stall_idx = -1;
-
-    const std::vector<RingBufferUse>& prbu = trace[trace_idx].get_prev_rb_use();
-    for (std::uint32_t idx = 0; idx < prbu.size(); idx++) {
-        if (addr < prbu[idx].addr + prbu[idx].size && end_addr > prbu[idx].addr) {
-            // Overlap
-            if (not trace[trace_idx].does_stall() || trace[trace_idx].get_stall_idx() < prbu[idx].trace_idx) {
-                if (prbu[idx].trace_idx > stall_idx) {
-                    stall_idx = prbu[idx].trace_idx;
-                }
-            }
-        }
-    }
-
-    if (stall_idx > trace[trace_idx].get_stall_idx()) {
-        trace[trace_idx].set_stall_idx(stall_idx);
-    }
-}
-
-// "The line" is the max ring buffer size (divides RB from allocator)
-// Allocating here will eventually conflict w/ the ring buffer (require an RB stall)
-// TODO: for now, this is just done when the node is freed before it conflicts w/ the RB,
-// eventually this can make a smarter decision by scoring
-// TODO: for now, this allocates from high to low.  Since the RB grows bottom up, may be
-// better to start low and grow high?
-bool WorkerBufferManager::try_to_alloc_below_the_line(
-    std::int32_t trace_idx, std::uint32_t size_needed, std::int32_t window, std::vector<TraceNode>& trace) {
-    bool success = false;
-
-    if (trace[trace_idx].is_ok_downstream_below_the_line(window)) {
-        // Allocator extends all the way to the line (with a free block if needed)
-        assert(this->allocator_.size() != 0);
-
-        const AllocNode& last = this->allocator_.back();
-        std::uint32_t high_addr = last.is_free() ? last.get_addr() + last.get_size() : last.get_addr();
-        std::uint32_t size_avail = high_addr;  // address range is 0..try_addr
-
-        if (size_needed <= size_avail) {
-            std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
-            std::uint32_t addr = high_addr - size_needed;
-            std::uint32_t end_addr = high_addr;
-
-            if (trace[trace_idx].is_ok_upstream_below_the_line(trace_idx - window, addr, size_needed)) {
-                fprintf(stderr, "At idx %d alloc %s below the line\n", trace_idx, Program::get_name(pgm_id).c_str());
-
-                // Insert this node's stall on RB up the trace
-                set_upstream_rb_stall_idx(trace_idx, addr, end_addr, trace);
-
-                if (last.is_free()) {
-                    auto lru_it = this->lru_.begin();
-                    auto last_it = --this->allocator_.end();
-                    while (*lru_it != last_it) {
-                        ++lru_it;
-                    }
-                    this->lru_.erase(lru_it);
-                    this->allocator_.pop_back();
-                }
-
-                this->allocator_.push_back({pgm_id, addr, size_needed, trace_idx});
-                this->allocator_.back().set_below_the_line();
-                trace[trace_idx].set_does_dispatch();
-                trace[trace_idx].set_addr(addr);
-                this->program_data_[pgm_id].alloc_heap();
-                this->lru_.push_back(--this->allocator_.end());
-                this->alloced_pgms_[pgm_id] = std::prev(this->lru_.end());
-
-                success = true;
-            }
-        }
-    }
-
-    return success;
 }
 
 // Called after finding eviction candidates, so guaranteed to succeed
@@ -993,6 +480,7 @@ std::list<AllocNode>::iterator WorkerBufferManager::evict(
                 if (alloc_it->get_prev_use() > trace[trace_idx].get_stall_idx()) {
                     trace[trace_idx].set_stall_idx(alloc_it->get_prev_use());
                 }
+
                 this->lru_.erase(lru_it);
                 alloc_it = this->allocator_.erase(alloc_it);
                 break;
@@ -1022,11 +510,10 @@ void WorkerBufferManager::allocate_in_hole(
         this->allocator_.push_back({pgm_id, alloc_addr, size_needed, trace_idx});
         this->lru_.push_back(--this->allocator_.end());
 
-        // Add an empty free node at the end down to the top of the ring buffer
+        // Add an empty free node at the bottom of the heap
         // This simplifies book keeping by not having to special case the gap
-        // If we've already allocated below the line, then we can't be here (not allocator end)
-        if (alloc_addr > this->rb_max_size_) {
-            this->allocator_.push_back({this->rb_max_size_, alloc_addr - this->rb_max_size_});
+        if (alloc_addr != 0) {
+            this->allocator_.push_back({0, alloc_addr});
             this->lru_.push_front(--this->allocator_.end());
         }
     } else {
@@ -1078,12 +565,6 @@ void WorkerBufferManager::allocate_in_hole(
                 }
             }
         }
-    }
-
-    std::uint32_t end_addr = alloc_addr + size_needed;
-    if (alloc_it->is_below_the_line()) {
-        // Insert this node's stall on RB up the trace
-        set_upstream_rb_stall_idx(trace_idx, alloc_addr, end_addr, trace);
     }
 
     // TODO: aggegate all this bookkeeping in a helper?
@@ -1156,20 +637,12 @@ bool WorkerBufferManager::try_to_reenter_preallocation_mode(
     }
 
     if (eviction_mode) {
-        if (this->allocator_.size() == 0) {
-            // TODO: if we continue w/ this algorithm, needs to handle an allocation bigger than the heap region that
-            // extends below the line I think in find_eviction_candidates
-            fprintf(stderr, "Failed at index %d, entering eviction mode with no allocations\n", trace_idx);
-            dump_allocator();
-            throw("failed");
-        }
         fprintf(stderr, "Transitioning to eviction mode with %ld allocations\n", this->allocator_.size());
 
-        // Add an empty free node at the end down to the top of the ring buffer
         // This simplifies book keeping by not having to special case the gap
         std::uint32_t addr = this->allocator_.back().get_addr();
-        if (addr > this->rb_max_size_) {
-            this->allocator_.push_back({this->rb_max_size_, addr - this->rb_max_size_});
+        if (addr > 0) {
+            this->allocator_.push_back({0, addr});
             this->lru_.push_front(--this->allocator_.end());
         }
     } else {
@@ -1183,44 +656,8 @@ bool WorkerBufferManager::try_to_reenter_preallocation_mode(
     return eviction_mode;
 }
 
-void WorkerBufferManager::evict_rb_conflicts(
-    std::int32_t trace_idx, std::vector<TraceNode>& trace, const std::vector<Program>& programs) {
-    std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
-    std::uint32_t addr = trace[trace_idx].get_addr();
-    std::uint32_t end_addr = trace[trace_idx].get_addr() + programs[pgm_id].get_size();
-
-    auto lru_it = this->lru_.begin();
-    while (lru_it != this->lru_.end()) {
-        auto alloc_it = *lru_it;
-        std::uint32_t alloc_addr = alloc_it->get_addr();
-        std::uint32_t alloc_size = alloc_it->get_size();
-
-        if (addr < alloc_addr + alloc_size && end_addr > alloc_addr) {
-            std::uint32_t pgm_id = alloc_it->get_pgm_id();
-            if (alloc_it->get_pgm_id() != 0xffffffff) {
-                this->program_data_[pgm_id].dealloc();
-                this->alloced_pgms_[pgm_id].reset();
-            }
-            if (alloc_it->get_prev_use() > trace[trace_idx].get_stall_idx()) {
-                trace[trace_idx].set_stall_idx(alloc_it->get_prev_use());
-            }
-
-            if (alloc_addr < this->rb_max_size_ and alloc_addr + alloc_size > this->rb_max_size_) {
-                auto empty_it = this->allocator_.insert(
-                    alloc_it, {this->rb_max_size_, alloc_size - (this->rb_max_size_ - alloc_addr)});
-                this->lru_.push_front(empty_it);
-            }
-
-            lru_it = this->lru_.erase(lru_it);
-            this->allocator_.erase(alloc_it);
-        } else {
-            ++lru_it;
-        }
-    }
-}
-
 // General approach:
-// 1) Track total allocated size up until the heap collides w/ the ring buffer
+// 1) Track total allocated size up until the heap overflows
 // 2) At this point, allocate based on last seen priority for the pgm putting
 // high priority at the top and low priority at the bottom
 // 3) Free up what can be freed up and restart to first step
@@ -1230,7 +667,7 @@ void WorkerBufferManager::alloc_heap(std::vector<TraceNode>& trace, const std::v
     this->alloced_pgms_.resize(programs.size());
     std::int32_t trace_idx = 0;
 
-    fprintf(stderr, "+++++Starting heap allocation from %d to %d\n", this->rb_max_size_, this->buffer_size_);
+    fprintf(stderr, "+++++Starting heap allocation up to %d\n", this->buffer_size_);
 
     bool eviction_mode = false;
     std::uint32_t pre_alloc_addr_top = this->buffer_size_;
@@ -1246,25 +683,16 @@ void WorkerBufferManager::alloc_heap(std::vector<TraceNode>& trace, const std::v
             this->lru_.splice(this->lru_.end(), this->lru_, this->alloced_pgms_[pgm_id].value());
             this->alloced_pgms_[pgm_id] = std::prev(this->lru_.end());
             this->lru_.back()->set_prev_use(trace_idx);
-        } else if (this->program_data_[pgm_id].get_count() == 1) {
-            // Total count was 1, allocated in ring buffer
-            // Need to evict anything allocation that conflicts w/ this use
-            fprintf(stderr, "Ring buffer, checking evictions\n");
-            evict_rb_conflicts(trace_idx, trace, programs);
         } else {
             // Total count greater than one, heap
 
             std::uint32_t size_needed = programs[pgm_id].get_size();
-
             if (eviction_mode) {
                 fprintf(stderr, "Eviction mode: %d\n", trace_idx);
 
                 std::list<std::list<AllocNode>::iterator>::iterator evict_it;
                 evict_it = find_eviction_candidates(true, reuse_window, size_needed, trace_idx, trace);
-                bool alloc_below = false;
-                // XXXX below the line should iterate over shrinking window as well
-                if (evict_it == this->lru_.end() &&
-                    not(alloc_below = try_to_alloc_below_the_line(trace_idx, size_needed, reuse_window, trace))) {
+                if (evict_it == this->lru_.end()) {
                     for (std::int32_t window = reuse_window; window != 0; window--) {
                         fprintf(stderr, "Trying eviction window: %d\n", window);
                         evict_it = find_eviction_candidates(false, window, size_needed, trace_idx, trace);
@@ -1285,7 +713,7 @@ void WorkerBufferManager::alloc_heap(std::vector<TraceNode>& trace, const std::v
                         continue;
                     }
                     allocate_in_hole(trace_idx, freed_size, size_needed, alloc_it, trace);
-                } else if (not alloc_below) {
+                } else {
                     fprintf(stderr, "Failed allocate %d bytes at trace_idx %d\n", size_needed, trace_idx);
                     // TODO: need to be able to stall on the RB and vice versa to handle all cases
                     dump_allocator();
@@ -1296,9 +724,7 @@ void WorkerBufferManager::alloc_heap(std::vector<TraceNode>& trace, const std::v
 
                 assert(this->program_data_[pgm_id].is_not_alloced());
 
-                // TODO: replace static rb size w/ dynamic rb size
-
-                if ((int)pre_alloc_addr - (int)size_needed < (int)this->rb_max_size_) {
+                if (pre_alloc_addr < size_needed) {
                     fprintf(
                         stderr,
                         "Committing prior allocations on trace node %d start at addr %d\n",
@@ -1346,7 +772,6 @@ void WorkerBufferManager::process_trace(std::vector<TraceNode>& trace, const std
 
     if (!handle_trivial_cases(trace, programs)) {
         // Eventually may want to interleave these two
-        this->rb_ = alloc_ring_buffer(trace, programs);
         alloc_heap(trace, programs);
     }
 }
@@ -1462,16 +887,14 @@ void WorkerBufferManager::dump(const std::vector<TraceNode>& trace, const std::v
 
         std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
         std::uint32_t addr = trace[trace_idx].get_addr();
-        fprintf(stderr, " %c", (this->program_data_[pgm_id].get_count() == 1) ? 'R' : 'H');
+        fprintf(stderr, " %c", (this->program_data_[pgm_id].get_count() == 1) ? 'S' : 'H');
         fprintf(
             stderr,
-            "[%5d-%5d) %c S:%2d %5d %2d",
+            "[%5d-%5d) %c S:%2d",
             addr,
             addr + programs[pgm_id].get_size(),
             trace[trace_idx].does_dispatch() ? 'D' : 'x',
-            trace[trace_idx].get_stall_idx(),
-            trace[trace_idx].get_rb_size(),
-            trace[trace_idx].get_rb_reset_idx());
+            trace[trace_idx].get_stall_idx());
         fprintf(stderr, "\n");
     }
 }
