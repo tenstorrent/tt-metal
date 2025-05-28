@@ -32,8 +32,10 @@ Tensor post_scatter_transform_tensor(
     Tensor& output_tensor, const int32_t dim, const bool is_dim_last_idx, const Shape& original_lshape) {
     const auto orig_rank = original_lshape.rank();
 
-    if (orig_rank < 4) {
+    if (orig_rank == 1) {
         output_tensor = ttnn::reshape(output_tensor, original_lshape);
+    } else if (orig_rank < 4) {
+        output_tensor = ttnn::squeeze_from_4D(output_tensor, orig_rank);
     } else if (orig_rank > 4) {
         ttnn::SmallVector<uint32_t> result_shape(original_lshape.cbegin(), original_lshape.cend());
         output_tensor = ttnn::reshape(output_tensor, original_lshape);
