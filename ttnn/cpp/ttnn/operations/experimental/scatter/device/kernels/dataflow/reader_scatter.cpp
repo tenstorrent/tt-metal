@@ -24,7 +24,11 @@ FORCE_INLINE void read_nth_tile_in_Wt_tiles(
     cb_push_back(cb, ONE_TILE);
 }
 
-// O(n^2), but no constraints
+// several comments on the algorithm
+// computational complexity: O(input_shape[scatter_axis] * index_shape[scatter_axis])
+// memory complexity: O(3 * tile_size(input_cb) + tile_size(index_cb)) -> O(1)
+// this algorithm courses through each tile along the whole scatter axis (index_shape[scatter_axis]) in the index tensor
+// (and source tensor on parallel) for each input tile along the whole scatter axis (input_shape[scatter_axis])
 template <
     typename number_type,
     typename index_type,
@@ -44,6 +48,7 @@ FORCE_INLINE void scatter_along_whole_axis(
     const IAGF<input_tensor_is_dram>& input_addr_gtor,
     const IAGF<index_tensor_is_dram>& index_addr_gtor,
     const IAGF<source_tensor_is_dram>& source_addr_gtor) {
+    // for each tile along the scatter axis (Wt_input, or input_shape[scatter_axis]) in the input tensor...
     for (uint32_t tile_input = 0; tile_input < Wt_input; ++tile_input) {
         cb_reserve_back(output_cb, ONE_TILE);
         // read an input tile + get fresh pointers
@@ -59,7 +64,7 @@ FORCE_INLINE void scatter_along_whole_axis(
         for (uint32_t tile_input_inner = 0; tile_input_inner < tt::constants::TILE_HW; ++tile_input_inner) {
             output_l1_ptr[tile_input_inner] = input_l1_ptr[tile_input_inner];
         }
-        // scatter Wt_index tiles onto ONE_TILE from Wt_input
+        // ...scatter Wt_tiles (index_shape[scatter_axis]) tiles onto ONE_TILE from Wt_input
         for (uint32_t tile_index_w = 0; tile_index_w < Wt_index; ++tile_index_w) {
             // read index and source tiles + get fresh pointers
             read_nth_tile_in_Wt_tiles<index_tensor_is_dram>(
@@ -72,6 +77,7 @@ FORCE_INLINE void scatter_along_whole_axis(
                 reinterpret_cast<volatile tt_l1_ptr index_type*>(index_l1_read_addr);
             volatile tt_l1_ptr number_type* source_l1_ptr =
                 reinterpret_cast<volatile tt_l1_ptr number_type*>(source_l1_read_addr);
+            // gut the tiles
             for (uint32_t face_x = 0; face_x < TILE_FACES_PER_AXIS; ++face_x) {
                 for (uint32_t face_y = 0; face_y < TILE_FACES_PER_AXIS; ++face_y) {
                     for (uint32_t scalar_x = 0; scalar_x < TILE_FACE_WIDTH; ++scalar_x) {
@@ -90,21 +96,21 @@ FORCE_INLINE void scatter_along_whole_axis(
 
                             // get scatter info
                             volatile index_type& index_value =
-                                tile_guts<index_type>(index_l1_ptr, face_x, face_y, scalar_x, scalar_y, 0);
+                                tile_guts<index_type>(index_l1_ptr, face_x, face_y, scalar_x, scalar_y);
                             // check if index value targets currently chosen input tile (tile_input)
                             const uint32_t dest_tile_id_in_row = index_value >> 5;
                             if (dest_tile_id_in_row != tile_input) {
                                 continue;
                             }
                             volatile number_type& source_value =
-                                tile_guts<number_type>(source_l1_ptr, face_x, face_y, scalar_x, scalar_y, 0);
+                                tile_guts<number_type>(source_l1_ptr, face_x, face_y, scalar_x, scalar_y);
                             const uint32_t x_index_in_tile = index_value & 31;
                             const uint32_t dest_scalar_x =
                                 (x_index_in_tile < 16) ? x_index_in_tile : (x_index_in_tile - 16);
                             const uint32_t dest_face_id_x = (x_index_in_tile < 16) ? 0 : 1;
 
                             // scatter the value
-                            tile_guts<number_type>(output_l1_ptr, dest_face_id_x, face_y, dest_scalar_x, scalar_y, 0) =
+                            tile_guts<number_type>(output_l1_ptr, dest_face_id_x, face_y, dest_scalar_x, scalar_y) =
                                 source_value;
                         }
                     }

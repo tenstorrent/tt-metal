@@ -15,7 +15,9 @@ def select_torch_dtype(ttnn_dtype):
     if ttnn_dtype is ttnn.uint8:
         return torch.uint8
     if ttnn_dtype is ttnn.int32:
-        return torch.int64  # !!!
+        return (
+            torch.int64
+        )  # !!! there is a strict requirement for the index tensor in Torch to be int64, and there is no int64 in ttnn
 
 
 @pytest.mark.parametrize(
@@ -66,48 +68,3 @@ def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, d
     assert torch_result_from_preallocated_ttnn.shape == torch_preallocated_result.shape
     assert torch_result_from_preallocated_ttnn.dtype == torch_preallocated_result.dtype
     torch.testing.assert_close(torch_result_from_preallocated_ttnn, torch_preallocated_result)
-
-
-@pytest.mark.parametrize(
-    "input_shape, dim, index_shape, source_shape, input_dtype, index_dtype, source_dtype, memory_config, layout, sharded",
-    [
-        #
-    ],
-)
-def test_scatter_bad_input(
-    input_shape,
-    dim,
-    index_shape,
-    source_shape,
-    input_dtype,
-    index_dtype,
-    source_dtype,
-    memory_config,
-    layout,
-    sharded,
-    device,
-):
-    torch.manual_seed(22052025)
-
-    # input_rank vs dim
-
-    # index_rank vs dim
-
-    # index_shape vs source_shape
-
-    # input_shape vs index_shape
-
-    # input_dtype vs source_dtype
-
-    # input_dtype vs output_dtype
-
-    # indices vs input shape length
-
-    # input_shape vs output_shape
-
-    # non-tile
-
-    # sharded
-
-    # pytest.raises
-    pass
