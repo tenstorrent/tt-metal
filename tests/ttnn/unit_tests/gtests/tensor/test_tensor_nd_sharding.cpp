@@ -41,34 +41,45 @@ struct NDShardingOpCompatParams {
 
 class NDShardingTests : public ttnn::TTNNFixtureWithDevice, public ::testing::WithParamInterface<NDShardingParams> {};
 
-TEST_P(NDShardingTests, ReadWriteTest) {
+namespace {
+void test_nd_sharded_loopback(
+    tt::tt_metal::distributed::MeshDevice* device,
+    const NDShardingParams& params,
+    BufferType buffer_type,
+    ShardOrientation orientation) {
+    CoreRangeSet cores;
+    if (buffer_type == BufferType::L1) {
+        cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+    } else {
+        auto dram_grid_size = device->dram_grid_size();
+        cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{dram_grid_size.x - 1, dram_grid_size.y - 1}));
+    }
+    MemoryConfig memory_config{buffer_type, NdShardSpec{params.shard_shape, cores, orientation}};
+    TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
+    TensorSpec tensor_spec(params.shape, tensor_layout);
+
+    size_t volume = params.shape.volume();
+    std::vector<uint16_t> data(volume);
+    for (size_t i = 0; i < volume; i++) {
+        data[i] = static_cast<uint16_t>(i);
+    }
+
+    auto tensor = Tensor::from_vector(data, tensor_spec, device);
+    auto readback_data = tensor.to_vector<uint16_t>();
+
+    for (size_t i = 0; i < volume; i++) {
+        ASSERT_EQ(data[i], readback_data[i]);
+    }
+}
+}  // namespace
+
+TEST_P(NDShardingTests, LoopbackTest) {
     const auto& params = GetParam();
 
-    CoreRangeSet l1_cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
-    auto dram_grid_size = device_->dram_grid_size();
-    CoreRangeSet dram_cores(CoreRange(CoreCoord{0, 0}, CoreCoord{dram_grid_size.x - 1, dram_grid_size.y - 1}));
-
-    for (auto sharding_orientation : {ShardOrientation::ROW_MAJOR, ShardOrientation::COL_MAJOR}) {
-        for (auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
-            const auto& cores = buffer_type == BufferType::L1 ? l1_cores : dram_cores;
-            MemoryConfig memory_config{buffer_type, NdShardSpec{params.shard_shape, cores, sharding_orientation}};
-            TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);
-            TensorSpec tensor_spec(params.shape, tensor_layout);
-
-            size_t volume = params.shape.volume();
-            std::vector<uint16_t> data(volume);
-            for (size_t i = 0; i < volume; i++) {
-                data[i] = static_cast<uint16_t>(i);
-            }
-
-            auto tensor = Tensor::from_vector(data, tensor_spec, device_);
-            auto readback_data = tensor.to_vector<uint16_t>();
-
-            for (size_t i = 0; i < volume; i++) {
-                ASSERT_EQ(data[i], readback_data[i]);
-            }
-        }
-    }
+    test_nd_sharded_loopback(device_, params, BufferType::L1, ShardOrientation::ROW_MAJOR);
+    test_nd_sharded_loopback(device_, params, BufferType::L1, ShardOrientation::COL_MAJOR);
+    test_nd_sharded_loopback(device_, params, BufferType::DRAM, ShardOrientation::ROW_MAJOR);
+    test_nd_sharded_loopback(device_, params, BufferType::DRAM, ShardOrientation::COL_MAJOR);
 }
 
 class LegacyToNdShardingTests : public ::testing::TestWithParam<LegacyToNdShardingParams> {};
