@@ -17,7 +17,7 @@ depending on the most up-to-date installation methods.
 
 .. code-block:: bash
 
-    export TT_METAL_HOME=<this repo dir>
+    export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
     # To run the example
     ./build/programming_examples/eltwise_binary
@@ -149,6 +149,7 @@ To do so, the reader creates 2 interleaved address generators. Unlike on most pr
 
 .. code-block:: cpp
 
+    // tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp
     void kernel_main() {
         uint32_t in0_addr = get_arg_val<uint32_t>(0);
         uint32_t in1_addr = get_arg_val<uint32_t>(1);
@@ -189,6 +190,7 @@ The compute kernel is a bit more complicated. It is responsible for performing t
 
 .. code-block:: cpp
 
+    // tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp
     namespace NAMESPACE {
     void MAIN {
         uint32_t n_tiles = get_arg_val<uint32_t>(0);
@@ -225,6 +227,7 @@ The writer kernel is looks similar to the reader kernel. Instead of reading, it 
 
 .. code-block:: cpp
 
+    // tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp
     void kernel_main() {
         uint32_t out_addr = get_arg_val<uint32_t>(0);
         uint32_t n_tiles = get_arg_val<uint32_t>(1);

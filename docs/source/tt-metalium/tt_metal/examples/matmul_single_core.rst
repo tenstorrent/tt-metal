@@ -3,21 +3,15 @@
 Matmul (Single Core)
 ====================
 
-We'll build a program that will perform matmul operations on two tensors
-with equal-size inner dimension. We will then go through specific sections of
-the program.
+Now that we have a basic understanding of how to use the TT Metal API and building data movement and compute kernels, we can look at a more complex example of matrix multiplication. This will the the first non trivial example of a program that involves complex data movement and compute. The matrix multiplication will be performed on a single Tensix core using the FPU (Matrix engine).
 
-The full example program is in
-``tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp``
+We'll go through this code section by section. The fully source code for this example is available under the ``tt_metal/programming_examples/matmul_single_core/`` directory.
 
-To build and execute, you may use the following commands. Note that we include
-the necessary environment variables here, but you may possibly need more
-depending on the most up-to-date installation methods.
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_single_core`` executable in the ``build/programming_examples`` directory. For example:
 
-::
+.. code-block:: bash
 
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
+    export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh
     ./build/programming_examples/matmul_single_core
 

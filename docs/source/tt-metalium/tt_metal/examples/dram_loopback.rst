@@ -128,6 +128,7 @@ The kernel itself is simple. It takes the address and bank indices we just creat
 
 .. code-block:: cpp
 
+    // tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp
     void kernel_main() {
         std::uint32_t l1_buffer_addr = get_arg_val<uint32_t>(0);
         std::uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(1);

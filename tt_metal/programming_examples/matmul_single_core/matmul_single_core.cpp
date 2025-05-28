@@ -11,6 +11,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <matmul_common/bmm_op.hpp>
 #include <tt-metalium/device.hpp>
+#include "tt-metalium/core_coord.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -64,7 +65,7 @@ void matmul_single_core(
     CommandQueue& cq = device->command_queue();
     Program program{};
     // Core range from x: [0, 0] to y: [0, 0] (single core at {0, 0})
-    CoreRange core({0, 0}, {0, 0});
+    CoreCoord core({0, 0});
 
     // Calcaulate the number of tiles for each dimension.
     uint32_t Mt = M / TILE_HEIGHT;
