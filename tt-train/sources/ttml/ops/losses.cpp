@@ -11,6 +11,7 @@
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
@@ -29,19 +30,25 @@ autograd::TensorPtr mse_loss(
     }
 }
 
-autograd::TensorPtr cross_entropy_loss_without_reduce_(
-    const autograd::TensorPtr& prediction, const autograd::TensorPtr& target) {
-    const float eps = 1e-6F;
-    auto prediction_tensor = ttnn_fixed::softmax(prediction->get_value(), 3);
-    auto prediction_tensor_clipped = ttnn::clip(prediction_tensor, eps, 1.0F);
-    auto loss = ttnn::multiply(target->get_value(), ttnn::log(prediction_tensor_clipped));
-    loss = ttnn::neg(loss);
-    loss = ttnn_fixed::sum_over_dim(loss, 3);
-    auto out = autograd::create_tensor(loss);
+autograd::TensorPtr cross_entropy_loss(
+    const autograd::TensorPtr& prediction, const autograd::TensorPtr& target, ReduceType reduce) {
+    auto loss = ttml::metal::cross_entropy_fw(prediction->get_value(), target->get_value());
+    auto shape = core::create_shape({1, 1, 1, 1});
+    autograd::TensorPtr out = autograd::create_tensor(core::from_vector({0.F}, shape, &autograd::ctx().get_device()));
+    ttnn::moreh_mean(
+        loss,
+        std::nullopt,
+        true,
+        std::nullopt,
+        out->get_value(),
+        std::nullopt,
+        /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
 
-    autograd::GradFunction grad = [target, prediction_tensor, prediction, out]() {
-        auto grad = ttnn::subtract(prediction_tensor, target->get_value());
-        grad = ttnn::multiply(grad, out->get_grad());
+    autograd::GradFunction grad = [target, prediction, out]() {
+        auto volume = target->get_value().logical_volume();
+        float scaler = 1.0F / static_cast<float>(volume);
+        auto grad =
+            ttml::metal::cross_entropy_bw(prediction->get_value(), target->get_value(), out->get_grad(), scaler);
         prediction->add_grad(grad);
     };
 
@@ -49,16 +56,6 @@ autograd::TensorPtr cross_entropy_loss_without_reduce_(
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
 
     return out;
-}
-
-autograd::TensorPtr cross_entropy_loss(
-    const autograd::TensorPtr& prediction, const autograd::TensorPtr& target, ReduceType reduce) {
-    auto loss = cross_entropy_loss_without_reduce_(prediction, target);
-    if (reduce == ReduceType::MEAN) {
-        return ops::mean(loss);
-    } else {
-        throw std::logic_error("Unsupported cross entropy reduction type");
-    }
 }
 
 autograd::TensorPtr nll_loss(
