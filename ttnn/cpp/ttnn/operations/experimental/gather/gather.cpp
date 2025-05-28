@@ -51,7 +51,7 @@ Tensor pre_gather_transform_tensor(
         index_tensor_padded_shape[0],
         index_tensor_padded_shape[1],
         index_tensor_padded_shape[2],
-        input_tensor.get_logical_shape()[-1]};
+        transformed_tensor.get_logical_shape()[-1]};
 
     const Tensor sliced_tensor =
         ttnn::slice(transformed_tensor, start_index, end_index, step, input_tensor.memory_config());

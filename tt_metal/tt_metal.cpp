@@ -6,7 +6,6 @@
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
 #include "dev_msgs.h"
-#include <device_impl.hpp>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
@@ -14,7 +13,6 @@
 #include <kernel.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <sub_device_types.hpp>
-#include <trace.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <cstdlib>
@@ -36,6 +34,7 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "device/device_impl.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -46,6 +45,7 @@
 #include "tt-metalium/program.hpp"
 #include "program/program_impl.hpp"
 #include "semaphore.hpp"
+#include "trace/trace.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>

@@ -37,6 +37,11 @@ set(TTNN_FABRIC_EDM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_fabric_edm.cpp)
 set(TTNN_CCL_MULTI_TENSOR_UNIT_TESTS_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_multi_tensor_ccl.cpp)
 set(TTNN_1D_FABRIC_LATENCY_TEST_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_1d_fabric_loopback_latency.cpp)
 
+set(TTNN_ACCESSOR_UNIT_TESTS_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/accessor/test_sharded_accessor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/accessor/test_sharded_accessor_on_device.cpp
+)
+
 set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/common_tensor_test_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor.cpp
@@ -47,6 +52,7 @@ set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_mesh_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_partition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_sharding.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_nd_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_vector_conversion.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_xtensor_conversion.cpp
 )
@@ -60,7 +66,9 @@ add_executable(unit_tests_ttnn_ccl_ops ${TTNN_CCL_OP_TESTS_SRC})
 add_executable(unit_tests_ttnn_fabric_edm ${TTNN_FABRIC_EDM_SRC})
 add_executable(unit_tests_ttnn_ccl_multi_tensor ${TTNN_CCL_MULTI_TENSOR_UNIT_TESTS_SRC})
 add_executable(unit_tests_ttnn_1d_fabric_latency ${TTNN_1D_FABRIC_LATENCY_TEST_SRC})
+add_executable(unit_tests_ttnn_accessor ${TTNN_ACCESSOR_UNIT_TESTS_SRC})
 add_executable(unit_tests_ttnn_tensor ${TTNN_TENSOR_UNIT_TESTS_SRC})
+target_link_libraries(unit_tests_ttnn_tensor PRIVATE xtensor)
 add_executable(
     test_ccl_multi_cq_multi_device
     ${CMAKE_CURRENT_SOURCE_DIR}/multi_thread/test_ccl_multi_cq_multi_device.cpp
@@ -82,6 +90,7 @@ setup_ttnn_test_target(unit_tests_ttnn_ccl_ops)
 setup_ttnn_test_target(unit_tests_ttnn_fabric_edm)
 setup_ttnn_test_target(unit_tests_ttnn_ccl_multi_tensor)
 setup_ttnn_test_target(unit_tests_ttnn_1d_fabric_latency)
+setup_ttnn_test_target(unit_tests_ttnn_accessor)
 setup_ttnn_test_target(unit_tests_ttnn_tensor)
 setup_ttnn_test_target(test_ccl_multi_cq_multi_device)
 setup_ttnn_test_target(unit_tests_ttnn_emitc)

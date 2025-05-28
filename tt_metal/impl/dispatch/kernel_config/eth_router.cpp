@@ -25,6 +25,8 @@ using namespace tt::tt_metal;
 
 void EthRouterKernel::GenerateStaticConfigs() {
     auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    kernel_type_ = FDKernelType::ROUTING;
+
     if (as_mux_) {
         uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
             servicing_device_id_);  // TODO: can be mmio
@@ -81,7 +83,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
             static_config_.output_depacketize_local_sem[idx] =
                 tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
             // Forwward VCs are the ones that don't connect to a prefetch
-            if (auto pk = dynamic_cast<PrefetchKernel*>(downstream_kernels_[idx])) {
+            if (dynamic_cast<PrefetchKernel*>(downstream_kernels_[idx]) != nullptr) {
                 static_config_.fwd_vc_count = this->static_config_.fwd_vc_count.value() - 1;
             }
         }

@@ -26,11 +26,12 @@
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include "sub_device_types.hpp"
-#include "trace_buffer.hpp"
+#include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
+#include "trace/trace_node.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -125,6 +126,8 @@ private:
     std::shared_ptr<TraceDescriptor> trace_ctx_;
     std::thread completion_queue_thread_;
     SystemMemoryManager& manager_;
+
+    std::vector<TraceNode> trace_nodes_;
 
     // Shared across all CommandQueue instances for a Device.
     std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;

@@ -92,14 +92,14 @@ void write_to_core(
             std::min(size_bytes, calculate_max_prefetch_data_size_bytes(dispatch_core_type));
 
         CoreWriteDispatchParams dispatch_params{
-            virtual_core,
-            address,
-            size_bytes_to_write,
-            device,
-            cq_id,
-            dispatch_core_type,
-            expected_num_workers_completed,
-            sub_device_ids,
+            {virtual_core,
+             address,
+             size_bytes_to_write,
+             device,
+             cq_id,
+             dispatch_core_type,
+             expected_num_workers_completed,
+             sub_device_ids},
             src};
         issue_core_write_command_sequence(dispatch_params);
 

@@ -40,6 +40,8 @@ void EthTunnelerKernel::GenerateStaticConfigs() {
         logical_core_ =
             MetalContext::instance().get_dispatch_core_manager().us_tunneler_core_local(device_->id(), channel, cq_id_);
     }
+    kernel_type_ = FDKernelType::ROUTING;
+
     static_config_.endpoint_id_start_index = 0xDACADACA;
     static_config_.in_queue_start_addr_words = 0x19A00 >> 4;
     // Input queue size can be extended based on number of tunnel lanes
@@ -366,7 +368,7 @@ uint32_t EthTunnelerKernel::GetRouterId(FDKernel* k, bool upstream) {
     std::vector<FDKernel*>& search = (upstream) ? upstream_kernels_ : downstream_kernels_;
     uint32_t router_id = 0;
     for (auto kernel : search) {
-        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(kernel)) {
+        if (dynamic_cast<EthRouterKernel*>(kernel) != nullptr) {
             if (k == kernel) {
                 return router_id;
             }

@@ -1,9 +1,8 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <device_impl.hpp>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <map>
@@ -12,6 +11,7 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
+#include "device/device_impl.hpp"
 #include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
@@ -19,14 +19,14 @@
 #include "utils.hpp"
 
 enum class CoreType;
+
 namespace tt {
 namespace tt_metal {
+
 class IDevice;
 class Program;
 enum DispatchWorkerType : uint32_t;
 enum NOC : uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
 
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
 #define UNUSED_SEM_ID 0
@@ -35,6 +35,20 @@ struct noc_selection_t {
     tt::tt_metal::NOC non_dispatch_noc;  // For communicating with workers/DRAM/host
     tt::tt_metal::NOC upstream_noc;      // For communicating with upstream dispatch modules
     tt::tt_metal::NOC downstream_noc;    // For communicating with downstream dispatch modules
+};
+
+enum class FDKernelType : uint32_t {
+    UNSET = 0,
+    VIRTUAL,   // Not a real kernel
+    DISPATCH,  // Dispatch kernels
+    ROUTING,   // Routing/Tunneling kernels
+};
+
+struct TerminationInfo {
+    CoreCoord logical_core;  // Logical core coordination
+    CoreType core_type;      // Core Type
+    uint32_t address;        // Termination signal address in L1
+    uint32_t val;            // Termination signal value
 };
 
 static std::vector<string> dispatch_kernel_file_names = {
@@ -113,12 +127,14 @@ public:
     virtual CoreType GetCoreType() {
         return tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     }
+    FDKernelType GetKernelType() { return kernel_type_; }
     tt_cxy_pair GetLogicalCore() { return logical_core_; }
     tt_cxy_pair GetVirtualCore() {
         return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
             logical_core_, GetCoreType());
     }
     chip_id_t GetDeviceId() { return device_id_; }  // Since this->device may not exist yet
+    virtual std::optional<tt::tt_metal::TerminationInfo> GetTerminationInfo() const { return std::nullopt; }
 
     // Get the port index for which a given kernel is upstream/downstream of this one
     int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
@@ -153,6 +169,7 @@ protected:
     tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
     tt::tt_metal::Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
+    FDKernelType kernel_type_;
     chip_id_t device_id_;
     chip_id_t servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
     int node_id_;
@@ -162,3 +179,6 @@ protected:
     std::vector<FDKernel*> upstream_kernels_;
     std::vector<FDKernel*> downstream_kernels_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt
