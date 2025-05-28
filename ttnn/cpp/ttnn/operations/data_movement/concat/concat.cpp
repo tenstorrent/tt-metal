@@ -42,8 +42,6 @@ using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int, unsigned int>
 using MassagedConcat = MassagedOperation<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
 using MassagedConcatParams = MassagedOperationParams<ttnn::Tensor, const std::vector<ttnn::Tensor>&, int, unsigned int>;
 
-// FIXME: this papers over an issue in pad, so we should probably move the
-// fix there.
 MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output_memory_config) {
     return MassagedConcat(MassagedConcatParams{
         .predicate = [input_rank](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
@@ -64,7 +62,20 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
                 tensors.end(),
                 std::back_inserter(itensors),
                 [](const ttnn::Tensor& input_tensor) -> ttnn::Tensor { return ttnn::unsqueeze_to_4D(input_tensor); });
-            return std::make_tuple(itensors, dim + 4 - input_rank, groups);
+
+            int adjusted_dim;
+            if (dim < 0) {
+                adjusted_dim = 4 + dim;
+            } else {
+                adjusted_dim = dim + (4 - input_rank);
+            }
+
+            concat_db_print(
+                true,
+                "dimension mapping: original=" + std::to_string(dim) + " adjusted=" + std::to_string(adjusted_dim) +
+                    " input_rank=" + std::to_string(input_rank));
+
+            return std::make_tuple(itensors, adjusted_dim, groups);
         },
         .post_transform = [input_rank](const ttnn::Tensor& output) -> ttnn::Tensor {
             ttnn::Tensor res = output;
@@ -268,7 +279,7 @@ ttnn::Tensor ConcatOperation::invoke(
     const ttnn::Tensor& first_tensor = input_tensors.front();
     const int rank = first_tensor.get_logical_shape().rank();
 
-    dim = first_tensor.get_padded_shape().get_normalized_index(dim);
+    dim = first_tensor.get_logical_shape().get_normalized_index(dim);
 
     TT_FATAL(
         dim >= 0 and dim < rank,
@@ -310,9 +321,11 @@ ttnn::Tensor ConcatOperation::invoke(
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
 
+    auto unsqueeze_concat = build_unsqueeze_concat(rank, mem_config);
     auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(queue_id, mem_config, logical_output_shape);
     auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, queue_id, mem_config);
-    auto massaged_concat = untilize_rm_retilize_concat.sequence(non_aligned_last_dim_concat);
+
+    auto massaged_concat = unsqueeze_concat.sequence(untilize_rm_retilize_concat).sequence(non_aligned_last_dim_concat);
 
     std::vector<ttnn::Tensor> itensors(input_tensors);
     auto res = massaged_concat(itensors, dim, groups);
