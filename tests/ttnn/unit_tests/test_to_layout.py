@@ -331,6 +331,12 @@ def test_to_layout_page_error(shape, device):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])  # ttnn.bfloat8_b
 @pytest.mark.parametrize("use_pack_untilize", [True])  # False
 @pytest.mark.parametrize(
+    "tensor_shape",
+    [
+        [1, 1, 512, 512],
+    ],
+)  # [1, 1, 256, 512], [1, 1, 512, 256], [1, 1, 512, 8192]
+@pytest.mark.parametrize(
     "input_memory_layout",
     [
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -366,52 +372,66 @@ def test_untilize_single_core(
     device,
     dtype,
     use_pack_untilize,
+    tensor_shape,
     input_memory_layout,
     input_shard_orientation,
     output_memory_layout,
     output_shard_orientation,
 ):
-    num_cores_x = 8
-    num_cores_y = 8
+    tensor_dims = len(tensor_shape)
+    tensor_height = 1
+    for i in range(tensor_dims - 1):
+        tensor_height *= tensor_shape[i]
+    tensor_width = tensor_shape[tensor_dims - 1]
 
-    # TODO: Going to want separate core ranges for input and ouput, since they may have a different number of shards
-    shard_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))])
+    num_shard_cores = 4
 
-    tensor_shape = [1, 1, 256, 256]
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    if input_memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        input_shard_core_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 1)),
+            }
+        )
 
-    input_shard_spec_shape = (64, 64)
-    if input_memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        input_shard_spec_shape = (32, 256)
-    elif input_memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        input_shard_spec_shape = (256, 32)
-    elif input_memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-        input_shard_spec_shape = (128, 128)
+        input_shard_spec_shape = (64, 64)
+        if input_memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            input_shard_spec_shape = (tensor_height / num_shard_cores, tensor_width)
+        elif input_memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            input_shard_spec_shape = (tensor_height, tensor_width / num_shard_cores)
+        elif input_memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+            input_shard_spec_shape = (tensor_height / num_shard_cores / 2, tensor_width / num_shard_cores / 2)
 
-    output_shard_spec_shape = (64, 64)
-    if output_memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        output_shard_spec_shape = (32, 256)
-    elif output_memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        output_shard_spec_shape = (256, 32)
-    elif output_memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-        output_shard_spec_shape = (128, 128)
-
-    input_shard_spec = ttnn.ShardSpec(shard_core_grid, input_shard_spec_shape, input_shard_orientation)
-    input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, input_shard_spec)
+        input_shard_spec = ttnn.ShardSpec(input_shard_core_grid, input_shard_spec_shape, input_shard_orientation)
+        input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, input_shard_spec)
 
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
 
-    output_shard_spec = ttnn.ShardSpec(shard_core_grid, output_shard_spec_shape, output_shard_orientation)
-    output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    if output_memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        output_shard_core_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 1)),
+            }
+        )
+
+        output_shard_spec_shape = (64, 64)
+        if output_memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            output_shard_spec_shape = (tensor_height / num_shard_cores, tensor_width)
+        elif output_memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            output_shard_spec_shape = (tensor_height, tensor_width / num_shard_cores)
+        elif output_memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+            output_shard_spec_shape = (tensor_height / num_shard_cores / 2, tensor_width / num_shard_cores / 2)
+
+        output_shard_spec = ttnn.ShardSpec(output_shard_core_grid, output_shard_spec_shape, output_shard_orientation)
+        output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
 
     ttnn_output_tensor = ttnn.untilize(
-        input_ttnn_tensor,
-        memory_config=output_memory_config,
-        use_multicore=False,
-        use_pack_untilize=use_pack_untilize
-        # input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize # -> tensor_shape = [1, 2, 256, 8192] -> !enough_space -> now failing for inter->shard and shard->inter with old impl
-        # input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize, sub_core_grids=shard_core_grid # -> with input and/or output sharded
+        input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False, use_pack_untilize=use_pack_untilize
     )
 
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
