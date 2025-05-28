@@ -10,7 +10,7 @@ from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 from models.demos.wormhole.mistral7b.tt.mistral_common import precompute_freqs
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
 
-# from transformers.generation.utils import top_k_top_p_filtering
+# from models.common.utils import top_k_top_p_filtering
 
 
 class Emb(torch.nn.Module):
