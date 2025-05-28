@@ -47,10 +47,6 @@ def update_model_config(config, batch_size):
 
     # sharding configs
     program_configs = {
-        #         LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=(x=6,y=8),subblock_w=2,block_h=7,block_w=4,inplace=0)
-        # In vit layer, LN hidden_states shape is:  Shape([8, 224, 768])
-        # In vit layer, hidden_states mem_config is:  MemoryConfig(memory_layout=TensorMemoryLayout::BLOCK_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec
-        # (grid={[(x=0,y=0) - (x=5,y=7)]},shape={224, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
         "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
             subblock_w=3,  # 96 == 3 tiles,
@@ -244,12 +240,6 @@ def vit_attention(
     ttnn.deallocate(query_key_value)
     ttnn.deallocate(hidden_states)
 
-    print("q mem_config is: ", query.memory_config())
-    print("k mem_config is: ", key.memory_config())
-    print("v mem_config is: ", value.memory_config())
-    print("q shape is: ", query.shape)
-    print("k shape is: ", key.shape)
-    print("v shape is: ", value.shape)
     attention_scores = ttnn.matmul(
         query,
         key,
@@ -285,20 +275,6 @@ def vit_attention(
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
     )
 
-    print("In vit self out, context_layer mem_config is: ", context_layer.memory_config())
-    print("In vit self out, context_layer shape is: ", context_layer.shape)
-    print(
-        "In vit self out, self_output_matmul_program_config is: ",
-        config.program_configs["self_output_matmul_program_config"],
-    )
-
-    #     ttnn.create_sharded_memory_config(
-    #         context_layer.padded_shape,
-    #         core_grid=config.core_grid_8x8,  # 64 cores
-    #         strategy=ttnn.ShardStrategy.BLOCK,
-    #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    #     )
-
     block_sharded_config_64_cores = ttnn.create_sharded_memory_config(
         context_layer.padded_shape,
         core_grid=config.core_grid_8x8,  # 64 cores
@@ -306,21 +282,11 @@ def vit_attention(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
 
+    # reshard back to 64 cores
     # cant use reshard as it's not working here, so use s2i followed by i2s
     context_layer = ttnn.to_memory_config(context_layer, ttnn.DRAM_MEMORY_CONFIG)
     context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cores)
     # hidden_states = ttnn.to_memory_config(hidden_states, memory_config_ff)
-
-    # reshard back to 64 cores
-    # context_layer = ttnn.reshard(
-    #     context_layer,
-    #     ttnn.create_sharded_memory_config(
-    #         context_layer.padded_shape,
-    #         core_grid=config.core_grid_8x8,  # 64 cores
-    #         strategy=ttnn.ShardStrategy.BLOCK,
-    #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    #     ),
-    # )
 
     self_output = ttnn.linear(
         context_layer,
