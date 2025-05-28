@@ -66,7 +66,7 @@ public:
     /* ---------------- basic info / sync ---------------- */
     [[nodiscard]] Rank rank() const override;
     [[nodiscard]] Size size() const override;
-    [[nodiscard]] bool have_ulfm_extensions() const;
+    [[nodiscard]] bool supports_fault_tolerance() const override;
     void barrier() const override;
 
     /* ---------------- point‑to‑point ------------------- */
@@ -119,7 +119,6 @@ private:
     MPI_Group group_{MPI_GROUP_NULL};
     int rank_{0};
     int size_{0};
-    bool have_ulfm_extensions_{false};
 
     // caching our own world communicator which is duplicator of MPI_COMM_WORLD
     inline static ContextPtr current_world_;

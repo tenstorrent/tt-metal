@@ -103,9 +103,8 @@ inline int multihost_main(int argc, char** argv) {
 
     auto ctx = DistributedContext::get_current_world();
 
-    // Check if we have an MPIContext and if so, skip tests when we don't have ULFM support
-    auto mpi_ctx = dynamic_cast<tt::tt_metal::distributed::multihost::MPIContext*>(ctx.get());
-    if (!mpi_ctx || (mpi_ctx && !mpi_ctx->have_ulfm_extensions())) {
+    // Skip all tests if lacking fault tolerance.
+    if (!ctx->supports_fault_tolerance()) {
         ::testing::GTEST_FLAG(filter) = "-*";
         fmt::println("ULFM support is not available in this build, skipping fault tolerance tests.");
         return 0;

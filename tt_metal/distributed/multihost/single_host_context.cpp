@@ -11,33 +11,33 @@ namespace tt::tt_metal::distributed::multihost {
 // ---------------------------------------------------------------------
 //                           Exception implementation
 // ---------------------------------------------------------------------
-DummyDistributedException::DummyDistributedException(Rank rank, int error_code, std::string msg) :
+SingleHostException::SingleHostException(Rank rank, int error_code, std::string msg) :
     rank_(rank), error_code_(error_code), message_(std::move(msg)), error_string_("Dummy MPI error") {}
 
-Rank DummyDistributedException::rank() const noexcept { return rank_; }
+Rank SingleHostException::rank() const noexcept { return rank_; }
 
-int DummyDistributedException::error_code() const noexcept { return error_code_; }
+int SingleHostException::error_code() const noexcept { return error_code_; }
 
-const std::string& DummyDistributedException::message() const noexcept { return message_; }
+const std::string& SingleHostException::message() const noexcept { return message_; }
 
-const std::string& DummyDistributedException::error_string() const noexcept { return error_string_; }
+const std::string& SingleHostException::error_string() const noexcept { return error_string_; }
 
 // ---------------------------------------------------------------------
 //                           Request implementation
 // ---------------------------------------------------------------------
-Status DummyRequest::wait() {
+Status SingleHostRequest::wait() {
     done_ = true;
     return Status{Rank(0), Tag(0), 0};
 }
 
-std::optional<Status> DummyRequest::test() {
+std::optional<Status> SingleHostRequest::test() {
     done_ = true;
     return Status{Rank(0), Tag(0), 0};
 }
 
-void DummyRequest::cancel() { done_ = true; }
+void SingleHostRequest::cancel() { done_ = true; }
 
-bool DummyRequest::active() const { return !done_; }
+bool SingleHostRequest::active() const { return !done_; }
 
 // ---------------------------------------------------------------------
 //                           Context implementation
@@ -57,6 +57,8 @@ const ContextPtr& SingleHostContext::get_current_world() {
 Rank SingleHostContext::rank() const { return Rank(rank_); }
 
 Size SingleHostContext::size() const { return Size(size_); }
+
+bool SingleHostContext::supports_fault_tolerance() const { return false; }
 
 void SingleHostContext::barrier() const {
     // No-op for single process

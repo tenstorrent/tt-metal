@@ -63,6 +63,7 @@ public:
     /* ---------------- basic info / sync ---------------- */
     [[nodiscard]] Rank rank() const override;
     [[nodiscard]] Size size() const override;
+    [[nodiscard]] bool supports_fault_tolerance() const override;
     void barrier() const override;
 
     /* ---------------- point‑to‑point ------------------- */
