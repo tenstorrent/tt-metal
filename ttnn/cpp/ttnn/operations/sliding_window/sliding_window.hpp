@@ -54,7 +54,6 @@ struct SlidingWindowConfig {
     bool is_bilinear = false;
     bool is_transpose = false;
     bool ceil_mode = false;
-    bool count_include_pad = true;
     bool is_avg_pool = false;
 
     std::string to_string() const;

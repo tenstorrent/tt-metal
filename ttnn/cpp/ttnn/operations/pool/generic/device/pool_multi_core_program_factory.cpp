@@ -460,6 +460,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             .ceil_mode = ceil_mode,
             .ceil_h = ceil_pad_h,
             .ceil_w = ceil_pad_w,
+            .count_include_pad = count_include_pad,
             .pad_h = pad_h / 2,  // pad_h is the total padding, so divide by 2 for each side
             .pad_w = pad_w / 2,  // pad_w is the total padding, so divide by 2 for each side
             .out_nhw_per_core = out_nhw_per_core};
@@ -647,6 +648,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
     const auto& out_mem_config = op_attr.memory_config_;
+    bool count_include_pad = op_attr.count_include_pad_;
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
 
     tt::tt_metal::Program program{};
@@ -685,7 +687,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto ceil_pad_h = sliding_window_config.get_ceil_pad_h();
     auto ceil_pad_w = sliding_window_config.get_ceil_pad_w();
     auto ceil_mode = sliding_window_config.ceil_mode;
-    auto count_include_pad = sliding_window_config.count_include_pad;
     auto dilation_h = sliding_window_config.dilation_hw.first;
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
