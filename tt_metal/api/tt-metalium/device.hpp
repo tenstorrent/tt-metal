@@ -132,6 +132,7 @@ public:
 
     virtual CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const = 0;
     virtual uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const = 0;
+    virtual uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const = 0;
 
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const = 0;
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const = 0;

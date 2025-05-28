@@ -8,7 +8,6 @@
 #include "dispatch/device_command_calculator.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
-
 namespace tt {
 namespace tt_metal {
 
@@ -28,14 +27,33 @@ void validate_core_read_write_bounds(
     IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes) {
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::L1) {
-        TT_FATAL(
-            address + size_bytes <= device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE) +
-                                        device->get_dev_size(virtual_core, HalL1MemAddrType::BASE),
-            "Region in L1 is out of bounds");
+        const DeviceAddr l1_base_address = device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE);
+        const DeviceAddr l1_size = device->get_dev_size(virtual_core, HalL1MemAddrType::BASE);
+
+        TT_FATAL(address >= l1_base_address, "Region in L1 is out of bounds");
+        TT_FATAL(address + size_bytes <= l1_base_address + l1_size, "Region in L1 is out of bounds");
     } else {
         TT_ASSERT(mem_type == HalMemType::DRAM);
-        TT_FATAL(address + size_bytes <= device->dram_size_per_channel(), "Region in DRAM is out of bounds");
+
+        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
+        const DeviceAddr dram_base_address = soc_desc.get_address_offset(dram_channel);
+
+        const DeviceAddr dram_channel_size = device->dram_size_per_channel();
+
+        TT_FATAL(address >= dram_base_address, "Region in DRAM is out of bounds");
+        TT_FATAL(address + size_bytes <= dram_base_address + dram_channel_size, "Region in DRAM is out of bounds");
     }
+}
+
+DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address) {
+    const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
+    if (mem_type == HalMemType::DRAM) {
+        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
+        address += soc_desc.get_address_offset(dram_channel);
+    }
+    return address;
 }
 
 void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_params) {
