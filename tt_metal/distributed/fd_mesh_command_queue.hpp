@@ -188,13 +188,15 @@ public:
         const void* src,
         uint32_t size_bytes,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        DeviceAddr address_offset = 0);
     void enqueue_read_shard_from_core(
         const DeviceMemoryAddress& address,
         void* dst,
         uint32_t size_bytes,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        DeviceAddr address_offset = 0);
 
     MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},

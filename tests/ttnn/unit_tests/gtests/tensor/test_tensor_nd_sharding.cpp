@@ -49,7 +49,7 @@ TEST_P(NDShardingTests, ReadWriteTest) {
     CoreRangeSet dram_cores(CoreRange(CoreCoord{0, 0}, CoreCoord{dram_grid_size.x - 1, dram_grid_size.y - 1}));
 
     for (auto sharding_orientation : {ShardOrientation::ROW_MAJOR, ShardOrientation::COL_MAJOR}) {
-        for (auto buffer_type : {BufferType::DRAM}) {
+        for (auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
             const auto& cores = buffer_type == BufferType::L1 ? l1_cores : dram_cores;
             MemoryConfig memory_config{buffer_type, NdShardSpec{params.shard_shape, cores, sharding_orientation}};
             TensorLayout tensor_layout(DataType::UINT16, PageConfig(params.layout), memory_config);

@@ -32,6 +32,9 @@ void validate_core_read_write_bounds(
             address + size_bytes <= device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE) +
                                         device->get_dev_size(virtual_core, HalL1MemAddrType::BASE),
             "Region in L1 is out of bounds");
+    } else {
+        TT_ASSERT(mem_type == HalMemType::DRAM);
+        TT_FATAL(address + size_bytes <= device->dram_size_per_channel(), "Region in DRAM is out of bounds");
     }
 }
 
@@ -79,7 +82,8 @@ void write_to_core(
     uint32_t size_bytes,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    DeviceAddr address_offset) {
     validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
 
     while (size_bytes > 0) {
@@ -90,7 +94,7 @@ void write_to_core(
 
         CoreWriteDispatchParams dispatch_params{
             {virtual_core,
-             address,
+             address + address_offset,
              size_bytes_to_write,
              device,
              cq_id,

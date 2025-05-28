@@ -329,7 +329,8 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     const void* src,
     uint32_t size_bytes,
     bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    DeviceAddr address_offset) {
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
@@ -344,7 +345,8 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
         size_bytes,
         id_,
         expected_num_workers_completed_,
-        sub_device_ids);
+        sub_device_ids,
+        address_offset);
 
     if (blocking) {
         this->finish(sub_device_ids);
@@ -356,7 +358,8 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     void* dst,
     uint32_t size_bytes,
     bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    DeviceAddr address_offset) {
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
@@ -366,7 +369,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     if (size_bytes > 0) {
         device_dispatch::CoreReadDispatchParams dispatch_params{
             address.virtual_core_coord,
-            address.address,
+            address.address + address_offset,
             size_bytes,
             device,
             id_,
@@ -414,11 +417,12 @@ void FDMeshCommandQueue::write_shard_to_device(
                     DeviceMemoryAddress{
                         .device_coord = device_coord,
                         .virtual_core_coord = virtual_core,
-                        .address = shard_view->address() + chunk_mapping_in_bytes.dst + offset},
+                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
                     (char*)src + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
                     /*blocking=*/false,
-                    sub_device_ids);
+                    sub_device_ids,
+                    offset);
             }
         }
     } else {
@@ -465,11 +469,12 @@ void FDMeshCommandQueue::read_shard_from_device(
                     DeviceMemoryAddress{
                         .device_coord = device_coord,
                         .virtual_core_coord = virtual_core,
-                        .address = shard_view->address() + chunk_mapping_in_bytes.dst + offset},
+                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
                     (char*)dst + chunk_mapping_in_bytes.src,
                     chunk_mapping_in_bytes.size,
                     /*blocking=*/false,
-                    sub_device_ids);
+                    sub_device_ids,
+                    offset);
             }
         }
     } else if (is_sharded(shard_view->buffer_layout())) {
