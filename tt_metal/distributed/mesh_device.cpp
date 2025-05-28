@@ -664,6 +664,11 @@ uint32_t MeshDevice::dram_channel_from_logical_core(const CoreCoord& logical_cor
         return device->dram_channel_from_logical_core(logical_core);
     });
 }
+uint32_t MeshDevice::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
+    return validate_and_get_reference_value(scoped_devices_->root_devices(), [virtual_core](const auto& device) {
+        return device->dram_channel_from_virtual_core(virtual_core);
+    });
+}
 
 uint32_t MeshDevice::dram_channel_offset(uint32_t dram_channel) const {
     return validate_and_get_reference_value(scoped_devices_->root_devices(), [dram_channel](const auto& device) {

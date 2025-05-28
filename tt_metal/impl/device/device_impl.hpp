@@ -103,6 +103,7 @@ public:
 
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
+    uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
     uint32_t dram_channel_offset(uint32_t dram_channel) const override;
 
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;

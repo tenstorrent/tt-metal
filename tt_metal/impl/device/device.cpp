@@ -1297,6 +1297,16 @@ uint32_t Device::dram_channel_offset(uint32_t dram_channel) const {
     return soc_desc.get_address_offset(dram_channel);
 }
 
+uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+    for (uint32_t channel = 0; channel < this->num_dram_channels(); ++channel) {
+        if (soc_desc.get_preferred_worker_core_for_dram_view(channel) == virtual_core) {
+            return channel;
+        }
+    }
+    TT_THROW("Virtual core {} is not a DRAM core", virtual_core.str());
+}
+
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
 }

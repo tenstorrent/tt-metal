@@ -367,6 +367,8 @@ void HWCommandQueue::enqueue_read_from_core(
     DeviceAddr address_offset) {
     ZoneScopedN("HWCommandQueue_enqueue_read_from_core");
 
+    address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
+
     device_dispatch::validate_core_read_write_bounds(this->device_, virtual_core, address, size_bytes);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
@@ -402,6 +404,8 @@ void HWCommandQueue::enqueue_write_to_core(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     DeviceAddr address_offset) {
     ZoneScopedN("HWCommandQueue_enqueue_write_to_core");
+
+    address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
