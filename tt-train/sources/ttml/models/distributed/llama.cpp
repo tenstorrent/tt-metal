@@ -132,8 +132,7 @@ autograd::TensorPtr DistributedLlama::operator()(
     }
     out = (*ln_fc)(out);
     auto logits = (*fc)(out);
-    auto log_softmax = ttml::ops::log_softmax_moreh(logits, 3);
-    return log_softmax;
+    return logits;
 }
 
 std::shared_ptr<DistributedLlama> create(const LlamaConfig& config) {
