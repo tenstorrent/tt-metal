@@ -2050,6 +2050,10 @@ height_sharded_memory_config_4 = ttnn.create_sharded_memory_config(
     ([torch.bfloat16, ttnn.bfloat16],),
 )
 def test_binary_sharded_decoder(dtype_pt, dtype_tt, device, use_program_cache):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.x * compute_grid_size.y < 64:
+        pytest.skip("Test is skipped because the device does not have full coregrid 8x8")
+
     torch.manual_seed(0)
     # device.disable_and_clear_program_cache()
 
