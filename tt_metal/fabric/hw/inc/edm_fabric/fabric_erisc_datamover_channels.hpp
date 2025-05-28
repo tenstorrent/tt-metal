@@ -7,6 +7,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
+#include <utility>
 
 #include "debug/dprint.h"
 #include "dataflow_api.h"
@@ -209,6 +211,50 @@ struct EdmChannelWorkerInterface {
     ChannelBufferPointer<NUM_BUFFERS> local_wrptr;
     ChannelBufferPointer<NUM_BUFFERS> local_ackptr;
     ChannelBufferPointer<NUM_BUFFERS> local_rdptr;  // also used as completion_ptr
+};
+
+// A tuple of EDM channel worker interfaces
+template <size_t... Buffers>
+struct EdmChannelWorkerInterfaceTuple {
+    // tuple of EdmChannelWorkerInterface<Buffers>...
+    std::tuple<tt::tt_fabric::EdmChannelWorkerInterface<Buffers>...> channel_worker_interfaces;
+
+    void init(
+        volatile tt::tt_fabric::EDMChannelWorkerLocationInfo* const info_ptrs[],
+        volatile tt_l1_ptr uint32_t* const flow_ctrl_semaphores[],
+        volatile tt_l1_ptr uint32_t* const live_semaphores[],
+        const uint8_t ack_buf_ids[]) {
+        std::apply(
+            // <-- note the template<...> here
+            [&]<typename... IfaceT>(IfaceT&... ifaces) {
+                size_t idx = 0;
+                (void)std::initializer_list<int>{(
+                    info_ptrs[idx]->edm_rdptr = 0,
+                    new (&ifaces) IfaceT(
+                        info_ptrs[idx],
+                        flow_ctrl_semaphores[idx],
+                        live_semaphores[idx],
+                        ack_buf_ids[idx]  // read idx *before* bump
+                        ),
+                    ++idx,  // increment *after* the read
+                    0       // dummy value
+                    )...};
+            },
+            channel_worker_interfaces);
+    }
+
+    template <size_t I>
+    auto& get() {
+        return std::get<I>(channel_worker_interfaces);
+    }
+};
+
+template <auto& ChannelBuffers>
+struct EdmChannelWorkerInterfaces {
+    template <size_t... Is>
+    static auto make(std::index_sequence<Is...>) {
+        return EdmChannelWorkerInterfaceTuple<ChannelBuffers[Is]...>{};
+    }
 };
 
 }  // namespace tt::tt_fabric

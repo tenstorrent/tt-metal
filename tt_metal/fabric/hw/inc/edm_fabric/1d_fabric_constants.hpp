@@ -109,6 +109,18 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
 
 constexpr size_t SENDER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
+
+template <std::size_t... Is>
+constexpr std::array<unsigned int, NUM_SENDER_CHANNELS> make_buffers_array_impl(std::index_sequence<Is...>) {
+    // the ((void)Is, SENDER_NUM_BUFFERS) is just a trick
+    // to repeat the same value in each slot
+    return {{((void)Is, SENDER_NUM_BUFFERS)...}};
+}
+
+// the constexpr array you can now use everywhere
+static constexpr auto SENDER_NUM_BUFFERS_ARRAY =
+    make_buffers_array_impl(std::make_index_sequence<NUM_SENDER_CHANNELS>{});
+
 constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
 constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
 constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 11);
