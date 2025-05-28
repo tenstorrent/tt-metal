@@ -124,7 +124,7 @@ static Tensor pool2d_invoke(
         output_nhw_padded,
         output_shard_height_padded,
         output_shard_width_padded);
-    out_memory_config.with_shard_spec(tt::tt_metal::ShardSpec{
+    out_memory_config = out_memory_config.with_shard_spec(tt::tt_metal::ShardSpec{
         shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR});
     sliding_window_config = sliding_window::SlidingWindowConfig{
         .batch_size = batch_size,
