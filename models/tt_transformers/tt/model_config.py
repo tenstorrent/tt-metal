@@ -2081,7 +2081,8 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            wrapper = HfAttentionWrapper(layer, self.head_dim)
+            rotary_emb = model.model.rotary_emb
+            wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb)
             return wrapper
 
     def set_tg_attention_config(self):
@@ -2166,25 +2167,28 @@ class ModelArgs:
 
 
 class HfAttentionWrapper:
-    def __init__(self, attention, head_dim):
+    def __init__(self, attention, head_dim, rotary_emb=None):
         from transformers import DynamicCache
 
         super().__init__()
         self.attention = attention
         self.past_key_value = DynamicCache()
         self.head_dim = head_dim
+        self.rotary_emb = rotary_emb
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
-        output, _, self.past_key_value = self.attention(
+        position_embeddings = self.rotary_emb(x, position_ids)
+        output, _ = self.attention(
             x,
             past_key_value=self.past_key_value,
             use_cache=True,
             position_ids=position_ids,
             attention_mask=mask,
+            position_embeddings=position_embeddings,
         )
         return output
 
