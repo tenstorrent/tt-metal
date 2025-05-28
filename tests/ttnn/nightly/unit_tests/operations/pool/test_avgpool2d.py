@@ -91,7 +91,9 @@ def run_avg_pool2d(
 @pytest.mark.parametrize(
     "input_shape",  # NCHW
     (
-        # Case: Normal compute & Normal reader kernel.
+        # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
+        # Wide reduction cases channels > 8 * 32
+        # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
         [1, 32, 16, 16],
         [1, 512, 112, 32],
         [1, 512, 16, 16],
@@ -105,10 +107,12 @@ def run_avg_pool2d(
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        # Case: Normal compute & Normal reader kernel.
+        # Wide and normal reductions go to normal kernels
+        # Large reductions go to large kernels
+        # Reductions which are large and wide at the same time
+        # go to large kernels
         (2, 2),
         (3, 3),
-        # Case: Large compute & Large reader kernel.
         (5, 5),
         (9, 9),
     ),

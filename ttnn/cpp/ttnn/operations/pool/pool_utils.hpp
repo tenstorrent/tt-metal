@@ -16,30 +16,35 @@ enum class Pool2DType {
 };
 
 struct ScalarInfo {
+    // Scalar Info is used to store the information abpou the scalar used in avg pool op
+    // start and end refer to indices of the output stick core is calculating.
+    // These are directly mapped to the for loop that can be found in reader and compute kernel of the pool op
+    // for (uint32_t i = 0; i < nsticks_per_core; ++i), start is first stick which should be reduced and multiplied by
+    // scalar value, end is the first stick which should not be reduced and multiplied by scalar value. So the interval
+    // [start, end) is the range of sticks that should be reduced and multiplied by scalar value.
     uint32_t start;
     uint32_t value;
     uint32_t end;
 };
 
+struct AvgPoolConfig {
+    uint32_t kernel_h;
+    uint32_t kernel_w;
+    uint32_t in_h;
+    uint32_t in_w;
+    uint32_t out_h;
+    uint32_t out_w;
+    uint32_t stride_h;
+    uint32_t stride_w;
+    bool ceil_mode;
+    uint32_t ceil_h;
+    uint32_t ceil_w;
+    uint32_t pad_h;
+    uint32_t pad_w;
+};
+
 std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
-    Pool2DType pool_type,
-    uint32_t kernel_h,
-    uint32_t kernel_w,
-    uint32_t in_h,
-    uint32_t in_w,
-    uint32_t out_h,
-    uint32_t out_w,
-    uint32_t stride_h,
-    uint32_t stride_w,
-    bool ceil_mode,
-    uint32_t ceil_h,
-    uint32_t ceil_w,
-    uint32_t out_x,
-    uint32_t out_y,
-    uint32_t pad_h,
-    uint32_t pad_w,
-    uint32_t out_nhw_per_core,
-    std::optional<int32_t> divisor_override);
+    AvgPoolConfig config, uint32_t output_stick_x, uint32_t output_stick_y, uint32_t num_of_elements_per_core);
 
 uint32_t get_bf16_pool_scalar(
     Pool2DType pool_type, uint32_t kernel_h, uint32_t kernel_w, std::optional<int32_t> divisor_override);
