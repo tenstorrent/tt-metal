@@ -50,22 +50,22 @@ namespace tt::tt_fabric {
 //
 
 FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
-    enable_handshake(true),
-    enable_context_switch(true),
-    enable_interrupts(true),
-    iterations_between_ctx_switch_and_teardown_checks(
+    enable_handshake_(true),
+    enable_context_switch_(true),
+    enable_interrupts_(true),
+    iterations_between_ctx_switch_and_teardown_checks_(
         FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks) {
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
     if (arch == tt::ARCH::WORMHOLE_B0) {
-        this->is_sender_channel_serviced.fill(true);
-        this->is_receiver_channel_serviced.fill(true);
+        this->is_sender_channel_serviced_.fill(true);
+        this->is_receiver_channel_serviced_.fill(true);
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        this->is_sender_channel_serviced.fill(risc_id == 0);
-        this->is_receiver_channel_serviced.fill(risc_id == 1);
-        this->enable_context_switch = false;
-        this->enable_interrupts = false;
+        this->is_sender_channel_serviced_.fill(risc_id == 0);
+        this->is_receiver_channel_serviced_.fill(risc_id == 1);
+        this->enable_context_switch_ = false;
+        this->enable_interrupts_ = false;
     } else {
-        TT_ASSERT(false);
+        TT_THROW("Unsupported architecture for FabricRiscConfig: {}", magic_enum::enum_name(arch));
     }
 }
 
@@ -622,19 +622,19 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.senders_completed_packet_header_cb_address[4],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.risc_configs[risc_id].is_sender_channel_serviced[0],
-        config.risc_configs[risc_id].is_sender_channel_serviced[1],
-        config.risc_configs[risc_id].is_sender_channel_serviced[2],
-        config.risc_configs[risc_id].is_sender_channel_serviced[3],
-        config.risc_configs[risc_id].is_sender_channel_serviced[4],
-        config.risc_configs[risc_id].is_receiver_channel_serviced[0],
-        config.risc_configs[risc_id].is_receiver_channel_serviced[1],
-        config.risc_configs[risc_id].enable_handshake,
-        config.risc_configs[risc_id].enable_context_switch,
-        config.risc_configs[risc_id].enable_interrupts,
+        config.risc_configs[risc_id].is_sender_channel_serviced(0),
+        config.risc_configs[risc_id].is_sender_channel_serviced(1),
+        config.risc_configs[risc_id].is_sender_channel_serviced(2),
+        config.risc_configs[risc_id].is_sender_channel_serviced(3),
+        config.risc_configs[risc_id].is_sender_channel_serviced(4),
+        config.risc_configs[risc_id].is_receiver_channel_serviced(0),
+        config.risc_configs[risc_id].is_receiver_channel_serviced(1),
+        config.risc_configs[risc_id].enable_handshake(),
+        config.risc_configs[risc_id].enable_context_switch(),
+        config.risc_configs[risc_id].enable_interrupts(),
         config.sender_txq_id,
         config.receiver_txq_id,
-        config.risc_configs[risc_id].iterations_between_ctx_switch_and_teardown_checks,
+        config.risc_configs[risc_id].iterations_between_ctx_switch_and_teardown_checks(),
         config.topology == Topology::Mesh,
         this->direction,
         soc_desc.get_num_eth_channels(),

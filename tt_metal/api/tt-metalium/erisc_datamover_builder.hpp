@@ -23,7 +23,7 @@
 
 namespace tt::tt_fabric {
 
-class FabricRiscConfig;
+struct FabricRiscConfig;
 
 struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
@@ -131,8 +131,8 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_used_sender_channels = 0;
     std::size_t num_used_receiver_channels = 0;
     std::size_t num_fwd_paths = 0;
-    std::size_t sender_txq_id;
-    std::size_t receiver_txq_id;
+    std::size_t sender_txq_id = 0;
+    std::size_t receiver_txq_id = 0;
     std::size_t num_riscv_cores = 0;
 
     Topology topology = Topology::Linear;
@@ -154,15 +154,24 @@ private:
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };
 
-class FabricRiscConfig {
-public:
+struct FabricRiscConfig {
     FabricRiscConfig(uint32_t risc_id);
-    bool enable_handshake;
-    bool enable_context_switch;
-    bool enable_interrupts;
-    size_t iterations_between_ctx_switch_and_teardown_checks;
-    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced;
-    std::array<bool, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced;
+    bool enable_handshake() const { return enable_handshake_; };
+    bool enable_context_switch() const { return enable_context_switch_; };
+    bool enable_interrupts() const { return enable_interrupts_; };
+    size_t iterations_between_ctx_switch_and_teardown_checks() const {
+        return iterations_between_ctx_switch_and_teardown_checks_;
+    };
+    bool is_sender_channel_serviced(int id) const { return is_sender_channel_serviced_[id]; };
+    bool is_receiver_channel_serviced(int id) const { return is_receiver_channel_serviced_[id]; };
+
+private:
+    bool enable_handshake_ = false;
+    bool enable_context_switch_ = false;
+    bool enable_interrupts_ = false;
+    size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;
+    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced_;
+    std::array<bool, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced_;
 };
 
 struct SenderWorkerAdapterSpec {
