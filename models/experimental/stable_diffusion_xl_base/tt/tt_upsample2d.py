@@ -20,7 +20,7 @@ class TtUpsample2D(nn.Module):
         padding,
         dilation,
         groups,
-        conv_weights_dtype=ttnn.bfloat16,
+        model_config,
     ):
         super().__init__()
 
@@ -35,8 +35,11 @@ class TtUpsample2D(nn.Module):
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        self.compute_config, self.conv_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device, weights, bias, conv_weights_dtype, conv_path=module_path
+        self.conv_config = model_config.get_conv_config(conv_path=module_path)
+        self.compute_config, _, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
+            device,
+            weights,
+            bias,
         )
 
     def interpolate(self, hidden_states):
@@ -72,9 +75,6 @@ class TtUpsample2D(nn.Module):
         C = self.conv_params["output_channels"]
         self.tt_weights = d_w
         self.tt_bias = d_b
-
-        self.conv_config.preprocess_weights_on_device = False
-        self.conv_config.always_preprocess_weights = False
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         return hidden_states, [C, H, W]
