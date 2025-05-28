@@ -85,10 +85,9 @@ void CaptureBufferCreate(
     DeviceAddr page_size,
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameters,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id,
-    const std::optional<BufferDistributionSpec>& buffer_distribution_spec);
+    const std::optional<SubDeviceId> sub_device_id);
 
 void CaptureBufferDeallocate(const Buffer& buffer);
 void CaptureBufferDelete(const Buffer& buffer);
