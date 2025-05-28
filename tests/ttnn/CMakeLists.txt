@@ -16,6 +16,7 @@ function(setup_ttnn_test_target target_name)
             ${PROJECT_SOURCE_DIR}/tt_metal
             ${PROJECT_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}
+            "$<TARGET_PROPERTY:TT::NN::CPP,INCLUDE_DIRECTORIES>"
     )
     set_target_properties(
         ${target_name}
