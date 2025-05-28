@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 
 from tests.ttnn.nightly.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
@@ -18,41 +19,22 @@ parameters = {
     "input_specs": [
         # Contains following parameters
         # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, ceil_mode, count_include_pad]
-        # [1, 32, 3, 3, 2, 2, 2, 2, 0, 0, True, True, None],
-        # [1, 32, 3, 3, 2, 2, 2, 2, 0, 0, True, False, None],
-        # [1, 32, 3, 3, 2, 2, 2, 2, 1, 1, False, False, None],
-        # [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, False, False, None],
-        # [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, True, False, None],
-        # # # # # # #
-        # [1, 1056, 14, 14, 5, 5, 2, 2, 0, 0, False, True, None],
-        # [1, 128, 56, 56, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 160, 7, 7, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 192, 56, 56, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 256, 28, 28, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 384, 28, 28, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 512, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 640, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 896, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 112, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 24, 56, 56, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 40, 28, 28, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 80, 14, 14, 2, 2, 2, 2, 0, 0, False, True, None],
-        # [1, 32, 4, 4, 2, 2, 2, 2, 1, 1, True, True, None],
-        # #
-        # [1, 32, 8, 8, 3, 3, 1, 1, 1, 1, False, False, None],  # issue with width and block sharding
-        # [1, 32, 17, 17, 5, 5, 1, 1, 1, 1, False, True, None],  # hangs height
-        # [1, 384, 35, 35, 3, 3, 1, 1, 1, 1, False, False, None],  # hangs height
-        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, True, True, None],  # hangs height
-        # [1, 32, 16, 16, 2, 2, 1, 1, 1, 1, False, False, None],  # hangs height
-        # [1, 32, 16, 16, 3, 3, 2, 2, 0, 0, False, False, None],  # hangs height
-        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, False, False, None],  # hangs height
-        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, False, False, None],  # hangs height
-        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, False, False, None],  # hangs height
-        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, False, False, None],  # hangs height
-        # [2, 512, 112, 32, 5, 5, 1, 1, 0, 0, False, False, None],  # hangs height
-        # [2, 512, 112, 32, 2, 2, 1, 1, 0, 0, False, False, None],  # hangs height
-        # [1, 512, 112, 32, 3, 3, 2, 2, 0, 0, False, False, None],  # hangs height
-        [1, 512, 112, 32, 3, 3, 2, 2, 0, 0, True, True, None],  # hangs height
+        [1, 1056, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 128, 56, 56, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 160, 7, 7, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 192, 56, 56, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 256, 28, 28, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 384, 28, 28, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 512, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 640, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 896, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 1024, 17, 17, 3, 3, 1, 1, 1, 1, False, False],
+        [1, 112, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 1536, 8, 8, 3, 3, 1, 1, 1, 1, False, False],
+        [1, 24, 56, 56, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 384, 35, 35, 3, 3, 1, 1, 1, 1, False, False],
+        [1, 40, 28, 28, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 80, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
     ],
     "failing_parameters": [
         # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, ceil_mode, count_include_pad]
@@ -88,7 +70,7 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
 
     run_avg_pool2d(
         device=device,
-        use_program_cache=True,
+        use_program_cache=False,
         tensor_map=tensor_map,
         input_shape=(in_n, in_c, in_h, in_w),
         kernel_size=(kernel_h, kernel_w),
@@ -96,5 +78,6 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
         padding=(pad_h, pad_w),
         ceil_mode=ceil_mode,
         divisor_override=None,
+        count_include_pad=count_include_pad,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     )
