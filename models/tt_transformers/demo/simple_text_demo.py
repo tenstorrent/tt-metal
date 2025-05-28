@@ -24,7 +24,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data
-from models.tt_transformers.tt.alspec_common import ALSpec
+from models.tt_transformers.tt.alspec_common import ALSpec, get_fabric_config
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -293,7 +293,7 @@ def prepare_generator_args(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": 23887872,
             "num_command_queues": 2,
         }
@@ -330,6 +330,8 @@ def test_demo_text(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
+
+    use_alspec = get_fabric_config() is not None
 
     mesh_device.enable_async(True)
     enable_trace = True  # Use tracing for better perf
@@ -495,7 +497,7 @@ def test_demo_text(
         # Log total inference (accounting for compile_decode as well)
         profiler.start(f"inference_decode", iteration=batch_idx)
         while users_decoding:
-            if done_prefill and not done_alspec_setup:
+            if done_prefill and not done_alspec_setup and use_alspec:
                 # Remove trace
                 ttnn.release_trace(mesh_device, generator.trace_id_text)
                 del generator.trace_id_text

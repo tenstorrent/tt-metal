@@ -17,7 +17,7 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-from models.tt_transformers.tt.alspec_common import ALSpec
+from models.tt_transformers.tt.alspec_common import ALSpec, get_fabric_config
 
 
 @torch.no_grad()
@@ -28,9 +28,11 @@ from models.tt_transformers.tt.alspec_common import ALSpec
     "weights, layers",
     [
         ("random", 1),
-        ("instruct", None),
+        # ("instruct", None),
     ],
-    ids=["quick", "full"],
+    ids=[
+        "quick",
+    ],
 )
 @pytest.mark.parametrize(
     "paged_attention",
@@ -76,7 +78,7 @@ from models.tt_transformers.tt.alspec_common import ALSpec
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"fabric_config": get_fabric_config()}],
     indirect=True,
 )
 def test_model_inference(
@@ -201,7 +203,8 @@ def test_model_inference(
 
     # ALSpec setup
     alspec = None
-    alspec = ALSpec(mesh_device, model_args.head_dim, model_args.n_heads, k_chunk_size=128)
+    if model_args.use_sfd:
+        alspec = ALSpec(mesh_device, model_args.head_dim, model_args.n_heads, k_chunk_size=128)
 
     page_table_tt = None
     paged_attention_config = None

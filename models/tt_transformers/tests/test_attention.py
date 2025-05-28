@@ -18,7 +18,7 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-from models.tt_transformers.tt.alspec_common import ALSpec
+from models.tt_transformers.tt.alspec_common import ALSpec, get_fabric_config
 
 
 @torch.no_grad()
@@ -57,7 +57,7 @@ from models.tt_transformers.tt.alspec_common import ALSpec
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"fabric_config": get_fabric_config()}],
     indirect=True,
 )
 def test_attention_inference(
@@ -110,7 +110,8 @@ def test_attention_inference(
 
     # Set up ALSpec
     alspec = None
-    alspec = ALSpec(mesh_device, model_args.head_dim, model_args.n_heads, k_chunk_size=128)
+    if model_args.use_sfd:
+        alspec = ALSpec(mesh_device, model_args.head_dim, model_args.n_heads, k_chunk_size=128)
 
     page_table_tt = None
     paged_attention_config = None
@@ -193,10 +194,10 @@ def test_attention_inference(
         if alspec and i == 0:
             alspec.set_use_skip_tensor(False)
 
-        alspec.update_skip_tensor(reset=True)
+            alspec.update_skip_tensor(reset=True)
 
-        # Sync priorities
-        alspec.synchronize_priority()
+            # Sync priorities
+            alspec.synchronize_priority()
 
         # Run the attention module
         tt_out = tt_model(

@@ -5,10 +5,21 @@
 from loguru import logger
 import ttnn
 import torch
+import os
 
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_global_semaphore_with_same_address,
 )
+
+
+def get_fabric_config():
+    """
+    Check if the current environment is using the fabric.
+    """
+
+    use_sfd = os.getenv("USE_SFD", "0") == "1"
+
+    return ttnn.FabricConfig.FABRIC_1D if use_sfd else None
 
 
 def get_buffer_address(tensor):
