@@ -51,6 +51,9 @@ void bind_scatter_operation(py::module& module) {
                 dim = -1
 
                 output = ttnn.experimental.scatter_(input_ttnn, dim, index_ttnn, source_ttnn)
+
+                output_preallocated = ttnn.zeros_like(input_ttnn)
+                another_output = ttnn.experimental.scatter_(input_ttnn, dim, index_ttnn, source_ttnn, out=output_preallocated)
         )doc";
 
     using OperationType = decltype(ttnn::experimental::scatter_);
