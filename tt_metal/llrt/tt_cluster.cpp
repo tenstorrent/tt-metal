@@ -579,7 +579,8 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSof
 }
 
 void Cluster::write_dram_vec(
-    std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access) const {
+    const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access)
+    const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
         dram_view < desc_to_use.get_num_dram_views(),
@@ -590,21 +591,11 @@ void Cluster::write_dram_vec(
     CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
-    write_core(
-        vec.data(),
-        vec.size() * sizeof(uint32_t),
-        tt_cxy_pair(device_id, dram_core.x, dram_core.y),
-        addr + offset,
-        small_access);
+    write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, small_access);
 }
 
 void Cluster::read_dram_vec(
-    std::vector<uint32_t>& vec,
-    uint32_t sz_in_bytes,
-    chip_id_t device_id,
-    int dram_view,
-    uint64_t addr,
-    bool small_access) const {
+    void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
         dram_view < desc_to_use.get_num_dram_views(),
@@ -615,7 +606,7 @@ void Cluster::read_dram_vec(
     CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
-    read_core(vec, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, small_access);
+    read_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, small_access);
 }
 
 void Cluster::write_core(

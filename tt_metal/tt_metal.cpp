@@ -320,7 +320,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-        host_buffer, device->id(), dram_channel, address);
+        host_buffer.data(), host_buffer.size() * sizeof(uint32_t), device->id(), dram_channel, address);
     return pass;
 }
 
@@ -329,7 +329,7 @@ bool ReadFromDeviceDRAMChannel(
     bool pass = true;
     tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
     tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-        host_buffer, size, device->id(), dram_channel, address);
+        host_buffer.data(), size, device->id(), dram_channel, address);
     return pass;
 }
 
@@ -534,21 +534,31 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
     if (buffer.is_nd_sharded()) {
         auto device_id = buffer.device()->id();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
-        for (size_t i = 0; i < banks.size(); i++) {
-            const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-            uint32_t offset = 0;
-            if (buffer.is_dram()) {
-                const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+        if (buffer.is_dram()) {
+            for (size_t i = 0; i < banks.size(); i++) {
+                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
                 auto dram_channel = buffer.device()->dram_channel_from_virtual_core(virtual_core);
-                offset = soc_desc.get_address_offset(dram_channel);
+                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                    cluster.write_dram_vec(
+                        host_buffer.data() + chunk_mapping_in_bytes.src,
+                        chunk_mapping_in_bytes.size,
+                        device_id,
+                        dram_channel,
+                        buffer.address() + chunk_mapping_in_bytes.dst);
+                }
             }
-            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                // TODO: subspan is in elements; here 1 element is 1 byte (ie. uint8_t) so using bytes here is fine
-                auto chunk_span = tt::stl::make_const_span(
-                    host_buffer.subspan(chunk_mapping_in_bytes.src, chunk_mapping_in_bytes.size));
-                llrt::write_hex_vec_to_core(
-                    device_id, virtual_core, chunk_span, buffer.address() + chunk_mapping_in_bytes.dst + offset);
+        } else {
+            for (size_t i = 0; i < banks.size(); i++) {
+                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                    cluster.write_core(
+                        host_buffer.data() + chunk_mapping_in_bytes.src,
+                        chunk_mapping_in_bytes.size,
+                        tt_cxy_pair(device_id, virtual_core.x, virtual_core.y),
+                        buffer.address() + chunk_mapping_in_bytes.dst);
+                }
             }
         }
     } else if (
@@ -663,22 +673,31 @@ void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
     ZoneScoped;
     if (buffer.is_nd_sharded()) {
         auto device_id = buffer.device()->id();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
-        for (size_t i = 0; i < banks.size(); i++) {
-            const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-            uint32_t offset = 0;
-            if (buffer.is_dram()) {
-                const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+        if (buffer.is_dram()) {
+            for (size_t i = 0; i < banks.size(); i++) {
+                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
                 auto dram_channel = buffer.device()->dram_channel_from_virtual_core(virtual_core);
-                offset = soc_desc.get_address_offset(dram_channel);
+                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                    cluster.read_dram_vec(
+                        host_buffer + chunk_mapping_in_bytes.src,
+                        chunk_mapping_in_bytes.size,
+                        device_id,
+                        dram_channel,
+                        buffer.address() + chunk_mapping_in_bytes.dst);
+                }
             }
-            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                // Using cluster read_core API (as opposed to ReadFromDeviceL1) because it is inplace
-                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                    host_buffer + chunk_mapping_in_bytes.src,
-                    chunk_mapping_in_bytes.size,
-                    tt_cxy_pair(device_id, virtual_core),
-                    buffer.address() + chunk_mapping_in_bytes.dst + offset);
+        } else {
+            for (size_t i = 0; i < banks.size(); i++) {
+                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                    cluster.read_core(
+                        host_buffer + chunk_mapping_in_bytes.src,
+                        chunk_mapping_in_bytes.size,
+                        tt_cxy_pair(device_id, virtual_core),
+                        buffer.address() + chunk_mapping_in_bytes.dst);
+                }
             }
         }
     } else if (
