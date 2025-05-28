@@ -143,7 +143,9 @@ class TtUNet2DConditionModel(nn.Module):
             self.tt_conv2_weights,
             self.tt_conv2_bias,
             self.conv2_params,
-        ) = prepare_conv_params(device, conv_weights_out, conv_bias_out, conv_weights_dtype, act_block_h_override=32)
+        ) = prepare_conv_params(
+            device, conv_weights_out, conv_bias_out, conv_weights_dtype, act_block_h_override=32, conv_path="conv_out"
+        )
 
         self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
@@ -263,9 +265,9 @@ class TtUNet2DConditionModel(nn.Module):
 
         sample = ttnn.silu(sample)
 
-        sample = ttnn.sharded_to_interleaved(sample, ttnn.DRAM_MEMORY_CONFIG)
-        self.conv2_config.shard_layout = sample.memory_config().memory_layout if sample.is_sharded() else None
-        self.conv2_config.act_block_h_override = 32 if sample.is_sharded() else 0
+        sample = ttnn.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG)
+        # self.conv2_config.shard_layout = sample.memory_config().memory_layout if sample.is_sharded() else None
+        # self.conv2_config.act_block_h_override = 32 if sample.is_sharded() else 0
 
         [sample, [H, W], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=sample,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © <YEAR> Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -120,18 +120,84 @@ class ModelOptimisations:
             always_preprocess_weights=True,
             transpose_shards=True,
         )
-        self.conv_configs["ABH_128_ADB_BS"] = ttnn.Conv2dConfig(
+
+        # ------------------------------------------------------------------------
+        self.conv_configs["ABH_64_NO_ADB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
             weights_dtype=conv_w_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=False,
-            enable_act_double_buffer=True,
+            enable_act_double_buffer=False,
             enable_split_reader=False,
             enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=128,
+            act_block_h_override=64,
+            preprocess_weights_on_device=False,
+            always_preprocess_weights=True,
+            transpose_shards=True,
+        )
+        self.conv_configs["ABH_512_NO_ADB_WS"] = ttnn.Conv2dConfig(
+            dtype=conv_act_dtype,
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+            preprocess_weights_on_device=False,
+            always_preprocess_weights=True,
+            transpose_shards=True,
+        )
+        self.conv_configs["ABH_512_NO_ADB_WS_FR"] = ttnn.Conv2dConfig(
+            dtype=conv_act_dtype,
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=512,
+            preprocess_weights_on_device=False,
+            always_preprocess_weights=True,
+            transpose_shards=True,
+        )
+        self.conv_configs["ABH_256_NO_ADB_WS"] = ttnn.Conv2dConfig(
+            dtype=conv_act_dtype,
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+            preprocess_weights_on_device=False,
+            always_preprocess_weights=True,
+            transpose_shards=True,
+        )
+        self.conv_configs["ABH_32_NO_ADB_BS"] = ttnn.Conv2dConfig(
+            dtype=conv_act_dtype,
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=32,
             preprocess_weights_on_device=False,
             always_preprocess_weights=True,
             transpose_shards=True,
@@ -152,8 +218,7 @@ class ModelOptimisations:
             always_preprocess_weights=True,
             transpose_shards=True,
         )
-
-        self.conv_configs["ABH_64_NO_ADB_BS"] = ttnn.Conv2dConfig(
+        self.conv_configs["ABH_256_NO_ADB_BS_FR"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
             weights_dtype=conv_w_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -164,7 +229,39 @@ class ModelOptimisations:
             enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
-            act_block_h_override=64,
+            act_block_h_override=256,
+            preprocess_weights_on_device=False,
+            always_preprocess_weights=True,
+            transpose_shards=True,
+        )
+        self.conv_configs["ABH_128_ADB_BS"] = ttnn.Conv2dConfig(
+            dtype=conv_act_dtype,
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+            preprocess_weights_on_device=False,
+            always_preprocess_weights=True,
+            transpose_shards=True,
+        )
+        self.conv_configs["ABH_128_NO_ADB_HS"] = ttnn.Conv2dConfig(
+            dtype=conv_act_dtype,
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
             preprocess_weights_on_device=False,
             always_preprocess_weights=True,
             transpose_shards=True,
@@ -191,7 +288,32 @@ class ModelOptimisations:
             return self.conv_configs["ABH_128_NO_ADB_BS"]  # should be ABH_128_ADB_BS, hitting OOM on UNet
         elif ("down_blocks.2.resnets.0.conv2" == conv_path) or ("down_blocks.2.resnets.1.conv2" == conv_path):
             return self.conv_configs["ABH_64_NO_ADB_BS"]
+        # --------------------------------------------------
         elif "mid_block" in conv_path:
             return self.conv_configs["ABH_64_NO_ADB_BS"]
+        elif ("up_blocks.0.resnets.0.conv1" == conv_path) or ("up_blocks.0.resnets.1.conv1" == conv_path):
+            return self.conv_configs["ABH_512_NO_ADB_WS"]  # should be 512 hitting OOM, 256 instead
+        elif "up_blocks.0.upsamplers.0" == conv_path:
+            return self.conv_configs["ABH_256_NO_ADB_WS"]
+        elif ("up_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
+            return self.conv_configs["ABH_64_NO_ADB_BS"]
+        elif "up_blocks.0.resnets.2.conv1" == conv_path:
+            return self.conv_configs["ABH_512_NO_ADB_WS_FR"]
+        elif ("up_blocks.1.resnets.0.conv1" == conv_path) or ("up_blocks.1.resnets.2.conv1" == conv_path):
+            return self.conv_configs["ABH_256_NO_ADB_WS"]
+        elif "up_blocks.1.resnets.1.conv1" == conv_path:
+            return self.conv_configs["ABH_32_NO_ADB_BS"]
+        elif ("up_blocks.1.resnets" in conv_path) and ("conv2" in conv_path):
+            return self.conv_configs["ABH_128_NO_ADB_BS"]
+        elif "up_blocks.1.upsamplers.0" == conv_path:
+            return self.conv_configs["ABH_32_NO_ADB_BS"]  # should be 128
+        elif "up_blocks.2.resnets.0.conv1" == conv_path:
+            return self.conv_configs["ABH_256_NO_ADB_BS_FR"]
+        elif ("up_blocks.2.resnets" in conv_path) and ("conv2" in conv_path):
+            return self.conv_configs["ABH_128_ADB_BS"]
+        elif ("up_blocks.2.resnets.1.conv1" == conv_path) or ("up_blocks.2.resnets.2.conv1" == conv_path):
+            return self.conv_configs["ABH_128_ADB_BS"]
+        elif "conv_out" == conv_path:
+            return self.conv_configs["ABH_128_NO_ADB_HS"]
         else:
             return None
