@@ -57,22 +57,25 @@ def is_valid_device_for_unet(device):
     )
 
 
-def preprocess_unet_input_tensor(input_tensor, min_channels=16):
+def preprocess_unet_input_tensor(input_tensor, output_shard_height=2688):
     """
     Pad (if needed) and reshape to [1,1,N*H*W,C] for downstream convolution
     """
-    N, C, H, W = input_tensor.shape
-    if C < min_channels:
-        channel_padding_needed = min_channels - C
-        nchw = ttnn.pad(input_tensor, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
-        ttnn.deallocate(input_tensor)
-    else:
-        nchw = input_tensor
+    assert len(input_tensor.shape), "Expected input tensor to be rank 4 (was {len(input_tensor.shape)})"
 
-    nhwc = ttnn.permute(nchw, (0, 2, 3, 1))  # NCHW -> NHWC
-    ttnn.deallocate(nchw)
-
-    return ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
+    _, _, C, HW = input_tensor.shape
+    output_core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    output_shard_shape = (output_shard_height, C)
+    output_shard_spec = ttnn.ShardSpec(output_core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+    )
+    return ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_memory_config, dtype=ttnn.bfloat16)
 
 
 def concatenate(activation, residual, dim=-1, groups=1, final_block=False):
@@ -506,20 +509,28 @@ class UNet:
             activation_dtype=ttnn.bfloat16,
         )
 
-        INPUT_TENSOR_SHAPE = [1, 16, 1056, 160]
-        self.input_sharded_memory_config = ttnn.create_sharded_memory_config(
-            INPUT_TENSOR_SHAPE,
-            ttnn.CoreGrid(x=8, y=6),
-            ttnn.ShardStrategy.HEIGHT,
-        )
+    input_core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    input_shard_shape = (16, 2688)
+    input_shard_spec = ttnn.ShardSpec(input_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_sharded_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec
+    )
 
     def bottleneck(self, x):
         x = self.bnc(x)
         x = self.bnc2(x)
         return x
 
-    def preprocess_input_tensor(self, x):
-        return preprocess_unet_input_tensor(x, min_channels=16)
+    def preprocess_input_tensor(self, x, deallocate_input_activation):
+        out = preprocess_unet_input_tensor(x)
+        if deallocate_input_activation:
+            ttnn.deallocate(x)  # Some use-cases have a persistent input tensor that we don't want to delete
+        return out
 
     def postprocess_output_tensor(self, x):
         # Convert the output tensor (in TILE layout) to RM to prevent transferring padding back to host.
@@ -536,13 +547,25 @@ class UNet:
         )
         return ttnn.experimental.convert_to_chw(x, memory_config=output_memory_config, dtype=ttnn.bfloat16)
 
-    def __call__(self, x, move_input_tensor_to_device=True):
+    def __call__(self, x, move_input_tensor_to_device=True, deallocate_input_activation=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
 
         if move_input_tensor_to_device:
+            assert (
+                x.storage_type() == ttnn.StorageType.HOST
+            ), "Expected UNet input tensor to be on host if move_input_tensor_to_device=True"
+            B, C, H, W = x.shape
+            x = ttnn.reshape(x, [1, 1, C, H * W])  # Reshape so we can width-shard along inner-dim
             x = ttnn.to_device(x, device=self.device, memory_config=self.input_sharded_memory_config)
+        else:
+            assert (
+                x.storage_type() == ttnn.StorageType.DEVICE
+            ), "Expected UNet input tensor to be on device if move_input_tensor_to_device=False"
 
-        x = self.preprocess_input_tensor(x)
+        x = self.preprocess_input_tensor(
+            x, deallocate_input_activation=deallocate_input_activation or move_input_tensor_to_device
+        )
+
         x, c1_res = self.downblock1(x)
         x, c2_res = self.downblock2(x)
         x, c3_res = self.downblock3(x)
