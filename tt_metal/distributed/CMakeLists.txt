@@ -14,18 +14,23 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/mpi_distributed_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp
 )
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
+# Check if distributed compute is enabled
+if(NOT DEFINED ENABLE_DISTRIBUTED)
+    set(ENABLE_DISTRIBUTED OFF)
+endif()
+
 set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
 
-# Check if ULFM MPI exists, otherwise use system MPI
-if(EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
+# Check if distributed is enabled and ULFM MPI exists, otherwise use system MPI, or fall back to single host
+if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
     message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
     set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
+    set(USE_MPI TRUE)
 
     add_library(OpenMPI::MPI SHARED IMPORTED GLOBAL)
 
@@ -44,10 +49,32 @@ if(EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
             INTERFACE_INCLUDE_DIRECTORIES
                 ${ULFM_PREFIX}/include
     )
+
+    # Add MPI distributed context
+    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
+elseif(ENABLE_DISTRIBUTED)
+    # Try to find system MPI if distributed is enabled
+    find_package(MPI QUIET COMPONENTS C)
+    if(MPI_FOUND)
+        message(STATUS "ULFM MPI not found, using system MPI")
+        add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
+        set(USE_MPI TRUE)
+
+        # Add MPI distributed context
+        list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
+    else()
+        message(
+            FATAL_ERROR
+            "ENABLE_DISTRIBUTED is ON but no MPI implementation found. Please install MPI or disable distributed support."
+        )
+    endif()
 else()
-    message(STATUS "ULFM MPI not found, using system MPI")
-    find_package(MPI REQUIRED COMPONENTS C)
-    add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
+    # Distributed is disabled, use single host context
+    message(STATUS "Distributed compute disabled, using single host context")
+    set(USE_MPI FALSE)
+
+    # Add single host context
+    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/single_host_context.cpp)
 endif()
 
 target_link_libraries(
@@ -58,5 +85,9 @@ target_link_libraries(
         Metalium::Metal::Impl
         Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon
-        OpenMPI::MPI
 )
+
+# Only link MPI libraries if we're using MPI
+if(USE_MPI)
+    target_link_libraries(distributed PRIVATE OpenMPI::MPI)
+endif()

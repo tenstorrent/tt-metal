@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "mpi_distributed_context.hpp"
 #include <mpi.h>
 #include <mpi-ext.h>
@@ -27,16 +26,16 @@ namespace tt::tt_metal::distributed::multihost {
 
 constexpr MPI_Op reduce_to_mpi(ReduceOp op) {
     switch (op) {
-        case ReduceOp::SUM:  return MPI_SUM;
-        case ReduceOp::MAX:  return MPI_MAX;
-        case ReduceOp::MIN:  return MPI_MIN;
+        case ReduceOp::SUM: return MPI_SUM;
+        case ReduceOp::MAX: return MPI_MAX;
+        case ReduceOp::MIN: return MPI_MIN;
         case ReduceOp::PROD: return MPI_PROD;
         case ReduceOp::LAND: return MPI_LAND;
         case ReduceOp::LOR: return MPI_LOR;
         case ReduceOp::BAND: return MPI_BAND;
         case ReduceOp::BOR: return MPI_BOR;
     }
-    return MPI_SUM; // default
+    return MPI_SUM;  // default
 }
 
 constexpr MPI_Datatype dtype_to_mpi(DType dt) noexcept {
@@ -138,7 +137,9 @@ std::optional<Status> MPIRequest::test() {
     MPI_Status status{};
     int flag = 0;
     MPI_CHECK(MPI_Test(&req_, &flag, &status));
-    if (!flag) return std::nullopt;
+    if (!flag) {
+        return std::nullopt;
+    }
 
     done_ = true;
     int count = 0;
@@ -147,7 +148,9 @@ std::optional<Status> MPIRequest::test() {
 }
 
 void MPIRequest::cancel() {
-    if (done_) return;
+    if (done_) {
+        return;
+    }
     MPI_CHECK(MPI_Cancel(&req_));
     MPI_CHECK(MPI_Request_free(&req_));
     done_ = true;
@@ -203,27 +206,24 @@ MPIContext::MPIContext(MPI_Comm comm, MPI_Group group) : comm_(comm), group_(gro
     MPI_CHECK(MPI_Comm_size(comm_, &size_));
 }
 
-Rank  MPIContext::rank()  const { return Rank(rank_); }
-Size  MPIContext::size()  const { return Size(size_); }
+Rank MPIContext::rank() const { return Rank(rank_); }
+Size MPIContext::size() const { return Size(size_); }
 bool MPIContext::have_ulfm_extensions() const { return OMPI_HAS_ULFM; }
 void MPIContext::barrier() const { MPI_CHECK(MPI_Barrier(comm_)); }
 
 /* ---- point‑to‑point ---------------------------------------------------- */
 
-void MPIContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const
-{
+void MPIContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Send(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
 }
 
-void MPIContext::recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const
-{
+void MPIContext::recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Recv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, MPI_STATUS_IGNORE));
 }
 
-RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const
-{
+RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
     MPI_CHECK(MPI_Isend(
@@ -231,8 +231,7 @@ RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) c
     return std::make_shared<MPIRequest>(req);
 }
 
-RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const
-{
+RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
     MPI_CHECK(MPI_Irecv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, &req));
@@ -241,8 +240,7 @@ RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) co
 
 /* ---- collectives ------------------------------------------------------- */
 
-void MPIContext::broadcast(tt::stl::Span<std::byte> buf, Rank root) const
-{
+void MPIContext::broadcast(tt::stl::Span<std::byte> buf, Rank root) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Bcast(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *root, comm_));
 }

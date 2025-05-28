@@ -12,6 +12,7 @@ usage()
     echo "[--help, -h]                List this help"
     echo "[--validate, -v]            Validate that required packages are installed"
     echo "[--docker, -d]              Specialize execution for docker"
+    echo "[--distributed, -D]         Install distributed compute dependencies (OpenMPI)"
     echo "[--mode, -m <mode>]         Select installation mode: runtime, build, baremetal"
     exit 1
 }
@@ -36,6 +37,7 @@ fi
 
 validate=0
 docker=0
+distributed=0
 mode="baremetal"
 
 while [ $# -gt 0 ]; do
@@ -49,6 +51,10 @@ while [ $# -gt 0 ]; do
             ;;
         --docker|-d)
             docker=1
+            shift
+            ;;
+        --distributed|-D)
+            distributed=1
             shift
             ;;
 	--mode|-m)
@@ -85,8 +91,11 @@ ub_runtime_packages()
      libc++-17-dev \
      libc++abi-17-dev \
      libstdc++6 \
-     openmpi-bin \
     )
+
+    if [ "$distributed" -eq 1 ]; then
+        UB_RUNTIME_LIST+=(openmpi-bin)
+    fi
 }
 
 ub_buildtime_packages()
@@ -104,8 +113,11 @@ ub_buildtime_packages()
      libc++abi-17-dev \
      build-essential \
      xz-utils \
-     libopenmpi-dev \
     )
+
+    if [ "$distributed" -eq 1 ]; then
+        UB_BUILDTIME_LIST+=(libopenmpi-dev)
+    fi
 }
 
 # Packages needed to setup a baremetal machine to build from source and run
@@ -247,9 +259,13 @@ install_sfpi() {
 }
 
 install_mpi_ulfm(){
-    # Only install MPI ULFM for Ubuntu 22.04 or older
-    # VERSION is already defined at the top of the script
-    # Convert version to comparable format (e.g., 24.04 -> 2404)
+    # Only install if distributed flag is set
+    if [ "$distributed" -ne 1 ]; then
+        echo "→ Skipping MPI ULFM installation (distributed mode not enabled)"
+        return
+    fi
+
+    # Only install MPI ULFM for Ubuntu 24.04 or older
     local VERSION_NUM=$(echo "$VERSION" | sed 's/\.//')
 
     if [ "$VERSION_NUM" -gt "2404" ]; then
