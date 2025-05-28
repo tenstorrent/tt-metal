@@ -39,24 +39,24 @@ void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
 
         TT_FATAL(
-            tensor.get_layout() == required_layout,
+            tensor.layout() == required_layout,
             "Tensor '{}' must have layout '{}', but got '{}'",
             name,
             magic_enum::enum_name(required_layout),
-            magic_enum::enum_name(tensor.get_layout()));
+            magic_enum::enum_name(tensor.layout()));
 
         TT_FATAL(
-            tensor.get_dtype() == required_dtype,
+            tensor.dtype() == required_dtype,
             "Tensor '{}' must have data type '{}', but got '{}'",
             name,
             magic_enum::enum_name(required_dtype),
-            magic_enum::enum_name(tensor.get_dtype()));
+            magic_enum::enum_name(tensor.dtype()));
 
         TT_FATAL(
-            tensor.memory_config().memory_layout == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
-            magic_enum::enum_name(tensor.memory_config().memory_layout));
+            magic_enum::enum_name(tensor.memory_config().memory_layout()));
     };
 
     const auto& input_tensor = tensor_args.input;
@@ -76,13 +76,13 @@ void CrossEntropyBackwardDeviceOperation::validate_on_program_cache_miss(
 CrossEntropyBackwardDeviceOperation::spec_return_value_t CrossEntropyBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output->get_tensor_spec();
+        return tensor_args.preallocated_output->tensor_spec();
     }
-    auto input_logical_shape = tensor_args.input.get_logical_shape();
+    auto input_logical_shape = tensor_args.input.logical_shape();
     return ttnn::TensorSpec(
         ttnn::Shape(input_logical_shape),
         tt::tt_metal::TensorLayout(
-            tensor_args.input.get_dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+            tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
 }
 
 CrossEntropyBackwardDeviceOperation::tensor_return_value_t CrossEntropyBackwardDeviceOperation::create_output_tensors(
@@ -103,7 +103,7 @@ CrossEntropyBackwardDeviceOperation::tensor_return_value_t CrossEntropyBackwardD
 tt::stl::hash::hash_t CrossEntropyBackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.get_logical_shape();
+    const auto& input_logical_shape = input_tensor.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     return tt::tt_metal::operation::hash_operation<CrossEntropyBackwardDeviceOperation>(
         args, program_factory.index(), input_tensor.dtype(), input_logical_shape);

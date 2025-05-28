@@ -45,7 +45,7 @@ autograd::TensorPtr cross_entropy_loss(
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
 
     autograd::GradFunction grad = [target, prediction, out]() {
-        auto volume = target->get_value().get_logical_volume();
+        auto volume = target->get_value().logical_volume();
         float scaler = 1.0F / static_cast<float>(volume);
         auto grad =
             ttml::metal::cross_entropy_bw(prediction->get_value(), target->get_value(), out->get_grad(), scaler);

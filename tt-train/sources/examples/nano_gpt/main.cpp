@@ -448,8 +448,7 @@ int main(int argc, char **argv) {
     std::string run_name = "";
     bool is_eval = false;
     bool add_time_to_name = true;
-    // bool enable_wandb = true;
-    bool enable_wandb = false;
+    bool enable_wandb = true;
     bool ddp = false;
     bool enable_tp = false;
     std::string save_and_exit_path = "";
