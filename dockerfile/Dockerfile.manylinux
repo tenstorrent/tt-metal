@@ -1,0 +1,69 @@
+FROM quay.io/pypa/manylinux_2_34_x86_64
+
+# Install system dependencies
+RUN dnf update -y && \
+    dnf install -y \
+    autoconf \
+    automake \
+    bison \
+    ca-certificates \
+    cmake3 \
+    expat-devel \
+    flex \
+    gcc \
+    gcc-c++ \
+    gfortran \
+    git \
+    gmp-devel \
+    gawk \
+    hwloc-devel \
+    libevent-devel \
+    libibverbs-devel \
+    libmpc-devel \
+    make \
+    mpfr-devel \
+    ninja-build \
+    numactl-devel \
+    patchutils \
+    pkgconf-pkg-config \
+    pmix-devel \
+    python3 \
+    texinfo \
+    wget \
+    zlib-devel \
+    && dnf clean all
+
+# Build OpenMPI 5.0.7 with ULFM support from source
+ARG OMPI_TAG=v5.0.7
+ARG OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+WORKDIR /tmp
+RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.git ompi-src && \
+    cd ompi-src && \
+    git submodule update --init --recursive && \
+    ./autogen.pl && \
+    ./configure \
+        --prefix=${OMPI_PREFIX} \
+        --with-ft=ulfm \
+        --enable-wrapper-rpath \
+        --enable-mpirun-prefix-by-default \
+        --disable-mca-dso \
+        --disable-dlopen && \
+    make -j$(nproc) && \
+    make install && \
+    cd .. && \
+    rm -rf ompi-src
+
+# Add OpenMPI ULFM to PATH and LD_LIBRARY_PATH
+ENV PATH=${OMPI_PREFIX}/bin:$PATH
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
+ENV CPATH=${OMPI_PREFIX}/include
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH
+
+# Clone SFPI repo recursively from the specified branch
+WORKDIR /tmp
+RUN git clone --recurse-submodules -b blozano-tt-expand-os https://github.com/blozano-tt/sfpi.git && \
+    cd sfpi && \
+    ./scripts/build.sh && \
+    ./scripts/release.sh && \
+    mkdir -p /opt/tenstorrent && \
+    tar -xJf build/sfpi-x86_64_Linux.txz -C /opt/tenstorrent/
