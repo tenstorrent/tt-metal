@@ -136,7 +136,8 @@ endif()
 if(WITH_PYTHON_BINDINGS)
     set(Python3_FIND_STRATEGY LOCATION)
     find_package(
-        Python3 REQUIRED
+        Python3
+        REQUIRED
         COMPONENTS
             Interpreter
             Development.Module
