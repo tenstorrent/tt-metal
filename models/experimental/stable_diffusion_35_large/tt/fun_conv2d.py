@@ -4,14 +4,13 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 import torch
 import ttnn
 
 from .parallel_config import DiTParallelConfig
-from .utils import from_torch_fast
+from .utils import from_torch_fast_2d
 
 
 @dataclass
@@ -32,7 +31,6 @@ class TtConv2dParameters:
         device,
         parallel_config: DiTParallelConfig,
     ) -> TtConv2dParameters:
-        # TODO: Use parallel_config
         weight = state["weight"]
         out_channels, in_c, kh, kw = weight.shape
         weight = torch.permute(weight, (2, 3, 1, 0))
@@ -43,26 +41,28 @@ class TtConv2dParameters:
         else:
             bias = None
 
-        if os.environ["FAKE_DEVICE"] == "T3K":
+        if hidden_dim_padding > 0:
             weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_padding), mode="constant", value=0)
             if not bias == None:
                 bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_padding), mode="constant", value=0)
 
         return cls(
-            weight=from_torch_fast(
+            weight=from_torch_fast_2d(
                 weight,
-                dtype=dtype,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[None, parallel_config.tensor_parallel.mesh_axis],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                shard_dim=-1,
+                dtype=dtype,
             ),
             bias=(
-                from_torch_fast(
+                from_torch_fast_2d(
                     bias.reshape((1, 1, 1, -1)),
-                    dtype=dtype,
+                    mesh_device=device,
+                    mesh_shape=tuple(device.shape),
+                    dims=[None, parallel_config.tensor_parallel.mesh_axis + 2],
                     layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    shard_dim=-1,
+                    dtype=dtype,
                 )
                 if "bias" in state
                 else None
