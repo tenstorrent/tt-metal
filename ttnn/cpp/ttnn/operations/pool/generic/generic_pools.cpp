@@ -76,10 +76,12 @@ Tensor Pool2DOp<pool_type>::invoke(
             false);
         TT_FATAL(parallel_config.has_value(), "Could not determine parallel config for pool2d.");
 
-        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(*parallel_config);
-        num_cores_c = conv::get_num_cores_channels_from_parallel_config(*parallel_config);
+        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config.value());
+        num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config.value());
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
-            input_tensor_sharded.get_padded_shape(), *parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
+            input_tensor_sharded.get_padded_shape(),
+            parallel_config.value(),
+            is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
         input_tensor_sharded = ttnn::to_memory_config(
             input_tensor_sharded, sharded_mem_config, std::nullopt);  // this converts interleaved to sharded
         out_memory_config = input_tensor_sharded.memory_config();
@@ -95,8 +97,8 @@ Tensor Pool2DOp<pool_type>::invoke(
         parallel_config->grid = shard_grid;
         parallel_config->shard_scheme = shard_scheme;
         parallel_config->shard_orientation = shard_orientation;
-        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(*parallel_config);
-        num_cores_c = conv::get_num_cores_channels_from_parallel_config(*parallel_config);
+        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config.value());
+        num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config.value());
     }
 
     // update the shard spec to match the output shape
