@@ -49,7 +49,7 @@ struct AllGatherRS {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::shared_variables_t rs_shared_vars;
-            ttnn::operations::matmul::mcast_in0_shared_variables_t matmul_shared_vars;
+            // ttnn::operations::matmul::mcast_in0_shared_variables_t matmul_shared_vars;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -59,17 +59,11 @@ struct AllGatherRS {
             const tensor_args_t& tensor_args,
             std::vector<Tensor>& tensor_return_value);
 
-        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at_helper(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coordinate,
-            const tensor_args_t& tensor_args,
-            std::vector<Tensor>& tensor_return_value);
         static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
             const operation_attributes_t& operation_attributes,
             const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
-            std::vector<Tensor>& tensor_return_value,
-            tt::tt_metal::Program& program);
+            std::vector<Tensor>& tensor_return_value);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,
