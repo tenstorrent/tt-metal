@@ -9,7 +9,7 @@
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
 #include <tt-metalium/program.hpp>
-#include <trace_buffer.hpp>
+#include "trace/trace_buffer.hpp"
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -356,6 +356,8 @@ void HWCommandQueue::enqueue_read_from_core(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_enqueue_read_from_core");
 
+    address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
+
     device_dispatch::validate_core_read_write_bounds(this->device_, virtual_core, address, size_bytes);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
@@ -390,6 +392,8 @@ void HWCommandQueue::enqueue_write_to_core(
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_enqueue_write_to_core");
+
+    address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 

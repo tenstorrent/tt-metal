@@ -56,10 +56,8 @@ static void test_sems_across_core_types(
             continue;
         }
 
-        const auto& eth_cores_unordered =
+        const auto& eth_cores =
             active_eth ? device->get_active_ethernet_cores() : device->get_inactive_ethernet_cores();
-
-        std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
         if (eth_cores.size() > 0) {
             auto program = tt::tt_metal::CreateProgram();
 

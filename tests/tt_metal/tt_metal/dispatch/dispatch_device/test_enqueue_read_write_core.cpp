@@ -397,33 +397,37 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleCoresDRAM) {
         const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) +
                                    MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BARRIER);
         const uint32_t num_elements = 1000;
-        const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
+        uint32_t dram_core_value = 1;
         for (uint32_t core_x = 0; core_x < device->dram_grid_size().x; ++core_x) {
             for (uint32_t core_y = 0; core_y < device->dram_grid_size().y; ++core_y) {
                 const CoreCoord core = device->virtual_core_from_logical_core({core_x, core_y}, CoreType::DRAM);
+                const std::vector<uint32_t> src_data(num_elements, dram_core_value);
                 dynamic_cast<HWCommandQueue&>(device->command_queue())
                     .enqueue_write_to_core(core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
+                dram_core_value++;
             }
         }
 
         std::vector<std::vector<uint32_t>> all_cores_dst_data(
             device->dram_grid_size().x * device->dram_grid_size().y, std::vector<uint32_t>(num_elements, 0));
-        uint32_t i = 0;
+        uint32_t j = 0;
         for (uint32_t core_x = 0; core_x < device->dram_grid_size().x; ++core_x) {
             for (uint32_t core_y = 0; core_y < device->dram_grid_size().y; ++core_y) {
                 const CoreCoord core = device->virtual_core_from_logical_core({core_x, core_y}, CoreType::DRAM);
                 dynamic_cast<HWCommandQueue&>(device->command_queue())
                     .enqueue_read_from_core(
-                        core, all_cores_dst_data[i].data(), address, num_elements * sizeof(uint32_t), false);
-                i++;
+                        core, all_cores_dst_data[j].data(), address, num_elements * sizeof(uint32_t), false);
+                j++;
             }
         }
 
         Finish(device->command_queue());
 
+        uint32_t expected_dram_core_value = 1;
         for (const std::vector<uint32_t>& dst_data : all_cores_dst_data) {
-            EXPECT_EQ(src_data, dst_data);
+            EXPECT_EQ(dst_data, std::vector<uint32_t>(num_elements, expected_dram_core_value));
+            expected_dram_core_value++;
         }
     }
 }

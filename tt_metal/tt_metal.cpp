@@ -13,7 +13,6 @@
 #include <kernel.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <sub_device_types.hpp>
-#include <trace.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <cstdlib>
@@ -46,6 +45,7 @@
 #include "tt-metalium/program.hpp"
 #include "program/program_impl.hpp"
 #include "semaphore.hpp"
+#include "trace/trace.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>

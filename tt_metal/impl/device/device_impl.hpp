@@ -17,7 +17,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/trace_buffer.hpp>
+#include "trace/trace_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
@@ -103,6 +103,7 @@ public:
 
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
+    uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
 
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const override;

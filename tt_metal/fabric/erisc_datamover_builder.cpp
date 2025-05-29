@@ -49,6 +49,26 @@ namespace tt::tt_fabric {
 //                         ------------------
 //
 
+FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
+    enable_handshake_(true),
+    enable_context_switch_(true),
+    enable_interrupts_(true),
+    iterations_between_ctx_switch_and_teardown_checks_(
+        FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks) {
+    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        this->is_sender_channel_serviced_.fill(true);
+        this->is_receiver_channel_serviced_.fill(true);
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        this->is_sender_channel_serviced_.fill(risc_id == 0);
+        this->is_receiver_channel_serviced_.fill(risc_id == 1);
+        this->enable_context_switch_ = false;
+        this->enable_interrupts_ = false;
+    } else {
+        TT_THROW("Unsupported architecture for FabricRiscConfig: {}", magic_enum::enum_name(arch));
+    }
+}
+
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->topology = topology;
     uint32_t num_sender_channels = get_sender_channel_count(topology);
@@ -63,6 +83,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
+    this->num_riscv_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
+        this->risc_configs.emplace_back(risc_id);
+    }
+
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
         this->receiver_channels_counters_address[i] = buffer_address;
         buffer_address += receiver_channel_counters_size_bytes;
@@ -88,8 +114,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
         buffer_address += field_size;
         // Connection info layout:
         // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
-        // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's
-        // L1 2: WorkerXY (as uint32_t) 3: Hold's EDM's rdptr for the buffer index in the channel
+        // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in
+        // worker's L1 2: WorkerXY (as uint32_t) 3: Hold's EDM's rdptr for the buffer index in the channel
         this->sender_channels_worker_conn_info_base_address[i] = buffer_address;
         buffer_address += sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo);
         this->sender_channels_local_flow_control_semaphore_address[i] = buffer_address;
@@ -124,7 +150,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, bool is_dateline) :
     FabricEriscDatamoverConfig(topology) {
+    this->sender_txq_id = 0;
+    this->receiver_txq_id = 0;
+    this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->num_used_sender_channels = get_sender_channel_count(topology);
+    this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
+
     if (topology == Topology::Mesh) {
         // For 2D there is no forwarding to self but we are still initialize the settings for it.
         // Routers ignore the settings at self index.
@@ -132,7 +163,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     } else {
         this->num_fwd_paths = this->num_used_sender_channels - 1;
     }
-    this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
 
     if (topology == Topology::Linear || topology == Topology::Mesh) {
         this->num_used_sender_channels -= 1;
@@ -190,7 +220,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     const size_t min_buffer_size = sizeof(tt::tt_fabric::PacketHeader);
     TT_FATAL(
         channel_buffer_size_bytes >= min_buffer_size,
-        "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than minimum "
+        "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than "
+        "minimum "
         "size of {}",
         min_buffer_size);
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
@@ -294,6 +325,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         total_slot_count * channel_buffer_size_bytes,
         available_channel_buffering_space);
 
+    log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         // skip sender channel 2 for dateline edm and set the buffer size to 0
         // Dateline connections have some channels that are unused because there
@@ -495,7 +527,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         false);
 }
 
-std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const {
+std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_t risc_id) const {
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
     TT_ASSERT(this->my_chip_id != this->peer_chip_id);
 
@@ -590,6 +622,19 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.senders_completed_packet_header_cb_address[4],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
+        config.risc_configs[risc_id].is_sender_channel_serviced(0),
+        config.risc_configs[risc_id].is_sender_channel_serviced(1),
+        config.risc_configs[risc_id].is_sender_channel_serviced(2),
+        config.risc_configs[risc_id].is_sender_channel_serviced(3),
+        config.risc_configs[risc_id].is_sender_channel_serviced(4),
+        config.risc_configs[risc_id].is_receiver_channel_serviced(0),
+        config.risc_configs[risc_id].is_receiver_channel_serviced(1),
+        config.risc_configs[risc_id].enable_handshake(),
+        config.risc_configs[risc_id].enable_context_switch(),
+        config.risc_configs[risc_id].enable_interrupts(),
+        config.sender_txq_id,
+        config.receiver_txq_id,
+        config.risc_configs[risc_id].iterations_between_ctx_switch_and_teardown_checks(),
         config.topology == Topology::Mesh,
         this->direction,
         soc_desc.get_num_eth_channels(),
@@ -839,6 +884,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             config,
             direction,
             enable_persistent_mode,
+            build_in_worker_connection_mode,
             dateline_connection);
     }
 }

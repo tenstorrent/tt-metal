@@ -150,3 +150,18 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  ttnn-import-test:
+    name: ttnn import test ubuntu-22.04
+    runs-on: ubuntu-22.04
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: ttnn import test
+        timeout-minutes: 5
+        run: |
+          python3 -c "import ttnn"

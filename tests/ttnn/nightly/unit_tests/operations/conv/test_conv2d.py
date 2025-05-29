@@ -293,9 +293,13 @@ def run_conv(
 
     torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
-        passing, pcc_msg = check_with_fast_pcc_without_tensor_printout(out, ref, pcc=pcc)
-        logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
-        assert passing, pcc_msg
+        if fp32_accum:
+            threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
+        else:
+            threshold = 3e-1 + 1e-1 * math.log(input_channels * filter_height * filter_width, 2)
+        logger.info(f"Threshold: {threshold}")
+        diff = torch.abs(ref - out) / ref.abs().mean()
+        assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
     else:
         passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
         logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
@@ -3221,7 +3225,7 @@ def test_conv2d_sdxl(
         (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8),
 
         # output_channels 3
-        # (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16), #  pcc: 0.0
+        (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16),
 
         # input_channels 4
         (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, None, 1),
@@ -3576,6 +3580,7 @@ def test_conv2d_with_fold(
         device=device,
         torch_tensor_map=torch_tensor_map,
         math_fidelity=ttnn.MathFidelity.LoFi,
+        packer_l1_acc = True,
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         batch_size=batch_size,
