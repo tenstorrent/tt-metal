@@ -20,7 +20,7 @@ from .format_config import InputOutputFormat
 
 
 def generate_make_command(test_config):
-    make_cmd = f"make --silent --always-make "
+    make_cmd = f"make -j 6 --silent --always-make "
     formats = test_config.get("formats")
     testname = test_config.get("testname")
     dest_acc = test_config.get(

@@ -73,7 +73,7 @@ jobs:
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-beta-ubuntu-2204-n150-large-stable
-      test_group: "[1, 2, 3, 4, 5]"
+      test_group: "[1, 2, 3]"
 
   setup-and-test-blackhole:
     name: "🕳️ Perform checks (Blackhole)"
@@ -84,8 +84,8 @@ jobs:
             needs.detect-changes.outputs.github == 'true' }}
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
-      runs_on: tt-beta-ubuntu-2204-p150a-large-stable
-      test_group: "[1, 2, 3, 4, 5]"
+      runs_on: p150
+      test_group: "[1]"
 
   check-all-green:
     name: "✅ Check all green"
