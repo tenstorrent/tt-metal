@@ -21,7 +21,6 @@ jobs:
         test-group: [
           {
             name: "[T3K] Llama-3.1-8B-Instruct",
-            arch: wormhole_b0,
             model: "meta-llama/Llama-3.1-8B-Instruct",
             server-timeout: 5,
             benchmark-timeout: 5,
@@ -34,7 +33,6 @@ jobs:
           },
           {
             name: "[TG] Llama-3.3-70B-Instruct",
-            arch: wormhole_b0,
             model: "meta-llama/Llama-3.3-70B-Instruct",
             server-timeout: 35,
             benchmark-timeout: 10,
@@ -55,7 +53,6 @@ jobs:
       env:
         TT_METAL_HOME: /work
         vllm_dir: /work/vllm
-        ARCH_NAME: ${{ matrix.test-group.arch }}
         VLLM_TARGET_DEVICE: "tt"
         PYTHONPATH: /work:/work/vllm
         LD_LIBRARY_PATH: /work/build/lib
