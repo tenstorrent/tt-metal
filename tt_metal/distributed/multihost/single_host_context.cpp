@@ -25,7 +25,7 @@ const ContextPtr& SingleHostContext::get_current_world() {
 void SingleHostContext::set_current_world(const ContextPtr& ctx) {
     TT_FATAL(
         ctx != nullptr && std::dynamic_pointer_cast<SingleHostContext>(ctx) != nullptr,
-        "set_current_world: context is not a MPIContext or a nullptr");
+        "SingleHostContext::set_current_world: context is not a SingleHostContext or a nullptr");
     SingleHostContext::current_world_ = ctx;
 }
 

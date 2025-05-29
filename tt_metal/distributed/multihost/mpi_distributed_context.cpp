@@ -189,7 +189,7 @@ const ContextPtr& MPIContext::get_current_world() {
 void MPIContext::set_current_world(const ContextPtr& ctx) {
     TT_FATAL(
         ctx != nullptr && std::dynamic_pointer_cast<MPIContext>(ctx) != nullptr,
-        "set_current_world: context is not a MPIContext or a nullptr");
+        "MPIContext::set_current_world: context is not a MPIContext or a nullptr");
     MPIContext::current_world_ = ctx;
 }
 
