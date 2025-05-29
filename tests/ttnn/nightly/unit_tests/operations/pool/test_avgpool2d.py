@@ -35,6 +35,7 @@ def run_avg_pool2d(
     ceil_mode,
     divisor_override,
     shard_scheme,
+    run_twice=False,
 ):
     ## Test setup for both.
     in_n, in_c, in_h, in_w = input_shape
@@ -72,6 +73,21 @@ def run_avg_pool2d(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         applied_shard_scheme=shard_scheme,
     )
+    if run_twice:
+        ttnn_output = ttnn.avg_pool2d(
+            input_tensor=ttnn_input,
+            batch_size=in_n,
+            input_h=in_h,
+            input_w=in_w,
+            channels=in_c,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            ceil_mode=ceil_mode,
+            divisor_override=divisor_override,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            applied_shard_scheme=shard_scheme,
+        )
 
     ## Test teardown for Actual.
     ttnn_output = ttnn_output.reshape(
@@ -193,4 +209,5 @@ def test_run_avg_pool2d(
         ceil_mode=ceil_mode,
         divisor_override=divisor_override,
         shard_scheme=shard_scheme,
+        run_twice=True,
     )
