@@ -114,7 +114,10 @@ ub_buildtime_packages()
      build-essential \
      xz-utils \
      libopenmpi-dev \
+     pandoc \
+     libtbb-dev \
      libcapstone-dev \
+     pkg-config \
     )
 
     if [ "$distributed" -eq 1 ]; then
