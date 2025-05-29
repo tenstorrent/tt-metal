@@ -65,38 +65,33 @@ class TokenAccuracy:
 
 
 class TokenAccuracy:
-    def __init__(self, input_prompts):
+    def __init__(self, model_name=None):
         self.store_predicted_tokens = []
-        self.store_predicted_top5_tokens = []
-
-        index = input_prompts[0].find("?")
-        self.input_prompt = [input_prompts[0][: index + 1]]
-        self.ref_data = [input_prompts[0][index + 1 :]]
-
-    def split_data(self):
-        return self.input_prompt
+        reference_data_file = f"models/tt_transformers/tests/reference_outputs/{model_name}.refpt"
+        logger.info(f"Loading reference data from {reference_data_file}")
+        assert os.path.exists(reference_data_file)
+        reference_data = torch.load(reference_data_file)
+        self.reference_tokens = reference_data["reference_tokens"]
+        self.input_prompt = self.reference_tokens[0, :512]
+        self.gt_tokens = self.reference_tokens[0, 512:]
+        self.top5_tokens = reference_data["top5_tokens"][512 - 1 :, :]
 
     def prepare_ref_tokens(self, tokenizer):
-        encoded_data = tokenizer.encode(self.ref_data[0])
-        self.gt_tokens = encoded_data
+        text_data = tokenizer.decode(self.input_prompt)
+        return text_data
 
-    def collect_top1n5_logits(self, logits):
-        _, tt_top5_tokens = torch.topk(logits, k=5, dim=-1)
-        top5_tokens = [tok.item() for tok in tt_top5_tokens.squeeze()]
-        _, tt_top1_token = torch.topk(logits, k=1, dim=-1)
-        self.store_predicted_tokens.append(tt_top1_token.item())
-        self.store_predicted_top5_tokens.append(top5_tokens)
+    def collect_predicted_tokens(self, tokens):
+        self.store_predicted_tokens.append(tokens)
 
     def compute_accuracy(self):
         count = 0
         count_t5 = 0
         matching_sz = min(len(self.gt_tokens), len(self.store_predicted_tokens))
         for i in range(matching_sz):
-            if self.gt_tokens[i] == self.store_predicted_tokens[i]:
+            if self.gt_tokens[i].item() == self.store_predicted_tokens[i]:
                 count += 1
-            for j in range(len(self.store_predicted_top5_tokens[i])):
-                if self.gt_tokens[i] == self.store_predicted_top5_tokens[i][j]:
-                    count_t5 += 1
+            if self.store_predicted_tokens[i] in self.top5_tokens[i, :]:
+                count_t5 += 1
         accuracy_top1 = count / matching_sz
         accuracy_top5 = count_t5 / matching_sz
 
@@ -636,12 +631,7 @@ def test_demo_text(
     # test_id='accuracy'
 
     if "accuracy" in test_id:
-        token_acc = TokenAccuracy(input_prompts)
-        input_prompts = token_acc.split_data()
-
-    repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+        token_acc = TokenAccuracy(model_name="Llama3.2-1B-Instruct")
 
     model_args, model, page_table, tt_kv_cache, tokenizer = prepare_generator_args(
         num_devices=num_devices,
@@ -666,7 +656,11 @@ def test_demo_text(
 
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
+<<<<<<< HEAD
     if token_accuracy:
+=======
+    if "accuracy" in test_id:
+>>>>>>> de0e011adf (added precomputed tokens)
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
 
     repeat_batch_prompts = []
@@ -774,6 +768,7 @@ def test_demo_text(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
+<<<<<<< HEAD
             if token_accuracy:
                 out_tok = token_acc.collect_predicted_tokens(out_tok.item())
 
@@ -787,6 +782,10 @@ def test_demo_text(
                 sampling_params=device_sampling_params,
             )
             token_acc.collect_tokens(out_tok)
+=======
+            if "accuracy" in test_id:
+                token_acc.collect_predicted_tokens(out_tok.item())
+>>>>>>> de0e011adf (added precomputed tokens)
 
             # Run decode forward
             logits = generator.decode_forward_text(
@@ -796,13 +795,11 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
-                argmax_on_device=False,
             )
 
             # Get the next token
             if device_sampling_params is not None:
-                _, top1_token = torch.topk(logits, k=1, dim=-1)
-                out_tok = top1_token.squeeze(1)
+                out_tok = logits.unsqueeze(1)
             else:
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
