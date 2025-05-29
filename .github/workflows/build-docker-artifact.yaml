@@ -104,6 +104,7 @@ jobs:
             dockerfile/Dockerfile.manylinux \
             tt_metal/sfpi-version.sh \
             | sha1sum | cut -d' ' -f1)
+          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
 
       # Assume if dev-tag exists, the others will exist too
       - name: Query images exist
