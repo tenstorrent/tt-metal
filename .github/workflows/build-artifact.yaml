@@ -248,11 +248,6 @@ jobs:
           nice -n 19 cmake --build build --target package
           ls -1sh build/*.deb build/*.ddeb || true
 
-      - name: 🐍 Build wheel
-        if: ${{ inputs.build-wheel }}
-        run: |
-          nice -n 19 python3 -m build --wheel
-
       - name: Publish ccache summary
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
@@ -269,22 +264,6 @@ jobs:
             /work/build/*.deb
             /work/build/*.ddeb
           compression-level: 0
-          if-no-files-found: error
-
-      - name: Set wheel artifact name
-        id: set_wheel_artifact_name
-        run: |
-          WHEEL_ARTIFACT_NAME="eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}"
-          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_ENV"
-          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
-
-      - name: ☁️ Upload wheel
-        if: ${{ inputs.build-wheel }}
-        uses: actions/upload-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ env.wheel_artifact_name }}
-          path: /work/dist/
           if-no-files-found: error
 
       - name: 'Tar files'
@@ -310,4 +289,47 @@ jobs:
         with:
           name: ${{ env.build_artifact_name }}
           path: /work/ttm_any.tar
+          if-no-files-found: error
+
+  build-wheel:
+    if: ${{ inputs.build-wheel }}
+    name: 🐍 Build wheel
+    needs: build-docker-image
+    timeout-minutes: 30
+    runs-on: tt-beta-ubuntu-2204-large
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    outputs:
+      wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-tags: true # Need tags for `git describe`
+
+      - name: 🐍 Build wheel
+        uses: pypa/cibuildwheel@v2.23.2
+        env:
+          CIBW_ENVIRONMENT: "IN_CIBW_ENV=ON"
+          CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
+
+      - name: Set wheel artifact name
+        id: set_wheel_artifact_name
+        run: |
+          WHEEL_ARTIFACT_NAME="eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}"
+          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_ENV"
+          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: ☁️ Upload wheel
+        if: ${{ inputs.build-wheel }}
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ env.wheel_artifact_name }}
+          path: wheelhouse
           if-no-files-found: error
