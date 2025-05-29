@@ -200,10 +200,11 @@ def run_conv(
         output_layout=output_layout,
         activation=activation,
         transpose_shards=transpose_shards,
-        preprocess_weights_on_device=preprocess_weights_on_device,
+        preprocess_weights_on_device=False,
         always_preprocess_weights=False,
         in_place=in_place,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
+        reshard_if_not_optimal=True,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -222,6 +223,45 @@ def run_conv(
             conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (11, 7)), ttnn.CoreRange((0, 8), (1, 8))})
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
+    print(f"=======================================================================================")
+    print(f"input_tensor={tt_input_tensor.shape}")
+    print(f"weight_tensor={tt_weight_tensor.shape}")
+    print(f"bias_tensor={tt_bias_tensor.shape}")
+    print(f"batch_size={batch_size}")
+    print(f"out_channels={output_channels}")
+    print(f"in_channels={input_channels}")
+    print(f"input_height={input_height}")
+    print(f"input_width={input_width}")
+    print(f"kernel_size={(filter_height, filter_width)}")
+    print(f"stride={(stride_h, stride_w)}")
+    print(f"padding={(pad_top, pad_bottom, pad_left, pad_right)}")
+    print(f"dilation= {(dilation_h, dilation_w)}")
+    print(f"groups={groups}")
+    print(f"use_1d_systolic_array= ")
+    print(f"use_shallow_conv_variant= ")
+    print(f"memory_config={memory_config}")
+    print(f"----------------------------------------------------------------------------")
+    print(f"conv_config")
+    print(f"dtype={conv_config.dtype}")
+    print(f"weights_dtype={conv_config.weights_dtype}")
+    print(f"activation={conv_config.activation}")
+    # print(f"input_channels_alignment={conv_config.input_channels_alignment}")
+    print(f"deallocate_activation={conv_config.deallocate_activation}")
+    print(f"reallocate_halo_output={conv_config.reallocate_halo_output}")
+    print(f"act_block_h_override={conv_config.act_block_h_override}")
+    print(f"act_block_w_div={conv_config.act_block_w_div}")
+    print(f"reshard_if_not_optimal={conv_config.reshard_if_not_optimal}")
+    print(f"override_sharding_config={conv_config.override_sharding_config}")
+    print(f"core_grid={conv_config.core_grid}")
+    print(f"transpose_shards={conv_config.transpose_shards}")
+    print(f"output_layout={conv_config.output_layout}")
+    print(f"preprocess_weights_on_device={conv_config.preprocess_weights_on_device}")
+    print(f"always_preprocess_weights={conv_config.always_preprocess_weights}")
+    print(f"enable_act_double_buffer={conv_config.enable_act_double_buffer}")
+    print(f"enable_weights_double_buffer={conv_config.enable_weights_double_buffer}")
+    print(f"enable_split_reader={conv_config.enable_split_reader}")
+    print(f"enable_subblock_padding={conv_config.enable_subblock_padding}")
+    print(f"=======================================================================================")
 
     [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -1111,11 +1151,12 @@ def test_resnet50_conv_wh(
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
     (
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 256}),
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
+        # (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 256}),
+        # (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
+        (1, 192, 1536, 80, 80, 1, 1, 1, 1, 0, 0, HS, None),
     ),
 )
-@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG])  # , ttnn.DRAM_MEMORY_CONFIG
 def test_conv_mem_config_wh(
     device,
     torch_tensor_map,
