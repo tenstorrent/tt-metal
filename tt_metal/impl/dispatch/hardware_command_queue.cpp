@@ -39,10 +39,6 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "data_collection.hpp"
-// #include <pthread.h>
-// #include <sched.h>
-// #include <sys/resource.h>
-// #include <unistd.h>
 
 namespace tt {
 namespace tt_metal {
