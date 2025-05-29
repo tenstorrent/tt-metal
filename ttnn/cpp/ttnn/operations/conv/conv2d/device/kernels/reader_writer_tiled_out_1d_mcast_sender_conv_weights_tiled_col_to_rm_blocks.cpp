@@ -5,6 +5,14 @@
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
 
+template <uint32_t NumTiles, uint32_t TileSizeBytes>
+FORCE_INLINE void copy_weights_from_dram(uint32_t bank_id, uint32_t dram_base_read_addr, uint32_t l1_base_write_addr) {
+    DPRINT << "num tiles= " << NumTiles << ENDL();
+    constexpr uint32_t size = NumTiles * TileSizeBytes;
+    const uint64_t l1_read_addr = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
+    noc_async_read(l1_read_addr, l1_base_write_addr, size);
+}
+
 void kernel_main() {
     // This writer is for output tensor in tile format
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
@@ -129,6 +137,13 @@ void kernel_main() {
     constexpr uint32_t coalesced_read_bytes =
         ((dilation_w == 1) ? num_coalesced_reads * conv_act_c_read_bytes : conv_act_c_read_bytes);
 
+    constexpr uint32_t bank_id = 0;
+    constexpr uint32_t total_weight_tiles = out_num_blocks_w * weight_block_height_num_outer * num_blocks_weight_h *
+                                            weight_block_height_ntiles * weight_block_width_ntiles;
+    copy_weights_from_dram<total_weight_tiles, weight_tile_nbytes>(
+        bank_id, weight_addr_dram_base, get_read_ptr(cb_id_weight));
+    // noc_async_read_barrier();
+
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     uint32_t weight_start_tile_id = out_start_tile_id_w;
@@ -203,7 +218,7 @@ void kernel_main() {
                             for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles;
                                  ++weight_tile_w_i) {
                                 // DPRINT << "weight_tile_id=" << weight_tile_id << ENDL();
-                                noc_async_read_tile(weight_tile_id, s_weight, weight_write_l1_addr);
+                                // noc_async_read_tile(weight_tile_id, s_weight, weight_write_l1_addr);
                                 weight_write_l1_addr += weight_tile_nbytes;
                                 weights_block_size_bytes += weight_tile_nbytes;
                                 weight_tile_id += 1;

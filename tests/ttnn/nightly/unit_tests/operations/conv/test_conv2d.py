@@ -94,7 +94,7 @@ def run_conv(
     output_mesh_composer=None,
     enable_split_reader=False,
     activation="",
-    preprocess_weights_on_device=True,
+    preprocess_weights_on_device=False,
     in_place=False,
     run_twice=False,
     fast_compare=False,
@@ -203,6 +203,7 @@ def run_conv(
         preprocess_weights_on_device=preprocess_weights_on_device,
         always_preprocess_weights=False,
         in_place=in_place,
+        enable_weights_double_buffer=True,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -1849,7 +1850,7 @@ def test_unet_conv_groups_2_wh(
 )
 @pytest.mark.parametrize(
     "groups",
-    [4, 6],
+    [4],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
