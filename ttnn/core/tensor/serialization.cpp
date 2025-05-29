@@ -236,19 +236,17 @@ DistributedStorage load_multi_device_host_storage(
     }
 }
 
-template <typename T>
 DistributedStorage load_storage(
-    FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, T device) {
+    FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, MeshDevice* device) {
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
-        if constexpr (std::is_same_v<T, MeshDevice*>) {
-            return load_multi_device_host_storage(input_file, data_type, layout, device);
-        }
+        return load_multi_device_host_storage(input_file, data_type, layout, device);
     }
     return DistributedStorage{load_host_storage(input_file, data_type), ReplicateTensor{}};
 }
 
-template <typename T>
-Tensor load_tensor_helper(const std::string& file_name, T device) {
+}  // namespace
+
+Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
     FILE* input_file = fopen(file_name.c_str(), "rb");
     if (not input_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
@@ -276,8 +274,6 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
     }
     return tensor;
 }
-
-}  // namespace
 
 void dump_tensor(
     const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy) {
@@ -315,14 +311,6 @@ void dump_tensor(
             },
         },
         tensor_to_dump.get_storage());
-}
-
-// Explicit instantiations
-Tensor load_tensor(const std::string& file_name, IDevice* device) {
-    return load_tensor_helper<IDevice*>(file_name, device);
-}
-Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
-    return load_tensor_helper<MeshDevice*>(file_name, device);
 }
 
 void dump_memory_config(FILE* output_file, const MemoryConfig& memory_config) {
