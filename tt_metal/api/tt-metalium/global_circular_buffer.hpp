@@ -44,7 +44,7 @@ public:
     IDevice* get_device() const { return this->device_; }
 
     static constexpr auto attribute_names = std::forward_as_tuple("sender_receiver_core_mapping", "size");
-    const auto attribute_values() const { return std::make_tuple(this->sender_receiver_core_mapping_, this->size_); }
+    auto attribute_values() const { return std::make_tuple(this->sender_receiver_core_mapping_, this->size_); }
 
 private:
     void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);

@@ -480,9 +480,9 @@ public:
     using OutputTensors = OutputTensorsT;
     using ComputedSpecs = std::vector<ttnn::TensorSpec>;
 
-    const std::string get_type_name() const { return this->get_type_name_impl_(this->type_erased_storage); }
+    std::string get_type_name() const { return this->get_type_name_impl_(this->type_erased_storage); }
 
-    const void validate(
+    void validate(
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         const OptionalTensors& optional_output_tensors) const {
@@ -490,13 +490,11 @@ public:
             this->type_erased_storage, input_tensors, optional_input_tensors, optional_output_tensors);
     }
 
-    const ComputedSpecs compute_output_specs(
-        const Tensors& input_tensors, const OptionalTensors& output_tensors) const {
+    ComputedSpecs compute_output_specs(const Tensors& input_tensors, const OptionalTensors& output_tensors) const {
         return this->compute_output_specs_impl_(this->type_erased_storage, input_tensors, output_tensors);
     }
 
-    const OutputTensors create_output_tensors(
-        const Tensors& input_tensors, const OptionalTensors& output_tensors) const {
+    OutputTensors create_output_tensors(const Tensors& input_tensors, const OptionalTensors& output_tensors) const {
         return this->create_output_tensors_impl_(this->type_erased_storage, input_tensors, output_tensors);
     }
 
@@ -559,19 +557,16 @@ public:
 
     bool uses_custom_program_hash() const { return this->uses_custom_program_hash_impl_(); }
 
-    const Hash compute_program_hash(
-        const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) const {
+    Hash compute_program_hash(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) const {
         ZoneScoped;
         return this->compute_program_hash_impl_(this->type_erased_storage, input_tensors, optional_input_tensors);
     }
 
-    const ProfilerInfo create_profiler_info(const Tensors& input_tensors) const {
+    ProfilerInfo create_profiler_info(const Tensors& input_tensors) const {
         return this->create_profiler_info_impl_(this->type_erased_storage, input_tensors);
     }
 
-    const tt::stl::reflection::Attributes attributes() const {
-        return this->attributes_impl_(this->type_erased_storage);
-    }
+    tt::stl::reflection::Attributes attributes() const { return this->attributes_impl_(this->type_erased_storage); }
 
     template <typename T>
         requires(not std::same_as<std::decay_t<T>, DeviceOperation<OutputTensorsT>>)
@@ -1019,8 +1014,8 @@ struct ExternalOperation {
     const std::string function_name_;
     const tt::stl::reflection::Attributes attributes_;
 
-    const std::string get_type_name() const { return this->function_name_; }
-    const tt::stl::reflection::Attributes attributes() const { return this->attributes_; }
+    std::string get_type_name() const { return this->function_name_; }
+    tt::stl::reflection::Attributes attributes() const { return this->attributes_; }
 };
 
 using ProgramWithCallbacks = CacheableProgram<Tensors>;
