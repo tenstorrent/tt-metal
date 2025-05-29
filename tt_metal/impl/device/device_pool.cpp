@@ -497,6 +497,9 @@ void DevicePool::wait_for_fabric_router_sync() const {
     const auto& fabric_context = control_plane->get_fabric_context();
 
     auto wait_for_handshake = [&](IDevice* dev) {
+        if (!dev) {
+            TT_THROW("Fabric router sync on null device. All devices must be opened for Fabric.");
+        }
         if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
             return;
         }
@@ -619,7 +622,7 @@ IDevice* DevicePool::get_active_device(chip_id_t device_id) const {
 std::vector<IDevice* > DevicePool::get_all_active_devices() const {
     std::vector<IDevice*> user_devices;
     for (const auto& device : this->devices) {
-        if (device->is_initialized()) {
+        if (device && device->is_initialized()) {
             user_devices.push_back(device.get());
         }
     }
