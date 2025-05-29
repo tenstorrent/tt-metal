@@ -26,10 +26,13 @@ jobs:
             const overrideCmd    = '/override';
             const runWorkflowCmd = '/run-it';
 
+            console.log(`🤖 Post-commit nag bot triggered by: ${context.eventName}`);
+
             /* -------- helpers -------- */
 
             // locate (or create) the single bot comment for this PR
             async function upsertComment(prNumber, body) {
+              console.log(`📝 Updating comment for PR #${prNumber}`);
               const comments = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo:  context.repo.repo,
@@ -44,14 +47,18 @@ jobs:
               if (existing) {
                 // avoid churn: only patch when body actually changes
                 if (existing.body !== body) {
+                  console.log(`✏️ Updating existing comment (ID: ${existing.id})`);
                   await github.rest.issues.updateComment({
                     owner: context.repo.owner,
                     repo:  context.repo.repo,
                     comment_id: existing.id,
                     body
                   });
+                } else {
+                  console.log(`✅ Comment already up to date, skipping update`);
                 }
               } else {
+                console.log(`📌 Creating new comment`);
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo:  context.repo.repo,
@@ -79,28 +86,43 @@ jobs:
 
             if (context.eventName === 'pull_request') {
               prNumber = context.payload.pull_request.number;
+              console.log(`🔍 Processing PR #${prNumber} event: ${context.payload.action}`);
 
             } else if (context.eventName === 'workflow_run') {
               const run = context.payload.workflow_run;
-              if (run.name !== targetWorkflow || run.conclusion !== 'success') return;
+              console.log(`🏃 Processing workflow run: ${run.name} (${run.conclusion})`);
+              if (run.name !== targetWorkflow || run.conclusion !== 'success') {
+                console.log(`⏭️ Skipping - not a successful ${targetWorkflow} run`);
+                return;
+              }
 
               const prs = await github.rest.pulls.list({
                 owner: context.repo.owner,
                 repo:  context.repo.repo,
                 head:  `${context.repo.owner}:${run.head_branch}`
               });
-              if (!prs.data.length) return;
+              if (!prs.data.length) {
+                console.log(`⏭️ No open PRs found for branch: ${run.head_branch}`);
+                return;
+              }
               prNumber = prs.data[0].number;
+              console.log(`✅ Found PR #${prNumber} for workflow run`);
 
             } else if (context.eventName === 'issue_comment') {
-              if (!context.payload.issue.pull_request) return;
+              if (!context.payload.issue.pull_request) {
+                console.log(`⏭️ Comment is not on a PR, ignoring`);
+                return;
+              }
 
               const commentBody = context.payload.comment.body;
+              console.log(`💬 Processing comment by ${context.payload.comment.user.login}`);
 
               if (commentBody.includes(overrideCmd)) {
+                console.log(`🟢 Override command detected!`);
                 prNumber   = context.payload.issue.number;
                 forceGreen = true;
               } else if (commentBody.includes(runWorkflowCmd)) {
+                console.log(`🚀 Run workflow command detected!`);
                 prNumber = context.payload.issue.number;
 
                 const { data: pr } = await github.rest.pulls.get({
@@ -110,40 +132,51 @@ jobs:
                 });
 
                 try {
-                  await github.rest.actions.createWorkflowDispatch({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    workflow_id: targetWorkflow,
-                    ref: pr.head.ref
-                  });
+                  console.log(`🎯 Dispatching workflow for PR #${prNumber} on ref: ${pr.head.ref}`);
 
                   // Construct the link to the workflow runs page, filtered by branch
-                  const workflowRunLink = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/${targetWorkflow}?query=branch%3A${encodeURIComponent(pr.head.ref)}`;
+                  const workflowRunLink = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/all-post-commit-workflows.yaml?query=branch%3A${encodeURIComponent(pr.head.ref)}`;
 
+                  // Comment immediately before dispatching (async behavior)
                   await github.rest.issues.createComment({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
                     issue_number: prNumber,
-                    body: `🔄 Running \`${targetWorkflow}\` on the latest commit. [View progress](${workflowRunLink})`
+                    body: `🔄 Running \`${targetWorkflow}\` on the latest commit (${pr.head.sha.substring(0, 7)}). [View progress](${workflowRunLink})`
                   });
+
+                  // Now dispatch the workflow
+                  await github.rest.actions.createWorkflowDispatch({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    workflow_id: 'all-post-commit-workflows.yaml',
+                    ref: pr.head.ref
+                  });
+
+                  console.log(`✅ Workflow dispatched successfully`);
                 } catch (dispatchError) {
-                  console.error("Error dispatching workflow:", dispatchError);
+                  console.error("❌ Error dispatching workflow:", dispatchError);
                   await github.rest.issues.createComment({
                       owner: context.repo.owner,
                       repo: context.repo.repo,
                       issue_number: prNumber,
-                      body: `⚠️ Failed to trigger workflow \`${targetWorkflow}\`. Ensure \`targetWorkflow\` is the correct filename and the GITHUB_TOKEN has \`actions:write\` permission. Error: ${dispatchError.message}`
+                      body: `⚠️ Failed to trigger workflow \`${targetWorkflow}\`. Ensure the workflow file exists and the GITHUB_TOKEN has \`actions:write\` permission. Error: ${dispatchError.message}`
                     });
                 }
                 return; // Exit after triggering the workflow
               } else {
+                console.log(`⏭️ Ignoring comment - no recognized commands`);
                 return; // Ignore other comments
               }
 
-            } else return;   // ignore other events
+            } else {
+              console.log(`⏭️ Ignoring event: ${context.eventName}`);
+              return;   // ignore other events
+            }
 
             /* -------- main logic -------- */
 
+            console.log(`🔎 Checking PR #${prNumber} status...`);
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo:  context.repo.repo,
@@ -153,5 +186,12 @@ jobs:
             const happy = `**✅🎉 Thanks for running \`${targetWorkflow}\`! You're clear to merge. 🎉✅**`;
             const angry = `**⛔️🚨 \`${targetWorkflow}\` has NOT run on the latest commit. Run it before merging! 🚨⛔️**\n - /run-it to run the workflow on the latest commit.\n - /override to ignore the workflow check.`;
 
-            const body  = (forceGreen || await workflowGood(pr)) ? happy : angry;
-            await upsertComment(prNumber, body);
+            if (forceGreen) {
+              console.log(`✅ Force green via override command`);
+              await upsertComment(prNumber, happy);
+            } else {
+              const isGood = await workflowGood(pr);
+              console.log(`🎯 Workflow status check: ${isGood ? 'PASSED' : 'FAILED'} for commit ${pr.head.sha.substring(0, 7)}`);
+              const body = isGood ? happy : angry;
+              await upsertComment(prNumber, body);
+            }
