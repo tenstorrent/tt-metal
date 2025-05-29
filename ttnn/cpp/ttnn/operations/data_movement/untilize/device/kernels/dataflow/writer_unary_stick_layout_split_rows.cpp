@@ -7,7 +7,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
-    // const-expr variables
+    // constexpr variables
     constexpr uint32_t cb_id_out0 = 16;
 
     // run-time args

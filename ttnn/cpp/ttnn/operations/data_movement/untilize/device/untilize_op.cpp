@@ -54,10 +54,10 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     if (!this->use_multicore) {
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::SINGLE_BANK,
-            "Input layout must be interleaved or sharded");
+            "Input memory layout must be interleaved or sharded");
         TT_FATAL(
             this->output_mem_config.memory_layout() != TensorMemoryLayout::SINGLE_BANK,
-            "Output layout must be interleaved or sharded");
+            "Output memory layout must be interleaved or sharded");
 
         if (input_tensor_a.is_sharded()) {
             std::array<uint32_t, 2> input_shard_shape = input_tensor_a.shard_spec().value().shape;
@@ -108,7 +108,6 @@ std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<T
     DataType output_dtype =
         input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
 
-    // TODO (GR): Cleanup
     if (!this->use_multicore) {
         return {TensorSpec(
             input_tensor.get_logical_shape(),
