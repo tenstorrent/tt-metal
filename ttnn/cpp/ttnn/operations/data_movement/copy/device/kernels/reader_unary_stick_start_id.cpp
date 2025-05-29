@@ -19,7 +19,6 @@ void kernel_main() {
     constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(3);
     constexpr uint32_t full_row = get_compile_time_arg_val(4);
 
-#ifdef SHARDED
     typedef ShardedInfo<
         get_compile_time_arg_val(5),
         get_compile_time_arg_val(6),
@@ -33,10 +32,6 @@ void kernel_main() {
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(4));
     experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = src_addr, .shard_array = mapping_table};
-#else
-    const auto s0 = get_interleaved_addr_gen<src0_is_dram, src_stick_size_is_pow2>(
-        src_addr, stick_size, src_log_base_2_of_page_size);
-#endif
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_sticks;
