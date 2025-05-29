@@ -696,6 +696,7 @@ void InitDeviceProfiler(IDevice* device) {
         const uint32_t num_cores_per_dram_bank = soc_desc.profiler_ceiled_core_count_perf_dram_bank;
         const uint32_t bank_size_bytes =
             PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * num_cores_per_dram_bank;
+        TT_ASSERT(bank_size_bytes <= MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::PROFILER));
 
         const uint32_t num_dram_banks = soc_desc.get_num_dram_views();
 
