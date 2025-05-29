@@ -2049,9 +2049,9 @@ height_sharded_memory_config_4 = ttnn.create_sharded_memory_config(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_decoder(dtype_pt, dtype_tt, device, use_program_cache):
+def test_binary_sharded_decoder_program_cache(dtype_pt, dtype_tt, device, use_program_cache):
     compute_grid_size = device.compute_with_storage_grid_size()
-    if compute_grid_size.x * compute_grid_size.y < 64:
+    if compute_grid_size.x < 8 or compute_grid_size.y < 8:
         pytest.skip("Test is skipped because the device does not have full coregrid 8x8")
 
     torch.manual_seed(0)
@@ -2100,3 +2100,6 @@ def test_binary_sharded_decoder(dtype_pt, dtype_tt, device, use_program_cache):
                 # print(f"Pearson correlation coefficient: {pcc}")
                 print(f"device.num_program_cache_entries(): {device.num_program_cache_entries()}")
                 assert pcc >= 0.99988
+    assert (
+        device.num_program_cache_entries() == 5
+    ), f"device.num_program_cache_entries(): {device.num_program_cache_entries()}"
