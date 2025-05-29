@@ -41,17 +41,24 @@ jobs:
 
               const existing = comments.data.find(
                 c => c.user.login === 'github-actions[bot]' &&
-                     c.body.startsWith('**⛔️') || c.body.startsWith('**✅')
+                     (c.body.startsWith('**⛔️') || c.body.startsWith('**✅'))
               );
 
               if (existing) {
-                // avoid churn: only patch when body actually changes
+                // avoid churn: only update if body actually changes
                 if (existing.body !== body) {
-                  console.log(`✏️ Updating existing comment (ID: ${existing.id})`);
-                  await github.rest.issues.updateComment({
+                  console.log(`🗑️ Deleting old comment (ID: ${existing.id}) to move to bottom`);
+                  await github.rest.issues.deleteComment({
                     owner: context.repo.owner,
                     repo:  context.repo.repo,
-                    comment_id: existing.id,
+                    comment_id: existing.id
+                  });
+
+                  console.log(`📌 Creating new comment at bottom`);
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo:  context.repo.repo,
+                    issue_number: prNumber,
                     body
                   });
                 } else {
