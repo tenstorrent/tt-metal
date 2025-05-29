@@ -38,6 +38,8 @@ protected:
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
     std::unordered_map<chip_id_t, std::vector<const ll_api::memory*>> binaries_;
 
+    virtual uint8_t expected_num_binaries() const = 0;
+
     virtual std::vector<std::string> file_paths(IDevice& device) const = 0;
 };
 

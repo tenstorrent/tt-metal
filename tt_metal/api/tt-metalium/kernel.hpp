@@ -156,8 +156,6 @@ protected:
     std::map<std::string, std::string> defines_;        // preprocessor defines. this is to be able to generate generic instances.
     std::set<CoreCoord> logical_cores_;
 
-    virtual uint8_t expected_num_binaries() const = 0;
-
     virtual std::string config_hash() const = 0;
 
 private:
