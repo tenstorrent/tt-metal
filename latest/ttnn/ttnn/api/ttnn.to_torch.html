@@ -168,7 +168,7 @@ to tile layout during tensor.to_torch().</p>
 <li><p><strong>torch_rank</strong> (<em>int</em><em>, </em><em>optional</em>) – Desired rank of the <cite>torch.Tensor</cite>. Defaults to <cite>None</cite>.
 Will use <cite>torch.squeeze</cite> operation to remove dimensions until the desired rank is reached. If not possible, the operation will raise an error.</p></li>
 <li><p><strong>mesh_composer</strong> (<em>ttnn.MeshToTensor</em><em>, </em><em>optional</em>) – The desired <cite>ttnn</cite> mesh composer. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>device</strong> (<em>ttnn.Device</em><em>, </em><em>optional</em>) – The <cite>ttnn</cite> device of the input tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>device</strong> (<em>ttnn.MeshDevice</em><em>, </em><em>optional</em>) – The <cite>ttnn</cite> device of the input tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>cq_id</strong> (<em>int</em><em>, </em><em>optional</em>) – The command queue ID to use. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>

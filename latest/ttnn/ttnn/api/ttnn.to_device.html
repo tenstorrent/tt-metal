@@ -150,11 +150,11 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">to_device</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.to_device',</span> <span class="pre">function=&lt;function</span> <span class="pre">PyCapsule.to_device&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=False,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.to_device" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Copies the <cite>ttnn.Tensor</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> to the <cite>tt_lib.device.Device</cite>.</p>
+<p>Copies the <cite>ttnn.Tensor</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> to the <cite>tt_lib.device.MeshDevice</cite>.</p>
 <p>The tensor may be placed in DRAM or L1 memory.</p>
 <p>Currently memory_config must be of an Interleaved tensor (not sharded)</p>
 <p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code>: the ttnn.Tensor
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">device</span></code>: the ttnn.Device
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">device</span></code>: the ttnn.MeshDevice
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: the optional MemoryConfig (DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG). Defaults to DRAM_MEMORY_CONFIG.</p>
 <p>Example:</p>
 <div class="highlight-default notranslate">

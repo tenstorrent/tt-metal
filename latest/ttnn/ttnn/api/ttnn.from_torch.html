@@ -170,7 +170,7 @@ to tile layout during tensor creation (ttnn.Tensor).</p>
 <li><p><strong>tile</strong> (<em>ttnn.Tile</em><em>, </em><em>optional</em>) – the desired tiling configuration for the tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>pad_value</strong> (<em>float</em><em>, </em><em>optional</em>) – the desired padding value for tiling. Only used if <cite>layout</cite> is <cite>TILE_LAYOUT</cite>. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – the desired <cite>ttnn</cite> layout. Defaults to <cite>ttnn.ROW_MAJOR_LAYOUT</cite>.</p></li>
-<li><p><strong>device</strong> (<em>ttnn.Device</em><em>, </em><em>optional</em>) – the desired <cite>ttnn</cite> device. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>device</strong> (<em>ttnn.MeshDevice</em><em>, </em><em>optional</em>) – the desired <cite>ttnn</cite> device. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – The desired <cite>ttnn</cite> memory configuration. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>mesh_mapper</strong> (<em>ttnn.TensorToMesh</em><em>, </em><em>optional</em>) – The desired <cite>ttnn</cite> mesh mapper. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>cq_id</strong> (<em>int</em><em>, </em><em>optional</em>) – The command queue ID to use. Defaults to <cite>0</cite>.</p></li>
