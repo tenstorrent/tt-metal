@@ -52,6 +52,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 @pytest.mark.parametrize(
     "max_seq_len",
     (
+        8192,
         4096,
         128,
     ),
