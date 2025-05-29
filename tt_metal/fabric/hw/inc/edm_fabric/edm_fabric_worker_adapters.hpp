@@ -75,7 +75,7 @@ struct WorkerToFabricEdmSenderImpl {
         const auto edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
         const auto edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
         const uint16_t buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
-        const auto edm_buffer_index_addr = get_arg_val<uint32_t>(arg_idx++);
+        const auto edm_copy_of_wr_counter_addr = get_arg_val<uint32_t>(arg_idx++);
         const auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
         auto writer_send_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(writer_send_sem_id));
@@ -99,7 +99,7 @@ struct WorkerToFabricEdmSenderImpl {
             edm_connection_handshake_l1_addr,
             edm_worker_location_info_addr,  // The EDM's location for `EDMChannelWorkerLocationInfo`
             buffer_size_bytes,
-            edm_buffer_index_addr,
+            edm_copy_of_wr_counter_addr,
             writer_send_sem_addr,
             worker_teardown_sem_addr,
             worker_buffer_index_semaphore_addr,
@@ -147,13 +147,12 @@ struct WorkerToFabricEdmSenderImpl {
                 ? edm_connection_handshake_l1_id
                 : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_connection_handshake_l1_id);
         this->edm_worker_location_info_addr = edm_worker_location_info_addr;
-        this->edm_buffer_index_addr = connected_to_persistent_fabric
-                                          ? edm_buffer_index_id
-                                          : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_buffer_index_id);
+        this->edm_copy_of_wr_counter_addr = connected_to_persistent_fabric
+                                                ? edm_buffer_index_id
+                                                : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_buffer_index_id);
         this->from_remote_buffer_free_slots_ptr = from_remote_buffer_free_slots_ptr;
         this->worker_teardown_addr = worker_teardown_addr;
         this->edm_buffer_base_addr = edm_buffer_base_addr;
-        this->buffer_slot_index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_buffer_index_addr);
         this->buffer_size_bytes = buffer_size_bytes;
         this->num_buffers_per_channel = num_buffers_per_channel;
         this->edm_noc_x = edm_worker_x;
@@ -299,7 +298,7 @@ struct WorkerToFabricEdmSenderImpl {
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
-            const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
+            const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
             // piggy back off of worker_teardown_addr just to temporarily store the read-back write pointer
             // then once we get it we will use that address for the teardown ack
             // Note this is safe because only the worker can initiate teardown (and it will not do it until)
@@ -379,12 +378,6 @@ struct WorkerToFabricEdmSenderImpl {
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
 
-        const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
-        const uint64_t edm_write_ptr =
-            dest_noc_addr_coord_only | reinterpret_cast<size_t>(
-                                           edm_worker_location_info_addr +
-                                           offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_read_counter));
-
         noc_inline_dw_write<false, posted>(
             edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
         *this->worker_teardown_addr = 0;
@@ -411,10 +404,10 @@ struct WorkerToFabricEdmSenderImpl {
 
         // buffer index stored at location after handshake addr
         if (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
-            const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
+            const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
             noc_inline_dw_write(remote_buffer_index_addr, this->buffer_slot_write_counter.counter);
         } else {
-            const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
+            const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
             noc_inline_dw_write(remote_buffer_index_addr, this->get_buffer_slot_index());
         }
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
@@ -455,7 +448,9 @@ struct WorkerToFabricEdmSenderImpl {
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_update_ptr;
     size_t edm_connection_handshake_l1_addr;
     size_t edm_worker_location_info_addr;
-    size_t edm_buffer_index_addr;
+    // Note that for persistent (fabric to fabric connections), this only gets read once and actually points to the free
+    // slots addr
+    size_t edm_copy_of_wr_counter_addr;
 
     // Local copy of the the buffer slot rdptr on the EDM
     // EDM will update this to indicate that packets have been read (and hence
@@ -464,9 +459,6 @@ struct WorkerToFabricEdmSenderImpl {
     volatile tt_l1_ptr uint32_t* worker_teardown_addr;
     size_t edm_buffer_base_addr;
 
-    // TODO: keep a local copy that we use during the lifetime of the channel to avoid repeated L1 reads
-    // EDM ONLY
-    volatile tt_l1_ptr uint32_t* buffer_slot_index_ptr;
     BufferIndex buffer_slot_index{0};
 
     // WORKER ONLY

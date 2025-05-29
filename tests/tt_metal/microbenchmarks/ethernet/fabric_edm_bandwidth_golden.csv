@@ -16,8 +16,8 @@ mcast_SaturateChipToChipRing,noc_unicast_write,4096,4,1,False,False,False,7.8154
 mcast_SaturateChipToChipRing,noc_unicast_write,4096,4,2,False,False,False,7.6558356228542355,1869100.4938608974
 unicast_Linear_0x4_mesh,noc_unicast_write,16,2,1,False,False,True,0.04591123375723319,2869452.109827074
 unicast_Linear_0x4_mesh,noc_unicast_write,16,2,2,False,False,True,0.04588843955343149,2868027.472089468
-unicast_Linear_0x4_mesh,noc_unicast_write,2048,2,1,False,False,True,5.878976025331957,2870593.7623691196
-unicast_Linear_0x4_mesh,noc_unicast_write,2048,2,2,False,False,True,5.876290400590418,2869282.42216329
+unicast_Linear_0x4_mesh,noc_unicast_write,2048,2,1,False,False,True,5.838976025331957,2870593.7623691196
+unicast_Linear_0x4_mesh,noc_unicast_write,2048,2,2,False,False,True,5.830290400590418,2869282.42216329
 unicast_Linear_0x4_mesh,noc_unicast_write,4096,2,1,False,False,True,10.95221204675162,2700735.3629764696
 unicast_Linear_0x4_mesh,noc_unicast_write,4096,2,2,False,False,True,10.92575681104625,2704042.1901968387
 mcast_Linear_2x0_mesh,noc_unicast_write,16,4,1,False,False,True,0.041610092382272,2600630.773892
