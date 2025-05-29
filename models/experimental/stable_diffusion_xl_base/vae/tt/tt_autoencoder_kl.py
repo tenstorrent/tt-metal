@@ -9,24 +9,24 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare
 
 
 class TtAutoencoderKL(nn.Module):
-    def __init__(self, device, state_dict, gn_fallback=False):
+    def __init__(self, device, state_dict, model_config, gn_fallback=False):
         super().__init__()
 
         self.device = device
+        self.model_config = model_config
 
         self.stride = (1, 1)
         self.padding = (0, 0)
         self.dilation = (1, 1)
         self.groups = 1
 
-        self.decoder = TtDecoder(device, state_dict, gn_fallback=gn_fallback)
+        self.decoder = TtDecoder(device, state_dict, model_config, gn_fallback=gn_fallback)
 
         post_quant_conv_weights = state_dict[f"post_quant_conv.weight"]
         post_quant_conv_bias = state_dict[f"post_quant_conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         (
             self.compute_config,
-            self.conv_config,
             self.tt_post_quant_conv_weights,
             self.tt_post_quant_conv_bias,
             self.conv_params,
@@ -34,17 +34,17 @@ class TtAutoencoderKL(nn.Module):
             device,
             post_quant_conv_weights,
             post_quant_conv_bias,
-            ttnn.bfloat16,
-            act_block_h_override=0,
+            model_config.conv_w_dtype,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
-        self.conv_config.deallocate_activation = True
+        self.conv_config = model_config.get_conv_config(conv_path="decoder.post_quant_conv")
 
     def forward(self, hidden_states, input_shape):
         B, C, H, W = input_shape
 
-        [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        pre_conv_hidden_states = hidden_states
+        [hidden_states, [H, W], [self.tt_post_quant_conv_weights, self.tt_post_quant_conv_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_post_quant_conv_weights,
             in_channels=self.conv_params["input_channels"],
@@ -66,10 +66,7 @@ class TtAutoencoderKL(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv_params["output_channels"]
-
-        self.tt_post_quant_conv_weights = d_w
-        self.tt_post_quant_conv_bias = d_b
-        self.conv_config.always_preprocess_weights = False
+        ttnn.deallocate(pre_conv_hidden_states)
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         hidden_states = self.decoder(hidden_states, [B, C, H, W])

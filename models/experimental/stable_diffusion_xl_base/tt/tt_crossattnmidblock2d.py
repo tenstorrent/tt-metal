@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,11 +14,11 @@ class TtUNetMidBlock2DCrossAttn(nn.Module):
         device,
         state_dict,
         module_path,
+        model_config,
         query_dim,
         num_attn_heads,
         out_dim,
         transformer_weights_dtype=ttnn.bfloat16,
-        conv_weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -42,7 +42,7 @@ class TtUNetMidBlock2DCrossAttn(nn.Module):
 
         for i in range(num_layers_resn):
             self.resnets.append(
-                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", conv_weights_dtype=conv_weights_dtype)
+                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config)
             )
 
     def forward(self, input_tensor, input_shape, temb=None, encoder_hidden_states=None, attention_mask=None):
