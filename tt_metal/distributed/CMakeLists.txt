@@ -18,8 +18,6 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/multihost/distributed_context.cpp
 )
 
-add_library(distributed OBJECT ${DISTRIBUTED_SRC})
-
 # Check if distributed compute is enabled
 if(NOT DEFINED ENABLE_DISTRIBUTED)
     set(ENABLE_DISTRIBUTED OFF)
@@ -69,6 +67,8 @@ else()
     set(USE_MPI FALSE)
     list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/single_host_context.cpp)
 endif()
+
+add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
 target_link_libraries(
     distributed
