@@ -189,6 +189,8 @@ jobs:
       }}
     needs:
       - get-image-tags
+      - test-wh-6u-image
+      - test-bh-image
     permissions:
       packages: write
       contents: read
