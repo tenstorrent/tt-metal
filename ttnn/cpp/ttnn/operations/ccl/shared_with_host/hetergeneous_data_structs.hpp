@@ -316,8 +316,8 @@ struct ArchDependentTypes<true> {
 
 template <>
 struct ArchDependentTypes<false> {
-    using workers_list_t = ccl::WorkerXY *;
-    static const workers_list_t WORKERS_LIST_UNINITIALIZED_VALUE;
+    using const_workers_list_t = const ccl::WorkerXY *;
+    static const_workers_list_t WORKERS_LIST_UNINITIALIZED_VALUE;
 };
 
 
