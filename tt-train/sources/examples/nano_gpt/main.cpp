@@ -629,7 +629,7 @@ int main(int argc, char **argv) {
 
     struct CachedHostData {
         std::vector<uint32_t> data;
-        std::vector<int32_t> targets;
+        std::vector<uint32_t> targets;
         ttml::autograd::TensorPtr masks_tensor;
     };
     CachedHostData cached_data;
@@ -649,7 +649,7 @@ int main(int argc, char **argv) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
-            std::vector<int32_t> &targets = cached_data.targets;
+            std::vector<uint32_t> &targets = cached_data.targets;
 
             data.clear();
             targets.clear();
@@ -672,10 +672,10 @@ int main(int argc, char **argv) {
                         ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
                             data_xtensor, device, data_composer, ttnn::Layout::ROW_MAJOR));
 
-                    auto targets_xtensor = xt::adapt(targets, {batch_size * sequence_length});
-                    auto targets_composer = ttml::core::ShardXTensorToMesh<int32_t>(device->shape(), 0);
-                    auto targets_tt_tensor = ttml::core::from_xtensor<int32_t, ttnn::DataType::INT32>(
-                        targets_xtensor, device, targets_composer);
+                    auto targets_xtensor = xt::adapt(targets, {batch_size, sequence_length});
+                    auto targets_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
+                    auto targets_tt_tensor = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+                        targets_xtensor, device, targets_composer, ttnn::Layout::ROW_MAJOR);
                     auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
                     return {data_tensor, targets_tensor};
                 }
@@ -686,9 +686,10 @@ int main(int argc, char **argv) {
                         ttml::core::create_shape({batch_size, 1, 1, sequence_length}),
                         device,
                         ttnn::Layout::ROW_MAJOR));
+
                 auto targets_tensor =
-                    ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
-                        targets, ttnn::Shape({batch_size * sequence_length}), device));
+                    ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                        targets, ttnn::Shape({batch_size, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
                 return {data_tensor, targets_tensor};
             };
 
@@ -860,7 +861,7 @@ int main(int argc, char **argv) {
                 optimizer->zero_grad();
             }
             auto output = run_model(model, features, masks);
-            auto loss = ttml::ops::nll_loss(output, target);
+            auto loss = ttml::ops::cross_entropy_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
             float loss_float = get_loss_value(loss);
 

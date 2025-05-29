@@ -267,7 +267,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         out_cb_id,
         in_ntiles_c,
         1 * in_ntiles_c,
-        scale_factor_h * scale_factor_w,
+        4,  // Number of input rows required for tilize reduction is 4 as we are processing single output row at a time.
         (uint32_t)std::ceil((float)output_shape[3] / constants::TILE_WIDTH),
         output_nsticks_per_core,  // loop count with blocks
         num_input_width_blocks,
