@@ -5,7 +5,6 @@
 import ttnn
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_config, get_DRAM_GN_config
@@ -18,7 +17,7 @@ from loguru import logger
 
 
 class TtDecoder(nn.Module):
-    def __init__(self, device, state_dict, gn_fallback=False):
+    def __init__(self, device, state_dict, model_config, gn_fallback=False):
         super().__init__()
 
         self.device = device
@@ -33,7 +32,9 @@ class TtDecoder(nn.Module):
 
         num_up_blocks = 4
 
-        self.mid_block = TtUNetMidBlock2D(device, state_dict, "decoder.mid_block", gn_fallback=gn_fallback)
+        self.mid_block = TtUNetMidBlock2D(
+            device, state_dict, "decoder.mid_block", model_config, gn_fallback=gn_fallback
+        )
         self.up_blocks = []
         for block_id in range(num_up_blocks):
             self.up_blocks.append(
@@ -41,6 +42,7 @@ class TtDecoder(nn.Module):
                     device,
                     state_dict,
                     f"decoder.up_blocks.{block_id}",
+                    model_config,
                     has_upsample=block_id < 3,
                     conv_shortcut=block_id > 1,
                     gn_fallback=gn_fallback,
@@ -53,8 +55,8 @@ class TtDecoder(nn.Module):
         conv_in_weights = state_dict[f"decoder.conv_in.weight"]
         conv_in_bias = state_dict[f"decoder.conv_in.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        self.conv_out_weights = state_dict[f"decoder.conv_out.weight"]
-        self.conv_out_bias = state_dict[f"decoder.conv_out.bias"]
+        conv_out_weights = state_dict[f"decoder.conv_out.weight"]
+        conv_out_bias = state_dict[f"decoder.conv_out.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         core_x, core_y, self.norm_blocks = get_DRAM_GN_config(None, 1)
         self.norm_core_grid = ttnn.CoreGrid(y=core_y, x=core_x)
@@ -67,8 +69,7 @@ class TtDecoder(nn.Module):
         )
 
         (
-            self.compute_config,
-            self.conv_config,
+            self.compute_in_config,
             self.tt_conv_in_weights,
             self.tt_conv_in_bias,
             self.conv_in_params,
@@ -76,12 +77,28 @@ class TtDecoder(nn.Module):
             device,
             conv_in_weights,
             conv_in_bias,
-            ttnn.bfloat16,
-            act_block_h_override=32,
+            model_config.conv_w_dtype,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv_in_slice_config = get_DRAM_conv_config(None, 1)
+        self.conv_in_config = model_config.get_conv_config(conv_path="decoder.conv_in")
+
+        (
+            self.compute_out_config,
+            self.tt_conv_out_weights,
+            self.tt_conv_out_bias,
+            self.conv_out_params,
+        ) = prepare_conv_params(
+            device,
+            conv_out_weights,
+            conv_out_bias,
+            model_config.conv_w_dtype,
+            fp32_dest_acc_en=True,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+        )
+        self.conv_out_slice_config = get_DRAM_conv_config(None, 2)
+        self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
 
     def forward(self, sample, input_shape):
         B, C, H, W = input_shape
@@ -90,7 +107,7 @@ class TtDecoder(nn.Module):
         if self.conv_in_slice_config is not None:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
-        [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [hidden_states, [H, W], [self.tt_conv_in_weights, self.tt_conv_in_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv_in_weights,
             in_channels=self.conv_in_params["input_channels"],
@@ -104,8 +121,8 @@ class TtDecoder(nn.Module):
             batch_size=B,
             input_height=H,
             input_width=W,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
+            conv_config=self.conv_in_config,
+            compute_config=self.compute_in_config,
             groups=self.groups,
             memory_config=None,
             slice_config=self.conv_in_slice_config,
@@ -113,9 +130,6 @@ class TtDecoder(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv_in_params["output_channels"]
-
-        self.tt_conv_in_weights = d_w
-        self.tt_conv_in_bias = d_b
 
         if self.conv_in_slice_config is not None:
             hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
@@ -147,10 +161,36 @@ class TtDecoder(nn.Module):
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)
 
-        # HOST FALLBACK: Conv2d
+        if self.conv_out_slice_config is not None:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+            hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
+        [hidden_states, [H, W], [self.tt_conv_out_weights, self.tt_conv_out_bias]] = ttnn.conv2d(
+            input_tensor=hidden_states,
+            weight_tensor=self.tt_conv_out_weights,
+            in_channels=self.conv_out_params["input_channels"],
+            out_channels=self.conv_out_params["output_channels"],
+            device=self.device,
+            bias_tensor=self.tt_conv_out_bias,
+            kernel_size=self.conv_out_params["kernel_size"],
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            batch_size=B,
+            input_height=H,
+            input_width=W,
+            conv_config=self.conv_out_config,
+            compute_config=self.compute_out_config,
+            groups=self.groups,
+            memory_config=None,
+            slice_config=self.conv_out_slice_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+        )
+        C = self.conv_out_params["output_channels"]
+
+        # Convert to torch
         hidden_states = ttnn.to_torch(hidden_states).float()
         hidden_states = hidden_states.reshape(B, H, W, C)
         hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
 
-        hidden_states = F.conv2d(hidden_states, self.conv_out_weights, bias=self.conv_out_bias, stride=1, padding=1)
         return hidden_states
