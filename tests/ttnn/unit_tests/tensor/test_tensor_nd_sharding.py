@@ -81,7 +81,7 @@ def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_t
     core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
     grid = ttnn.CoreRangeSet([core_range])
 
-    nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, ttnn.ShardOrientation.ROW_MAJOR)
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid)
     memory_config = ttnn.MemoryConfig(buffer_type, nd_shard_spec)
     assert memory_config.is_sharded()
     assert memory_config.nd_shard_spec == nd_shard_spec
