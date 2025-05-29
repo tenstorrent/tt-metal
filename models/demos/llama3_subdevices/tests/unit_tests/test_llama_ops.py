@@ -33,7 +33,6 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import (
     run_embeddings_tests,
 )
 
-
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -471,7 +470,7 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
         mesh_device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
     )
 
-
+    
 @pytest.mark.parametrize(
     "batch_size",
     (1,),
