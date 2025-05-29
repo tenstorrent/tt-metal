@@ -599,7 +599,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
         if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             // For Galaxy, we always init all remote devices associated with an mmio device.
             const std::vector<DispatchKernelNode>* nodes_for_one_mmio =
-                (num_hw_cqs == 1) ? &galaxy_nine_chip_arch_1cq : &galaxy_nine_chip_arch_2cq;
+                (num_hw_cqs == 1) ? &galaxy_nine_chip_arch_1cq_fabric : &galaxy_nine_chip_arch_2cq_fabric;
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
                 // Need a mapping from templated device id (1-8) to actual device id (from the tunnel)
@@ -611,6 +611,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                     TT_ASSERT(tunnel.size() == 5, "Galaxy expected 4-deep tunnels.");
                     for (auto remote_device_id : tunnel) {
                         if (remote_device_id != mmio_device_id) {
+                            log_info(tt::LogMetal, "Tunnel on MMIO {} -> {}", mmio_device_id, remote_device_id);
                             template_id_to_device_id.push_back(remote_device_id);
                         }
                     }

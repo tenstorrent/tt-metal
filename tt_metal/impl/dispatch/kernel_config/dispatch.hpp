@@ -71,6 +71,8 @@ struct dispatch_dependent_config_t {
     std::optional<uint32_t> prefetch_h_noc_xy;                     // Dependent. Used if split_prefetch is true
     std::optional<uint32_t> prefetch_h_local_downstream_sem_addr;  // Dependent. Used if split_prefetch is true
 
+    std::optional<uint32_t> num_hops;
+
     tt::tt_metal::fabric_mux_client_config fabric_mux_client_config;
 };
 

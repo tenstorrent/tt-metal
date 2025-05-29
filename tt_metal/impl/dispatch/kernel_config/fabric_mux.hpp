@@ -98,4 +98,11 @@ void assemble_fabric_mux_client_config_args(
     const FabricMux* fabric_mux,
     fabric_mux_client_config& config);
 
+// Helper function to calculate number of hops from a mmio device to downstream device
+// The two devices must be along the same tunnel.
+int get_num_hops(
+    chip_id_t mmio_dev_id,
+    chip_id_t downstream_dev_id
+);
+
 }  // namespace tt::tt_metal

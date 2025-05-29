@@ -68,7 +68,7 @@ void FabricMux::GenerateStaticConfigs() {
         programmable_core_type_index);
     mux_ct_args = mux_kernel_config_->get_fabric_mux_compile_time_args();
 
-    log_info(
+    log_debug(
         tt::LogDevice,
         "Create FabricMux on Device {} with {} Header Only Channels and {} Full Size Channels. {} x {} B Buffers Each "
         "Full Channel. {} status {:#x} termination {:#x}",
@@ -143,4 +143,27 @@ void assemble_fabric_mux_client_config_args(
     config.termination_signal_address = fabric_mux->GetMuxKernelConfig()->get_termination_signal_address();
 }
 
+int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id) {
+    const auto dev_mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(mmio_dev_id);
+    
+    if (dev_mmio_device_id != mmio_dev_id) {
+        TT_THROW("Specified MMIO device ID {} is not an MMIO device. MMIO device is {}", mmio_dev_id, dev_mmio_device_id);
+    }
+
+    auto tunnels_from_mmio =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_dev_id);
+
+    constexpr size_t k_MaxTunnelSize = 5; // 4 remote + 1 mmio
+    for (const auto& tunnel : tunnels_from_mmio) {
+        TT_ASSERT(tunnel.size() <= k_MaxTunnelSize, "Unexpected tunnel size {}. Max tunnel size expected {}", tunnel.size(), k_MaxTunnelSize);
+        for (int hop = 0; hop < tunnel.size(); ++hop) {
+            if (tunnel[hop] == downstream_dev_id) {
+                return hop;
+            }
+        }
+    }
+    TT_THROW("Downstream device {} is not found in tunnel from MMIO device {}", downstream_dev_id, mmio_dev_id);
+    return -1;
+}
 }  // namespace tt::tt_metal

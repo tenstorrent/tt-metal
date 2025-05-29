@@ -79,8 +79,10 @@ constexpr uint32_t virtualize_unicast_cores = get_compile_time_arg_val(47);
 constexpr uint32_t num_virtual_unicast_cores = get_compile_time_arg_val(48);
 constexpr uint32_t num_physical_unicast_cores = get_compile_time_arg_val(49);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(50);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(51);
+constexpr uint32_t num_hops = get_compile_time_arg_val(50);
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(51);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(52);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -246,7 +248,8 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
                         dispatch_cb_pages_per_block,
                         dispatch_cb_blocks,
                         fabric_mux_num_buffers_per_channel,
-                        fabric_header_rb_base>(edm_sender, block_noc_writes_to_clear, rd_block_idx);
+                        fabric_header_rb_base,
+                        num_hops>(edm_sender, block_noc_writes_to_clear, rd_block_idx);
                 }
             }
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
@@ -333,7 +336,8 @@ void relay_to_next_cb(
                         cq_fabric_write_any_len<
                             fabric_mux_channel_buffer_size_bytes,
                             fabric_mux_num_buffers_per_channel,
-                            fabric_header_rb_base>(
+                            fabric_header_rb_base,
+                            num_hops>(
                             edm_sender,
                             data_ptr,
                             get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr),
@@ -372,7 +376,8 @@ void relay_to_next_cb(
             downstream_cb_sem_id,
             fabric_mux_channel_buffer_size_bytes,
             fabric_mux_num_buffers_per_channel,
-            fabric_header_rb_base>(
+            fabric_header_rb_base,
+            num_hops>(
             edm_sender, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), xfer_size, 1);
 
         length -= xfer_size;
@@ -465,7 +470,8 @@ void process_write_linear(
                         dispatch_cb_pages_per_block,
                         dispatch_cb_blocks,
                         fabric_mux_num_buffers_per_channel,
-                        fabric_header_rb_base>(edm_sender, block_noc_writes_to_clear, rd_block_idx);
+                        fabric_header_rb_base,
+                        num_hops>(edm_sender, block_noc_writes_to_clear, rd_block_idx);
                 }
             }
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
@@ -1342,7 +1348,8 @@ void kernel_main() {
                     upstream_dispatch_cb_sem_id,
                     dispatch_cb_pages_per_block,
                     fabric_mux_num_buffers_per_channel,
-                    fabric_header_rb_base>(
+                    fabric_header_rb_base,
+                    num_hops>(
                     edm_sender,
                     cmd_ptr,
                     cb_fence,
@@ -1391,7 +1398,8 @@ void kernel_main() {
             upstream_dispatch_cb_sem_id,
             dispatch_cb_pages_per_block,
             fabric_mux_num_buffers_per_channel,
-            fabric_header_rb_base>(edm_sender, block_noc_writes_to_clear);
+            fabric_header_rb_base,
+            num_hops>(edm_sender, block_noc_writes_to_clear);
     } else {
         cb_block_release_pages<
             upstream_noc_index,
@@ -1408,7 +1416,8 @@ void kernel_main() {
             upstream_noc_xy,
             upstream_dispatch_cb_sem_id,
             fabric_mux_num_buffers_per_channel,
-            fabric_header_rb_base>(edm_sender, npages);
+            fabric_header_rb_base,
+            num_hops>(edm_sender, npages);
     } else {
         cb_release_pages<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>(npages);
     }
