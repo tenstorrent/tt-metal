@@ -105,7 +105,11 @@ inline int multihost_main(int argc, char** argv) {
 
     // Skip all tests if lacking fault tolerance.
     if (!ctx->supports_fault_tolerance()) {
-        fmt::println("ULFM support is not available in this build, skipping fault tolerance tests.");
+        fmt::println(
+            "ULFM support is not available in this build, skipping fault tolerance tests."
+            "ULFM support is consistently available in builds of OpenMPI from version 5.0"
+            "If your distribution does not have OpenMPI 5.0 packaged, you may be able to obtain a known-good build"
+            "by running install_dependencies.sh *without* --no-distributed.");
         return 0;
     }
 
