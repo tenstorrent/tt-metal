@@ -471,13 +471,6 @@ void MPIContext::translate_ranks_to_other_ctx(
 
 void MPIContext::abort(int error_code) const { MPI_Abort(comm_, error_code); }
 
-/* -------------------- factory for generic interface --------------------- */
-void DistributedContext::create(int argc, char** argv) { MPIContext::create(argc, argv); }
-
-const ContextPtr& DistributedContext::get_current_world() { return MPIContext::get_current_world(); }
-
-void DistributedContext::set_current_world(const ContextPtr& ctx) { MPIContext::set_current_world(ctx); }
-
 void MPIContext::revoke_and_shrink() {
 #if (!OMPI_HAS_ULFM)
     TT_THROW("revoke_and_shrink() requires MPI ULFM support which is not available in this build");

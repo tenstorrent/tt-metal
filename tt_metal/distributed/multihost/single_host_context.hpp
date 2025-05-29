@@ -19,6 +19,7 @@ public:
     // factory
     static void create(int argc, char** argv);
     static const ContextPtr& get_current_world();
+    static void set_current_world(const ContextPtr&);
 
     // destructor – no-op
     ~SingleHostContext() override = default;
@@ -27,8 +28,7 @@ public:
     [[nodiscard]] Rank rank() const override;
     [[nodiscard]] Size size() const override;
     [[nodiscard]] bool supports_fault_tolerance() const override;
-    [[nodiscard]] virtual bool is_revoked() override;
-    [[nodiscard]] virtual bool is_revoked() override;
+    [[nodiscard]] bool is_revoked() override;
 
     void abort(int error_code) const override;
 

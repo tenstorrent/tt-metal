@@ -15,8 +15,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/multihost/single_host_context.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/multihost/distributed_context.cpp
 )
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
@@ -58,6 +57,7 @@ elseif(ENABLE_DISTRIBUTED)
         message(STATUS "ULFM MPI not found, using system MPI")
         add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
         set(USE_MPI TRUE)
+        list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
     else()
         message(
             FATAL_ERROR
@@ -67,6 +67,7 @@ elseif(ENABLE_DISTRIBUTED)
 else()
     message(STATUS "Multihost compute with MPI disabled")
     set(USE_MPI FALSE)
+    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/single_host_context.cpp)
 endif()
 
 target_link_libraries(
