@@ -24,6 +24,13 @@ target_sources(
 
 target_include_directories(ttmetalium_hostdevcommon INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>")
 
+target_link_libraries(
+    ttmetalium_hostdevcommon
+    INTERFACE
+        fmt::fmt-header-only
+        umd::device
+)
+
 install(
     TARGETS
         ttmetalium_hostdevcommon

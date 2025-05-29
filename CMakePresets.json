@@ -73,12 +73,14 @@
         "name": "clang-tidy",
         "configurePreset": "clang-tidy",
         "configuration": "RelWithDebInfo",
+        "targets": ["all", "all_verify_interface_header_sets"],
         "nativeToolOptions": ["-k0"]
       },
       {
         "name": "clang-tidy-fix",
         "configurePreset": "clang-tidy-fix",
         "configuration": "RelWithDebInfo",
+        "targets": ["all", "all_verify_interface_header_sets"],
         "nativeToolOptions": ["-k0"]
       }
     ]
