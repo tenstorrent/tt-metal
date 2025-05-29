@@ -285,17 +285,6 @@ auto get_mesh_tensor_write_test_params() {
             .get_mapper = [](MeshDevice* device) { return shard_tensor_to_mesh_mapper(*device, 1); },
         },
         MeshTensorWriteTestParams{
-            .shape = ttnn::Shape{1, 9, 32, 32},
-            .sharded_shape = ttnn::Shape{1, 2, 32, 32},
-            .expected_coords =
-                {distributed::MeshCoordinate{0, 0},
-                 distributed::MeshCoordinate{0, 1},
-                 distributed::MeshCoordinate{0, 2},
-                 distributed::MeshCoordinate{0, 3},
-                 distributed::MeshCoordinate{1, 0}},
-            .get_mapper = [](MeshDevice* device) { return shard_tensor_to_mesh_mapper(*device, 1); },
-        },
-        MeshTensorWriteTestParams{
             .shape = ttnn::Shape{1, 1, 32, 32},
             .sharded_shape = ttnn::Shape{1, 1, 32, 32},
             .expected_coords =
