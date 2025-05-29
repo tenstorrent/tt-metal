@@ -44,8 +44,8 @@ Initializing Metalium is almost the same as before. To recap, we need to
 
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t n_tiles = 64;
-    constexpr uint32_t elemnts_per_tile = TILE_WIDTH * TILE_HEIGHT;
-    constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elemnts_per_tile;
+    constexpr uint32_t elements_per_tile = TILE_WIDTH * TILE_HEIGHT;
+    constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
 This time, instead of 2 DRAM buffers to copy data out and back, we will create 3 buffers. 2 as data sources and 1 as the output. Page size is set to one tile. This is the most common setting for buffers in Metalium as the compute engines expect to operate on tiles of data.
 
@@ -61,15 +61,15 @@ This time, instead of 2 DRAM buffers to copy data out and back, we will create 3
     auto src1_dram_buffer = CreateBuffer(config);
     auto dst_dram_buffer = CreateBuffer(config);
 
-Data preperation and upload is the same as before. For this example, buffer 0 will be filled with random values, and buffer 1 will be filled with a constant of -1 just for demonstration purposes. The data is then uploaded to the device asynchronously like before.
+Data preparation and upload is the same as before. For this example, buffer 0 will be filled with random values, and buffer 1 will be filled with a constant of -1 just for demonstration purposes. The data is then uploaded to the device asynchronously like before.
 
 .. code-block:: cpp
 
     constexpr float val_to_add = -1.0f;
     std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<float> distribution(0.0f, 1.0f);
-    std::vector<bfloat16> src0_data(elemnts_per_tile * n_tiles);
-    std::vector<bfloat16> src1_data(elemnts_per_tile * n_tiles, bfloat16(val_to_add));
+    std::vector<bfloat16> src0_data(elements_per_tile * n_tiles);
+    std::vector<bfloat16> src1_data(elements_per_tile * n_tiles, bfloat16(val_to_add));
     for(auto& val : a_data) {
         val = bfloat16(distribution(rng));
     }
@@ -80,7 +80,7 @@ Data preperation and upload is the same as before. For this example, buffer 0 wi
 Circular buffers
 ----------------
 
-Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 16 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilzie the appropriate ciricular buffer index in the kernel.
+Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 16 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilize the appropriate circular buffer index in the kernel.
 
 
 
@@ -105,10 +105,10 @@ Here we introduce a new concept: circular buffers. They are communication channe
         /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
         .set_page_size(dst_cb_index, tile_size_bytes));
 
-The API to create a circular buffer is more complicated then for a buffer, providing finer grained control for advanced use cases. At the core, there are a few critical parameters:
+The API to create a circular buffer is more complicated than for a buffer, providing finer grained control for advanced use cases. At the core, there are a few critical parameters:
 
 * The index of the circular buffer
-* The total size of the circular buffer in bytes (an thus the number of pages within)
+* The total size of the circular buffer in bytes (and thus the number of pages within)
 * The data format of the circular buffer (bfloat16, block float4, etc..)
 * How large each pages is
   * For most cases, this should be the same as the size of a tile of the underlying data format
@@ -143,9 +143,9 @@ In the previous example (DRAM loopback), we used a single kernel to perform the 
 
 Notice the ``ComputeConfig`` object. This indicates to the framework that a compute kernel should be created. There's a plethora of settings that can be set here. The most important one is the ``math_fidelity`` setting. This controls how accurate certain floating point operations are on the FPU specifically. Other operations (like the ones in the vector engine) are _not_ affected by this setting.
 
-Now let's look at the kernels. First the reader kernel. This kernel reads both input buffers from DRAM and pushes them into the circular buffers (will discuss in the following section) for the compute kernel to consume. For now, consider the circular buffers as a pipe. Data can be pushed into the pipe and read out of it. And both ends mush ensure there is space to do so.
+Now let's look at the kernels. First the reader kernel. This kernel reads both input buffers from DRAM and pushes them into the circular buffers (will discuss in the following section) for the compute kernel to consume. For now, consider the circular buffers as a pipe. Data can be pushed into the pipe and read out of it. And both ends must ensure there is space to do so.
 
-To do so, the reader creates 2 interleaved address generators. Unlike on most processors, the Tensix doesn't just see raw bytes. The address generator contains metadata about the data is is associated to enable the data be read out of the DRAM in the correct format. Then in a loop, the program waits for space to be available in the circular buffers. Once there is, it reads a tile from DRAM and pushes it into the circular buffer. The ``noc_async_read_barrier()`` call ensures waits for the read to finish before committing the data to the circular buffer. This is important as the read is asynchronous and data is not guaranteed to be there when the program continues.
+To do so, the reader creates 2 interleaved address generators. Unlike on most processors, the Tensix doesn't just see raw bytes. The address generator contains metadata about the data it is associated to enable the data be read out of the DRAM in the correct format. Then in a loop, the program waits for space to be available in the circular buffers. Once there is, it reads a tile from DRAM and pushes it into the circular buffer. The ``noc_async_read_barrier()`` call ensures waits for the read to finish before committing the data to the circular buffer. This is important as the read is asynchronous and data is not guaranteed to be there when the program continues.
 
 .. code-block:: cpp
 
@@ -186,7 +186,7 @@ To do so, the reader creates 2 interleaved address generators. Unlike on most pr
         }
     }
 
-The compute kernel is a bit more complicated. It is responsible for performing the actual computation. After the initialization calls to configure the matrix engine to perform addition on the input tiles, it enters a loop then waits for the destination registers to be available. Please refer to the Programming Model section for more information on this. In short, the destination registers are a set of 16 registers that are used send data in and out of the computation engines. 8 of them can be usedat a time. Once the destination registers are available, it waits for the reader kernel to make data available in the circular buffers. Once there is data, it adds the first tile from each buffer together and writes the result to destination register 0. Wait for space on the output circular buffer, and pushes the computed tile into it. Finally, it marks the input as consumed, output as produced and computation done.
+The compute kernel is a bit more complicated. It is responsible for performing the actual computation. After the initialization calls to configure the matrix engine to perform addition on the input tiles, it enters a loop then waits for the destination registers to be available. Please refer to the Programming Model section for more information on this. In short, the destination registers are a set of 16 registers that are used send data in and out of the computation engines. 8 of them can be used at a time. Once the destination registers are available, it waits for the reader kernel to make data available in the circular buffers. Once there is data, it adds the first tile from each buffer together and writes the result to destination register 0. Wait for space on the output circular buffer, and pushes the computed tile into it. Finally, it marks the input as consumed, output as produced and computation done.
 
 .. code-block:: cpp
 
@@ -222,7 +222,7 @@ The compute kernel is a bit more complicated. It is responsible for performing t
     }
     }
 
-The writer kernel is looks similar to the reader kernel. Instead of reading, it writes data back into DRAM and uses the appropriate API to do so.
+The writer kernel looks similar to the reader kernel. Instead of reading, it writes data back into DRAM and uses the appropriate API to do so.
 
 
 .. code-block:: cpp
@@ -251,7 +251,7 @@ The writer kernel is looks similar to the reader kernel. Instead of reading, it 
         }
 
 
-Then the host program sets the kernel arguments and launches the program. There is no different in setting the arguments for the compute kernel.
+Then the host program sets the kernel arguments and launches the program. There is no difference in setting the arguments for the compute kernel.
 
 .. note::
     Unlike OpenCL/CUDA. Each kernel (reader, compute and writer) can have it's own set of arguments. Furthermore, on a multi cored program (i.e. using more then 1 Tensix core), kernels within each core can have different arguments. This enables Metalium to exploit the grid like nature of the Tenstorrent processors to achieve high performance.

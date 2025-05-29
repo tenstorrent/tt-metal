@@ -30,7 +30,7 @@ void MAIN {
         cb_wait_front(tt::CBIndex::c_0, 1);
         copy_tile(tt::CBIndex::c_0, /*offset*/ 0, /*register_offset*/ 0);
         exp_tile(0);  // Compute the exponential of the tile using the SFPU. This
-                      // operatin is in-place. It takes data from tile 0 in the
+                      // operation is in-place. It takes data from tile 0 in the
                       // registers and writes the result back to tile 0 in the
                       // registers.
         // Wait for result to be done and data stored back to the circular buffer

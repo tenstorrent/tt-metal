@@ -24,7 +24,7 @@ void kernel_main() {
         // Make sure there is a tile in the circular buffer
         cb_wait_front(cb_out0, 1);
         uint32_t cb_out0_addr = get_read_ptr(cb_out0);
-        // write the tile to DRAM
+        // Write the tile to DRAM
         noc_async_write_tile(i, out0, cb_out0_addr);
         noc_async_write_barrier();  // This will wait until the write is done. As an alternative,
                                     // noc_async_write_flushed() can be faster because it waits

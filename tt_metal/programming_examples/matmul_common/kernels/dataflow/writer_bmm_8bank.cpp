@@ -20,7 +20,7 @@ void kernel_main() {
         .page_size = get_tile_size(cb_id_out0),
         .data_format = get_dataformat(cb_id_out0)};
 
-    // Loop throught the matrix dimensions Mt and Nt. bmm will generate C's tiles C=A*B, MN=MK*KN,
+    // Loop through the matrix dimensions Mt and Nt. bmm will generate C's tiles C=A*B, MN=MK*KN,
     // in row major order, we just read them from CB and write out to DRAM
     for (uint32_t m = 0; m < Mt; ++m) {
         for (uint32_t n = 0; n < Nt; ++n) {

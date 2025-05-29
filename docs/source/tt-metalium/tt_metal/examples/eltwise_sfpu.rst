@@ -43,7 +43,7 @@ First, allocate the buffers using the interleaved config with page size set to t
     // Fill a host buffer with random data and upload to the device.
     std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<float> dist(0.f, 1.0f);
-    std::vector<bfloat16> src0_vec(n_tiles * elemnts_per_tile);
+    std::vector<bfloat16> src0_vec(n_tiles * elements_per_tile);
     for (bfloat16& v : src0_vec) {
         v = bfloat16(dist(rng));
     }
@@ -97,7 +97,7 @@ Next, create the kernels. Nothing different from the previous examples besides b
 The kernels
 -----------
 
-The reder kernel takes in the address of the source buffer and the number of tiles to read. Then read each tile from the source buffer and write it to the circular buffer. The structure should be familiar by now, as it is similar to the previous example but with one less buffer to read from.
+The reader kernel takes in the address of the source buffer and the number of tiles to read. Then read each tile from the source buffer and write it to the circular buffer. The structure should be familiar by now, as it is similar to the previous example but with one less buffer to read from.
 
 .. code-block:: cpp
 
@@ -254,5 +254,5 @@ Finally we can run the program. The program is enqueued to the command queue and
 Conclusion
 ----------
 
-This is the step to execute computation on the SFPU. Next we will intoduce more complex data movement and running matrix multiplication using the matrix engine. See
+This is the step to execute computation on the SFPU. Next we will introduce more complex data movement and running matrix multiplication using the matrix engine. See
 :ref:`MatMul Single Core example<MatMul_Single_Core example>`.

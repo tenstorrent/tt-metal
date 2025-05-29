@@ -27,7 +27,7 @@ void kernel_main() {
 
     std::uint64_t dram_buffer_dst_noc_addr =
         get_noc_addr_from_bank_id</*dram=*/true>(dram_buffer_dst_bank, dram_buffer_dst_addr);
-    // write data from L1 back into DRAM and wait
+    // Write data from L1 back into DRAM and wait
     noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, dram_buffer_size);
     noc_async_write_barrier();
 }

@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
         // uploading/downloading data to/from the device, and executing programs.
         CommandQueue& cq = device->command_queue();
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
-        // same kernel at a give time. Metalium allows you to run different kernels on different cores
+        // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
         Program program = CreateProgram();
 
@@ -46,8 +46,8 @@ int main(int argc, char** argv) {
         // * Each tile is 32x32 elements
         // * Each element is a bfloat16 (2 bytes)
         constexpr uint32_t n_tiles = 64;
-        constexpr uint32_t elemnts_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-        constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elemnts_per_tile;
+        constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+        constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
         // Create 3 buffers on DRAM. These will hold the input and output data. src0 and src1 are the input buffers, dst is the
         // output buffer.
@@ -65,14 +65,14 @@ int main(int argc, char** argv) {
         // Initialize the input buffers with random data. For this example, src0 is a random vector of bfloat16 values
         std::mt19937 rng(std::random_device{}());
         std::uniform_real_distribution<float> distribution(0.0f, 1.0f);
-        std::vector<bfloat16> a_data(elemnts_per_tile * n_tiles);
+        std::vector<bfloat16> a_data(elements_per_tile * n_tiles);
         for(auto& val : a_data) {
             val = bfloat16(distribution(rng));
         }
 
         // ... and src1 is a vector of bfloat16 values initialized to -1.0f.
         constexpr float val_to_add = -1.0f;
-        std::vector<bfloat16> b_data(elemnts_per_tile * n_tiles, bfloat16(val_to_add));
+        std::vector<bfloat16> b_data(elements_per_tile * n_tiles, bfloat16(val_to_add));
 
         // Upload the data from host to the device.
         EnqueueWriteBuffer(cq, src0_dram_buffer, a_data, false);
@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
         // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
         // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
         // kernel. Each circular buffer is made up of 2 tiles. Thus when one tile is pushed and being used by the receiving end, the
-        // sending end can get the next piece of data ready to be pushed. Overlaping the operations. Leading to better performance.
+        // sending end can get the next piece of data ready to be pushed. Overlapping the operations. Leading to better performance.
         // However there is a trade off, The more tiles in a circular buffer, the more memory is used. And Circular buffers are
         // backed by L1(SRAM) memory and L1 is a precious resource.
         // The hardware supports up to 16 circular buffers and they all act the same.
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
         tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
         CBHandle cb_src0 = CreateCircularBuffer(program, core, CircularBufferConfig(
             /*total_size=*/tiles_per_cb * tile_size_bytes,                    // The total size of the circular buffer in bytes
-            /*data_format_spec=*/{{src0_cb_index, tt::DataFormat::Float16_b}})// The circular buffer index and data format it'll hole
+            /*data_format_spec=*/{{src0_cb_index, tt::DataFormat::Float16_b}})// The circular buffer index and data format it'll hold
             .set_page_size(src0_cb_index, tile_size_bytes));                  // Since we will be sending one tile at a time, we set
                                                                               // the page size to the tile size (and thus
                                                                               // total_size / page_size = tiles_per is the number of
@@ -105,12 +105,12 @@ int main(int argc, char** argv) {
             /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(dst_cb_index, tile_size_bytes));
 
-        // Create the reader, writer and compute kernels. The kernels does the following:
+        // Create the reader, writer and compute kernels. The kernels do the following:
         // * Reader: Reads data from the DRAM buffer and pushes it into the circular buffer.
         // * Compute: Waits for data to be available in the circular buffer, pops it, adds the two inputs together and pushes the result
         //   into the output circular buffer.
         // * Writer: Waits for data to be available in the output circular buffer, pops it and writes it back into DRAM.
-        // These kernels works together to form a pipeline. The reader reads data from the DRAM buffer and makes them available in the
+        // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them available in the
         // compute kernel. The compute kernel does math and pushes the result into the writer kernel. The writer kernel writes the result
         // back to DRAM.
         auto reader = CreateKernel(

@@ -3,10 +3,10 @@
 DRAM Loopback
 =============
 
-The is the simplest example of using the TT-Metal API. A data movement core in the Tensix copies data DRAM into it's L1(SRAM) buffer and back out to DRAM. Hence "loopback".
+This is the simplest example of using the TT-Metal API. A data movement core in the Tensix copies data from DRAM into its L1(SRAM) buffer and back out to DRAM. Hence "loopback".
 
 
-We'll go through this code section by section. The fully source code for this example is available under the ``tt_metal/programming_examples/loopback`` directory.
+We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/loopback`` directory.
 
 Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``loopback`` executable in the ``build/programming_examples`` directory. For example:
 
@@ -17,7 +17,7 @@ Building the example can be done by adding a ``--build-programming-examples`` fl
     # To run the example
     ./build/programming_examples/loopback
 
-Device initalization
+Device initialization
 --------------------
 
 .. code-block:: cpp
@@ -42,7 +42,7 @@ Next, we create a ``Program`` object that we will fill in later. A program is a 
 Create buffers in DRAM and L1 (SRAM)
 ------------------------------------
 
-Next, we need to declare buffers that will hold the actual data and a intermediate buffer on chip,
+Next, we need to declare buffers that will hold the actual data and an intermediate buffer on chip,
 
 There's in total 3 buffers to be created:
 * An L1 (SRAM) buffer within the core itself that will act as temporary storage
@@ -53,7 +53,7 @@ Note that almost all operations on the Tensix are aligned with tiles. And a tile
 
 There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tenstorrent processors has a different amount of L1 memory per Tensix. Grayskull had 1MB and Wormhole/Blackhole has 1.5MB.
 
-Note the ``page_size`` argument in the buffer config and the ``Interleaved`` in the buffer type. Both L1 and DRAM are splitted into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is trick and not scalable. Interleaved buffers simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Setting page size equal to the buffer size means that the entire buffer will live on a single bank. This is not recommended for performance and in most cases, page size is set to the size of a tile. However, this configuration allows easy illustration of NoC operations. However, these are implementation details and the programmer should not be overly concerned with them.
+Note the ``page_size`` argument in the buffer config and the ``Interleaved`` in the buffer type. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. Interleaved buffers simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Setting page size equal to the buffer size means that the entire buffer will live on a single bank. This is not recommended for performance and in most cases, page size is set to the size of a tile. However, this configuration allows easy illustration of NoC operations. However, these are implementation details and the programmer should not be overly concerned with them.
 
 .. code-block:: cpp
 
@@ -124,7 +124,7 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
     );
 
 
-The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended deisgn as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V ore directly access the L1 is not the most efficiently way to move data around. Thus the L1 address is also an integer.
+The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
 
 .. code-block:: cpp
 
@@ -151,7 +151,7 @@ The kernel itself is simple. It takes the address and bank indices we just creat
     }
 
 .. note::
-    Accessing DRAM using an address and bank pair is complicated and not scalable. Most kernels uses interleaved buffers and ``InterleavedAddrGenFast`` instead (introduced in the next example). This acts much more like a pointer and is much easier to use. The interleaved buffer is simply a buffer with page size qual to the tile size.
+    Accessing DRAM using an address and bank pair is complicated and not scalable. Most kernels uses interleaved buffers and ``InterleavedAddrGenFast`` instead (introduced in the next example). This acts much more like a pointer and is much easier to use. The interleaved buffer is simply a buffer with page size equal to the tile size.
 
 
 Setting runtime arguments for the data movement kernel

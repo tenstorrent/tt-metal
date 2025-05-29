@@ -41,8 +41,8 @@ int main() {
         constexpr CoreCoord core = {0, 0};
 
         constexpr uint32_t n_tiles = 64;
-        constexpr uint32_t elemnts_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-        constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elemnts_per_tile;
+        constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+        constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
         // Allocate DRAM buffers for the input and output data.
         tt_metal::InterleavedBufferConfig dram_config{
@@ -95,7 +95,7 @@ int main() {
         // Initialize the input data with random values and use as the input to the kernel.
         std::mt19937 rng(std::random_device{}());
         std::uniform_real_distribution<float> dist(0.f, 1.0f);
-        std::vector<bfloat16> src0_vec(n_tiles * elemnts_per_tile);
+        std::vector<bfloat16> src0_vec(n_tiles * elements_per_tile);
         for (bfloat16& v : src0_vec) {
             v = bfloat16(dist(rng));
         }

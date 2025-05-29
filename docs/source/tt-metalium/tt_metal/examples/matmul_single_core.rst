@@ -194,7 +194,7 @@ The tile indexing logic:
 *   For matrix A (M×K, or Mt×Kt tiles): ``a_tile_index = mt * Kt + kt``
 *   For matrix B (K×N, or Kt×Nt tiles): ``b_tile_index = kt * Nt + nt``
 
-maps the row-major order of the matrices in DRAM to read into the circular buffers. This ensures that the compute kernel receives tiles in the correct order for multiplication.
+maps tiles in the row-major order of the matrices in DRAM to read into the circular buffers. This ensures that the compute kernel receives tiles in the correct order for multiplication.
 
 .. code-block:: cpp
 
@@ -327,13 +327,13 @@ The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` 
             .page_size = get_tile_size(cb_id_out0),
             .data_format = get_dataformat(cb_id_out0)};
 
-        for (uint32_t m = 0; m < Mt; ++m) {
-            for (uint32_t n = 0; n < Nt; ++n) {
+        for (uint32_t mt = 0; mt < Mt; ++mt) {
+            for (uint32_t nt = 0; nt < Nt; ++nt) {
                 // Wait for the matrix multiplication kernel to produce an output
                 cb_wait_front(cb_id_out0, 1);
                 // Write the output tile to DRAM.
                 uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-                noc_async_write_tile(m * Nt + n, s, l1_read_addr);
+                noc_async_write_tile(mt * Nt + nt, s, l1_read_addr);
                 noc_async_write_barrier();
                 cb_pop_front(cb_id_out0, 1);
             }
@@ -346,9 +346,9 @@ Kernel exexution and result verification
 On the host side, runtime arguments are configured for each kernel. These typically include DRAM buffer addresses (for A, B, and C) and tile counts (``Mt``, ``Kt``, ``Nt``) that define the scope of the operation for the current invocation.
 The overall execution flow is managed by enqueuing commands:
 
-1.  `EnqueueWriteBuffer`: Transfers input matrices A and B from host memory to their respective DRAM buffers on the device.
-2.  `EnqueueProgram`: Launches the compiled program (reader, compute, and writer kernels) on the designated core.
-3.  `EnqueueReadBuffer`: Transfers the resulting matrix C from its DRAM buffer on the device back to host memory.
+1.  ``EnqueueWriteBuffer``: Transfers input matrices A and B from host memory to their respective DRAM buffers on the device.
+2.  ``EnqueueProgram``: Launches the compiled program (reader, compute, and writer kernels) on the designated core.
+3.  ``EnqueueReadBuffer``: Transfers the resulting matrix C from its DRAM buffer on the device back to host memory.
 
 .. code-block:: cpp
 
@@ -367,16 +367,16 @@ The overall execution flow is managed by enqueuing commands:
     EnqueueProgram(cq, program, false);
     EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
 
-After the program execution, the `output.data()` (which is `result_vec` in the `main` function of the C++ example) contains the result matrix C from the device's DRAM. However, this data is still in the tiled format used by the Tenstorrent hardware. To verify its correctness against the `golden_vec` (which is in a standard row-major format), two steps are necessary:
+After the program execution, the ``output.data()`` (which is ``result_vec`` in the ``main`` function of the C++ example) contains the result matrix C from the device's DRAM. However, this data is still in the tiled format used by the Tenstorrent hardware. To verify its correctness against the ``golden_vec`` (which is in a standard row-major format), two steps are necessary:
 
-1.  **Data Untilization**: The `untilize_nfaces` function is used to convert the tiled output data back into a row-major format. This is the inverse operation of `tilize_nfaces` performed on the input data.
+1.  **Data Untilization**: The `untilize_nfaces` function is used to convert the tiled output data back into a row-major format. This is the inverse operation of ``tilize_nfaces`` performed on the input data.
 
     .. code-block:: cpp
 
         // Reverse the tilization to get the result in the row-major format
         result_vec = untilize_nfaces(result_vec, M, N);
 
-2.  **Verification against Golden Reference**: The untilized `result_vec` is then compared against the `golden_vec` computed by the CPU. A common method for comparing floating-point vectors is to calculate the Pearson correlation coefficient (PCC). A PCC value close to 1.0 indicates a high degree of similarity between the two vectors, confirming the correctness of the accelerator's computation.
+2.  **Verification against Golden Reference**: The untilized ``result_vec`` is then compared against the ``golden_vec`` computed by the CPU. A common method for comparing floating-point vectors is to calculate the Pearson correlation coefficient (PCC). A PCC value close to 1.0 indicates a high degree of similarity between the two vectors, confirming the correctness of the accelerator's computation.
 
     .. code-block:: cpp
 
@@ -388,8 +388,7 @@ Conclusion
 ----------
 
 This single-core matrix multiplication example highlights several key architectural patterns for programming Tenstorrent devices:
+
 * **Separation of data movement and compute**: By using dedicated RISC-V processors for data movement (reader/writer kernels) and the matrix engine for computation, complex data orchestration patterns do not sacrifice compute throughput. The data movement processors can handle complex access patterns while the compute units remain fully utilized.
-
 * **Tiled operations**: The hardware is optimized for tiled operations, making tile-based algorithms essential for achieving peak performance. All matrices are processed in tile units, matching the natural granularity of the underlying hardware accelerators.
-
 * **Pipelined data movement**: The circular buffer architecture with double buffering enables overlapped execution - while the compute kernel processes current tiles, the data movement kernels can simultaneously fetch the next set of tiles. This pipelining ensures efficient utilization of compute resources by minimizing idle time.
