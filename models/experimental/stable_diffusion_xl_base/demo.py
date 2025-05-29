@@ -143,7 +143,9 @@ def run_demo_inference(
         model_config=tt_model_config,
         transformer_weights_dtype=ttnn.bfloat16,
     )
-    tt_vae = TtAutoencoderKL(ttnn_device, pipeline.vae.state_dict()) if vae_on_device else None
+    tt_vae = (
+        TtAutoencoderKL(ttnn_device, pipeline.vae.state_dict(), model_config=tt_model_config) if vae_on_device else None
+    )
     tt_scheduler = TtEulerDiscreteScheduler(
         ttnn_device,
         pipeline.scheduler.config.num_train_timesteps,

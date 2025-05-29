@@ -93,7 +93,6 @@ class TtResnetBlock2D(nn.Module):
         if self.split_conv:
             (
                 self.compute1_config,
-                _,
                 self.tt_conv1_weights,
                 self.tt_conv1_bias,
                 self.conv1_params,
@@ -101,13 +100,13 @@ class TtResnetBlock2D(nn.Module):
                 device,
                 conv_weights_1,
                 conv_bias_1,
+                model_config.conv_w_dtype,
                 split_in,
                 split_out,
             )
         else:
             (
                 self.compute1_config,
-                _,
                 self.tt_conv1_weights,
                 self.tt_conv1_bias,
                 self.conv1_params,
@@ -115,12 +114,12 @@ class TtResnetBlock2D(nn.Module):
                 device,
                 conv_weights_1,
                 conv_bias_1,
+                model_config.conv_w_dtype,
             )
 
         self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
         (
             self.compute2_config,
-            _,
             self.tt_conv2_weights,
             self.tt_conv2_bias,
             self.conv2_params,
@@ -128,13 +127,13 @@ class TtResnetBlock2D(nn.Module):
             device,
             conv_weights_2,
             conv_bias_2,
+            model_config.conv_w_dtype,
         )
 
-        self.conv3_config = model_config.get_conv_config(conv_path=f"{module_path}.conv_shortcut")
         if conv_shortcut:
+            self.conv3_config = model_config.get_conv_config(conv_path=f"{module_path}.conv_shortcut")
             (
                 self.compute_config_conv_linear,
-                _,
                 self.tt_conv3_weights,
                 self.tt_conv3_bias,
                 self.conv3_params,
@@ -142,7 +141,7 @@ class TtResnetBlock2D(nn.Module):
                 device,
                 conv_weights_3,
                 conv_bias_3,
-                act_block_h_override=32,
+                model_config.conv_w_dtype,
                 fp32_dest_acc_en=False,
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 packer_l1_acc=True,
@@ -201,12 +200,12 @@ class TtResnetBlock2D(nn.Module):
 
         hidden_states = ttnn.silu(hidden_states)
         # TBD: reshard
-        if C >= 1920 or (C == 640 and H == 64 and W == 64 and self.conv1_params["output_channels"] == 1280):
+        if hidden_states.memory_config().memory_layout != self.conv1_config.shard_layout:
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
         if self.split_conv:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states, [C, H, W], [d_w, d_b] = split_conv2d(
+            hidden_states, [C, H, W], [self.tt_conv1_weights, self.tt_conv1_bias] = split_conv2d(
                 device=self.device,
                 hidden_states=hidden_states,
                 input_shape=[B, C, H, W],
@@ -223,7 +222,7 @@ class TtResnetBlock2D(nn.Module):
                 groups=self.groups,
             )
         else:
-            [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+            [hidden_states, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
                 input_tensor=hidden_states,
                 weight_tensor=self.tt_conv1_weights,
                 in_channels=self.conv1_params["input_channels"],
@@ -245,9 +244,6 @@ class TtResnetBlock2D(nn.Module):
                 return_weights_and_bias=True,
             )
             C = self.conv1_params["output_channels"]
-
-        self.tt_conv1_weights = d_w
-        self.tt_conv1_bias = d_b
 
         temb = ttnn.silu(temb)
         temb = ttnn.linear(
@@ -284,9 +280,8 @@ class TtResnetBlock2D(nn.Module):
         )
 
         hidden_states = ttnn.silu(hidden_states)
-        if C >= 1920:
-            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+
+        [hidden_states, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,
             in_channels=self.conv2_params["input_channels"],
@@ -308,14 +303,9 @@ class TtResnetBlock2D(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv2_params["output_channels"]
-        self.tt_conv2_weights = d_w
-        self.tt_conv2_bias = d_b
 
         if self.tt_conv3_weights is not None:
-            if input_tensor.shape[3] >= 1920:
-                input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-                input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
-            [input_tensor, [H, W], [d_w, d_b]] = ttnn.conv2d(
+            [input_tensor, [H, W], [self.tt_conv3_weights, self.tt_conv3_bias]] = ttnn.conv2d(
                 input_tensor=input_tensor,
                 weight_tensor=self.tt_conv3_weights,
                 in_channels=self.conv3_params["input_channels"],
@@ -337,8 +327,6 @@ class TtResnetBlock2D(nn.Module):
                 return_weights_and_bias=True,
             )
             C = self.conv3_params["output_channels"]
-            self.tt_conv3_weights = d_w
-            self.tt_conv3_bias = d_b
             if input_tensor.is_sharded():
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 

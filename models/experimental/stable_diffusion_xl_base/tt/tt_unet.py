@@ -128,20 +128,18 @@ class TtUNet2DConditionModel(nn.Module):
         self.conv1_config = model_config.get_conv_config(conv_path="conv_in")
         (
             self.compute1_config,
-            _,
             self.tt_conv1_weights,
             self.tt_conv1_bias,
             self.conv1_params,
-        ) = prepare_conv_params(device, conv_weights_in, conv_bias_in)
+        ) = prepare_conv_params(device, conv_weights_in, conv_bias_in, model_config.conv_w_dtype)
 
         self.conv2_config = model_config.get_conv_config(conv_path="conv_out")
         (
             self.compute2_config,
-            _,
             self.tt_conv2_weights,
             self.tt_conv2_bias,
             self.conv2_params,
-        ) = prepare_conv_params(device, conv_weights_out, conv_bias_out)
+        ) = prepare_conv_params(device, conv_weights_out, conv_bias_out, model_config.conv_w_dtype)
 
         self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
@@ -173,7 +171,7 @@ class TtUNet2DConditionModel(nn.Module):
         temb = ttnn.add(temb, temb_add)
         ttnn.deallocate(temb_add)
 
-        [sample, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [sample, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.tt_conv1_weights,
             in_channels=self.conv1_params["input_channels"],
@@ -195,8 +193,6 @@ class TtUNet2DConditionModel(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv1_params["output_channels"]
-        self.tt_conv1_weights = d_w
-        self.tt_conv1_bias = d_b
 
         sample = ttnn.to_memory_config(sample, ttnn.DRAM_MEMORY_CONFIG)
         residuals = (sample,)
@@ -263,7 +259,7 @@ class TtUNet2DConditionModel(nn.Module):
 
         sample = ttnn.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG)
 
-        [sample, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [sample, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.tt_conv2_weights,
             in_channels=self.conv2_params["input_channels"],
@@ -285,9 +281,5 @@ class TtUNet2DConditionModel(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv2_params["output_channels"]
-        self.tt_conv2_weights = d_w
-        self.tt_conv2_bias = d_b
-
-        self.model_config.clear_weight_preprocess()
 
         return sample, [C, H, W]
