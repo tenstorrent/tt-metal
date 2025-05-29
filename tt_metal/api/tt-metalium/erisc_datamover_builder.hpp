@@ -258,6 +258,7 @@ public:
     void connect_to_downstream_edm(FabricEriscDatamoverBuilder& downstream_edm);
 
     eth_chan_directions get_direction() const;
+    size_t get_enabled_risc_cores() const;
     size_t get_noc_x() const;
     size_t get_noc_y() const;
 
