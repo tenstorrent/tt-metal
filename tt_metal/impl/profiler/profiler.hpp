@@ -37,7 +37,6 @@
 namespace tt {
 enum class ARCH;
 namespace tt_metal {
-class Buffer;
 class IDevice;
 class Program;
 }  // namespace tt_metal
