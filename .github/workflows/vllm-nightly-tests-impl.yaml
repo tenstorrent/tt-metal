@@ -194,7 +194,6 @@ jobs:
         if: ${{ failure() }}
         continue-on-error: true
         run: |
-          printf "---- ${FILE_SERVER_LOG} ----\n\n"
           cat "${FILE_SERVER_LOG}"
 
       - name: Show report
