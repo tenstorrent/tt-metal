@@ -104,6 +104,8 @@ $(OUTPUT_ELFS)/brisc.elf: $(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/brisc.o
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/brisc.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
 
 #compiling _test.pp to .o
+.PHONY: $(BUILD_DIR)/$(testname)_unpack.o $(BUILD_DIR)/$(testname)_math.o $(BUILD_DIR)/$(testname)_pack.o
+
 $(BUILD_DIR)/$(testname)_unpack.o: sources/$(testname).cpp
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) $(OPTIONS_UNPACK) -DLLK_TRISC_UNPACK -c -o $@ $<
 $(BUILD_DIR)/$(testname)_math.o: sources/$(testname).cpp
@@ -113,11 +115,11 @@ $(BUILD_DIR)/$(testname)_pack.o: sources/$(testname).cpp
 
 #compiling main for every TRISC core
 $(BUILD_DIR)/main_unpack.o : $(RISCV_SOURCES)/trisc.cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) $(OPTIONS_UNPACK) $(MULTIPLE_OPS) -DLLK_TRISC_UNPACK -c -o $@ $<
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_UNPACK -c -o $@ $<
 $(BUILD_DIR)/main_math.o : $(RISCV_SOURCES)/trisc.cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) $(OPTIONS_MATH) $(MULTIPLE_OPS) -DLLK_TRISC_MATH -c -o $@ $<
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_MATH -c -o $@ $<
 $(BUILD_DIR)/main_pack.o : $(RISCV_SOURCES)/trisc.cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) $(OPTIONS_PACK) $(MULTIPLE_OPS) -DLLK_TRISC_PACK -c -o $@ $<
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_PACK -c -o $@ $<
 
 $(BUILD_DIR)/tmu-crt0.o: $(HELPERS)/tmu-crt0.S | $(BUILD_DIR)
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -c -o $@ $<
