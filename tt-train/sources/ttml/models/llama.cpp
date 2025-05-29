@@ -117,18 +117,19 @@ ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, 
 
 LlamaConfig read_config(const YAML::Node& config) {
     LlamaConfig llama_config;
-    llama_config.num_heads = config["num_heads"].as<uint32_t>();
-    llama_config.num_groups = config["num_groups"].as<uint32_t>();
-    llama_config.embedding_dim = config["embedding_dim"].as<uint32_t>();
+    // Use defaults from nanollama3
+    llama_config.num_heads = config["num_heads"].as<uint32_t>(6U);
+    llama_config.num_groups = config["num_groups"].as<uint32_t>(3U);
+    llama_config.embedding_dim = config["embedding_dim"].as<uint32_t>(384U);
     if (config["intermediate_dim"]) {
         uint32_t intermediate_dim = config["intermediate_dim"].as<uint32_t>();
         llama_config.intermediate_dim = std::make_optional(intermediate_dim);
     }
-    llama_config.dropout_prob = config["dropout_prob"].as<float>();
-    llama_config.num_blocks = config["num_blocks"].as<uint32_t>();
-    llama_config.vocab_size = config["vocab_size"].as<uint32_t>();
-    llama_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
-    llama_config.theta = config["theta"].as<float>();
+    llama_config.dropout_prob = config["dropout_prob"].as<float>(0.0F);
+    llama_config.num_blocks = config["num_blocks"].as<uint32_t>(6U);
+    llama_config.vocab_size = config["vocab_size"].as<uint32_t>(96U);
+    llama_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>(256U);
+    llama_config.theta = config["theta"].as<float>(500000.0F);
     llama_config.runner_type = common::transformer::read_runner_type(config);
     llama_config.weight_tying = common::transformer::read_weight_tying_type(config);
 
