@@ -47,7 +47,7 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
         ),  # Data is distributed equally across all cores, no dimenions preserved
     ],
 )
-@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1])
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
 @pytest.mark.parametrize(
     "tt_dtype",
     [
