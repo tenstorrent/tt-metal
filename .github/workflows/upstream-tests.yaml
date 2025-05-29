@@ -6,7 +6,7 @@ on:
       tag-as-latest:
         default: false
         type: boolean
-        description: "Tag this run as latest"
+        description: "(FORCE) Tag this run as latest, even if tests fail"
   schedule:
     - cron: '0 12 * * *'
 
