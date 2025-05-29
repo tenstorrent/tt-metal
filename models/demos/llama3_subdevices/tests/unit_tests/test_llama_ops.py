@@ -8,6 +8,7 @@ import pytest
 from models.utility_functions import comp_pcc
 
 from models.utility_functions import skip_for_blackhole
+from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import FF1_CRS_RS_OUT
 from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import (
     create_input_and_weight_tensors,
     create_tt_tensors,
@@ -211,20 +212,11 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("pcc", [0.9995])
 def test_llama_tg_BinaryDeviceOperation(use_program_cache, device, batch_size, seq_len, dim, num_heads, dtype, pcc):
-    sub_core_grid = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-        ]
-    )
-    ff1_crs_rs_out = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        ttnn.CoreCoord(1, 0), 30, sub_core_grid, row_wise=True
-    )
     in_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            ff1_crs_rs_out,
+            FF1_CRS_RS_OUT,
             [32, 32],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -233,7 +225,7 @@ def test_llama_tg_BinaryDeviceOperation(use_program_cache, device, batch_size, s
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            ff1_crs_rs_out,
+            FF1_CRS_RS_OUT,
             [32, 32],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
