@@ -360,15 +360,13 @@ MemoryConfig load_memory_config(const std::string& file_name) {
 
 void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) {
     FILE* output_file = fopen(file_name.c_str(), "wb");
-    if (not output_file) {
-        TT_THROW("Cannot open \"{}\"", file_name);
-    }
+    TT_FATAL(output_file != nullptr, "Cannot open \"{}\"", file_name);
     std::unique_ptr<FILE, FileCloser> file_guard(output_file);
 
     Tensor cpu_tensor = tensor.cpu();
 
     flatbuffers::FlatBufferBuilder builder;
-    auto tensor_offset = ttnn::tensor_to_flatbuffer(cpu_tensor, builder);
+    auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder);
     builder.Finish(tensor_offset);
 
     uint64_t header_size = builder.GetSize();
@@ -382,6 +380,7 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
                 safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
             },
             [&output_file](const DeviceStorage&) {
+                // Unreachable - the tensor should be moved to host at this point.
                 TT_THROW("Device storage isn't supported in flatbuffer serialization");
             },
             [&output_file](const MultiDeviceHostStorage& storage) {
@@ -396,9 +395,7 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
 
 Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) {
     FILE* input_file = fopen(file_name.c_str(), "rb");
-    if (not input_file) {
-        TT_THROW("Cannot open \"{}\"", file_name);
-    }
+    TT_FATAL(input_file != nullptr, "Cannot open \"{}\"", file_name);
     std::unique_ptr<FILE, FileCloser> file_guard(input_file);
 
     uint64_t header_size = 0;
@@ -409,28 +406,23 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) 
 
     auto fb_tensor = ttnn::flatbuffer::GetTensor(header_buffer.data());
 
-    uint64_t data_size = 0;
-    if (fb_tensor->tensor_type_type() == ttnn::flatbuffer::TensorType::ReplicatedTensor) {
-        const auto* replicated = fb_tensor->tensor_type_as_ReplicatedTensor();
-        const auto* inline_storage = replicated->buffer_as<ttnn::flatbuffer::InlineStorage>();
-        TT_FATAL(inline_storage != nullptr, "Only InlineStorage is supported in flatbuffer deserialization");
-        data_size = inline_storage->size();
-    } else if (fb_tensor->tensor_type_type() == ttnn::flatbuffer::TensorType::ShardedTensor) {
-        const auto* sharded = fb_tensor->tensor_type_as_ShardedTensor();
-        for (flatbuffers::uoffset_t i = 0; i < sharded->shards()->size(); i++) {
-            const auto* shard = sharded->shards()->Get(i);
-            const auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineStorage>();
-            TT_FATAL(inline_storage != nullptr, "Only InlineStorage is supported in flatbuffer deserialization");
-            data_size += inline_storage->size();
-        }
-    } else {
-        TT_THROW("Unknown TensorType in flatbuffer deserialization");
-    }
+    // Get current position and seek to end to calculate remaining data size
+    long current_pos = ftell(input_file);
+    TT_FATAL(current_pos != -1, "Failed to get current file position");
+
+    TT_FATAL(fseek(input_file, 0, SEEK_END) == 0, "Failed to seek to end of file");
+
+    long end_pos = ftell(input_file);
+    TT_FATAL(end_pos != -1, "Failed to get end file position");
+
+    uint64_t data_size = end_pos - current_pos;
+
+    TT_FATAL(fseek(input_file, current_pos, SEEK_SET) == 0, "Failed to seek back to data start");
 
     std::vector<std::byte> data_buffer(data_size);
     safe_fread(data_buffer.data(), data_size, 1, input_file);
 
-    Tensor tensor = ttnn::flatbuffer_to_tensor(fb_tensor, data_buffer.data());
+    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, data_buffer.data());
     if (device != nullptr) {
         tensor = tensor.to_device(device);
     }

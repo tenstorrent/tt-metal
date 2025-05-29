@@ -5,12 +5,12 @@ include "mesh_coordinate.fbs";
 namespace ttnn.flatbuffer;
 
 union TensorBuffer {
-    InlineStorage = 1,
+    InlineFileStorage = 1,
     // Reserved for future use to refer to external storage.
 }
 
 // Stores `TensorBuffer` in the same file as the `Tensor` "inline".
-struct InlineStorage {
+struct InlineFileStorage {
     offset: uint64;
     size: uint64;
 }

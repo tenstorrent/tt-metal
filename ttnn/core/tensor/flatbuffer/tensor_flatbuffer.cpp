@@ -78,17 +78,18 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(uint64_t size_bytes, cons
         }
         case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported DataType");
     }
+    TT_THROW("Unreachable");
 }
 
 }  // namespace
 
-flatbuffers::Offset<ttnn::flatbuffer::Tensor> tensor_to_flatbuffer(
+flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder) {
     const auto& storage = tensor.get_storage();
 
     TT_FATAL(!is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
 
-    auto strategy = tensor.get_distributed_tensor_config();
+    const auto& strategy = tensor.get_distributed_tensor_config();
     if (std::holds_alternative<tt::tt_metal::ReplicateTensor>(strategy)) {
         auto tensor_spec_offset = ttnn::to_flatbuffer(tensor.get_tensor_spec(), builder);
 
@@ -101,12 +102,12 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> tensor_to_flatbuffer(
             buffer_size = buffer.view_bytes().size();
         }
 
-        auto inline_storage = ttnn::flatbuffer::InlineStorage(/*offset=*/0, buffer_size);
+        auto inline_storage = ttnn::flatbuffer::InlineFileStorage(/*offset=*/0, buffer_size);
 
         auto replicated_tensor = ttnn::flatbuffer::CreateReplicatedTensor(
             builder,
             tensor_spec_offset,
-            ttnn::flatbuffer::TensorBuffer::InlineStorage,
+            ttnn::flatbuffer::TensorBuffer::InlineFileStorage,
             builder.CreateStruct(inline_storage).Union());
 
         auto tensor_offset = ttnn::flatbuffer::CreateTensor(
@@ -128,12 +129,12 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> tensor_to_flatbuffer(
             const auto& buffer = multi_device_storage.get_buffer(i);
             const std::size_t buffer_size = buffer.view_bytes().size();
 
-            auto inline_storage = ttnn::flatbuffer::InlineStorage(data_offset, buffer_size);
+            auto inline_storage = ttnn::flatbuffer::InlineFileStorage(data_offset, buffer_size);
 
             auto shard_offset = ttnn::flatbuffer::CreateTensorShard(
                 builder,
                 tensor_spec_offset,
-                ttnn::flatbuffer::TensorBuffer::InlineStorage,
+                ttnn::flatbuffer::TensorBuffer::InlineFileStorage,
                 builder.CreateStruct(inline_storage).Union());
 
             shards_vector.push_back(shard_offset);
@@ -155,7 +156,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> tensor_to_flatbuffer(
     }
 }
 
-Tensor flatbuffer_to_tensor(const ttnn::flatbuffer::Tensor* fb_tensor, const std::byte* data_region) {
+Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, const std::byte* data_region) {
     switch (fb_tensor->tensor_type_type()) {
         case ttnn::flatbuffer::TensorType::NONE: TT_THROW("Invalid TensorType");
         case ttnn::flatbuffer::TensorType::ReplicatedTensor: {
@@ -163,8 +164,8 @@ Tensor flatbuffer_to_tensor(const ttnn::flatbuffer::Tensor* fb_tensor, const std
 
             auto spec = ttnn::from_flatbuffer(replicated->tensor_spec());
 
-            auto* inline_storage = replicated->buffer_as<ttnn::flatbuffer::InlineStorage>();
-            TT_FATAL(inline_storage != nullptr, "Only InlineStorage is supported in flatbuffer deserialization");
+            auto* inline_storage = replicated->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
+            TT_FATAL(inline_storage != nullptr, "Only InlineFileStorage is supported in flatbuffer deserialization");
 
             const uint64_t offset = inline_storage->offset();
             const uint64_t size = inline_storage->size();
@@ -197,8 +198,9 @@ Tensor flatbuffer_to_tensor(const ttnn::flatbuffer::Tensor* fb_tensor, const std
                 auto spec = ttnn::from_flatbuffer(shard->tensor_spec());
                 specs.push_back(std::move(spec));
 
-                auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineStorage>();
-                TT_FATAL(inline_storage != nullptr, "Only InlineStorage is supported in flatbuffer deserialization");
+                auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
+                TT_FATAL(
+                    inline_storage != nullptr, "Only InlineFileStorage is supported in flatbuffer deserialization");
 
                 const uint64_t offset = inline_storage->offset();
                 const uint64_t size = inline_storage->size();
@@ -208,11 +210,13 @@ Tensor flatbuffer_to_tensor(const ttnn::flatbuffer::Tensor* fb_tensor, const std
                 buffers.push_back(std::move(host_buffer));
             }
 
+            TensorSpec first_spec = specs.front();
             tt::tt_metal::MultiDeviceHostStorage multi_device_storage{std::move(buffers), std::move(specs)};
 
-            return Tensor(std::move(multi_device_storage), specs.front(), strategy);
+            return Tensor(std::move(multi_device_storage), first_spec, strategy);
         }
     }
+    TT_THROW("Unreachable");
 }
 
 }  // namespace ttnn
