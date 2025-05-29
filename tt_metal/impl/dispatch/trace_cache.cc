@@ -405,6 +405,16 @@ void WorkerBufferManager::commit_preallocations(
     }
 }
 
+// Selecting what to evict is based on one of two heuristics:
+//  - evict node(s) with lowest weight
+//  - evict nodes(s) used furthest in the future
+// Lowest weight seems to make sense as we want to keep expensive/highly re-used items in the buffer
+// However, if you consider thrashing, maybe we're better off kicking out something that isn't used for a while
+// w/ 8 randomized test cases, furthest out wins by a little (2-5%)
+// w/ data gathered from llama and trying 4 buffer sizes, lowest weight wins by a lot (~20%)
+// Should experiment further and maybe choose dynamically.  Or maybe there is a better heurstic
+#define EVICT_ON_DISTANCE 0
+
 // The LRU side of the LRU list contains the free nodes, free nodes are at the
 // the old end, so we start w/ those
 // Walk from LRU to MRU:
@@ -421,14 +431,24 @@ std::list<std::list<AllocNode>::iterator>::iterator WorkerBufferManager::find_ev
     std::uint32_t size_needed,
     std::int32_t trace_idx,
     const std::vector<TraceNode>& trace) {
-    float best_score = std::numeric_limits<float>::infinity();
     std::list<std::list<AllocNode>::iterator>::iterator match = this->lru_.end();
+
+#if EVICT_ON_DISTANCE
+    std::int32_t best_dist = -1;
+#else
+    float best_score = std::numeric_limits<float>::infinity();
+#endif
 
     fprintf(stderr, "Trying to find eviction candidate for size %d\n", size_needed);
     for (auto lru_it = this->lru_.begin(); lru_it != this->lru_.end(); ++lru_it) {
         std::uint32_t free_size = 0;
-        float score = 0.0f;
         bool found_one = false;
+
+#if EVICT_ON_DISTANCE
+        std::int32_t dist = std::numeric_limits<std::int32_t>::max();
+#else
+        float score = 0.0f;
+#endif
 
         // Iterates over allocator from high to low memory
         for (auto alloc_it = *lru_it; alloc_it != this->allocator_.end(); ++alloc_it) {
@@ -439,8 +459,12 @@ std::list<std::list<AllocNode>::iterator>::iterator WorkerBufferManager::find_ev
             float weight = alloc_it->get_weight(trace, &TraceNode::get_weight);
             if (not only_stale or weight == 0.0f) {
                 free_size += alloc_it->get_size();
-
+#if EVICT_ON_DISTANCE
+                std::int32_t this_dist = alloc_it->is_free() ? 10000 : trace[alloc_it->get_prev_use()].get_next_idx();
+                dist = std::min(dist, this_dist);
+#else
                 score += weight;
+#endif
                 if (size_needed <= free_size) {
                     found_one = true;
                     break;
@@ -448,8 +472,17 @@ std::list<std::list<AllocNode>::iterator>::iterator WorkerBufferManager::find_ev
             }
         }
 
-        if (found_one && score < best_score) {
+#if EVICT_ON_DISTANCE
+        if (found_one && dist > best_dist)
+#else
+        if (found_one && score < best_score)
+#endif
+        {
+#if EVICT_ON_DISTANCE
+            best_dist = dist;
+#else
             best_score = score;
+#endif
             match = lru_it;
         }
     }
@@ -704,8 +737,6 @@ void WorkerBufferManager::alloc_heap(std::vector<TraceNode>& trace, const std::v
             this->alloced_pgms_[pgm_id] = std::prev(this->lru_.end());
             this->lru_.back()->set_prev_use(trace_idx);
         } else {
-            // Total count greater than one, heap
-
             std::uint32_t size_needed = programs[pgm_id].get_size();
             if (eviction_mode) {
                 fprintf(stderr, "Eviction mode: %d\n", trace_idx);
