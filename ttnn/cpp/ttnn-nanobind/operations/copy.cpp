@@ -55,14 +55,16 @@ Example::
                const DataType dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
+               const std::optional<CoreRangeSet>& sub_core_grids,
                QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, dtype, memory_config, output_tensor);
+                return self(queue_id, input_tensor, dtype, memory_config, output_tensor, sub_core_grids);
             },
             nb::arg("input_tensor"),
             nb::arg("dtype"),
             nb::kw_only(),
             nb::arg("memory_config") = std::nullopt,
             nb::arg("output_tensor") = std::nullopt,
+            nb::arg("sub_core_grids") = std::nullopt,
             nb::arg("queue_id") = DefaultQueueId},
 
         ttnn::nanobind_overload_t{
@@ -72,8 +74,10 @@ Example::
                const DataType output_dtype,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
+               const std::optional<CoreRangeSet>& sub_core_grids,
                QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, input_dtype, output_dtype, memory_config, output_tensor);
+                return self(
+                    queue_id, input_tensor, input_dtype, output_dtype, memory_config, output_tensor, sub_core_grids);
             },
             nb::arg("input_tensor"),
             nb::arg("input_dtype"),
@@ -81,6 +85,7 @@ Example::
             nb::kw_only(),
             nb::arg("memory_config") = std::nullopt,
             nb::arg("output_tensor") = std::nullopt,
+            nb::arg("sub_core_grids") = std::nullopt,
             nb::arg("queue_id") = DefaultQueueId}
 
     );

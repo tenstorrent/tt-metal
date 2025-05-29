@@ -17,6 +17,7 @@
 #include "events.hpp"
 #include "global_circular_buffer.hpp"
 #include "global_semaphore.hpp"
+#include "program_descriptors.hpp"
 #include "tensor.hpp"
 #include "reports.hpp"
 #include "ttnn/distributed/distributed_nanobind.hpp"
@@ -218,6 +219,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_reports = mod.def_submodule("reports", "ttnn reports");
     auto m_operations = mod.def_submodule("operations", "ttnn Operations");
     auto m_fabric = mod.def_submodule("fabric", "Fabric instantiation APIs");
+    auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
 
     // TYPES
     ttnn::tensor::tensor_mem_config_module_types(m_tensor);
@@ -234,6 +236,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
     ttnn::global_semaphore::py_module_types(m_global_semaphore);
     ttnn::reports::py_module_types(m_reports);
+    ttnn::program_descriptors::py_module_types(m_program_descriptors);
 
     // FUNCTIONS / OPERATIONS
     ttnn::tensor::tensor_mem_config_module(m_tensor);

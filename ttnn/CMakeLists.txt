@@ -505,23 +505,73 @@ if(WITH_PYTHON_BINDINGS)
             ${TTNN_SRC_PYBIND}
             ${CCL_TTNN_SRCS_PYBIND}
             ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
+            #${Python3_LIBRARY_DIRS}
     )
     target_include_directories(
         ttnn
         PUBLIC
+            #${Python3_INCLUDE_DIRS}
             ${PROJECT_SOURCE_DIR}/ttnn
             ${CMAKE_CURRENT_SOURCE_DIR}/cpp
     )
 
-    target_link_libraries(
-        ttnn
-        PUBLIC
-            TT::NN::CPP
-        PRIVATE
-            pybind11::module
-            Boost::algorithm
-            TT::Metalium
-    )
+    if(EXPERIMENTAL_NANOBIND_BINDINGS)
+        # https://nanobind.readthedocs.io/en/latest/api_cmake.html#low-level-interface
+        # -static Perform a static library build (without this suffix, a shared build is used)
+        # -abi3   Perform a stable ABI build targeting Python v3.12+.
+        # -ft     Perform a build that opts into the Python 3.13+ free-threaded behavior.
+
+        set(NANOBIND_LIBNAME "nanobind-static-abi3")
+        nanobind_build_library(${NANOBIND_LIBNAME})
+
+        target_include_directories(${NANOBIND_LIBNAME} PUBLIC ${Python3_INCLUDE_DIRS})
+
+        add_library(nanobind ALIAS ${NANOBIND_LIBNAME})
+        target_link_libraries(
+            ttnn
+            PUBLIC
+                TT::NN::CPP
+            PRIVATE
+                ${Python3_LIBRARIES}
+                nanobind
+                Boost::algorithm
+                TT::Metalium
+        )
+        # .. enable size optimizations
+        nanobind_opt_size(ttnn)
+
+        # .. enable link time optimization
+        nanobind_lto(ttnn)
+
+        # .. set the default symbol visibility to 'hidden'
+        nanobind_set_visibility(ttnn)
+
+        # .. strip unneeded symbols and debug info from the binary (only active in release builds)
+        nanobind_strip(ttnn)
+
+        # .. disable the stack protector
+        #nanobind_disable_stack_protector(ttnn)
+
+        # .. set the Python extension suffix
+        nanobind_extension(ttnn)
+
+        # .. set important compilation flags
+        nanobind_compile_options(ttnn)
+
+        # .. set important linker flags
+        nanobind_link_options(ttnn)
+    else()
+        target_link_libraries(
+            ttnn
+            PUBLIC
+                TT::NN::CPP
+            PRIVATE
+                #${Python3_LIBRARIES}
+                pybind11::module
+                Boost::algorithm
+                TT::Metalium
+        )
+    endif()
 endif()
 
 if(WITH_PYTHON_BINDINGS)
