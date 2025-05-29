@@ -102,7 +102,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -155,13 +154,13 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – The tensor to use as a template for the shape of the new tensor.</p></li>
+<li><p><strong>tensor</strong> (<em>ttnn.Tensor</em>) – The tensor to use as a template for the shape of the new tensor.</p></li>
 <li><p><strong>fill_value</strong> (<em>float</em><em> | </em><em>int</em>) – The value to fill the tensor with.</p></li>
 <li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – The data type of the tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – The layout of the tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em><em>, </em><em>optional</em>) – The device on which the tensor will be allocated. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – The memory configuration of the tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – The memory configuration of the tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>

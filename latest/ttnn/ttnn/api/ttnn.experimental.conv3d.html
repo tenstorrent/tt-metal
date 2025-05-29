@@ -103,7 +103,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -156,11 +155,11 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – Input tensor.</p></li>
-<li><p><strong>weight_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – Weight tensor.</p></li>
-<li><p><strong>bias_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – Bias tensor.</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input tensor.</p></li>
+<li><p><strong>weight_tensor</strong> (<em>ttnn.Tensor</em>) – Weight tensor.</p></li>
+<li><p><strong>bias_tensor</strong> (<em>ttnn.Tensor</em>) – Bias tensor.</p></li>
 <li><p><strong>config</strong> (<em>ttnn.Conv3dConfig</em>) – Configuration for the Conv3D operation.</p></li>
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a>) – Memory configuration for the output of the Conv3D operation.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em>) – Memory configuration for the output of the Conv3D operation.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em>) – Compute kernel configuration for the Conv3D operation.</p></li>
 <li><p><strong>queue_id</strong> – Queue ID for the Conv3D operation.</p></li>
 </ul>
@@ -173,7 +172,7 @@
 <dt class="field-odd">Return type<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor">ttnn.Tensor</a></p>
+<p>ttnn.Tensor</p>
 </dd>
 </dl>
 </dd>

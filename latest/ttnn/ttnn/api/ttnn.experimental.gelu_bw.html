@@ -283,7 +283,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -336,8 +335,8 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>grad_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – The input gradient tensor.</p></li>
-<li><p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – The input tensor.</p></li>
+<li><p><strong>grad_tensor</strong> (<em>ttnn.Tensor</em>) – The input gradient tensor.</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
@@ -345,8 +344,8 @@
 <dd class="field-even">
 <ul class="simple">
 <li><p><strong>approximate</strong> (<em>str</em><em>, </em><em>optional</em>) – “tanh” or “none” (default). The gelu approximation algorithm to use.</p></li>
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – Memory configuration for this operation. Defaults to None.</p></li>
-<li><p><strong>input_grad</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to None.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for this operation. Defaults to None.</p></li>
+<li><p><strong>input_grad</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to None.</p></li>
 <li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – Command queue ID. Defaults to 0.</p></li>
 </ul>
 </dd>

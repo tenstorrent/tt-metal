@@ -285,7 +285,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -341,7 +340,7 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor.</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
 <li><p><strong>decimals</strong> (<em>int</em>) – no. of decimal places to round off to [supported range -6 to 7].</p></li>
 </ul>
 </dd>
@@ -349,8 +348,8 @@
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>

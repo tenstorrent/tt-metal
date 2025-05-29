@@ -95,7 +95,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -150,7 +149,7 @@ should be on the device. Height, width and block sharding schemes are supported.
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_a</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the tensor to be convolved.</p></li>
+<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the tensor to be convolved.</p></li>
 <li><p><strong>batch_size</strong> (<em>int</em>) – the number of batches (N in a [N, C, H, W] shaped tensor).</p></li>
 <li><p><strong>input_h</strong> (<em>int</em>) – the height of the input tensor (H in a [N, C, H, W] shaped tensor).</p></li>
 <li><p><strong>input_w</strong> (<em>int</em>) – the width of the input tensor (W in a [N, C, H, W] shaped tensor).</p></li>
@@ -165,7 +164,7 @@ should be on the device. Height, width and block sharding schemes are supported.
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – the memory configuration for the output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration for the output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>applied_shard_scheme</strong> (<em>ttnn.TensorMemoryLayout</em><em>, </em><em>optional</em>) – the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to <cite>None</cite>, which should be used with pre-sharded input tensors.</p></li>
 <li><p><strong>ceil_mode</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to use ceil mode for the output shape. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>in_place</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to perform the halo operation in place. Defaults to <cite>False</cite>.</p></li>

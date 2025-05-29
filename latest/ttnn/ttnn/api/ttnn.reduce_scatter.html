@@ -96,7 +96,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -149,7 +148,7 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – multi-device tensor</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – multi-device tensor</p></li>
 <li><p><strong>dim</strong> (<em>int</em>) – Dimension to perform operation</p></li>
 <li><p><strong>cluster_axis</strong> (<em>int</em>) – Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-reduce-scatter operation on.</p></li>
 <li><p><strong>mesh_device</strong> (<em>MeshDevice</em>) – Device mesh to perform the line-reduce-scatter operation on.</p></li>
@@ -166,7 +165,7 @@
 <dd class="field-odd">
 <ul class="simple">
 <li><p><strong>num_links</strong> (<em>int</em><em>, </em><em>optional</em>) – Number of links to use for the reduce0scatter operation. Defaults to <cite>1</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>input tensor memory config</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>input tensor memory config</cite>.</p></li>
 <li><p><strong>num_workers</strong> (<em>int</em><em>, </em><em>optional</em>) – Number of workers to use for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>num_buffers_per_channel</strong> (<em>int</em><em>, </em><em>optional</em>) – Number of buffers per channel to use for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>) – The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to <cite>ttnn.Topology.Ring</cite>.</p></li>

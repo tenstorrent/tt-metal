@@ -80,7 +80,6 @@
 <li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -121,11 +120,11 @@
   <section id="tensor">
 <h1>Tensor<a class="headerlink" href="#tensor" title="Permalink to this heading"></a>
 </h1>
-<p>A <a class="reference internal" href="dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code></a> is a multi-dimensional matrix containing elements of a single data type.</p>
+<p>A <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> is a multi-dimensional matrix containing elements of a single data type.</p>
 <section id="shape">
 <h2>Shape<a class="headerlink" href="#shape" title="Permalink to this heading"></a>
 </h2>
-<p><a class="reference internal" href="dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code></a> uses <a class="reference internal" href="#ttnn.Shape" title="ttnn.Shape"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Shape</span></code></a> to store its shape.</p>
+<p><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> uses <a class="reference internal" href="#ttnn.Shape" title="ttnn.Shape"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Shape</span></code></a> to store its shape.</p>
 <p><a class="reference internal" href="#ttnn.Shape" title="ttnn.Shape"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Shape</span></code></a> can be used to store dimensions for a tensor of rank 1 to rank 8 (inclusive).</p>
 <p><a class="reference internal" href="#ttnn.Shape" title="ttnn.Shape"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Shape</span></code></a> stores the shape of both the actual data and the data padded to tile dimensions. Which can be different due to hardware requirements.</p>
 <p><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Shape([16,</span> <span class="pre">32])</span></code> is a shape of 2D tensor with 16 rows and 32 columns. Where the number of actual rows and columns is 16 and 32 respectively.
@@ -178,7 +177,7 @@ When the height or width of the tensor are not divisible by 32, padding is autom
 </ul>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p><a class="reference internal" href="dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code></a> uses a minimum of 4 bytes to store a row of the tensor in <a class="reference internal" href="#ttnn-row-major-layout"><span class="std std-ref">ttnn.ROW_MAJOR_LAYOUT</span></a> on the device.
+<p><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> uses a minimum of 4 bytes to store a row of the tensor in <a class="reference internal" href="#ttnn-row-major-layout"><span class="std std-ref">ttnn.ROW_MAJOR_LAYOUT</span></a> on the device.
 That means that the width of a tensor on the device must be a multiple of <cite>4 / sizeof(dtype)</cite>. The exact numbers are shown below:</p>
 <table class="docutils align-default" id="id4">
 <caption>
@@ -268,7 +267,7 @@ That means that the width of a tensor on the device must be a multiple of <cite>
 Currently we support L1 sharding, which refers to the distribution of a tensor across the L1 memory space of different cores.</p>
 <p>Sharded tensors are represented in two dimensions, we compress a higher rank tensor into two-dims by compressing all upper dims in dim 0 and keeping the last dimension the same.
 For example a [1,2,3,4] tensor will be represented as a [6,4] 2D tensor before sharding.
-Data in a <a class="reference internal" href="dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code></a> is organized in tiles, and these tiles are typically in row-major order.
+Data in a <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> is organized in tiles, and these tiles are typically in row-major order.
 The size of the tile depends on the <code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Layout</span></code> and <a class="reference internal" href="#ttnn.Shape" title="ttnn.Shape"><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Shape</span></code></a> of the tensor.
 Refer to the section about <a class="reference internal" href="#ttnn-layout"><span class="std std-ref">Layout</span></a> to learn more.</p>
 <p><strong>Data Organization on Host</strong></p>

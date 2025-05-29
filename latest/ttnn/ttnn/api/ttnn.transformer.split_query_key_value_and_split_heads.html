@@ -100,7 +100,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -188,8 +187,8 @@ and <code class="xref py py-attr docutils literal notranslate"><span class="pre"
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – Input Tensor for Query, Key and Value. If <code class="xref py py-attr docutils literal notranslate"><span class="pre">kv_input_tensor</span></code> is not None, then <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> is only used for Query.</p></li>
-<li><p><strong>kv_input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – Input Tensor for Key and Value. If passed in, <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> has to be used only for Query. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input Tensor for Query, Key and Value. If <code class="xref py py-attr docutils literal notranslate"><span class="pre">kv_input_tensor</span></code> is not None, then <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> is only used for Query.</p></li>
+<li><p><strong>kv_input_tensor</strong> (<em>ttnn.Tensor</em>) – Input Tensor for Key and Value. If passed in, <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> has to be used only for Query. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
@@ -199,7 +198,7 @@ and <code class="xref py py-attr docutils literal notranslate"><span class="pre"
 <li><p><strong>num_heads</strong> (<em>int</em>) – num heads to split into.</p></li>
 <li><p><strong>num_kv_heads</strong> (<em>int</em><em>, </em><em>optional</em>) – num heads of Key and num heads of Value. If not passed in, then <code class="xref py py-attr docutils literal notranslate"><span class="pre">num_kv_heads</span></code> is set to <code class="xref py py-attr docutils literal notranslate"><span class="pre">num_heads</span></code>. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>transpose_key</strong> (<em>bool</em>) – Whether to transpose the Key tensor on the last two dimensions. Defaults to <cite>true</cite></p></li>
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>

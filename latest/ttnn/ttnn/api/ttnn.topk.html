@@ -105,7 +105,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -170,7 +169,7 @@ Note that when using BFLOAT8, a different set of elements than in the input may 
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor.</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
 <li><p><strong>k</strong> (<em>number</em>) – the number of top elements to look for.</p></li>
 <li><p><strong>dim</strong> (<em>number</em>) – the dimension to reduce.</p></li>
 <li><p><strong>largest</strong> (<em>bool</em>) – whether to return the largest or the smallest elements. Defaults to <cite>False</cite>.</p></li>
@@ -181,8 +180,8 @@ Note that when using BFLOAT8, a different set of elements than in the input may 
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>

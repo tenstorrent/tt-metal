@@ -104,7 +104,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -161,10 +160,10 @@ the last two dimensions depending on the requested layout.</p>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor to be organized.</p></li>
+<li><p><strong>tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor to be organized.</p></li>
 <li><p><strong>layout</strong> (<em>ttnn.Layout</em>) – the desired layout, either <cite>ttnn.ROW_MAJOR_LAYOUT</cite> or <cite>ttnn.TILE_LAYOUT</cite>.</p></li>
 <li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – the optional output data type.</p></li>
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – the optional output memory configuration.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the optional output memory configuration.</p></li>
 <li><p><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em>) – the device/mesh device whose worker thread on the host should be used for the layout conversion.</p></li>
 </ul>
 </dd>

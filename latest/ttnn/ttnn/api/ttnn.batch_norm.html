@@ -97,7 +97,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -149,7 +148,7 @@
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor of shape <cite>[N, C, H, W]</cite>.</p>
+<p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor of shape <cite>[N, C, H, W]</cite>.</p>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
@@ -157,13 +156,13 @@
 <ul class="simple">
 <li><p><strong>eps</strong> (<em>float</em><em>, </em><em>optional</em>) – Epsilon value. Defaults to <cite>1e-05</cite>.</p></li>
 <li><p><strong>momentum</strong> (<em>float</em><em>, </em><em>optional</em>) – Momentum value. Defaults to <cite>0.1</cite>.</p></li>
-<li><p><strong>running_mean</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – the running_mean of shape <cite>[1, C, 1, 1]</cite>, required in inference mode. When in training mode, this tensor is optional and the updated running mean value is stored in-place based on the inputs provided. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>running_var</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – the running_var of shape <cite>[1, C, 1, 1]</cite>, required in inference mode. When in training mode, this tensor is optional and the updated running variance value is stored in-place based on the inputs provided. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>weight</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – the weight or gamma value of shape <cite>[1, C, 1, 1]</cite>. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>bias</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – the bias or beta value of shape <cite>[1, C, 1, 1]</cite>. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>running_mean</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the running_mean of shape <cite>[1, C, 1, 1]</cite>, required in inference mode. When in training mode, this tensor is optional and the updated running mean value is stored in-place based on the inputs provided. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>running_var</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the running_var of shape <cite>[1, C, 1, 1]</cite>, required in inference mode. When in training mode, this tensor is optional and the updated running variance value is stored in-place based on the inputs provided. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the weight or gamma value of shape <cite>[1, C, 1, 1]</cite>. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the bias or beta value of shape <cite>[1, C, 1, 1]</cite>. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>training</strong> (<em>bool</em><em>, </em><em>optional</em>) – Selection between training mode and inference (evaluation) mode. Defaults to <cite>False</cite> (Inference mode).</p></li>
-<li><p><strong>output</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – Preallocated output tensor to store batch norm result of shape <cite>[N, C, H, W]</cite>. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor to store batch norm result of shape <cite>[N, C, H, W]</cite>. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to 0.</p></li>
 </ul>
 </dd>

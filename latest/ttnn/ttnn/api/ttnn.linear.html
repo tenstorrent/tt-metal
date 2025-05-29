@@ -95,7 +95,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Models</span></p>
@@ -149,25 +148,25 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_a</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the first tensor to be multiplied. Needs to be on the device.</p></li>
-<li><p><strong>input_tensor_b</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the second tensor to be multiplied. Needs to be on the device.</p></li>
+<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the first tensor to be multiplied. Needs to be on the device.</p></li>
+<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>) – the second tensor to be multiplied. Needs to be on the device.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>bias</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – the bias tensor to be added. If specified, needs to be on the device. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the bias tensor to be added. If specified, needs to be on the device. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>transpose_a</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to transpose input_tensor_a. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>transpose_b</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to transpose input_tensor_b. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – the memory configuration of the output tensor. Defaults to <cite>None</cite>, which will result in using <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration of the output tensor. Defaults to <cite>None</cite>, which will result in using <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
 <li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – the data type of the output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>program_config</strong> (<em>MatmulProgramConfig</em><em>, </em><em>optional</em>) – the program configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>activation</strong> (<em>str</em><em>, </em><em>optional</em>) – the activation function to be applied. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – the compute kernel configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>core_grid</strong> (<em>ttnn.CoreGrid</em><em>, </em><em>optional</em>) – the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tile</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>) – Specifies the output tile configuration. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>optional_output_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – User provided on-device output tensor where the result of linear is to be written. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>optional_output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – User provided on-device output tensor where the result of linear is to be written. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
