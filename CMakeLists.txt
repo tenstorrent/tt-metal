@@ -125,23 +125,24 @@ endif()
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
+if(WITH_PYTHON_BINDINGS)
+    set(Python3_FIND_STRATEGY LOCATION)
+    find_package(
+        Python3
+        REQUIRED
+        COMPONENTS
+            Interpreter
+            Development.Module
+    )
+    message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
+endif()
+
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
     add_subdirectory(third_party)
 else()
     add_subdirectory(third_party SYSTEM)
-endif()
-
-if(WITH_PYTHON_BINDINGS)
-    set(Python3_FIND_STRATEGY LOCATION)
-    find_package(
-        Python3
-        COMPONENTS
-            Interpreter
-            Development
-    )
-    message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
 endif()
 
 find_library(NUMA_LIBRARY NAMES numa)
