@@ -579,7 +579,8 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSof
 }
 
 void Cluster::write_dram_vec(
-    std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access) const {
+    std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access, bool use_dma)
+    const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
         dram_view < desc_to_use.get_num_dram_views(),
@@ -590,12 +591,52 @@ void Cluster::write_dram_vec(
     CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
-    write_core(
-        vec.data(),
-        vec.size() * sizeof(uint32_t),
-        tt_cxy_pair(device_id, dram_core.x, dram_core.y),
-        addr + offset,
-        small_access);
+    if (use_dma) {
+        dma_write_core(
+            vec.data(), vec.size() * sizeof(uint32_t), tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
+    } else {
+        write_core(
+            vec.data(),
+            vec.size() * sizeof(uint32_t),
+            tt_cxy_pair(device_id, dram_core.x, dram_core.y),
+            addr + offset,
+            small_access);
+    }
+}
+
+void Cluster::write_dram_vec(
+    std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access) const {
+    write_dram_vec(vec, device_id, dram_view, addr, small_access, /*use_dma=*/false);
+}
+
+void Cluster::dma_write_dram_vec(
+    std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access) const {
+    write_dram_vec(vec, device_id, dram_view, addr, small_access, /*use_dma=*/true);
+}
+
+void Cluster::read_dram_vec(
+    std::vector<uint32_t>& vec,
+    uint32_t sz_in_bytes,
+    chip_id_t device_id,
+    int dram_view,
+    uint64_t addr,
+    bool small_access,
+    bool use_dma) const {
+    const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
+    TT_FATAL(
+        dram_view < desc_to_use.get_num_dram_views(),
+        "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
+        dram_view,
+        desc_to_use.get_num_dram_views());
+
+    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
+    tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
+    size_t offset = desc_to_use.get_address_offset(dram_view);
+    if (use_dma) {
+        dma_read_core(vec, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
+    } else {
+        read_core(vec, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, small_access);
+    }
 }
 
 void Cluster::read_dram_vec(
@@ -605,17 +646,17 @@ void Cluster::read_dram_vec(
     int dram_view,
     uint64_t addr,
     bool small_access) const {
-    const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
-    TT_FATAL(
-        dram_view < desc_to_use.get_num_dram_views(),
-        "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
-        dram_view,
-        desc_to_use.get_num_dram_views());
+    read_dram_vec(vec, sz_in_bytes, device_id, dram_view, addr, small_access, /*use_dma=*/false);
+}
 
-    CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
-    tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
-    size_t offset = desc_to_use.get_address_offset(dram_view);
-    read_core(vec, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, small_access);
+void Cluster::dma_read_dram_vec(
+    std::vector<uint32_t>& vec,
+    uint32_t sz_in_bytes,
+    chip_id_t device_id,
+    int dram_view,
+    uint64_t addr,
+    bool small_access) const {
+    read_dram_vec(vec, sz_in_bytes, device_id, dram_view, addr, small_access, /*use_dma=*/true);
 }
 
 void Cluster::write_core(
@@ -666,6 +707,28 @@ void Cluster::read_core(
     std::vector<uint32_t> &data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
     data.resize(size_in_bytes / sizeof(uint32_t));
     read_core(data.data(), size_in_bytes, core, addr, small_access);
+}
+
+void Cluster::dma_write_core(const void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    const chip_id_t chip_id = core.chip;
+    TT_FATAL(this->cluster_desc_->is_chip_mmio_capable(chip_id), "DMA write to non-MMIO device is not supported");
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->dma_write_to_device(mem_ptr, size_in_bytes, chip_id, core_coord, addr);
+}
+
+void Cluster::dma_read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    const chip_id_t chip_id = core.chip;
+    TT_FATAL(this->cluster_desc_->is_chip_mmio_capable(chip_id), "DMA read from non-MMIO device is not supported");
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, chip_id, core_coord, addr);
+}
+
+void Cluster::dma_read_core(
+    std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    data.resize(size_in_bytes / sizeof(uint32_t));
+    dma_read_core(data.data(), size_in_bytes, core, addr);
 }
 
 void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {

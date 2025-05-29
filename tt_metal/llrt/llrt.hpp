@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -88,6 +88,23 @@ void write_hex_vec_to_core(
 }
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord& core, uint64_t addr, uint32_t size);
+
+// DMA reads and writes only supported on MMIO devices
+template <typename DType>
+void dma_write_hex_vec_to_core(
+    chip_id_t chip, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) {
+    tt::tt_metal::MetalContext::instance().get_cluster().dma_write_core(
+        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
+}
+
+template <typename DType>
+void dma_write_hex_vec_to_core(
+    chip_id_t chip, const CoreCoord& core, tt::stl::Span<const DType> hex_vec, uint64_t addr) {
+    tt::tt_metal::MetalContext::instance().get_cluster().dma_write_core(
+        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
+}
+
+std::vector<uint32_t> dma_read_hex_vec_from_core(chip_id_t chip, const CoreCoord& core, uint64_t addr, uint32_t size);
 
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord& ethernet_core);
 

@@ -42,6 +42,10 @@ namespace tt {
 
 namespace tt_metal {
 
+bool supports_dma_operations(const IDevice* device) {
+    return device->arch() == tt::ARCH::WORMHOLE_B0 && device->is_mmio_capable();
+}
+
 static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
@@ -68,6 +72,27 @@ void issue_fd_read_from_profiler_buffer(
     }
 }
 
+std::vector<uint32_t> read_control_buffer_from_core_slow_dispatch(
+    IDevice* device, const CoreCoord& core, const HalProgrammableCoreType core_type) {
+    std::vector<uint32_t> control_buffer;
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    if (supports_dma_operations(device)) {
+        control_buffer = tt::llrt::dma_read_hex_vec_from_core(
+            device->id(),
+            core,
+            reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+    } else {
+        control_buffer = tt::llrt::read_hex_vec_from_core(
+            device->id(),
+            core,
+            reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+    }
+    return control_buffer;
+}
+
 std::vector<uint32_t> read_control_buffer_from_core(
     IDevice* device, const CoreCoord& core, const HalProgrammableCoreType core_type, const ProfilerDumpState state) {
     std::vector<uint32_t> control_buffer;
@@ -85,11 +110,7 @@ std::vector<uint32_t> read_control_buffer_from_core(
                 mesh_cq.enqueue_read_shard_from_core(
                     address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
             } else {
-                control_buffer = tt::llrt::read_hex_vec_from_core(
-                    device->id(),
-                    core,
-                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
-                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+                control_buffer = read_control_buffer_from_core_slow_dispatch(device, core, core_type);
             }
         } else {
             control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
@@ -102,14 +123,26 @@ std::vector<uint32_t> read_control_buffer_from_core(
                     true);
         }
     } else {
-        control_buffer = tt::llrt::read_hex_vec_from_core(
-            device->id(),
-            core,
-            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+        control_buffer = read_control_buffer_from_core_slow_dispatch(device, core, core_type);
     }
 
     return control_buffer;
+}
+
+void write_control_buffer_to_core_slow_dispatch(
+    IDevice* device,
+    const CoreCoord& core,
+    const HalProgrammableCoreType core_type,
+    const std::vector<uint32_t>& control_buffer) {
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    if (supports_dma_operations(device)) {
+        tt::llrt::dma_write_hex_vec_to_core(
+            device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
+    } else {
+        tt::llrt::write_hex_vec_to_core(
+            device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
+    }
 }
 
 void write_control_buffer_to_core(
@@ -131,8 +164,7 @@ void write_control_buffer_to_core(
                 mesh_cq.enqueue_write_shard_to_core(
                     address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
             } else {
-                tt::llrt::write_hex_vec_to_core(
-                    device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
+                write_control_buffer_to_core_slow_dispatch(device, core, core_type, control_buffer);
             }
         } else {
             dynamic_cast<HWCommandQueue&>(device->command_queue())
@@ -144,8 +176,7 @@ void write_control_buffer_to_core(
                     true);
         }
     } else {
-        tt::llrt::write_hex_vec_to_core(
-            device->id(), core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+        write_control_buffer_to_core_slow_dispatch(device, core, core_type, control_buffer);
     }
 }
 HalProgrammableCoreType get_core_type(chip_id_t device_id, const CoreCoord& core) {
@@ -895,16 +926,23 @@ void DeviceProfiler::dumpResults(
         }
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
-            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE || state == ProfilerDumpState::FORCE_UMD_READ) {
-                if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
+            if (state == ProfilerDumpState::FORCE_UMD_READ ||
+                (state == ProfilerDumpState::LAST_CLOSE_DEVICE && rtoptions.get_profiler_do_dispatch_cores())) {
+                if (supports_dma_operations(output_dram_buffer_ptr->device())) {
+                    tt_metal::detail::ReadFromBufferUsingDMA(*output_dram_buffer_ptr, profile_buffer);
+                } else {
                     tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
                 }
-            } else {
+            } else if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 issue_fd_read_from_profiler_buffer(output_dram_buffer, device, profile_buffer);
             }
         } else {
             if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
+                if (supports_dma_operations(output_dram_buffer_ptr->device())) {
+                    tt_metal::detail::ReadFromBufferUsingDMA(*output_dram_buffer_ptr, profile_buffer);
+                } else {
+                    tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
+                }
             }
         }
         for (const auto& worker_core : worker_cores) {

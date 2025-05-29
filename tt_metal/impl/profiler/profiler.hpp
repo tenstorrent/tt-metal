@@ -268,6 +268,8 @@ public:
     void setSyncInfo(const std::tuple<double, double, double>& sync_info);
 };
 
+bool supports_dma_operations(const IDevice* device);
+
 void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data);
 
 void write_control_buffer_to_core(
