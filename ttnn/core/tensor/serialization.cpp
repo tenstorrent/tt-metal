@@ -407,15 +407,15 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) 
     auto fb_tensor = ttnn::flatbuffer::GetTensor(header_buffer.data());
 
     // Get current position and seek to end to calculate remaining data size
-    long current_pos = ftell(input_file);
+    off_t current_pos = ftello(input_file);
     TT_FATAL(current_pos != -1, "Failed to get current file position");
 
     TT_FATAL(fseek(input_file, 0, SEEK_END) == 0, "Failed to seek to end of file");
 
-    long end_pos = ftell(input_file);
+    off_t end_pos = ftello(input_file);
     TT_FATAL(end_pos != -1, "Failed to get end file position");
 
-    uint64_t data_size = end_pos - current_pos;
+    uint64_t data_size = static_cast<uint64_t>(end_pos - current_pos);
 
     TT_FATAL(fseek(input_file, current_pos, SEEK_SET) == 0, "Failed to seek back to data start");
 
