@@ -232,8 +232,7 @@ void kernel_main() {
                             weights_multicast_data_addr,
                             weights_block_size_bytes,
                             weights_mcast_num_cores,
-                            false,
-                            false);
+                            true);
 
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                         // same vc even though cmd bufs are different Also, this only works because we are setting VCs
@@ -250,7 +249,6 @@ void kernel_main() {
                             weights_mcast_receiver_semaphore_addr,
                             weights_mcast_receiver_semaphore_noc_addr,
                             weights_mcast_num_cores,
-                            false,
                             false);
 #endif
 
@@ -294,12 +292,7 @@ void kernel_main() {
                     bias_start_address);
                 // num_dests must not include source, since we are NOT really doing a local copy!
                 noc_async_write_multicast(
-                    bias_start_address,
-                    bias_multicast_data_addr,
-                    bias_block_size_bytes,
-                    weights_mcast_num_cores,
-                    false,
-                    false);
+                    bias_start_address, bias_multicast_data_addr, bias_block_size_bytes, weights_mcast_num_cores, true);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc
                 // even though cmd bufs are different Also, this only works because we are setting VCs statically (using
@@ -316,7 +309,6 @@ void kernel_main() {
                     weights_mcast_receiver_semaphore_addr,
                     weights_mcast_receiver_semaphore_noc_addr,
                     weights_mcast_num_cores,
-                    false,
                     false);
 #endif
 
