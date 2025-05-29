@@ -32,7 +32,7 @@ def test_yolov8s(device, input_tensor, use_weights_from_ultralytics):
     disable_persistent_kernel_cache()
     profiler.clear()
     batch_size = input_tensor.shape[0]
-    inp_h, inp_w = input_tensor.shape[1], input_tensor.shape[2]
+    inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
     if use_weights_from_ultralytics:
         torch_model = YOLO("yolov8s.pt")
         torch_model = torch_model.model
@@ -69,6 +69,7 @@ def test_yolov8s(device, input_tensor, use_weights_from_ultralytics):
     outputs = []
     logger.info(f"Running inference for {iterations} iterations")
     for idx in range(iterations):
+        print("hellooo")
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
         ttnn_output_tensor = ttnn_model(ttnn_input)

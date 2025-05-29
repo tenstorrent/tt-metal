@@ -381,11 +381,6 @@ class TtC2f:
 
         y = [cv1_a, cv1_b]
 
-        # if reshard_bottleneck_input:
-        #     bottlenech_input = ttnn.to_memory_config(y[-1], ttnn.L1_MEMORY_CONFIG)
-        # else:
-        #     bottlenech_input = y[-1]
-
         for i in range(self.n):
             z = self.bottleneck_modules[i](y[-1])
             if (not self.shortcut) and reshard_bottleneck_input:
@@ -543,8 +538,7 @@ class TtDetect:
         for i in range(nl):
             cv2_params = input_params["cv2_params"][i]["input_params"]
             cv3_params = input_params["cv3_params"][i]["input_params"]
-            # if i == nl - 1:
-            #     block_shard = True
+
             self.detect_cv2_modules.append(
                 TtDetectCv2(device, parameters, f"{path}.cv2.{i}", input_params=cv2_params, block_shard=block_shard)
             )
