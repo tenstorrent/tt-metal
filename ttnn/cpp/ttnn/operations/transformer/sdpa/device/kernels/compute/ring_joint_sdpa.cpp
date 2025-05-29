@@ -19,27 +19,28 @@ void MAIN {
     constexpr uint32_t DHt = get_compile_time_arg_val(3);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(4);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
-    // constexpr uint32_t k_num_chunks = get_compile_time_arg_val(6);
 
-    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(7);
-    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(8);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(9);
-    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(10);
-    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(11);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(12);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(13);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(14);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(15);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(16);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(17);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(18);
+    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(6);
+    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(7);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(8);
+    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(9);
+    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(10);
+    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(11);
+    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(12);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(13);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(14);
+    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(15);
+    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(16);
+    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(17);
 
-    constexpr bool use_joint_mask = get_compile_time_arg_val(19) == 1;
-    constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(20);
-    constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(21);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(22);
-    constexpr uint32_t N_k_num_chunks_local = get_compile_time_arg_val(23);
-    constexpr uint32_t L_k_num_chunks = get_compile_time_arg_val(24);
+    constexpr bool use_joint_mask = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(19);
+    constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(20);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(21);
+    constexpr uint32_t N_k_num_chunks_local = get_compile_time_arg_val(22);
+    constexpr uint32_t L_k_num_chunks = get_compile_time_arg_val(23);
+    constexpr uint32_t global_logical_NK_chunks = get_compile_time_arg_val(24);
+    constexpr uint32_t global_padded_NK_chunks = get_compile_time_arg_val(25);
 
     uint32_t argidx = 0;
     const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
@@ -74,12 +75,25 @@ void MAIN {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;
 
+    // Only one iteration of the ring will contain the masked portion of the spatial input.
+    constexpr uint32_t N_mask_ring_id = mask_chunk_0 / N_k_num_chunks_local;
+    // The last iteration will concatenate L, which contains the masked portion of the joint tensor.
+    constexpr uint32_t L_mask_ring_id = ring_size - 1;
+
+    UNPACK(DPRINT << "COMPUTE: N_mask_ring_id: " << N_mask_ring_id << ENDL());
+    UNPACK(DPRINT << "COMPUTE: L_mask_ring_id: " << L_mask_ring_id << ENDL());
+
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
     for (uint32_t ring_id = 0; ring_id < ring_size; ++ring_id) {
         const uint32_t iter_k_num_chunks =
             ring_id == ring_size - 1 ? (N_k_num_chunks_local + L_k_num_chunks) : N_k_num_chunks_local;
-        UNPACK(DPRINT << "COMPUTE: ring_id: " << ring_id << ", iter_k_num_chunks: " << iter_k_num_chunks << ENDL());
+        const uint32_t iter_k_chunk_start = ring_id * N_k_num_chunks_local;
+        const uint32_t iter_k_chunk_end = iter_k_chunk_start + iter_k_num_chunks;
+        UNPACK(
+            DPRINT << "COMPUTE: ring_id: " << ring_id << ", iter_k_num_chunks: " << iter_k_num_chunks
+                   << "iter_k_chunk_start: " << iter_k_chunk_start << "iter_k_chunk_end: " << iter_k_chunk_end
+                   << ENDL());
         // Iterate over KV gathered on the ring
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
@@ -94,7 +108,14 @@ void MAIN {
 
                     cb_wait_front(cb_q_in, q_chunk_tiles);
 
-                    for (uint32_t k_chunk = 0; k_chunk < iter_k_num_chunks; ++k_chunk) {
+                    for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
+                        UNPACK(DPRINT << "COMPUTE: k_chunk: " << k_chunk << ENDL());
+                        if (k_chunk >= global_logical_NK_chunks && k_chunk < global_padded_NK_chunks) {
+                            // This is a KV chunk on spatial input beyond the chunk-padded length of the spatial input.
+                            // If k_chunk >= global_padded_NK_chunks, then this is a joint KV chunk.
+                            UNPACK(DPRINT << "COMPUTE: Skipping joint KV chunk: " << k_chunk << ENDL());
+                            continue;
+                        }
                         /* QK = Q_CHUNK @ K_CHUNK */
                         pack_reconfig_data_format(cb_qk_im);
                         matmul_blocks(
@@ -114,15 +135,14 @@ void MAIN {
 
                         /* QK *= SCALE */
                         mul_block_bcast_scalar_inplace<cb_qk_im, cb_scale_in, qk_chunk_tiles>();
-
                         if constexpr (use_joint_mask) {
-                            if ((k_chunk == mask_chunk_0) || (k_chunk == mask_chunk_1)) {
+                            if ((ring_id == N_mask_ring_id && k_chunk == mask_chunk_0) ||
+                                (ring_id == L_mask_ring_id && k_chunk == mask_chunk_1)) {
                                 /* QK += MASK */
                                 reconfig_data_format(cb_qk_im, cb_mask_in);
                                 add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                             }
                         }
-
                         /* Compute max and sum for softmax */
                         reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                         reduce_c<
@@ -132,8 +152,7 @@ void MAIN {
                             cb_identity_scale_in,
                             Sq_chunk_t,
                             Sk_chunk_t>(alias_cur_max);
-
-                        if (k_chunk > 0) {
+                        if (k_chunk > iter_k_chunk_start) {
                             max_block_inplace<Sq_chunk_t>(alias_cur_max, alias_prev_max);
                         }
 
@@ -170,11 +189,10 @@ void MAIN {
                         reconfig_data_format(alias_prev_max, alias_cur_max);
 
                         /* OUT_ACC += OUT_IM */
-                        if (k_chunk > 0) {
+                        if (k_chunk > iter_k_chunk_start) {
                             /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
                             sub_exp_block(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                             cb_pop_front(alias_prev_max, Sq_chunk_t);
-
                             /* cb_prev_sum *= cb_exp_max_diff */
                             mul_block_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                             /* cb_cur_sum += cb_prev_sum */

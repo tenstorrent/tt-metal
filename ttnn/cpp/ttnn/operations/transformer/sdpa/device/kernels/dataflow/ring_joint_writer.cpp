@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
 #include "debug/dprint.h"
+#include <tt-metalium/constants.hpp>
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -14,26 +15,34 @@ void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(5);
-    constexpr uint32_t valid_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t valid_Lt = get_compile_time_arg_val(7);
-    constexpr uint32_t padded_Nqt = get_compile_time_arg_val(8);
-    constexpr uint32_t padded_Nkt = get_compile_time_arg_val(9);
-    constexpr uint32_t padded_Lqt = get_compile_time_arg_val(10);
-    constexpr uint32_t padded_Lkt = get_compile_time_arg_val(11);
-    constexpr uint32_t unpadded_N = get_compile_time_arg_val(12);
-    constexpr uint32_t unpadded_L = get_compile_time_arg_val(13);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(15);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(16);
-    constexpr bool use_joint_mask = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(18);
-    constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(19);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(20);
-    constexpr uint32_t N_k_num_chunks_local = get_compile_time_arg_val(21);
-    constexpr uint32_t L_k_num_chunks = get_compile_time_arg_val(22);
+    constexpr uint32_t local_Nt = get_compile_time_arg_val(5);
+    constexpr uint32_t global_Nt = get_compile_time_arg_val(6);
+    constexpr uint32_t logical_Lt = get_compile_time_arg_val(7);
+    constexpr uint32_t padded_Lqt = get_compile_time_arg_val(8);
+    constexpr uint32_t padded_Lkt = get_compile_time_arg_val(9);
+    constexpr uint32_t logical_N = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_L = get_compile_time_arg_val(11);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(12);
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(13);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(14);
+    constexpr bool use_joint_mask = get_compile_time_arg_val(15) == 1;
+    constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(16);
+    constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(17);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(18);
+    constexpr uint32_t N_k_num_chunks_local = get_compile_time_arg_val(19);
+    constexpr uint32_t L_k_num_chunks = get_compile_time_arg_val(20);
+    constexpr uint32_t global_logical_NK_chunks = get_compile_time_arg_val(21);
+    constexpr uint32_t global_padded_NK_chunks = get_compile_time_arg_val(22);
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
+
+    // Only one iteration of the ring will contain the masked portion of the spatial input.
+    constexpr uint32_t N_mask_ring_id = mask_chunk_0 / N_k_num_chunks_local;
+    // The last iteration will concatenate L, which contains the masked portion of the joint tensor.
+    constexpr uint32_t L_mask_ring_id = ring_size - 1;
+
+    DPRINT << "WRITER: N_mask_ring_id: " << N_mask_ring_id << ENDL();
+    DPRINT << "WRITER: L_mask_ring_id: " << L_mask_ring_id << ENDL();
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -62,10 +71,10 @@ void kernel_main() {
     const InterleavedAddrGenFast<is_dram> lse_writer = {
         .bank_base_address = lse_addr, .page_size = tile_bytes, .data_format = data_format};
 
-    const auto output_tile_logical = TensorTileShape(B, NH, valid_Nt, DHt);
-    const auto joint_tile_logical = TensorTileShape(B, NH, valid_Lt, DHt);
+    const auto output_tile_logical = TensorTileShape(B, NH, local_Nt, DHt);
+    const auto joint_tile_logical = TensorTileShape(B, NH, logical_Lt, DHt);
     const auto cat_out_generator =
-        CatAddrGenerator(out_writer, output_tile_logical, padded_Nqt, joint_out_writer, joint_tile_logical, padded_Lqt);
+        CatAddrGenerator(out_writer, output_tile_logical, local_Nt, joint_out_writer, joint_tile_logical, padded_Lqt);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
@@ -88,11 +97,17 @@ void kernel_main() {
                         Therefore, for the last K chunk of the first tensor and the last K chunk of the joint tensor,
                         we should generate the vertical mask.
                         */
-                        if (mask_chunk_0 != (uint32_t)(-1)) {
-                            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_N);
+                        if (ring_id == N_mask_ring_id) {
+                            if (mask_chunk_0 != (uint32_t)(-1)) {
+                                DPRINT << "WRITER: N_mask_ring_id: " << ring_id << ENDL();
+                                generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_N);
+                            }
                         }
-                        if (mask_chunk_1 != (uint32_t)(-1)) {
-                            generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, unpadded_L);
+                        if (ring_id == L_mask_ring_id) {
+                            if (mask_chunk_1 != (uint32_t)(-1)) {
+                                DPRINT << "WRITER: L_mask_ring_id: " << ring_id << ENDL();
+                                generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_L);
+                            }
                         }
                     }
 
@@ -109,8 +124,8 @@ void kernel_main() {
                         // Read previous LSE for this Q chunk
                         cb_reserve_back(cb_lse_in, Sq_chunk_t);
                         // DEBUG: logging each LSE to different element in batch. Remove
-                        uint32_t lse_tile_id = (ring_id - 1) * B * NH * (padded_Nqt + padded_Lqt) +
-                                               nb * NH * (padded_Nqt + padded_Lqt) + nq * (padded_Nqt + padded_Lqt) +
+                        uint32_t lse_tile_id = (ring_id - 1) * B * NH * (local_Nt + logical_Lt) +
+                                               nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) +
                                                q_chunk * Sq_chunk_t;
                         uint32_t lse_addr = get_write_ptr(cb_lse_in);
                         for (uint32_t i = 0; i < Sq_chunk_t; i++) {
@@ -126,8 +141,8 @@ void kernel_main() {
 
                     cb_wait_front(cb_lse_out, Sq_chunk_t);
                     // DEBUG: logging each LSE to different element in batch. Remove
-                    uint32_t lse_tile_id = ring_id * B * NH * (padded_Nqt + padded_Lqt) +
-                                           nb * NH * (padded_Nqt + padded_Lqt) + nq * (padded_Nqt + padded_Lqt) +
+                    uint32_t lse_tile_id = ring_id * B * NH * (local_Nt + logical_Lt) +
+                                           nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) +
                                            q_chunk * Sq_chunk_t;
                     uint32_t lse_addr = get_read_ptr(cb_lse_out);
                     for (uint32_t i = 0; i < Sq_chunk_t; i++) {

@@ -98,6 +98,7 @@ struct ExecuteRingJointAttention {
         const ttnn::Tensor& joint_tensor_k,
         const ttnn::Tensor& joint_tensor_v,
         const std::string& joint_strategy,
+        std::size_t logical_n,
         SDPAProgramConfig program_config,
         std::optional<float> scale = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);

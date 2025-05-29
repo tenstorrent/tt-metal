@@ -57,48 +57,72 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
     }
 
     // Validate input shapes match
-    TT_FATAL(
-        k_shape[0] == q_shape[0] && v_shape[0] == q_shape[0],
-        "Batch sizes must match. Got Q: {}, K: {}, V: {}",
-        q_shape[0],
-        k_shape[0],
-        v_shape[0]);
+    const auto B = q_shape[0];
+    const auto NQH = q_shape[1];
+    const auto NKH = k_shape[1];
+    const auto N_local = q_shape[2];
+    const auto N_global = k_shape[2];
+    const auto L = joint_q_shape[2];
+    const auto DH = q_shape[3];
 
-    // Validate joint input shapes match
     TT_FATAL(
-        joint_k_shape[0] == joint_q_shape[0] && joint_v_shape[0] == joint_q_shape[0],
-        "Joint batch sizes must match. Got Q: {}, K: {}, V: {}",
+        k_shape[0] == B && v_shape[0] == B && joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
+        "Batch sizes must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+        B,
+        k_shape[0],
+        v_shape[0],
         joint_q_shape[0],
         joint_k_shape[0],
         joint_v_shape[0]);
 
-    // Validate Q and joint Q have same batch size and num heads
-    TT_FATAL(
-        q_shape[0] == joint_q_shape[0],
-        "Q and joint Q must have same batch size. Got Q: {}, joint Q: {}",
-        q_shape[0],
-        joint_q_shape[0]);
-
     // Validate head dimensions match
     TT_FATAL(
-        k_shape[3] == q_shape[3] && v_shape[3] == q_shape[3],
-        "Head dimensions must match. Got Q: {}, K: {}, V: {}",
-        q_shape[3],
+        k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
+            joint_v_shape[3] == DH,
+        "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+        DH,
         k_shape[3],
-        v_shape[3]);
-
-    TT_FATAL(
-        joint_k_shape[3] == joint_q_shape[3] && joint_v_shape[3] == joint_q_shape[3],
-        "Joint head dimensions must match. Got Q: {}, K: {}, V: {}",
+        v_shape[3],
         joint_q_shape[3],
         joint_k_shape[3],
         joint_v_shape[3]);
 
     TT_FATAL(
-        q_shape[3] == joint_q_shape[3],
-        "Q and joint Q must have same head dimension. Got Q: {}, joint Q: {}",
-        q_shape[3],
-        joint_q_shape[3]);
+        v_shape[1] == NKH && joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NKH,
+        "Num heads must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+        NQH,
+        NKH,
+        v_shape[1],
+        joint_q_shape[1],
+        joint_k_shape[1],
+        joint_v_shape[1]);
+
+    TT_FATAL(
+        v_shape[2] == N_global,
+        "V sequence length must be equal to global sequence length. Got V: {}, global sequence length: {}",
+        v_shape[2],
+        N_global);
+
+    TT_FATAL(
+        N_global == N_local * this->ring_size,
+        "Global sequence length must be equal to local sequence length times ring size. Got global sequence length: "
+        "{}, local sequence length: {}, ring size: {}",
+        N_global,
+        N_local,
+        this->ring_size);
+
+    TT_FATAL(
+        this->logical_n <= N_global,
+        "Logical sequence length must be less than or equal to global sequence length. Got logical sequence length: "
+        "{}, global sequence length: {}",
+        this->logical_n,
+        N_global);
+
+    TT_FATAL(
+        joint_k_shape[2] == L && joint_v_shape[2] == L,
+        "Joint sequence length must match. Got joint_K: {}, joint_V: {}",
+        joint_k_shape[2],
+        joint_v_shape[2]);
 
     // Check shapes based on ring
     TT_FATAL(
@@ -113,21 +137,7 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         k_shape[2],
         v_shape[2]);
 
-    // Validate num_heads relationship
-    const auto nqh = q_shape[1];
-    const auto nkv = k_shape[1];
-    const auto joint_nqh = joint_q_shape[1];
-    const auto joint_nkv = joint_k_shape[1];
-
-    TT_FATAL(nqh == nkv, "Q num_heads must be equal to K num_heads. Got Q: {}, K: {}", nqh, nkv);
-
-    TT_FATAL(
-        joint_nqh == joint_nkv,
-        "Joint Q num_heads must be equal to Joint K num_heads. Got Q: {}, K: {}",
-        joint_nqh,
-        joint_nkv);
-    TT_FATAL(
-        joint_nkv == nkv, "Joint K num_heads must be equal to K num_heads. Got Joint K: {}, K: {}", joint_nkv, nkv);
+    TT_FATAL(NQH == NKH, "Q num_heads must be equal to K num_heads. Got Q: {}, K: {}", NQH, NKH);
 
     // Validate chunk sizes if program config is provided
     auto q_chunk_size = this->get_q_chunk_size();
@@ -143,6 +153,17 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
         k_chunk_size,
         tt::constants::TILE_WIDTH);
+
+    TT_FATAL(
+        N_local % q_chunk_size == 0,
+        "Local sequence length must be divisible by q_chunk_size. Got N_local: {}, q_chunk_size: {}",
+        N_local,
+        q_chunk_size);
+    TT_FATAL(
+        N_local % k_chunk_size == 0,
+        "Local sequence length must be divisible by k_chunk_size. Got N_local: {}, k_chunk_size: {}",
+        N_local,
+        k_chunk_size);
 
     // Validate padding: Only the sequence dimension may be padded
     auto validate_padding = [](const Tensor& tensor) {
@@ -213,6 +234,7 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         output_tensor,
         joint_output_tensor,
         lse_output_tensor,
+        this->logical_n,
         scale,
         q_chunk_size,
         k_chunk_size,

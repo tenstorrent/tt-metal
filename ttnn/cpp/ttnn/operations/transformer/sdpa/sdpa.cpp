@@ -191,6 +191,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
     const ttnn::Tensor& joint_tensor_k,
     const ttnn::Tensor& joint_tensor_v,
     const std::string& joint_strategy,
+    std::size_t logical_n,
     SDPAProgramConfig program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -204,6 +205,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         RingJointScaledDotProductAttention{
             .joint_strategy = joint_strategy,
             .scale = scale,
+            .logical_n = logical_n,
             .output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             .program_config = std::move(program_config),
             .compute_kernel_config = kernel_config_val},

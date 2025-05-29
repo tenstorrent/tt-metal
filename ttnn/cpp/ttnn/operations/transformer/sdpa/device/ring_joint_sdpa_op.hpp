@@ -16,6 +16,7 @@ namespace ttnn::operations::transformer {
 struct RingJointScaledDotProductAttention {
     const std::string joint_strategy;
     const std::optional<float> scale;
+    const std::size_t logical_n;
     const std::size_t ring_size = 8;  // TODO: Debug on single device, remove later
     const tt::tt_metal::MemoryConfig output_mem_config;
     const std::optional<SDPAProgramConfig> program_config;

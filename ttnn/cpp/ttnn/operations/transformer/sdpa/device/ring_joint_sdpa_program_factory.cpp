@@ -17,7 +17,6 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::transformer::detail {
@@ -25,14 +24,15 @@ namespace ttnn::operations::transformer::detail {
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
 operation::ProgramWithCallbacks ring_joint_sdpa(
     const Tensor& input_tensor_q,
-    const Tensor& input_tensor_k,
-    const Tensor& input_tensor_v,
+    const Tensor& gathered_input_tensor_k,
+    const Tensor& gathered_input_tensor_v,
     const Tensor& joint_tensor_q,
     const Tensor& joint_tensor_k,
     const Tensor& joint_tensor_v,
     const Tensor& output_tensor,
     const Tensor& joint_output_tensor,
     const Tensor& lse_output_tensor,
+    std::size_t logical_n,
     std::optional<float> scale,
     std::size_t q_chunk_size,
     std::size_t k_chunk_size,
@@ -40,43 +40,43 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config) {
     /*
-    Q: B x NH x N x DH
+    Q: B x NH x N/num_devices x DH
     K: B x NH x N x DH
     V: B x NH x N x DH
 
     Q_joint: B x NH x L x DH
     K_joint: B x NH x L x DH
     V_joint: B x NH x L x DH
+
+    logical_n is the unpadded length of the gathered tensor. depending on device id, Q logical length
+    may be less than padded length. K, V are gathered, so logical_n tells the true length of K and V.
     */
 
     const auto q_shape = input_tensor_q.get_logical_shape();
-    const auto k_shape = input_tensor_k.get_logical_shape();
+    const auto k_shape = gathered_input_tensor_k.get_logical_shape();
     const auto joint_q_shape = joint_tensor_q.get_logical_shape();
-    const uint32_t B = q_shape[0], NH = q_shape[1], N = q_shape[2], DH = q_shape[3];
+    const uint32_t B = q_shape[0], NH = q_shape[1], local_N = q_shape[2], DH = q_shape[3];
+    const uint32_t global_N = k_shape[2];
     const uint32_t L = joint_q_shape[2];
 
-    // Calculate padded sequence length
-    const uint32_t padded_Nq = tt::round_up(N, q_chunk_size);
-    const uint32_t padded_Nk = tt::round_up(N, k_chunk_size);  // local Nk, calculated from Q shape
+    // Calculate padded sequence length. Both N_local and L may need to be padded to chunk size.
     const uint32_t padded_Lq = tt::round_up(L, q_chunk_size);
     const uint32_t padded_Lk = tt::round_up(L, k_chunk_size);
 
-    const uint32_t padded_Nqt = padded_Nq / TILE_HEIGHT;
-    const uint32_t padded_Nkt = padded_Nk / TILE_HEIGHT;
-    const uint32_t padded_Lqt = padded_Lq / TILE_HEIGHT;
-    const uint32_t padded_Lkt = padded_Lk / TILE_HEIGHT;
-
+    const uint32_t local_Nt = local_N / tt::constants::TILE_HEIGHT;
+    const uint32_t global_Nt = global_N / tt::constants::TILE_HEIGHT;
     // Find unpadded sequence lengths in tiles
-    const uint32_t valid_Nt = tt::div_up(N, TILE_HEIGHT);
-    const uint32_t valid_Lt = tt::div_up(L, TILE_HEIGHT);
+    const uint32_t logical_Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
+    const uint32_t padded_Lqt = padded_Lq / tt::constants::TILE_HEIGHT;
+    const uint32_t padded_Lkt = padded_Lk / tt::constants::TILE_HEIGHT;
 
     // Compute kernel operates on concatenated Q and K
-    const uint32_t cat_Sq = padded_Nq + padded_Lq;
-    const uint32_t cat_Sk = padded_Nk + padded_Lk;
+    const uint32_t cat_Sq = local_N + padded_Lq;
+    const uint32_t cat_Sk = global_N + padded_Lk;
 
-    const uint32_t cat_Sqt = cat_Sq / TILE_HEIGHT;
-    const uint32_t cat_Skt = cat_Sk / TILE_HEIGHT;
-    const uint32_t DHt = DH / TILE_WIDTH;
+    const uint32_t cat_Sqt = cat_Sq / tt::constants::TILE_HEIGHT;
+    const uint32_t cat_Skt = cat_Sk / tt::constants::TILE_HEIGHT;
+    const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
 
     // Kernel will need to know the tile-based shapes of both sets of tensors
     // to create a representation of the concatenated tensors.
@@ -92,51 +92,50 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     don't affect attention of unpadded tokens.
     In causal case, the causal mask takes care of masking K pad tokens.
     */
-    const bool use_joint_mask = (padded_Nk != N) || (padded_Lk != L);
+    const bool use_joint_mask = (logical_n != global_N) || (padded_Lk != L);
 
-    const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
-    const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
+    const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
+    const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t q_num_chunks = cat_Sq / q_chunk_size;
     const uint32_t k_num_chunks = cat_Sk / k_chunk_size;
-    const uint32_t N_k_num_chunks_local = padded_Nk / k_chunk_size;
+    const uint32_t N_k_num_chunks_local = local_N / k_chunk_size;
     const uint32_t L_k_num_chunks = padded_Lk / k_chunk_size;
+    const uint32_t global_logical_NK_chunks = tt::div_up(logical_n, k_chunk_size);
+    const uint32_t global_padded_NK_chunks = global_N / k_chunk_size;
 
-    tt::log_debug("B: {}", B);
-    tt::log_debug("NH: {}", NH);
-    tt::log_debug("N: {}", N);
-    tt::log_debug("L: {}", L);
-    tt::log_debug("DH: {}", DH);
+    tt::log_info("B: {}", B);
+    tt::log_info("NH: {}", NH);
+    tt::log_info("N: {}", local_N);
+    tt::log_info("L: {}", L);
+    tt::log_info("DH: {}", DH);
 
     // Log padded dimensions
-    tt::log_debug("padded_Nq: {}", padded_Nq);
-    tt::log_debug("padded_Nk: {}", padded_Nk);
-    tt::log_debug("padded_Lq: {}", padded_Lq);
-    tt::log_debug("padded_Lk: {}", padded_Lk);
-    tt::log_debug("padded_Nqt: {}", padded_Nqt);
-    tt::log_debug("padded_Nkt: {}", padded_Nkt);
-    tt::log_debug("padded_Lqt: {}", padded_Lqt);
-    tt::log_debug("padded_Lkt: {}", padded_Lkt);
+    tt::log_info("padded_Lq: {}", padded_Lq);
+    tt::log_info("padded_Lk: {}", padded_Lk);
+    tt::log_info("padded_Lqt: {}", padded_Lqt);
+    tt::log_info("padded_Lkt: {}", padded_Lkt);
 
     // Log tile dimensions
-    tt::log_debug("DHt: {}", DHt);
-    tt::log_debug("valid_Nt: {}", valid_Nt);
-    tt::log_debug("valid_Lt: {}", valid_Lt);
+    tt::log_info("DHt: {}", DHt);
+    tt::log_info("local_Nt: {}", local_Nt);
+    tt::log_info("global_Nt: {}", global_Nt);
+    tt::log_info("logical_Lt: {}", logical_Lt);
 
     // Log chunking parameters
-    tt::log_debug("Sq_chunk_t: {}", Sq_chunk_t);
-    tt::log_debug("Sk_chunk_t: {}", Sk_chunk_t);
-    tt::log_debug("q_chunk_size: {}", q_chunk_size);
-    tt::log_debug("k_chunk_size: {}", k_chunk_size);
-    tt::log_debug("q_num_chunks: {}", q_num_chunks);
-    tt::log_debug("k_num_chunks: {}", k_num_chunks);
+    tt::log_info("Sq_chunk_t: {}", Sq_chunk_t);
+    tt::log_info("Sk_chunk_t: {}", Sk_chunk_t);
+    tt::log_info("q_chunk_size: {}", q_chunk_size);
+    tt::log_info("k_chunk_size: {}", k_chunk_size);
+    tt::log_info("q_num_chunks: {}", q_num_chunks);
+    tt::log_info("k_num_chunks: {}", k_num_chunks);
 
     // Log concatenated dimensions
-    tt::log_debug("cat_Sq: {}", cat_Sq);
-    tt::log_debug("cat_Sk: {}", cat_Sk);
-    tt::log_debug("cat_Sqt: {}", cat_Sqt);
-    tt::log_debug("cat_Skt: {}", cat_Skt);
+    tt::log_info("cat_Sq: {}", cat_Sq);
+    tt::log_info("cat_Sk: {}", cat_Sk);
+    tt::log_info("cat_Sqt: {}", cat_Sqt);
+    tt::log_info("cat_Skt: {}", cat_Skt);
 
-    tt::log_debug("use_joint_mask: {}", use_joint_mask);
+    tt::log_info("use_joint_mask: {}", use_joint_mask);
 
     Program program = CreateProgram();
 
@@ -312,17 +311,17 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        k_num_chunks,
-        valid_Nt,
-        valid_Lt,
-        padded_Nqt,
-        padded_Nkt,
+        local_Nt,
+        global_Nt,
+        logical_Lt,
         padded_Lqt,
         padded_Lkt,
         num_cores,
         ring_size,
         N_k_num_chunks_local,
         L_k_num_chunks,
+        global_logical_NK_chunks,
+        global_padded_NK_chunks,
     };
 
     // Calculate which K chunks contain the mask boundaries
@@ -330,9 +329,12 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     // bug in the mask generation code, which would mask a full, valid chunk
     // with -inf.
     const uint32_t mask_chunk_0 =
-        (padded_Nk != N) ? (padded_Nkt / Sk_chunk_t) - 1 : (uint32_t)(-1);  // idx of last chunk in first sequence
+        (logical_n != global_N) ? (logical_n / k_chunk_size) : (uint32_t)(-1);  // idx of last chunk in first sequence
     const uint32_t mask_chunk_1 =
         (padded_Lk != L) ? (cat_Skt / Sk_chunk_t) - 1 : (uint32_t)(-1);  // idx of last chunk in second sequence
+
+    tt::log_info("mask_chunk_0: {}", mask_chunk_0);
+    tt::log_info("mask_chunk_1: {}", mask_chunk_1);
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
@@ -340,14 +342,12 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        k_num_chunks,
-        valid_Nt,
-        valid_Lt,
-        padded_Nqt,
-        padded_Nkt,
+        local_Nt,
+        global_Nt,
+        logical_Lt,
         padded_Lqt,
         padded_Lkt,
-        N,
+        logical_n,
         L,
         num_cores,
         packed_identity_scalar,
@@ -358,6 +358,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         ring_size,
         N_k_num_chunks_local,
         L_k_num_chunks,
+        global_logical_NK_chunks,
+        global_padded_NK_chunks,
     };
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -367,7 +369,6 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        k_num_chunks,
         qk_in0_block_w,
         qk_out_subblock_w,
         qk_out_subblock_h,
@@ -386,6 +387,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         ring_size,
         N_k_num_chunks_local,
         L_k_num_chunks,
+        global_logical_NK_chunks,
+        global_padded_NK_chunks,
     };
 
     std::map<string, string> defines;
@@ -425,8 +428,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     // Create circular buffers
 
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.get_dtype());
-    tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.get_dtype());
-    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.get_dtype());
+    tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.get_dtype());
+    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.get_dtype());
     tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
@@ -545,8 +548,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     auto cb_out1_id = CreateCircularBuffer(program, core_grid, c_out1_config);
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
-    uint32_t k_addr = input_tensor_k.buffer()->address();
-    uint32_t v_addr = input_tensor_v.buffer()->address();
+    uint32_t k_addr = gathered_input_tensor_k.buffer()->address();
+    uint32_t v_addr = gathered_input_tensor_v.buffer()->address();
     uint32_t joint_q_addr = joint_tensor_q.buffer()->address();
     uint32_t joint_k_addr = joint_tensor_k.buffer()->address();
     uint32_t joint_v_addr = joint_tensor_v.buffer()->address();

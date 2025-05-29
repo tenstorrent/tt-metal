@@ -230,18 +230,20 @@ void py_bind_sdpa(py::module& module) {
 
     auto ring_joint_doc = R"doc(
         RingJointAttention operation that efficiently performs non-causal attention over two
-        sets of query, key, and value tensors. Internally, these are concatenated in the sequence
-        dimension (joint_strategy = "rear"), then attention is computed once. The
-        output is split ("sliced") into two parts: one for the original Q/K/V chunk,
+        sets of query, key, and value tensors, where the first set is sharded across devices in the sequence dimension.
+        Internally, these are concatenated in the sequence dimension (joint_strategy = "rear"),
+        then attention is computed once. The output is split ("sliced") into two parts: one for the original Q/K/V chunk,
         and one for the joint Q/K/V chunk.
 
         This op handles optional padding via an attention mask to omit padded tokens from
         both the "original" and "joint" sequences.
 
+        Since N must be divisible by the number of devices, the logical N must be passed in.
+
         Args:
-            input_tensor_q (ttnn.Tensor): Original queries  [b x nh x N x dh].
-            input_tensor_k (ttnn.Tensor): Original keys     [b x nh x N x dh].
-            input_tensor_v (ttnn.Tensor): Original values   [b x nh x N x dh].
+            input_tensor_q (ttnn.Tensor): Original queries  [b x nh x N/num_devices x dh].
+            input_tensor_k (ttnn.Tensor): Original keys     [b x nh x N/num_devices x dh].
+            input_tensor_v (ttnn.Tensor): Original values   [b x nh x N/num_devices x dh].
 
             joint_tensor_q (ttnn.Tensor): Joint queries     [b x nh x L x dh].
             joint_tensor_k (ttnn.Tensor): Joint keys        [b x nh x L x dh].
@@ -256,7 +258,7 @@ void py_bind_sdpa(py::module& module) {
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
-              - The attention output for the original Q/K/V shape [b x nh x N x dh].
+              - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dh].
               - The attention output for the joint Q/K/V shape    [b x nh x L x dh].
         )doc";
 
@@ -275,6 +277,7 @@ void py_bind_sdpa(py::module& module) {
                const ttnn::Tensor& joint_tensor_k,
                const ttnn::Tensor& joint_tensor_v,
                const std::string& joint_strategy,
+               std::size_t logical_n,
                SDPAProgramConfig program_config,
                std::optional<float> scale,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
@@ -288,6 +291,7 @@ void py_bind_sdpa(py::module& module) {
                     joint_tensor_k,
                     joint_tensor_v,
                     joint_strategy,
+                    logical_n,
                     program_config,
                     scale,
                     compute_kernel_config);
@@ -301,6 +305,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("joint_tensor_v").noconvert(),
             py::kw_only(),
             py::arg("joint_strategy"),
+            py::arg("logical_n"),
             py::arg("program_config").noconvert(),
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,

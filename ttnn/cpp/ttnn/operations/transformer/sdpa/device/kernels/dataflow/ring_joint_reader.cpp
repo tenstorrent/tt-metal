@@ -13,21 +13,17 @@ void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
-    // constexpr uint32_t k_num_chunks_local = get_compile_time_arg_val(5);
-    constexpr uint32_t valid_Nqt = get_compile_time_arg_val(6);
-    constexpr uint32_t valid_Lt = get_compile_time_arg_val(7);
-    constexpr uint32_t padded_Nqt = get_compile_time_arg_val(8);
-    constexpr uint32_t padded_Nkt_local = get_compile_time_arg_val(9);
-    constexpr uint32_t padded_Lqt = get_compile_time_arg_val(10);
-    constexpr uint32_t padded_Lkt = get_compile_time_arg_val(11);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(12);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(13);
-    constexpr uint32_t N_k_num_chunks_local = get_compile_time_arg_val(14);
-    constexpr uint32_t L_k_num_chunks = get_compile_time_arg_val(15);
-
-    // constexpr uint32_t N_k_num_chunks = N_k_num_chunks_local * ring_size;
-    constexpr uint32_t padded_Nkt = padded_Nkt_local * ring_size;
-    constexpr uint32_t valid_Nkt = valid_Nqt * ring_size;
+    constexpr uint32_t local_Nt = get_compile_time_arg_val(5);
+    constexpr uint32_t global_Nt = get_compile_time_arg_val(6);
+    constexpr uint32_t logical_Lt = get_compile_time_arg_val(7);
+    constexpr uint32_t padded_Lqt = get_compile_time_arg_val(8);
+    constexpr uint32_t padded_Lkt = get_compile_time_arg_val(9);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(10);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(11);
+    constexpr uint32_t N_k_num_chunks_local = get_compile_time_arg_val(12);
+    constexpr uint32_t L_k_num_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t global_logical_NK_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t global_padded_NK_chunks = get_compile_time_arg_val(15);
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -71,15 +67,15 @@ void kernel_main() {
     const InterleavedAddrGenFast<is_dram> joint_v_reader = {
         .bank_base_address = joint_v_addr, .page_size = v_tile_bytes, .data_format = v_data_format};
 
-    const auto q_input_tile_logical = TensorTileShape(B, NH, valid_Nqt, DHt);
-    const auto kv_input_tile_logical = TensorTileShape(B, NH, valid_Nkt, DHt);
-    const auto joint_tile_logical = TensorTileShape(B, NH, valid_Lt, DHt);
+    const auto q_input_tile_logical = TensorTileShape(B, NH, local_Nt, DHt);
+    const auto kv_input_tile_logical = TensorTileShape(B, NH, global_Nt, DHt);
+    const auto joint_tile_logical = TensorTileShape(B, NH, logical_Lt, DHt);
     const auto cat_q_generator =
-        CatAddrGenerator(q_reader, q_input_tile_logical, padded_Nqt, joint_q_reader, joint_tile_logical, padded_Lqt);
+        CatAddrGenerator(q_reader, q_input_tile_logical, local_Nt, joint_q_reader, joint_tile_logical, padded_Lqt);
     const auto cat_k_generator =
-        CatAddrGenerator(k_reader, kv_input_tile_logical, padded_Nkt, joint_k_reader, joint_tile_logical, padded_Lkt);
+        CatAddrGenerator(k_reader, kv_input_tile_logical, global_Nt, joint_k_reader, joint_tile_logical, padded_Lkt);
     const auto cat_v_generator =
-        CatAddrGenerator(v_reader, kv_input_tile_logical, padded_Nkt, joint_v_reader, joint_tile_logical, padded_Lkt);
+        CatAddrGenerator(v_reader, kv_input_tile_logical, global_Nt, joint_v_reader, joint_tile_logical, padded_Lkt);
 
     for (uint32_t ring_id = 0; ring_id < ring_size; ++ring_id) {
         // Iterate over KV blocks gathered on ring.
@@ -87,8 +83,12 @@ void kernel_main() {
         const uint32_t iter_k_num_chunks =
             ring_id == ring_size - 1 ? (N_k_num_chunks_local + L_k_num_chunks) : N_k_num_chunks_local;
         const uint32_t iter_k_chunk_start = ring_id * N_k_num_chunks_local;
+        const uint32_t iter_k_chunk_end = iter_k_chunk_start + iter_k_num_chunks;
         DPRINT << "READER: ring_id: " << ring_id << ", iter_k_num_chunks: " << iter_k_num_chunks
-               << ", iter_k_chunk_start: " << iter_k_chunk_start << ENDL();
+               << ", iter_k_chunk_start: " << iter_k_chunk_start << ", iter_k_chunk_end: " << iter_k_chunk_end
+               << ENDL();
+
+        // TODO: Insert fused signaler wait
 
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
@@ -100,8 +100,15 @@ void kernel_main() {
                         cat_q_generator, q_slice, cb_q_in, q_tile_bytes, barrier_threshold, false /*transpose*/
                     );
 
-                    for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_start + iter_k_num_chunks;
-                         ++k_chunk) {
+                    for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
+                        DPRINT << "READER: k_chunk: " << k_chunk << ENDL();
+                        if (k_chunk >= global_logical_NK_chunks && k_chunk < global_padded_NK_chunks) {
+                            // This is a KV chunk on spatial input beyond the chunk-padded length of the spatial input.
+                            // If k_chunk >= global_padded_NK_chunks, then this is a joint KV chunk.
+                            DPRINT << "READER: Skipping joint KV chunk: " << k_chunk << ENDL();
+                            continue;
+                        }
+
                         const auto kv_row_start_tile = k_chunk * Sk_chunk_t;
                         const auto kv_slice = Slice(nb, nq, kv_row_start_tile, kv_row_start_tile + Sk_chunk_t, 0, DHt);
 
