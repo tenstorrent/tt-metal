@@ -191,6 +191,7 @@ jobs:
             image-base-name: ${{ needs.get-image-tags.outputs.bh-profiler-base-image-name }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ matrix.image-config.image-tag }}
