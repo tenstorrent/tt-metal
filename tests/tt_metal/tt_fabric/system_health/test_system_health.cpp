@@ -11,6 +11,7 @@
 #include <utility>
 
 #include <tt-metalium/logger.hpp>
+#include <tt-metalium/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
@@ -33,6 +34,7 @@ std::pair<std::uint32_t, std::uint32_t> get_ubb_ids(chip_id_t chip_id) {
     }
     return std::make_pair(0, 0);
 }
+
 TEST(Cluster, ReportSystemHealth) {
     // Despite potential error messages, this test will not fail
     // It is a report of system health
@@ -125,7 +127,23 @@ TEST(Cluster, TestMeshFullConnectivity) {
     }
     EXPECT_EQ(eth_connections.size(), num_expected_chips)
         << " Expected " << num_expected_chips << " in " << magic_enum::enum_name(cluster_type) << " cluster";
+
     auto input_args = ::testing::internal::GetArgvs();
+
+    if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
+        log_info(LogTest, "Usage:");
+        log_info(
+            LogTest,
+            "  --min-connections: target minimum number of connections between chips (default depends on system "
+            "type) ");
+        log_info(
+            LogTest,
+            "  --system-topology: system topology to check (defaults to no topology check) Valid values: {}",
+            magic_enum::enum_names<FabricType>());
+        return;
+    }
+
+    // Parse command line arguments
     std::uint32_t num_target_connections = 0;
     std::tie(num_target_connections, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args, "--min-connections", 0);
@@ -138,6 +156,21 @@ TEST(Cluster, TestMeshFullConnectivity) {
         num_target_connections = num_connections_per_side;
     }
 
+    std::optional<FabricType> target_system_topology = std::nullopt;
+    std::optional<std::string> target_system_topology_str = std::nullopt;
+    std::tie(target_system_topology_str, input_args) =
+        test_args::get_command_option_and_remaining_args(input_args, "--system-topology", std::nullopt);
+    if (target_system_topology_str.has_value()) {
+        target_system_topology =
+            magic_enum::enum_cast<FabricType>(target_system_topology_str.value(), magic_enum::case_insensitive);
+        if (*target_system_topology != FabricType::TORUS_2D) {
+            log_warning(
+                tt::LogTest,
+                "System topology {} not supported for mesh check, skipping topology verification",
+                *target_system_topology_str);
+            target_system_topology = std::nullopt;
+        }
+    }
     for (const auto& [chip, connections] : eth_connections) {
         std::stringstream chip_ss;
         chip_ss << "Chip " << chip;
@@ -148,6 +181,15 @@ TEST(Cluster, TestMeshFullConnectivity) {
         std::map<chip_id_t, int> num_connections_to_chip;
         for (const auto& [channel, remote_chip_and_channel] : connections) {
             num_connections_to_chip[std::get<0>(remote_chip_and_channel)]++;
+        }
+        if (target_system_topology.has_value()) {
+            if (*target_system_topology == FabricType::TORUS_2D) {
+                static constexpr std::uint32_t num_expected_chip_connections = 4;
+                EXPECT_EQ(num_connections_to_chip.size(), num_expected_chip_connections)
+                    << chip_ss.str() << " has " << num_connections_to_chip.size()
+                    << " connections to other chips, expected " << num_expected_chip_connections << " for "
+                    << magic_enum::enum_name(*target_system_topology) << " topology";
+            }
         }
         for (const auto& [other_chip, count] : num_connections_to_chip) {
             std::stringstream other_chip_ss;
