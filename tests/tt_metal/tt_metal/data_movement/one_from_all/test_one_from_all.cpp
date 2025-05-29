@@ -196,5 +196,5 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
         }
     }
 }
-
+uint32_t dummy = 1;
 }  // namespace tt::tt_metal
