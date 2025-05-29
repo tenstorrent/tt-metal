@@ -60,6 +60,24 @@
                 }
             },
             {
+                "id": "exp-bfloat16-ulp-pres2",
+                "name": "exp",
+                "outputs": [
+                    "accuracy_results/plots/ulp/exp-bfloat16-pres2.png"
+                ],
+                "files": [
+                    "accuracy_results/results/exp-bfloat16-[1].csv",
+                    "accuracy_results/results/exp_approx_21f-bfloat16-[1].csv",
+                    "accuracy_results/results/exp_approx-bfloat16-[1].csv"
+                ],
+                "plot_params": {
+                    "xlim": [-100, 100],
+                    "ylim": [0, 20],
+                    "yscale": "linear",
+                    "xbase": 2
+                }
+            },
+            {
                 "id": "exp-bfloat16-ulp-pres0",
                 "name": "exp",
                 "outputs": [
@@ -899,6 +917,19 @@
                     }
                 },
                 {
+                    "id": "exp-bfloat16-pres1-zoom",
+                    "name": "exp",
+                    "outputs": ["accuracy_results/plots/exp-bfloat16-pres0-zoom.png"],
+                    "files": [
+                        "accuracy_results/results/exp-bfloat16-[1].csv",
+                        "accuracy_results/results/exp_approx_21f-bfloat16-[1].csv"
+                    ],
+                    "plot_params": {
+                        "xlim": [-100, 100],
+                        "xbase": 2
+                    }
+                },
+                {
                     "id": "pow-bfloat16-zoom",
                     "name": "pow",
                     "outputs": ["accuracy_results/plots/pow-bfloat16-zoom.png"],
@@ -1637,7 +1668,10 @@
                 {
                     "id": "mish-bfloat16-value",
                     "name": "mish",
-                    "outputs": ["accuracy_results/plots/value/mish-bfloat16.png"],
+                    "outputs": [
+                        "accuracy_results/plots/value/mish-bfloat16.png",
+                        "accuracy_results/plots/value/mish-bfloat16.svg"
+                    ],
                     "files": [
                         "accuracy_results/results/mish-bfloat16-[1].csv"
                     ],
