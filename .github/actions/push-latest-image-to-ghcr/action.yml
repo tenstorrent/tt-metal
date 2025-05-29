@@ -6,6 +6,10 @@ inputs:
     description: 'Docker image tag in format REPO_NAME:VERSION'
     required: true
     type: string
+  github-token:
+    description: 'GH Token for registry login'
+    required: false
+    type: string
 
 outputs:
   repo-name:
@@ -30,7 +34,7 @@ runs:
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        password: ${{ inputs.github-token }}
 
     - name: Parse repository name
       id: parse-repo

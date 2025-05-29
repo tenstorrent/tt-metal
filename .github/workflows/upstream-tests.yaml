@@ -195,3 +195,4 @@ jobs:
       - uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ matrix.image-config.image-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
