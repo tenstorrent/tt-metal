@@ -19,19 +19,6 @@ env:
   BLACKHOLE_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-bh
 
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
-      tracy: true
   get-image-tags:
     runs-on: ubuntu-latest
     outputs:
@@ -65,8 +52,6 @@ jobs:
           echo "bh-profiler-base-image-name=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
   build-images:
     needs:
-      - build-artifact
-      - build-artifact-profiler
       - get-image-tags
     permissions:
       packages: write
@@ -81,26 +66,20 @@ jobs:
             image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-base-image-name }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
             image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-profiler-base-image-name }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
-            build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+            tracy: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
             image-base-name: ${{ needs.get-image-tags.outputs.bh-base-image-name }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh blackhole
-            build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
             image-base-name: ${{ needs.get-image-tags.outputs.bh-profiler-base-image-name }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: tests/scripts/single_card/run_bh_upstream_profiler_tests.sh
-            build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+            tracy: true
     runs-on: tt-beta-ubuntu-2204-large
     steps:
       - uses: actions/checkout@v4
@@ -109,14 +88,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           # 22.04 artifact... we'll probably need to key on that in the original action in metal
-          name: ${{ matrix.image-config.build-artifact-name }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 15325488645
+          name: TTMetal_build_any${{ matrix.image-config.tracy && '_profiler' || '' }}
       - run: mkdir -p _tt-metal
       - run: tar -xvf ttm_any.tar -C _tt-metal/
       - run: ls -hal _tt-metal
       - name: 🧪 Download Python Wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.image-config.wheel-artifact-name }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 15325488645
+          name: eager-dist-ubuntu-22.04-any${{ matrix.image-config.tracy && '-profiler' || '' }}
       - name: 💿 Verify Wheel exists
         shell: bash
         run: |
