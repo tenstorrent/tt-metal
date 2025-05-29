@@ -561,14 +561,13 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
 }
 
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
-template <uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void receiver_forward_packet(
     // TODO: have a separate cached copy of the packet header to save some additional L1 loads
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>& downstream_edm_interface,
-    uint8_t transaction_id,
-    uint8_t rx_channel_id) {
+    uint8_t transaction_id) {
     if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
         // If the packet is a terminal packet, then we can just deliver it locally
         bool start_distance_is_terminal_value =
@@ -581,14 +580,14 @@ FORCE_INLINE void receiver_forward_packet(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
         }
         if (start_distance_is_terminal_value) {
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+            execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
         }
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         uint32_t routing = cached_routing_fields.value & tt::tt_fabric::LowLatencyRoutingFields::FIELD_MASK;
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         switch (routing) {
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_ONLY:
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
                 forward_payload_to_downstream_edm<enable_ring_support, true>(
@@ -597,7 +596,7 @@ FORCE_INLINE void receiver_forward_packet(
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
                 forward_payload_to_downstream_edm<enable_ring_support, true>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
                 break;
             default: ASSERT(false);
         }
@@ -606,13 +605,12 @@ FORCE_INLINE void receiver_forward_packet(
 
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
-template <uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_packet(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     uint8_t transaction_id,
-    uint8_t rx_channel_id,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
     auto dest_mesh_id = packet_start->dst_start_mesh_id;
     auto dest_chip_id = packet_start->dst_start_chip_id;
@@ -634,7 +632,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             transaction_id);
     } else {
         if (dest_chip_id == routing_table->my_device_id || mcast_active) {
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+            execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
             if (mcast_active) {
                 // This packet is in an active mcast
                 for (size_t i = eth_chan_directions::EAST; i < eth_chan_directions::COUNT; i++) {
@@ -666,13 +664,12 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
 #endif
 
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
-template <uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t rx_channel_id, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_packet(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     uint8_t transaction_id,
-    uint8_t rx_channel_id,
     uint32_t hop_cmd) {
     uint16_t payload_size_bytes = packet_start->payload_size_bytes;
 
@@ -680,7 +677,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::NOOP: break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
             if constexpr (my_direction == eth_chan_directions::EAST) {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
             } else {
                 forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
@@ -692,7 +689,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             break;
         case LowLatencyMeshRoutingFields::FORWARD_WEST:
             if constexpr (my_direction == eth_chan_directions::WEST) {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
             } else {
                 forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
@@ -718,11 +715,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     downstream_edm_interface[eth_chan_directions::WEST],
                     transaction_id);
             }
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+            execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
             break;
         case LowLatencyMeshRoutingFields::FORWARD_NORTH:
             if constexpr (my_direction == eth_chan_directions::NORTH) {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
             } else {
                 forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
@@ -734,7 +731,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             break;
         case LowLatencyMeshRoutingFields::FORWARD_SOUTH:
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
             } else {
                 forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
@@ -760,7 +757,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     downstream_edm_interface[eth_chan_directions::SOUTH],
                     transaction_id);
             }
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+            execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
             break;
         default: __builtin_unreachable();
     }
@@ -899,12 +896,7 @@ FORCE_INLINE void run_sender_channel_step(
     }
 }
 
-template <
-    uint8_t to_receiver_pkts_sent_id,
-    uint8_t receiver_channel,
-    typename WriteTridTracker,
-    uint8_t RECEIVER_NUM_BUFFERS,
-    uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t receiver_channel, typename WriteTridTracker, uint8_t RECEIVER_NUM_BUFFERS, uint8_t SENDER_NUM_BUFFERS>
 void run_receiver_channel_step_impl(
     tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_channel,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
@@ -912,18 +904,19 @@ void run_receiver_channel_step_impl(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
     auto& ack_counter = receiver_channel_pointers.ack_counter;
-    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+    auto pkts_received_since_last_check = get_ptr_val<to_receiver_packets_sent_streams[receiver_channel]>();
     if constexpr (enable_first_level_ack) {
         bool pkts_received = pkts_received_since_last_check > 0;
         ASSERT(receiver_channel_pointers.completion_ptr.distance_behind(ack_counter) < RECEIVER_NUM_BUFFERS);
         if (pkts_received) {
             // currently only support processing one packet at a time, so we only decrement by 1
-            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+            increment_local_update_ptr_val<to_receiver_packets_sent_streams[receiver_channel]>(-1);
             receiver_send_received_ack(ack_counter.get_buffer_index(), local_receiver_channel);
             ack_counter.increment();
         }
     } else {
-        increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
+        increment_local_update_ptr_val<to_receiver_packets_sent_streams[receiver_channel]>(
+            -pkts_received_since_last_check);
         ack_counter.increment_n(pkts_received_since_last_check);
     }
 
@@ -977,24 +970,15 @@ void run_receiver_channel_step_impl(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
 #if defined(DYNAMIC_ROUTING_ENABLED)
-                receiver_forward_packet(
-                    packet_header,
-                    cached_routing_fields,
-                    downstream_edm_interface,
-                    trid,
-                    receiver_channel,
-                    port_direction_table);
+                receiver_forward_packet<receiver_channel>(
+                    packet_header, cached_routing_fields, downstream_edm_interface, trid, port_direction_table);
 #else
-                receiver_forward_packet(
-                    packet_header, cached_routing_fields, downstream_edm_interface, trid, receiver_channel, hop_cmd);
+                receiver_forward_packet<receiver_channel>(
+                    packet_header, cached_routing_fields, downstream_edm_interface, trid, hop_cmd);
 #endif
             } else {
-                receiver_forward_packet(
-                    packet_header,
-                    cached_routing_fields,
-                    downstream_edm_interface[receiver_channel],
-                    trid,
-                    receiver_channel);
+                receiver_forward_packet<receiver_channel>(
+                    packet_header, cached_routing_fields, downstream_edm_interface[receiver_channel], trid);
             }
             wr_sent_counter.increment();
         }
@@ -1038,7 +1022,6 @@ void run_receiver_channel_step_impl(
 };
 
 template <
-    uint8_t to_receiver_pkts_sent_id,
     uint8_t receiver_channel,
     typename WriteTridTracker,
     uint8_t RECEIVER_NUM_BUFFERS,
@@ -1051,7 +1034,7 @@ FORCE_INLINE void run_receiver_channel_step(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
     if (is_receiver_channel_serviced[receiver_channel]) {
-        run_receiver_channel_step_impl<to_receiver_pkts_sent_id, receiver_channel, WriteTridTracker>(
+        run_receiver_channel_step_impl<receiver_channel>(
             local_receiver_channels[receiver_channel],
             downstream_edm_interface,
             receiver_channel_pointers[receiver_channel],
@@ -1186,7 +1169,7 @@ void run_fabric_edm_main_loop(
                 channel_connection_established);
 
             if constexpr (!dateline_connection) {
-                run_receiver_channel_step<to_receiver_packets_sent_streams[0], 0>(
+                run_receiver_channel_step<0>(
                     local_receiver_channels,
                     downstream_edm_noc_interfaces,
                     receiver_channel_pointers,
@@ -1194,7 +1177,7 @@ void run_fabric_edm_main_loop(
                     port_direction_table);
             }
             if constexpr (enable_ring_support) {
-                run_receiver_channel_step<to_receiver_packets_sent_streams[1], 1>(
+                run_receiver_channel_step<1>(
                     local_receiver_channels,
                     downstream_edm_noc_interfaces,
                     receiver_channel_pointers,
