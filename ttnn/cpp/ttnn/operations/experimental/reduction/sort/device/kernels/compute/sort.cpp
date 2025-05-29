@@ -138,7 +138,7 @@ void MAIN {
                          *
                          * Potential Bug: Unpacker and Packer Threads Synchronization Issue
                          *
-                         * After migrating to the wormhole architecture, undefined behavior was observed, resulting in
+                         * After migrating to the blackhole architecture, undefined behavior was observed, resulting in
                          * incorrect results. The core of the issue lies in the synchronization between the unpacker
                          * (reading tiles from CB to registers) and packer (writing tiles from registers back to CB)
                          * threads.
