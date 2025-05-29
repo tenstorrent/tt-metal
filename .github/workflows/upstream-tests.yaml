@@ -172,7 +172,21 @@ jobs:
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
   push-latest:
-    if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || inputs.tag-as-latest) }}
+    # This joyously long condition allows us to do a couple of things we want:
+    # - Forcefully publish a latest image if the user requested such,
+    #   regardless of the statuses of the test jobs Recall that jobs which depend
+    #   on other upstreams which fail will never get to run even if their
+    #   conditions are met, unless we things like !cancelled()
+    # - On main branch, don't publish an image unless the tests pass. We want to keep
+    #   this functionality on main, unless of course someone dispatches this workflow
+    #   with the tag-as-latest option which will force publish the image.
+    if: >-
+      ${{
+        !cancelled() && (
+          (github.ref == 'refs/heads/main' && !contains(join(needs.*.result, ','), 'failure')) ||
+          inputs.tag-as-latest
+        )
+      }}
     needs:
       - get-image-tags
     permissions:
