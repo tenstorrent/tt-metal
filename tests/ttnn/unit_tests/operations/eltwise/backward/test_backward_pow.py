@@ -65,7 +65,15 @@ def test_fw_exponent(input_shapes, exponent, device):
 )
 @pytest.mark.parametrize(
     "exponent",
-    [(0.5), (0.0), (1.5), (4.5), (7.25), (10.0), (12.75), (16.0)],
+    [
+        (0.0),
+        (1.0),
+        (2.0),
+        (5.0),
+        (0.5),
+        (1.5),
+        (2.5),
+    ],
 )
 def test_bw_unary_pow(input_shapes, exponent, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 0, 100, device, True, seed=0)
@@ -125,7 +133,15 @@ def test_bw_unary_pow_test_neg_inf(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "exponent",
-    [(0.5), (0.0), (1.5), (4.5), (7.25), (10.0), (12.75), (16.0)],
+    [
+        (0.0),
+        (1.0),
+        (2.0),
+        (5.0),
+        (0.5),
+        (1.5),
+        (2.5),
+    ],
 )
 def test_bw_unary_pow_output(input_shapes, exponent, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 0, 100, device, True, seed=0)
@@ -162,7 +178,15 @@ def test_bw_unary_pow_output(input_shapes, exponent, device):
 )
 @pytest.mark.parametrize(
     "exponent",
-    [(0.5), (0.0), (1.5), (4.5), (7.25), (10.0), (12.75), (16.0)],
+    [
+        (0.0),
+        (1.0),
+        (2.0),
+        (5.0),
+        (0.5),
+        (1.5),
+        (2.5),
+    ],
 )
 def test_bw_unary_pow_negative_inputs(input_shapes, exponent, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
@@ -186,4 +210,41 @@ def test_bw_unary_pow_negative_inputs(input_shapes, exponent, device):
     golden_tensor = golden_function(grad_data, in_data, exponent)
 
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor, pcc=0.99)
+    assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "exponent",
+    [(5.5), (8.5), (10.0), (11.6), (12.0), (13.2), (15.8), (16.45), (18.5), (20.0)],
+)
+@pytest.mark.parametrize(
+    ("low1", "high1", "low2", "high2"),
+    [
+        (0, 30, -20, 20),
+    ],
+)
+def test_bw_unary_pow_edge_case_exponents(device, input_shapes, exponent, high1, low1, high2, low2):
+    in_data = (
+        torch.rand(input_shapes, requires_grad=True).bfloat16() * (high1 - low1) + low1
+    )  # Using only positive inputs as fractional exponents with negative bases yield NaN
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_data = torch.rand(input_shapes, requires_grad=True).bfloat16() * (high2 - low2) + low2
+    grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden_fn = ttnn.get_golden_function(ttnn.pow_bw)
+    golden_tensor = golden_fn(grad_data, in_data, exponent=exponent)
+
+    in_data.retain_grad()
+
+    output_tensor = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
+
+    status = compare_pcc(output_tensor, golden_tensor, pcc=0.99)
     assert status

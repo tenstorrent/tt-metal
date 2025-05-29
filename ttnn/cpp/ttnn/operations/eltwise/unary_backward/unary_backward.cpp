@@ -261,7 +261,9 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardPow::invoke(
     }
 
     Tensor result = ttnn::multiply(queue_id, power_input, exponent, std::nullopt, output_mem_config);
+    power_input.deallocate();
     Tensor final_result = ttnn::multiply(queue_id, result, grad, std::nullopt, output_mem_config);
+    result.deallocate();
     // Handle negative inputs by returning infinity
     where(
         queue_id,
