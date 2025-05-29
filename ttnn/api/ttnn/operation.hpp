@@ -596,7 +596,7 @@ public:
         }},
 
         // Initialize methods
-        get_type_name_impl_{[](const storage_t& storage) -> const std::string {
+        get_type_name_impl_{[](const storage_t& storage) -> std::string {
             const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
             if constexpr (detail::implements_get_type_name<T>()) {
                 return operation.get_type_name();
@@ -660,7 +660,7 @@ public:
         compute_output_specs_impl_{
             [](const storage_t& storage,
                const Tensors& input_tensors,
-               const OptionalTensors& output_tensors) -> const ComputedSpecs {
+               const OptionalTensors& output_tensors) -> ComputedSpecs {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_compute_output_specs_with_optional_output_tensors<T>()) {
                     return operation.compute_output_specs(input_tensors, output_tensors);
@@ -674,7 +674,7 @@ public:
         create_output_tensors_impl_{
             [](const storage_t& storage,
                const Tensors& input_tensors,
-               const OptionalTensors& output_tensors) -> const OutputTensors {
+               const OptionalTensors& output_tensors) -> OutputTensors {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_create_output_tensors_with_optional_output_tensors<T>()) {
                     static_assert(
@@ -776,7 +776,7 @@ public:
         compute_program_hash_impl_{
             [](const storage_t& storage,
                const Tensors& input_tensors,
-               const OptionalConstTensors& optional_input_tensors) -> const Hash {
+               const OptionalConstTensors& optional_input_tensors) -> Hash {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
 
                 if constexpr (detail::implements_compute_program_hash<T>()) {
@@ -836,7 +836,7 @@ public:
             return detail::implements_create_mesh_workload<T>() ||
                    detail::implements_create_mesh_workload_with_optional_input_tensors<T>();
         }},
-        create_profiler_info_impl_{[](const storage_t& storage, const Tensors& input_tensors) -> const ProfilerInfo {
+        create_profiler_info_impl_{[](const storage_t& storage, const Tensors& input_tensors) -> ProfilerInfo {
             const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
             std::optional<std::string> preferred_name = std::string(tt::stl::get_type_name<T>());
 
@@ -846,7 +846,7 @@ public:
             }
             return {.preferred_name = preferred_name, .parallelization_strategy = parallelization_strategy};
         }},
-        attributes_impl_{[](const storage_t& storage) -> const tt::stl::reflection::Attributes {
+        attributes_impl_{[](const storage_t& storage) -> tt::stl::reflection::Attributes {
             const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
             return tt::stl::reflection::get_attributes(operation);
         }} {
@@ -959,14 +959,14 @@ private:
     void* (*copy_storage)(storage_t& storage, const void*) = nullptr;
     void* (*move_storage)(storage_t& storage, void*) = nullptr;
 
-    const std::string (*get_type_name_impl_)(const storage_t& value);
+    std::string (*get_type_name_impl_)(const storage_t& value);
     void (*validate_impl_)(
         const storage_t& value,
         const Tensors&,
         const std::vector<std::optional<const Tensor>>&,
         const OptionalTensors&);
-    const ComputedSpecs (*compute_output_specs_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
-    const OutputTensors (*create_output_tensors_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
+    ComputedSpecs (*compute_output_specs_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
+    OutputTensors (*create_output_tensors_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
 
     CacheableProgram<OutputTensors> (*create_program_impl_)(
         const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&, OutputTensors&);
@@ -996,10 +996,10 @@ private:
         OutputTensors&);
     bool (*uses_custom_program_hash_impl_)();
     bool (*has_create_workload_method_impl_)();
-    const Hash (*compute_program_hash_impl_)(
+    Hash (*compute_program_hash_impl_)(
         const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&);
-    const ProfilerInfo (*create_profiler_info_impl_)(const storage_t& value, const Tensors& input_tensors);
-    const tt::stl::reflection::Attributes (*attributes_impl_)(const storage_t& value);
+    ProfilerInfo (*create_profiler_info_impl_)(const storage_t& value, const Tensors& input_tensors);
+    tt::stl::reflection::Attributes (*attributes_impl_)(const storage_t& value);
 
     void destruct() noexcept {
         if (this->pointer) {

@@ -166,7 +166,7 @@ struct Attribute final {
         }},
 
         implementations{
-            .to_string_impl_ = [](const storage_t& storage) -> const std::string {
+            .to_string_impl_ = [](const storage_t& storage) -> std::string {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 if constexpr (std::is_pointer_v<BaseType>) {
                     return fmt::format("{}*", get_type_name<BaseType>());
@@ -178,7 +178,7 @@ struct Attribute final {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 return hash::detail::hash_object(object);
             },
-            .to_json_impl_ = [](const storage_t& storage) -> const nlohmann::json {
+            .to_json_impl_ = [](const storage_t& storage) -> nlohmann::json {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 return json::to_json(object);
             }} {
@@ -248,9 +248,9 @@ private:
     void* (*move_storage)(storage_t& storage, void*) = nullptr;
 
     struct implementations_t {
-        const std::string (*to_string_impl_)(const storage_t&) = nullptr;
+        std::string (*to_string_impl_)(const storage_t&) = nullptr;
         std::size_t (*to_hash_impl_)(const storage_t&) = nullptr;
-        const nlohmann::json (*to_json_impl_)(const storage_t&) = nullptr;
+        nlohmann::json (*to_json_impl_)(const storage_t&) = nullptr;
     };
 
     implementations_t implementations;
