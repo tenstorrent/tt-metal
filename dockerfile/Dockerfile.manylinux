@@ -7,6 +7,7 @@ RUN dnf update -y && \
     automake \
     bison \
     ca-certificates \
+    clang \
     cmake3 \
     expat-devel \
     flex \
@@ -53,12 +54,6 @@ RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.gi
     cd .. && \
     rm -rf ompi-src
 
-# Add OpenMPI ULFM to PATH and LD_LIBRARY_PATH
-ENV PATH=${OMPI_PREFIX}/bin:$PATH
-ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
-ENV CPATH=${OMPI_PREFIX}/include
-ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH
-
 # Clone SFPI repo recursively from the specified branch
 WORKDIR /tmp
 RUN git clone --recurse-submodules -b blozano-tt-expand-os https://github.com/blozano-tt/sfpi.git && \
@@ -66,4 +61,15 @@ RUN git clone --recurse-submodules -b blozano-tt-expand-os https://github.com/bl
     ./scripts/build.sh && \
     ./scripts/release.sh && \
     mkdir -p /opt/tenstorrent && \
-    tar -xJf build/sfpi-x86_64_Linux.txz -C /opt/tenstorrent/
+    tar -xJf build/sfpi-x86_64_Linux.txz -C /opt/tenstorrent/ && \
+    cd .. && \
+    rm -rf sfpi
+
+# ENV needed
+ENV PATH=${OMPI_PREFIX}/bin:$PATH
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
+ENV CPATH=${OMPI_PREFIX}/include
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH
+ENV CC=clang
+ENV CXX=clang++
+ENV CIBW=1
