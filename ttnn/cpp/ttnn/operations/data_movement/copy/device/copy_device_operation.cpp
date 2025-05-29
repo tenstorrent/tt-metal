@@ -28,11 +28,6 @@ void CopyDeviceOperation::validate_with_output_tensors(
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");
 
-    if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
-        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Input layout should be TILE for SHARDED input");
-    }
     if (input_tensors.size() == 2) {
         const auto& dst_tensor = input_tensors[1];
         TT_FATAL(input_tensor_a.get_padded_shape() == dst_tensor.get_padded_shape(), "Error");
