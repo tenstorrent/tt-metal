@@ -40,7 +40,7 @@ class Phi3Transformer(Transformer):
             datatype=ttnn.bfloat16,
         )
 
-    def prepare_inputs_prefill(self, tokens, seq_len, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_inputs_prefill(self, tokens, acutal_seq_len, start_pos=0, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
@@ -62,7 +62,7 @@ class Phi3Transformer(Transformer):
         assert self.rope_setup.cos_matrix["long_scaled"].shape[2] >= (
             start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix['long_scaled'].shape[2]}"
-        if seq_len > self.rope_setup.orig_context_len:
+        if acutal_seq_len > self.rope_setup.orig_context_len:
             tt_rot_mats_prefill = [
                 self.rope_setup.cos_matrix["long_scaled"][:, :, start_pos : start_pos + S, :],
                 self.rope_setup.sin_matrix["long_scaled"][:, :, start_pos : start_pos + S, :],
