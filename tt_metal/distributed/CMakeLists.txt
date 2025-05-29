@@ -28,6 +28,7 @@ set(ULFM_PREFIX /opt/openmpi-v5.0.7-ulfm)
 # Check if distributed is enabled and ULFM MPI exists, otherwise use system MPI, or fall back to single host
 if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
     message(STATUS "Using ULFM MPI from ${ULFM_PREFIX}")
+    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
     set(ULFM_LIB ${ULFM_PREFIX}/lib/libmpi.so.40)
     set(USE_MPI TRUE)
 
@@ -80,7 +81,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
 )
 
-# Only link MPI libraries if we're using MPI
 if(USE_MPI)
     target_link_libraries(distributed PRIVATE OpenMPI::MPI)
+    target_compile_definitions(distributed PUBLIC OPEN_MPI="1")
 endif()
