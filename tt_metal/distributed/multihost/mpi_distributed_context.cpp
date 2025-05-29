@@ -509,7 +509,7 @@ void MPIContext::revoke_and_shrink() {
 }
 
 bool MPIContext::is_revoked() {
-#if (!OPENMPI_HAS_ULFM)
+#if (!OMPI_HAS_ULFM)
     TT_THROW("is_revoked() requires MPI ULFM support which is not available in this build");
 #endif
     int flag = 0;
