@@ -209,7 +209,7 @@ inline void llk_unpack_tilizeA_B_init(
     llk_unpack_tilizeA_B_mop_config<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(narrow_tile, num_faces);
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B(
     std::uint32_t operandA,
     std::uint32_t operandB,
@@ -261,6 +261,8 @@ inline void llk_unpack_tilizeA_B(
 
         if constexpr (neginf_srcA) {
             TTI_UNPACR_NOP(SrcA,0,0,0,0,0,0,p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
+        } else if constexpr (zero_srcA_reduce) {
+            TTI_UNPACR_NOP(SrcA,0,0,0,0,0,0,p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
         }
 
         // Get tile address
@@ -303,7 +305,7 @@ inline void llk_unpack_tilizeA_B(
     WAYPOINT("UPTD");
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
@@ -312,6 +314,6 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t num_faces = 4,
     std::uint32_t unpA_face_r_dim = FACE_R_DIM) {
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
-        llk_unpack_tilizeA_B<neginf_srcA, reload_srcB, zero_srcA>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces, unpA_face_r_dim);
+        llk_unpack_tilizeA_B<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces, unpA_face_r_dim);
     }
 }

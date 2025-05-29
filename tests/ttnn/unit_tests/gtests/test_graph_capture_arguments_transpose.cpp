@@ -93,7 +93,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(operation3.arguments.size(), 5);
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 2048, 1, 512])");
     EXPECT_EQ(operation3.arguments[1], "DataType::BFLOAT16");
-    EXPECT_EQ(operation3.arguments[2], "Row Major");
+    EXPECT_EQ(operation3.arguments[2], "Layout::ROW_MAJOR");
     EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]");
     EXPECT_EQ(
         operation3.arguments[4],

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@ import math
 import pathlib
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import torch
 import ttnn.decorators
 from loguru import logger
 
@@ -241,7 +240,7 @@ def from_torch(
     tile: Optional[ttnn.Tile] = None,
     pad_value: Optional[float] = None,
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
-    device: Optional[ttnn.Device] = None,
+    device: Optional[ttnn.MeshDevice] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.TensorToMesh] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
@@ -260,7 +259,7 @@ def from_torch(
         tile (ttnn.Tile, optional): the desired tiling configuration for the tensor. Defaults to `None`.
         pad_value (float, optional): the desired padding value for tiling. Only used if `layout` is `TILE_LAYOUT`. Defaults to `None`.
         layout (ttnn.Layout, optional): the desired `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
-        device (ttnn.Device, optional): the desired `ttnn` device. Defaults to `None`.
+        device (ttnn.MeshDevice, optional): the desired `ttnn` device. Defaults to `None`.
         memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
         mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
         cq_id (int, optional): The command queue ID to use. Defaults to `0`.
@@ -307,24 +306,14 @@ def _golden_function(tensor, *, torch_rank=None, **kwargs):
     return tensor
 
 
-class TorchTensor(torch.Tensor):
-    @classmethod
-    def __torch_function__(cls, func, types, func_args=(), func_kwargs=None):
-        # this tells torch to treat TorchTensor just like torch.Tensor's.
-        # Otherwise, torch will complain that it doesn't know how to handle it.
-        types = tuple(torch.Tensor if t == TorchTensor else t for t in types)
-        func = ttnn._ttnn.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
-        return super().__torch_function__(func, types, func_args, func_kwargs)
-
-
 @ttnn.register_python_operation(name="ttnn.to_torch", golden_function=_golden_function)
 def to_torch(
     tensor: ttnn.Tensor,
-    dtype: Optional[torch.dtype] = None,
+    dtype: Optional["torch.dtype"] = None,
     *,
     torch_rank: Optional[int] = None,
     mesh_composer: Optional[ttnn.MeshToTensor] = None,
-    device: Optional[ttnn.Device] = None,
+    device: Optional[ttnn.MeshDevice] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> "torch.Tensor":
     """
@@ -339,7 +328,7 @@ def to_torch(
         torch_rank (int, optional): Desired rank of the `torch.Tensor`. Defaults to `None`.
             Will use `torch.squeeze` operation to remove dimensions until the desired rank is reached. If not possible, the operation will raise an error.
         mesh_composer (ttnn.MeshToTensor, optional): The desired `ttnn` mesh composer. Defaults to `None`.
-        device (ttnn.Device, optional): The `ttnn` device of the input tensor. Defaults to `None`.
+        device (ttnn.MeshDevice, optional): The `ttnn` device of the input tensor. Defaults to `None`.
         cq_id (int, optional): The command queue ID to use. Defaults to `0`.
 
     Returns:
@@ -352,6 +341,8 @@ def to_torch(
         tensor([[-0.3008, -0.8438,  0.3242],
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
+    import torch
+
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
@@ -381,7 +372,7 @@ def to_torch(
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze(0)
 
-    torch_tensor = TorchTensor(tensor)
+    torch_tensor = tensor
 
     if dtype is not None:
         torch_tensor = torch_tensor.to(dtype=dtype)
@@ -394,7 +385,7 @@ def _golden_function(tensor, *args, **kwargs):
 
 
 doc = """
-Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.Device`.
+Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.MeshDevice`.
 
 The tensor may be placed in DRAM or L1 memory.
 
@@ -402,7 +393,7 @@ Currently memory_config must be of an Interleaved tensor (not sharded)
 
 Args:
     * :attr:`tensor`: the ttnn.Tensor
-    * :attr:`device`: the ttnn.Device
+    * :attr:`device`: the ttnn.MeshDevice
     * :attr:`memory_config`: the optional MemoryConfig (DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG). Defaults to DRAM_MEMORY_CONFIG.
 
 Example::
@@ -516,7 +507,7 @@ ttnn.attach_golden_function(ttnn.reallocate, golden_function=_golden_function)
 
 
 @ttnn.register_python_operation(name="ttnn.load_tensor")
-def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = None) -> ttnn.Tensor:
+def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice = None) -> ttnn.Tensor:
     """
     Load tensor from a file.
 
@@ -524,7 +515,7 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = No
         file_name (str | pathlib.Path): the file name.
 
     Keyword Args:
-        device (ttnn.Device, optional): the device. Defaults to `None`.
+        device (ttnn.MeshDevice, optional): the device. Defaults to `None`.
 
     Returns:
         ttnn.Tensor: the loaded tensor.
@@ -570,7 +561,7 @@ def as_tensor(
     dtype: Optional[ttnn.DataType] = None,
     *,
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
-    device: Optional[ttnn.Device] = None,
+    device: Optional[ttnn.MeshDevice] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
@@ -586,7 +577,7 @@ def as_tensor(
 
     Keyword args:
         layout (ttnn.Layout, optional): The `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
-        device (ttnn.Device, optional): The `ttnn` device. Defaults to `None`.
+        device (ttnn.MeshDevice, optional): The `ttnn` device. Defaults to `None`.
         memory_config (ttnn.MemoryConfig, optional): The `ttnn` memory configuration. Defaults to `None`.
         cache_file_name (str | pathlib.Path, optional): The cache file name. Defaults to `None`.
         preprocess (Callable[[ttnn.Tensor], ttnn.Tensor], optional): The function to preprocess the tensor before serializing/converting to ttnn. Defaults to `None`.
@@ -621,10 +612,10 @@ def as_tensor(
         raise RuntimeError("memory_config must be specified when device is specified")
 
     def torch_to_ttnn(
-        tensor: torch.Tensor,
+        tensor: "torch.Tensor",
         dtype: Optional[ttnn.DataType],
         layout: Optional[ttnn.Layout],
-        device: Optional[ttnn.Device],
+        device: Optional[ttnn.MeshDevice],
         memory_config: Optional[ttnn.MemoryConfig],
         mesh_mapper: Optional[ttnn.TensorToMesh],
     ):
@@ -655,7 +646,7 @@ def as_tensor(
     else:
 
         def from_torch_and_dump(
-            tensor: torch.Tensor,
+            tensor: "torch.Tensor",
             dtype: Optional[ttnn.DataType],
             layout: Optional[ttnn.Layout],
             cache_file_name: str,

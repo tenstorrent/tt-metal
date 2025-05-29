@@ -45,6 +45,10 @@ void preallocated_tensors_check(
     }
 }
 
+bool is_block_format_dtype(const Tensor& tensor) {
+    return (tensor.dtype() == ttnn::DataType::BFLOAT8_B || tensor.dtype() == ttnn::DataType::BFLOAT4_B);
+}
+
 std::vector<ttnn::Tensor> ExecuteBackwardAtan2::invoke(
     const Tensor& grad,
     const Tensor& input,
@@ -358,6 +362,10 @@ std::vector<ttnn::Tensor> ExecuteBackwardLogaddexp2::invoke(
     const Tensor& input_a,
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        !(is_block_format_dtype(input_a) || is_block_format_dtype(grad) || is_block_format_dtype(other)),
+        "BFLOAT8_B/BFLOAT4_B dtypes are not supported !!");
+
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor oppow = ttnn::add(
