@@ -577,7 +577,7 @@ FORCE_INLINE void receiver_forward_packet(
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         bool not_last_destination_device = cached_routing_fields.value != tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
         if (not_last_destination_device) {
-            forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, true>(
+            forward_payload_to_downstream_edm<enable_ring_support, true>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
         }
         if (start_distance_is_terminal_value) {
@@ -591,11 +591,11 @@ FORCE_INLINE void receiver_forward_packet(
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, true>(
+                forward_payload_to_downstream_edm<enable_ring_support, true>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, true>(
+                forward_payload_to_downstream_edm<enable_ring_support, true>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
@@ -626,7 +626,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         uint32_t downstream_channel = routing_table->inter_mesh_table.dest_entry[dest_mesh_id];
         ASSERT(downstream_channel != INVALID_DIRECTION);
         auto downstream_direction = port_direction_table[downstream_channel];
-        forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
+        forward_payload_to_downstream_edm<enable_ring_support, false>(
             packet_start,
             payload_size_bytes,
             cached_routing_fields,
@@ -640,7 +640,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 for (size_t i = eth_chan_directions::EAST; i < eth_chan_directions::COUNT; i++) {
                     if (packet_start->mcast_params[i] and i != my_direction) {
                         packet_start->mcast_params[i]--;
-                        forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
+                        forward_payload_to_downstream_edm<enable_ring_support, false>(
                             packet_start,
                             payload_size_bytes,
                             cached_routing_fields,
@@ -654,7 +654,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             auto downstream_channel = routing_table->intra_mesh_table.dest_entry[dest_chip_id];
             ASSERT(downstream_channel != INVALID_DIRECTION);
             auto downstream_direction = port_direction_table[downstream_channel];
-            forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
+            forward_payload_to_downstream_edm<enable_ring_support, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -682,7 +682,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::EAST) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -694,7 +694,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::WEST) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -704,14 +704,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
             if constexpr (my_direction == eth_chan_directions::WEST) {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     downstream_edm_interface[eth_chan_directions::EAST],
                     transaction_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -724,7 +724,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::NORTH) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -736,7 +736,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -746,14 +746,14 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     downstream_edm_interface[eth_chan_directions::NORTH],
                     transaction_id);
             } else {
-                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support, false>(
+                forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -773,11 +773,10 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
 ////////////////////////////////////
 template <
     bool enable_packet_header_recording,
-    bool enable_fabric_counters,
-    uint8_t RECEIVER_NUM_BUFFERS,
-    uint8_t SENDER_NUM_BUFFERS,
     uint8_t to_receiver_pkts_sent_id,
-    bool SKIP_CONNECTION_LIVENESS_CHECK>
+    bool SKIP_CONNECTION_LIVENESS_CHECK,
+    uint8_t RECEIVER_NUM_BUFFERS,
+    uint8_t SENDER_NUM_BUFFERS>
 void run_sender_channel_step(
     tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
@@ -870,14 +869,12 @@ void run_sender_channel_step(
 };
 
 template <
-    bool enable_packet_header_recording,
-    bool enable_fabric_counters,
-    uint8_t RECEIVER_NUM_BUFFERS,
-    uint8_t SENDER_NUM_BUFFERS,
-    size_t NUM_SENDER_CHANNELS,
     uint8_t to_receiver_pkts_sent_id,
     uint8_t receiver_channel,
-    typename WriteTridTracker>
+    typename WriteTridTracker,
+    uint8_t RECEIVER_NUM_BUFFERS,
+    uint8_t SENDER_NUM_BUFFERS,
+    size_t NUM_SENDER_CHANNELS>
 void run_receiver_channel_step(
     tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_channel,
     std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_sender_channels,
@@ -1066,9 +1063,8 @@ bool all_channels_drained(
  */
 template <
     bool enable_packet_header_recording,
-    bool enable_fabric_counters,
     uint8_t RECEIVER_NUM_BUFFERS,
-    uint8_t NUM_RECEIVER_CHANNELS,
+    size_t NUM_RECEIVER_CHANNELS,
     uint8_t SENDER_NUM_BUFFERS,
     size_t NUM_SENDER_CHANNELS,
     size_t MAX_NUM_SENDER_CHANNELS,
@@ -1115,11 +1111,7 @@ void run_fabric_edm_main_loop(
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
             DPRINT << "EDM Graceful termination\n";
-            bool all_drained = all_channels_drained<
-                RECEIVER_NUM_BUFFERS,
-                NUM_RECEIVER_CHANNELS,
-                SENDER_NUM_BUFFERS,
-                NUM_SENDER_CHANNELS>(
+            bool all_drained = all_channels_drained(
                 local_receiver_channels,
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
@@ -1138,9 +1130,6 @@ void run_fabric_edm_main_loop(
             if constexpr (is_sender_channel_serviced[0]) {
                 run_sender_channel_step<
                     enable_packet_header_recording,
-                    enable_fabric_counters,
-                    RECEIVER_NUM_BUFFERS,
-                    SENDER_NUM_BUFFERS,
                     to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                     sender_ch_live_check_skip[0]>(
                     local_sender_channels[0],
@@ -1154,14 +1143,7 @@ void run_fabric_edm_main_loop(
             }
             if constexpr (is_receiver_channel_serviced[0]) {
                 if constexpr (!dateline_connection) {
-                    run_receiver_channel_step<
-                        enable_packet_header_recording,
-                        enable_fabric_counters,
-                        RECEIVER_NUM_BUFFERS,
-                        SENDER_NUM_BUFFERS,
-                        NUM_SENDER_CHANNELS,
-                        to_receiver_packets_sent_streams[0],
-                        0>(
+                    run_receiver_channel_step<to_receiver_packets_sent_streams[0], 0>(
                         local_receiver_channels[0],
                         remote_sender_channels,
                         downstream_edm_noc_interfaces,
@@ -1175,14 +1157,7 @@ void run_fabric_edm_main_loop(
             }
             if constexpr (is_receiver_channel_serviced[1]) {
                 if constexpr (enable_ring_support) {
-                    run_receiver_channel_step<
-                        enable_packet_header_recording,
-                        enable_fabric_counters,
-                        RECEIVER_NUM_BUFFERS,
-                        SENDER_NUM_BUFFERS,
-                        NUM_SENDER_CHANNELS,
-                        to_receiver_packets_sent_streams[1],
-                        1>(
+                    run_receiver_channel_step<to_receiver_packets_sent_streams[1], 1>(
                         local_receiver_channels[1],
                         remote_sender_channels,
                         downstream_edm_noc_interfaces,
@@ -1198,9 +1173,6 @@ void run_fabric_edm_main_loop(
             if constexpr (is_sender_channel_serviced[1]) {
                 run_sender_channel_step<
                     enable_packet_header_recording,
-                    enable_fabric_counters,
-                    RECEIVER_NUM_BUFFERS,
-                    SENDER_NUM_BUFFERS,
                     to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                     sender_ch_live_check_skip[1]>(
                     local_sender_channels[1],
@@ -1216,9 +1188,6 @@ void run_fabric_edm_main_loop(
                 if constexpr (is_sender_channel_serviced[2]) {
                     run_sender_channel_step<
                         enable_packet_header_recording,
-                        enable_fabric_counters,
-                        RECEIVER_NUM_BUFFERS,
-                        SENDER_NUM_BUFFERS,
                         to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                         sender_ch_live_check_skip[2]>(
                         local_sender_channels[2],
@@ -1233,9 +1202,6 @@ void run_fabric_edm_main_loop(
                 if constexpr (is_sender_channel_serviced[3]) {
                     run_sender_channel_step<
                         enable_packet_header_recording,
-                        enable_fabric_counters,
-                        RECEIVER_NUM_BUFFERS,
-                        SENDER_NUM_BUFFERS,
                         to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                         sender_ch_live_check_skip[3]>(
                         local_sender_channels[3],
@@ -1252,9 +1218,6 @@ void run_fabric_edm_main_loop(
                 if constexpr (is_sender_channel_serviced[NUM_SENDER_CHANNELS - 1]) {
                     run_sender_channel_step<
                         enable_packet_header_recording,
-                        enable_fabric_counters,
-                        RECEIVER_NUM_BUFFERS,
-                        SENDER_NUM_BUFFERS,
                         to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL],
                         sender_ch_live_check_skip[NUM_SENDER_CHANNELS - 1]>(
                         local_sender_channels[NUM_SENDER_CHANNELS - 1],
@@ -1947,15 +1910,7 @@ void kernel_main() {
     //        MAIN LOOP
     //////////////////////////////
     //////////////////////////////
-    run_fabric_edm_main_loop<
-        enable_packet_header_recording,
-        enable_fabric_counters,
-        RECEIVER_NUM_BUFFERS,
-        NUM_RECEIVER_CHANNELS,
-        SENDER_NUM_BUFFERS,
-        NUM_SENDER_CHANNELS,
-        MAX_NUM_SENDER_CHANNELS,
-        MAX_NUM_RECEIVER_CHANNELS>(
+    run_fabric_edm_main_loop<enable_packet_header_recording>(
         local_receiver_channels,
         local_sender_channels,
         local_sender_channel_worker_interfaces,
