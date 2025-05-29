@@ -366,31 +366,6 @@ void DevicePool::initialize_active_devices() const {
         }
     };
 
-    // 0. Dummy pass to allocate tunneler cores starting from the MMIO device
-    for (auto dev : active_devices) {
-        if (!dev->is_mmio_capable()) {
-            continue;
-        }
-
-        // Since devices could be set up in any order, on mmio device do a pass and populate cores for tunnelers.
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_mmio_device_tunnel_count(dev->id()) > 0) {
-            auto tunnels_from_mmio =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(dev->id());
-            for (auto& tunnel : tunnels_from_mmio) {
-                for (uint32_t tunnel_stop = 0; tunnel_stop < tunnel.size() - 1; tunnel_stop++) {
-                    chip_id_t device_id = tunnel[tunnel_stop];
-                    chip_id_t ds_device_id = tunnel[tunnel_stop + 1];
-                    uint16_t channel =
-                        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-                            ds_device_id);
-                    // Only one tunneler per connection, use CQ ID 0
-                    MetalContext::instance().get_dispatch_core_manager().tunneler_core(
-                        device_id, ds_device_id, channel, 0);
-                }
-            }
-        }
-    }
-
     // 1. Generate static args
     iterate_required_active_devices([](IDevice* remote_device) { populate_cq_static_args(remote_device); });
 

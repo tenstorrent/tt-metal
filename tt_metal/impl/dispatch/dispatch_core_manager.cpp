@@ -217,21 +217,21 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_d_core(chip_id_t device_id,
     return assignment.dispatcher_d.value();
 }
 
-
-const tt_cxy_pair& dispatch_core_manager::fabric_mux_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+const tt_cxy_pair& dispatch_core_manager::fabric_mux_core(
+    chip_id_t device_id, uint16_t channel, uint8_t cq_id, int tunnel) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.fabric_mux.has_value()) {
-        return assignment.fabric_mux.value();
+    if (!assignment.fabric_mux.contains(tunnel)) {
+        CoreCoord coord = this->get_next_available_dispatch_core(device_id);
+        assignment.fabric_mux[tunnel] = tt_cxy_pair(device_id, coord.x, coord.y);
+        log_dispatch_assignment("FabricMux", assignment.fabric_mux[tunnel], device_id, channel, cq_id);
     }
-    CoreCoord coord = this->get_next_available_dispatch_core(device_id);
-    assignment.fabric_mux = tt_cxy_pair(device_id, coord.x, coord.y);
-    log_dispatch_assignment("FabricMux", assignment.fabric_mux.value(), device_id, channel, cq_id);
-    return assignment.fabric_mux.value();
+    return assignment.fabric_mux[tunnel];
 }
 
-bool dispatch_core_manager::is_fabric_mux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+bool dispatch_core_manager::is_fabric_mux_core_allocated(
+    chip_id_t device_id, uint16_t channel, uint8_t cq_id, int tunnel) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    return assignment.fabric_mux.has_value();
+    return assignment.fabric_mux.contains(tunnel);
 }
 
 const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
