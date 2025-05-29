@@ -113,23 +113,6 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config) {
 
 }  // namespace tt::tt_metal
 
-nlohmann::json tt::stl::json::to_json_t<tt::tt_metal::NdShardSpec>::operator()(
-    const tt::tt_metal::NdShardSpec& spec) const {
-    nlohmann::json json_object;
-    json_object["shard_shape"] = tt::stl::json::to_json(spec.shard_shape);
-    json_object["grid"] = tt::stl::json::to_json(spec.grid);
-    json_object["shard_orientation"] = tt::stl::json::to_json(spec.shard_orientation);
-    return json_object;
-}
-
-tt::tt_metal::NdShardSpec tt::stl::json::from_json_t<tt::tt_metal::NdShardSpec>::operator()(
-    const nlohmann::json& json_object) const {
-    return tt::tt_metal::NdShardSpec(
-        tt::stl::json::from_json<tt::tt_metal::Shape>(json_object["shard_shape"]),
-        tt::stl::json::from_json<tt::tt_metal::CoreRangeSet>(json_object["grid"]),
-        tt::stl::json::from_json<tt::tt_metal::ShardOrientation>(json_object["shard_orientation"]));
-}
-
 nlohmann::json tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
     const tt::tt_metal::MemoryConfig& config) const {
     nlohmann::json json_object;

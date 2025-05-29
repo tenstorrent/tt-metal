@@ -269,7 +269,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
             py::arg("orientation") = ShardOrientation::ROW_MAJOR)
         .def_readwrite("shard_shape", &NdShardSpec::shard_shape, "Shape of shard.")
         .def_readwrite("grid", &NdShardSpec::grid, "Grid to layout shards.")
-        .def_readwrite("orientation", &NdShardSpec::shard_orientation, "Orientation of cores to distribute shards")
+        .def_readwrite("orientation", &NdShardSpec::orientation, "Orientation of cores to distribute shards")
         .def(
             "num_cores", [](const NdShardSpec& self) { return self.grid.num_cores(); }, "Number of cores")
         .def(py::self == py::self)

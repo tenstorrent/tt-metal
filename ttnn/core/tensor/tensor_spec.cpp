@@ -177,7 +177,7 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
     NdShardSpec nd_shard_spec{
         .shard_shape = ttnn::Shape().to_rank(padded_shape().rank()),
         .grid = shard_spec.grid,
-        .shard_orientation = shard_spec.orientation,
+        .orientation = shard_spec.orientation,
     };
 
     if (mem_layout == TensorMemoryLayout::SINGLE_BANK) {
@@ -251,7 +251,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return MemoryConfig::create_with_prepopulated_shard_specs(
             TensorMemoryLayout::SINGLE_BANK,
             mem_config.buffer_type(),
-            ShardSpec(nd_shard_spec.grid, physical_shape(), nd_shard_spec.shard_orientation),
+            ShardSpec(nd_shard_spec.grid, physical_shape(), nd_shard_spec.orientation),
             mem_config.nd_shard_spec(),
             mem_config.created_with_nd_shard_spec());
     }
@@ -259,7 +259,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     ShardSpec shard_spec(
         nd_shard_spec.grid,
         {nd_shard_shape.volume() / nd_shard_shape[-1], nd_shard_shape[-1]},
-        nd_shard_spec.shard_orientation);
+        nd_shard_spec.orientation);
 
     bool width_sharded = shard_spec.shape[0] == padded_shape().volume() / padded_shape()[-1];
 
