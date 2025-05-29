@@ -227,7 +227,6 @@ models/demos/yolov8x @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
-docs/source/ttnn/ttnn/dependencies/tt_lib.rst @tenstorrent/metalium-developers-ttnn-core
 docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na
 
 # misc
