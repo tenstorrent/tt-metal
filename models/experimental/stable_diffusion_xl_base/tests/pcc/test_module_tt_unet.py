@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -7,6 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -89,17 +90,18 @@ def test_unet(
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
-    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
     torch_unet = unet
+
+    model_config = ModelOptimisations(conv_w_dtype=conv_weights_dtype)
     tt_unet = TtUNet2DConditionModel(
         device,
         state_dict,
         "unet",
         transformer_weights_dtype=transformer_weights_dtype,
-        conv_weights_dtype=conv_weights_dtype,
+        model_config=model_config,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_timestep_tensor = torch_random(timestep_shape, -0.1, 0.1, dtype=torch.float32)
@@ -129,9 +131,9 @@ def test_unet(
         device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
     )
 
-    # import tracy
+    import tracy
 
-    # tracy.signpost("Compilation pass")
+    tracy.signpost("Compilation pass")
     _, _ = tt_unet.forward(
         ttnn_input_tensor,
         [B, C, H, W],
@@ -150,7 +152,7 @@ def test_unet(
         device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
     )
 
-    # tracy.signpost("Second pass")
+    tracy.signpost("Second pass")
     ttnn_output_tensor, output_shape = tt_unet.forward(
         ttnn_input_tensor,
         [B, C, H, W],

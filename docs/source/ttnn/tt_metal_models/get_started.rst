@@ -41,10 +41,3 @@ You can run these tests using ``pytest``.
 ::
 
     pytest <path_to_test_file>::<test_in_file>
-
-Next steps
-----------
-
-We write the models using TTNN which is a user-friendly Python Library that we developed on top of TT-Metalium. Refer to
-the docs under *Libraries* for documentation, such as the :ref:`Tensor
-API<Tensor>` or the :ref:`TT-LIB Dependencies<TT-LIB>`.
