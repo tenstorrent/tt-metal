@@ -667,8 +667,24 @@ def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
             "yref": np_flat_golden[np_finite_mask],
         }
     )
+
     df = df[df["x"].between(-1e5, 1e5)]
     pcc = scipy.stats.pearsonr(df["y"], df["yref"])
+
+    golden_std = np.std(np_flat_golden)
+    ttnn_std = np.std(np_flat_output)
+
+    np_finite_ulp_mask = np.isfinite(np_ulp_error) & (
+        np.greater(np_flat_input, -(2**6)) & np.less(np_flat_input, 2**6)
+    )
+    mean_ulp_error = np.mean(np_ulp_error[np_finite_ulp_mask])
+    print(f"Finite ulp error = {np_ulp_error[np_finite_ulp_mask]}")
+
+    print(f"Mean ulp error = {mean_ulp_error}")
+
+    covar = np.cov(np_flat_golden, np_flat_output)
+    print(f"Golden std = {golden_std}, TTNN std = {ttnn_std}")
+    print(f"Covar = {covar}")
 
     accuracy_df.to_csv(f"{dest_dir}/{operation_name}-bfloat16-[{group_size}].csv", na_rep="NaN", index_label="index")
 
@@ -698,7 +714,7 @@ def main(args):
     all_operations = [
         # "exp",
         # "exp_hybrid",
-        "exp_cond",
+        # "exp_cond",
         # "exp_approx",
         # "exp_approx0",
         # "exp_approx_21f",
@@ -742,8 +758,8 @@ def main(args):
     highres_operations = [
         # "exp_hybrid",
         # "exp",
-        "exp_cond",
-        # "exp_approx_21f",
+        # "exp_cond",
+        "exp_approx_21f",
         # "exp_approx",
         # "exp_approx0",
         # "exp_accurate_python",
