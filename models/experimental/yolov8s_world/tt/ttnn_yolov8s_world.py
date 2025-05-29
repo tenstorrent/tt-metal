@@ -433,6 +433,8 @@ class TtMaxSigmoidAttnBlock:
         aw = ttnn.permute(aw, (0, 1, 2, 4, 3))  # To increase the perfomance of squeeze operation
         aw = ttnn.squeeze(aw, -2)  # If the above permute is removed use ttnn.squeeze(aw, -1)
         aw = ttnn.div(aw, (self.hc**0.5))
+        if aw.get_dtype() != self.bias.get_dtype():
+            aw = ttnn.typecast(aw, dtype=ttnn.float32)
         aw = aw + ttnn.reshape(self.bias, (1, -1, 1, 1))
         aw = ttnn.sigmoid(aw) * self.scale
 
