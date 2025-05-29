@@ -113,7 +113,7 @@ public:
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
-    std::unordered_map<chip_id_t, uint64_t> get_unique_chip_ids() const {
+    const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
@@ -135,6 +135,10 @@ public:
 
     uint32_t get_harvesting_mask(chip_id_t chip) const {
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
+    }
+
+    uint16_t get_bus_id(chip_id_t chip) const {
+        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
     }
 
     //! device driver and misc apis

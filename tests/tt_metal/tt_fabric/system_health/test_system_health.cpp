@@ -12,10 +12,27 @@
 
 #include <tt-metalium/logger.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tests/tt_metal/test_utils/test_common.hpp"
 
 namespace tt::tt_fabric {
 namespace system_health_tests {
 
+const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
+    {tt::ARCH::WORMHOLE_B0, {0x00, 0x40, 0xC0, 0x80}},
+    {tt::ARCH::BLACKHOLE, {0xC0, 0x80, 0x00, 0x40}},
+};
+
+std::pair<std::uint32_t, std::uint32_t> get_ubb_ids(chip_id_t chip_id) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
+    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), cluster.get_bus_id(chip_id) & 0xF0);
+    if (tray_bus_id_it != tray_bus_ids.end()) {
+        auto unique_chip_id = cluster.get_unique_chip_ids().at(chip_id);
+        auto ubb_asic_id = ((unique_chip_id >> 56) & 0xFF);
+        return std::make_pair(tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id);
+    }
+    return std::make_pair(0, 0);
+}
 TEST(Cluster, ReportSystemHealth) {
     // Despite potential error messages, this test will not fail
     // It is a report of system health
@@ -36,11 +53,17 @@ TEST(Cluster, ReportSystemHealth) {
         }
     }
 
+    auto cluster_type = cluster.get_cluster_type();
+
     std::vector<std::string> unexpected_system_states;
     for (const auto& [chip_id, unique_chip_id] : unique_chip_ids) {
         const auto& soc_desc = cluster.get_soc_desc(chip_id);
         std::stringstream chip_id_ss;
         chip_id_ss << std::dec << "Chip: " << chip_id << " Unique ID: " << std::hex << unique_chip_id;
+        if (cluster_type == tt::ClusterType::GALAXY) {
+            auto [tray_id, ubb_asic_id] = get_ubb_ids(chip_id);
+            chip_id_ss << " Tray: " << tray_id << " N" << ubb_asic_id;
+        }
         ss << chip_id_ss.str() << std::endl;
         for (const auto& [eth_core, chan] : soc_desc.logical_eth_core_to_chan_map) {
             tt_cxy_pair virtual_eth_core(
@@ -89,25 +112,59 @@ TEST(Cluster, TestMeshFullConnectivity) {
     std::uint32_t num_expected_chips = 0;
     std::uint32_t num_connections_per_side = 0;
     auto cluster_type = cluster.get_cluster_type();
+    std::vector<std::uint16_t> tray_bus_ids;
     if (cluster_type == tt::ClusterType::T3K) {
         num_expected_chips = 8;
         num_connections_per_side = 2;
     } else if (cluster_type == tt::ClusterType::GALAXY) {
         num_expected_chips = 32;
         num_connections_per_side = 4;
+        tray_bus_ids = ubb_bus_ids.at(tt::tt_metal::MetalContext::instance().get_cluster().arch());
     } else {
         GTEST_SKIP() << "Mesh check not supported for system type " << magic_enum::enum_name(cluster_type);
     }
     EXPECT_EQ(eth_connections.size(), num_expected_chips)
         << " Expected " << num_expected_chips << " in " << magic_enum::enum_name(cluster_type) << " cluster";
+    auto input_args = ::testing::internal::GetArgvs();
+    std::uint32_t num_target_connections = 0;
+    std::tie(num_target_connections, input_args) =
+        test_args::get_command_option_uint32_and_remaining_args(input_args, "--min-connections", 0);
+    if (num_target_connections > num_connections_per_side) {
+        log_warning(
+            tt::LogTest,
+            "Min connections specified is greater than expected num connections per side for {}, overriding to {}.",
+            magic_enum::enum_name(cluster_type),
+            num_connections_per_side);
+        num_target_connections = num_connections_per_side;
+    }
+
     for (const auto& [chip, connections] : eth_connections) {
+        std::stringstream chip_ss;
+        chip_ss << "Chip " << chip;
+        if (cluster_type == tt::ClusterType::GALAXY) {
+            auto [tray_id, ubb_asic_id] = get_ubb_ids(chip);
+            chip_ss << " Tray: " << tray_id << " N" << ubb_asic_id;
+        }
         std::map<chip_id_t, int> num_connections_to_chip;
         for (const auto& [channel, remote_chip_and_channel] : connections) {
             num_connections_to_chip[std::get<0>(remote_chip_and_channel)]++;
         }
         for (const auto& [other_chip, count] : num_connections_to_chip) {
-            EXPECT_EQ(count, num_connections_per_side) << "Chip " << chip << " has " << count << " connections to Chip "
-                                                       << other_chip << ", expected " << num_connections_per_side;
+            std::stringstream other_chip_ss;
+            other_chip_ss << "Chip " << other_chip;
+            if (cluster_type == tt::ClusterType::GALAXY) {
+                auto [tray_id, ubb_asic_id] = get_ubb_ids(other_chip);
+                other_chip_ss << " Tray: " << tray_id << " N" << ubb_asic_id;
+            }
+            if (num_target_connections > 0) {
+                EXPECT_GE(count, num_target_connections)
+                    << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str()
+                    << ", expected at least " << num_target_connections;
+            } else {
+                EXPECT_EQ(count, num_connections_per_side)
+                    << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str() << ", expected "
+                    << num_connections_per_side;
+            }
         }
     }
 }

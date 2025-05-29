@@ -47,17 +47,10 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped
 }
 
 // Get the physical chip ids for a mesh
-// TODO: get this from Cluster, once UMD unique id changes are merged
 std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) {
-    std::vector<uint32_t> ubb_asic_loc_vec;
-    const auto& eth_cores = tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(physical_chip_id, false);
-    auto virtual_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-        physical_chip_id, *eth_cores.begin(), CoreType::ETH);
-
-    std::uint32_t addr = 0x1ec0 + 65 * sizeof(uint32_t);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        ubb_asic_loc_vec, sizeof(uint32_t), tt_cxy_pair(physical_chip_id, virtual_eth_core), addr);
-    return ((ubb_asic_loc_vec[0] >> 24) & 0xFF);
+    auto unique_chip_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
+    return ((unique_chip_id >> 56) & 0xFF);
 }
 
 bool is_external_ubb_cable(chip_id_t physical_chip_id, CoreCoord eth_core) {
