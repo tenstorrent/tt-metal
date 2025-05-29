@@ -33,6 +33,9 @@ target_sources(
         all_gather_async/device/all_gather_async_op.cpp
         all_gather_async/device/all_gather_async_program.cpp
         all_gather_async/device/all_gather_async_program_minimal_variants.cpp
+        ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
+        ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.cpp
+        ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
         all_to_all_async/all_to_all_async.cpp
         all_to_all_async/device/all_to_all_program_factory.cpp
         all_to_all_async/device/all_to_all_async_op.cpp
