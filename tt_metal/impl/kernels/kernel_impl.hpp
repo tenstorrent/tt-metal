@@ -26,6 +26,11 @@ public:
 
     void register_kernel_elf_paths_with_watcher(IDevice& device) const;
 
+    // KernelImpl and subclasses are the only implementations of Kernel.
+    static KernelImpl& from(Kernel& kernel) { return static_cast<KernelImpl&>(kernel); }
+
+    static const KernelImpl& from(const Kernel& kernel) { return static_cast<const KernelImpl&>(kernel); }
+
 protected:
     KernelImpl(
         const KernelSource& kernel_src,
@@ -151,9 +156,5 @@ private:
     std::string config_hash() const override;
     std::vector<std::string> file_paths(IDevice& device) const override;
 };
-
-// KernelImpl and subclasses should be the only implementations of Kernel.
-inline KernelImpl& Kernel::impl() { return *static_cast<KernelImpl*>(this); }
-inline const KernelImpl& Kernel::impl() const { return *static_cast<const KernelImpl*>(this); }
 
 }  // namespace tt::tt_metal

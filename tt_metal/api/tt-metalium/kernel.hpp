@@ -129,9 +129,6 @@ public:
 
     bool is_idle_eth() const;
 
-    KernelImpl& impl();
-    const KernelImpl& impl() const;
-
 protected:
     int watcher_kernel_id_;
     KernelSource kernel_src_;
@@ -156,10 +153,10 @@ private:
     void register_kernel_with_watcher();
 
     Kernel(
-        const KernelSource &kernel_src,
-        const CoreRangeSet &core_range_set,
-        const std::vector<uint32_t> &compile_args,
-        const std::map<std::string, std::string> &defines);
+        const KernelSource& kernel_src,
+        const CoreRangeSet& core_range_set,
+        const std::vector<uint32_t>& compile_args,
+        const std::map<std::string, std::string>& defines);
 
     // Only allow KernelImpl to inherit from Kernel.
     friend class KernelImpl;
