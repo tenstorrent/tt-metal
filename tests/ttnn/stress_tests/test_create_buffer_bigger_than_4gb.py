@@ -7,9 +7,9 @@ import os
 @pytest.mark.parametrize(
     "shape",
     [
-        (2**6, 2**13, 2**13 + 32),
-        (96 * 96, 1, 32 * 228),
-    ],  # (4Gb + 32) * 2 (sizeof(bfloat16))  # 4Gb + 8Mb after padding
+        (2**6, 2**13, 2**13 + 32),  # (4Gb + 32) * 2 (sizeof(bfloat16))
+        (96 * 96, 1, 32 * 228),  # 4Gb + 8Mb after padding
+    ],
 )
 @pytest.mark.parametrize(
     "fast_dispatch",
