@@ -143,4 +143,27 @@ void assemble_fabric_mux_client_config_args(
     config.termination_signal_address = fabric_mux->GetMuxKernelConfig()->get_termination_signal_address();
 }
 
+int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id) {
+    const auto dev_mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(mmio_dev_id);
+    
+    if (dev_mmio_device_id != mmio_dev_id) {
+        TT_THROW("Specified MMIO device ID {} is not an MMIO device. MMIO device is {}", mmio_dev_id, dev_mmio_device_id);
+    }
+
+    auto tunnels_from_mmio =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_dev_id);
+    
+    int hops = 0;
+    for (const auto& tunnel : tunnels_from_mmio) {
+        for (const auto& tunnel_stop : tunnel) {
+            hops++;
+            if (tunnel_stop == downstream_dev_id) {
+                return hops;
+            }
+        }
+    }
+    TT_THROW("Downstream device {} is not found in tunnel from MMIO device {}", downstream_dev_id, mmio_dev_id);
+    return -1;
+}
 }  // namespace tt::tt_metal

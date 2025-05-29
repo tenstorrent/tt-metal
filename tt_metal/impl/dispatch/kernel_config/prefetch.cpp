@@ -247,6 +247,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
             dependent_config_.downstream_dispatch_s_cb_sem_id = UNUSED_SEM_ID;
         }
+        dependent_config_.num_hops = 0;
     } else if (static_config_.is_h_variant.value()) {
         // Upstream, just host so no dispatch core
         TT_ASSERT(upstream_kernels_.size() == 0);
@@ -290,6 +291,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
                     DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
                 dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
                 dependent_config_.downstream_cb_pages = prefetch_d->GetStaticConfig().cmddat_q_pages.value();
+                dependent_config_.num_hops = tt::tt_metal::get_num_hops(device_id_, prefetch_d->GetDeviceId());
             } else if (auto fabric_mux = dynamic_cast<tt::tt_metal::FabricMux*>(ds_kernel)) {
                 constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
@@ -311,6 +313,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
         } else if (auto prefetch_h = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = prefetch_h->GetLogicalCore();
             dependent_config_.upstream_cb_sem_id = prefetch_h->GetStaticConfig().my_downstream_cb_sem_id.value();
+            dependent_config_.num_hops = tt::tt_metal::get_num_hops(prefetch_h->GetDeviceId(), device_id_);
         } else {
             TT_FATAL(false, "PREFETCH_D Upstream - Unimplemented path");
         }
@@ -419,8 +422,7 @@ void PrefetchKernel::CreateKernel() {
         edm_connection_attributes_.worker_teardown_sem,
         edm_connection_attributes_.worker_buffer_index_sem,
 
-        dependent_config_.upstream_num_hops.value(),
-        dependent_config_.downstream_num_hops.value(),
+        dependent_config_.num_hops.value(),
 
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),

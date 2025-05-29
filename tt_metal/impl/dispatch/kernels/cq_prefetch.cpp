@@ -94,11 +94,12 @@ constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(41);
 constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(42);
 constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(43);
 
-constexpr uint32_t upstream_num_hops = get_compile_time_arg_val(44);
-constexpr uint32_t downstream_num_hops = get_compile_time_arg_val(45);
+// Prefetch H: Num hops to prefetch D
+// Prefetch D: Num hops to prefetch H
+constexpr uint32_t num_hops = get_compile_time_arg_val(44);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(46);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(47);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(45);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(46);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -1497,7 +1498,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
             fabric_mux_channel_buffer_size_bytes,
             fabric_mux_num_buffers_per_channel,
             fabric_header_rb_base,
-            downstream_num_hops>(
+            num_hops>(
             edm_sender, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length, npages);
         downstream_data_ptr += npages * downstream_cb_page_size;
     } else {
@@ -1508,7 +1509,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
                 fabric_mux_channel_buffer_size_bytes,
                 fabric_mux_num_buffers_per_channel,
                 fabric_header_rb_base,
-                downstream_num_hops>(
+                num_hops>(
                 edm_sender, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
             data_ptr += available;
             length -= available;
@@ -1519,7 +1520,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
             fabric_mux_channel_buffer_size_bytes,
             fabric_mux_num_buffers_per_channel,
             fabric_header_rb_base,
-            downstream_num_hops>(
+            num_hops>(
             edm_sender, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length, npages);
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
@@ -1641,7 +1642,7 @@ void kernel_main_d() {
             upstream_cb_sem_id,
             fabric_mux_num_buffers_per_channel,
             fabric_header_rb_base,
-            upstream_num_hops>(edm_sender, pages_to_free);
+            num_hops>(edm_sender, pages_to_free);
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, cmddat_q_page_size);

@@ -236,6 +236,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         dependent_config_.downstream_cb_base = 0;                         // Unused
         dependent_config_.downstream_cb_size = 0;                         // Unused
         dependent_config_.downstream_cb_sem_id = UNUSED_SEM_ID;           // Unused
+        dependent_config_.num_hops = 0;                                   // Unused
     } else if (static_config_.is_h_variant.value()) {
         // Upstream, expect DEMUX
         // Or direct connection to DISPATCH_D if using fabric
@@ -252,6 +253,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.upstream_dispatch_cb_sem_id =
                 dispatch_d->GetStaticConfig().my_downstream_cb_sem_id.value();
             dependent_config_.upstream_sync_sem = 0;  // Unused
+            dependent_config_.num_hops = tt::tt_metal::get_num_hops(device_id_, dispatch_d->GetDeviceId());
         } else {
             TT_FATAL(false, "DISPATCH_H Upstream - Unimplemented path");
         }
@@ -346,6 +348,7 @@ void DispatchKernel::GenerateDependentConfigs() {
                 dependent_config_.downstream_cb_base = dispatch_h_kernel->GetStaticConfig().dispatch_cb_base.value();
                 dependent_config_.downstream_cb_sem_id =
                     dispatch_h_kernel->GetStaticConfig().my_dispatch_cb_sem_id.value();
+                dependent_config_.num_hops = tt::tt_metal::get_num_hops(dispatch_h_kernel->GetDeviceId(), device_id_);
                 found_dispatch_h = true;
             } else if (auto fabric_mux = dynamic_cast<tt::tt_metal::FabricMux*>(ds_kernel)) {
                 TT_ASSERT(!found_fabric_mux, "DISPATCH_D has multiple downstream FABRIC_MUX kernels.");
@@ -452,8 +455,7 @@ void DispatchKernel::CreateKernel() {
         num_virtual_active_eth_cores,
         num_physical_active_eth_cores,
 
-        dependent_config_.upstream_num_hops.value(),
-        dependent_config_.downstream_num_hops.value(),
+        dependent_config_.num_hops.value(),
 
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
