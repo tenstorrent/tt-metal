@@ -366,10 +366,9 @@ TEST_F(CommandQueueSingleCardFixture, TestInvalidReadWriteAddressDRAM) {
         const uint32_t num_elements = 1010;
         const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
-        const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) +
-                                   MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BARRIER);
+        const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
         const uint32_t size = device->dram_size_per_channel() -
-                              MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BARRIER);
+                              MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::UNRESERVED);
         const uint32_t dram_end_address = address + size;
         const DeviceAddr dram_end_address_offset = 256;
         const DeviceAddr dram_invalid_address = dram_end_address + dram_end_address_offset;
@@ -394,8 +393,7 @@ TEST_F(CommandQueueSingleCardFixture, TestInvalidReadWriteAddressDRAM) {
 
 TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleCoresDRAM) {
     for (IDevice* device : this->devices_) {
-        const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) +
-                                   MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BARRIER);
+        const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
         const uint32_t num_elements = 1000;
 
         uint32_t dram_core_value = 1;
