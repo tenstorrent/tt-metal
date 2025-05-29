@@ -114,6 +114,48 @@ private:
     uint8_t channel_id;
 };
 
+// A tuple of EthChannelBuffer
+template <size_t... Buffers>
+struct EthChannelBufferTuple {
+    std::tuple<tt::tt_fabric::EthChannelBuffer<Buffers>...> channel_buffers;
+
+    void init(
+        const size_t channel_base_address[],
+        const size_t buffer_size_bytes,
+        const size_t header_size_bytes,
+        const size_t eth_transaction_ack_word_addr) {
+        std::apply(
+            // <-- note the template<...> here
+            [&]<typename... ChanT>(ChanT&... chans) {
+                size_t idx = 0;
+                (void)std::initializer_list<int>{(
+                    new (&chans) ChanT(
+                        channel_base_address[idx],
+                        buffer_size_bytes,
+                        header_size_bytes,
+                        eth_transaction_ack_word_addr,
+                        idx),
+                    ++idx,  // increment *after* the read
+                    0       // dummy value
+                    )...};
+            },
+            channel_buffers);
+    }
+
+    template <size_t I>
+    auto& get() {
+        return std::get<I>(channel_buffers);
+    }
+};
+
+template <auto& ChannelBuffers>
+struct EthChannelBuffers {
+    template <size_t... Is>
+    static auto make(std::index_sequence<Is...>) {
+        return EthChannelBufferTuple<ChannelBuffers[Is]...>{};
+    }
+};
+
 template <uint8_t NUM_BUFFERS>
 struct EdmChannelWorkerInterface {
     EdmChannelWorkerInterface() :
