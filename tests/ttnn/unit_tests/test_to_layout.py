@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
+
+import math
 import pytest
-
 import torch
-
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
@@ -333,9 +333,9 @@ def test_to_layout_page_error(shape, device):
 @pytest.mark.parametrize(
     "tensor_shape",
     [
-        [1, 1, 512, 512],
+        [1, 1, 512, 512],  # [1, 1, 1024, 512], [1, 1, 512, 1024]
     ],
-)  # [1, 1, 256, 512], [1, 1, 512, 256], [1, 1, 512, 8192]
+)
 @pytest.mark.parametrize(
     "input_memory_layout",
     [
@@ -368,6 +368,17 @@ def test_to_layout_page_error(shape, device):
         # ttnn.ShardOrientation.COL_MAJOR,
     ],
 )
+@pytest.mark.parametrize(
+    "num_shard_cores, standard_shard_core_grid, block_shard_core_grid",
+    [
+        [
+            4,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ],
+        # [ 16, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0),  ttnn.CoreCoord(0, 7)), ttnn.CoreRange(ttnn.CoreCoord(1, 0),  ttnn.CoreCoord(1, 7))}), ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0),  ttnn.CoreCoord(3, 3))})],
+    ],
+)
 def test_untilize_single_core(
     device,
     dtype,
@@ -377,6 +388,9 @@ def test_untilize_single_core(
     input_shard_orientation,
     output_memory_layout,
     output_shard_orientation,
+    num_shard_cores,
+    standard_shard_core_grid,
+    block_shard_core_grid,
 ):
     tensor_dims = len(tensor_shape)
     tensor_height = 1
@@ -384,24 +398,25 @@ def test_untilize_single_core(
         tensor_height *= tensor_shape[i]
     tensor_width = tensor_shape[tensor_dims - 1]
 
-    num_shard_cores = 4
-
     input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     if input_memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        input_shard_core_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 1)),
-            }
-        )
-
         input_shard_spec_shape = (64, 64)
+        input_shard_core_grid = standard_shard_core_grid
+
         if input_memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-            input_shard_spec_shape = (tensor_height / num_shard_cores, tensor_width)
+            input_shard_spec_shape = (tensor_height // num_shard_cores, tensor_width)
+            input_shard_core_grid = standard_shard_core_grid
+
         elif input_memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-            input_shard_spec_shape = (tensor_height, tensor_width / num_shard_cores)
+            input_shard_spec_shape = (tensor_height, tensor_width // num_shard_cores)
+            input_shard_core_grid = standard_shard_core_grid
+
         elif input_memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-            input_shard_spec_shape = (tensor_height / num_shard_cores / 2, tensor_width / num_shard_cores / 2)
+            input_shard_spec_shape = (
+                tensor_height // int(math.sqrt(num_shard_cores)),
+                tensor_width // int(math.sqrt(num_shard_cores)),
+            )
+            input_shard_core_grid = block_shard_core_grid
 
         input_shard_spec = ttnn.ShardSpec(input_shard_core_grid, input_shard_spec_shape, input_shard_orientation)
         input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, input_shard_spec)
@@ -412,20 +427,23 @@ def test_untilize_single_core(
 
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     if output_memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        output_shard_core_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 1)),
-            }
-        )
-
         output_shard_spec_shape = (64, 64)
+        output_shard_core_grid = standard_shard_core_grid
+
         if output_memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-            output_shard_spec_shape = (tensor_height / num_shard_cores, tensor_width)
+            output_shard_spec_shape = (tensor_height // num_shard_cores, tensor_width)
+            output_shard_core_grid = standard_shard_core_grid
+
         elif output_memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-            output_shard_spec_shape = (tensor_height, tensor_width / num_shard_cores)
+            output_shard_spec_shape = (tensor_height, tensor_width // num_shard_cores)
+            output_shard_core_grid = standard_shard_core_grid
+
         elif output_memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-            output_shard_spec_shape = (tensor_height / num_shard_cores / 2, tensor_width / num_shard_cores / 2)
+            output_shard_spec_shape = (
+                tensor_height // int(math.sqrt(num_shard_cores)),
+                tensor_width // int(math.sqrt(num_shard_cores)),
+            )
+            output_shard_core_grid = block_shard_core_grid
 
         output_shard_spec = ttnn.ShardSpec(output_shard_core_grid, output_shard_spec_shape, output_shard_orientation)
         output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
