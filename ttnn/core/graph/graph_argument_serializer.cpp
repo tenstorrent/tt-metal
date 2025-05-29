@@ -9,14 +9,6 @@
 #include <boost/algorithm/string/replace.hpp>
 
 namespace ttnn::graph {
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout) {
-    switch (layout) {
-        case Layout::ROW_MAJOR: return os << "Row Major";
-        case Layout::TILE: return os << "Tile";
-        case Layout::INVALID: return os << "Invalid";
-        default: return os << "Unknown layout";
-    }
-}
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tile& config) {
     tt::stl::reflection::operator<<(os, config);
