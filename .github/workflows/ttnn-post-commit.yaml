@@ -164,5 +164,5 @@ jobs:
       - name: ttnn import test
         timeout-minutes: 5
         run: |
-          /work/tt-metal/install_dependencies.sh
+          sudo ./install_dependencies.sh
           python3 -c "import ttnn"
