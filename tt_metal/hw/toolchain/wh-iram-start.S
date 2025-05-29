@@ -5,17 +5,16 @@
 #include <dev_mem_map.h>
 
 .section .start,"ax",@progbits
-.global _start
-.type   _start, @function
 
 // This file is used on NCRISC on wormhole, and reloads registers stored in ncrisc-halt-wormhole.S.
 
+.global _start
+.type   _start, @function
+.func	_start
 _start:
 	// kernel_launch is responsible for the rest of crt -- clear bss, copy data image, run global constructors
-	// Enable GPREL optimizations
-	.reloc _start, R_RISCV_NONE, __global_pointer$
-    .option push
-    .option norelax
+	.option push
+	.option norelax
 	lui gp,%hi(__global_pointer$)
 	addi gp,gp,%lo(__global_pointer$)
 	.option pop
@@ -36,4 +35,5 @@ _start:
 	lw  a0, 13 * 4( sp )
 	addi sp, sp, (16 * 4)
 	tail    kernel_launch
-	.size  _start, .-_start
+.size _start, .-_start
+.endfunc
