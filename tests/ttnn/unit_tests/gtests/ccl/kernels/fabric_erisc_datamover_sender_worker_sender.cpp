@@ -70,7 +70,6 @@ void kernel_main() {
 
     // TODO: move to semaphore
     auto edm_buffer_index_sem_id = get_arg_val<uint32_t>(arg_idx++);
-    size_t my_fc_stream_channel_id = get_arg_val<uint32_t>(arg_idx++);
     ASSERT(edm_buffer_index_sem_id < 8);
     auto edm_buffer_index_id = edm_buffer_index_sem_id;
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(writer_send_sem_addr));
@@ -106,7 +105,7 @@ void kernel_main() {
         worker_teardown_sem_addr,
         worker_buffer_index_semaphore_addr,
         tt::tt_fabric::WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
-        StreamId{my_fc_stream_channel_id});
+        StreamId{std::numeric_limits<uint32_t>::max()});
 
     sender.open();
 
