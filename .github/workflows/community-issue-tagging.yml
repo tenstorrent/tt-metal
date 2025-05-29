@@ -6,6 +6,10 @@ on:
   pull_request:
     types: [opened]
 
+permissions:
+  issues: write
+  pull-requests: write
+
 jobs:
   call-central-workflow:
     uses: tenstorrent/tt-github-actions/.github/workflows/on-community-issue.yml@main
