@@ -39,6 +39,8 @@ class TtUpsample2D(nn.Module):
             device, weights, bias, ttnn.bfloat16, fp32_dest_acc_en=True, math_fidelity=ttnn.MathFidelity.LoFi
         )
         self.conv_slice_config = get_DRAM_conv_config(module_path, 1)
+        if self.conv_slice_config is not None:
+            self.conv_config.deallocate_activation = False
 
     def interpolate(self, hidden_states):
         hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))

@@ -69,6 +69,7 @@ class TtAutoencoderKL(nn.Module):
 
         self.tt_post_quant_conv_weights = d_w
         self.tt_post_quant_conv_bias = d_b
+        self.conv_config.always_preprocess_weights = False
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         hidden_states = self.decoder(hidden_states, [B, C, H, W])
