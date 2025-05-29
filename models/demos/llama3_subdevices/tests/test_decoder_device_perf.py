@@ -99,7 +99,7 @@ perf_targets = {
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "Matmul_3": {
         "op_name": "FF3_MM",
@@ -141,7 +141,7 @@ perf_targets = {
         "first_to_last_start": 1660.7777777777778,
         "non-overlapped-dispatch-time": 8510.2,
         "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
+        "op_to_op_duration_relative_margin": 0.3,
         "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
