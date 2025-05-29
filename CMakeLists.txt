@@ -150,7 +150,7 @@ if(NOT NUMA_LIBRARY)
 endif()
 
 # Bring in UMD and all it's dependencies
-add_subdirectory(tt_metal/third_party/umd)
+add_subdirectory(tt_metal/third_party)
 
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
