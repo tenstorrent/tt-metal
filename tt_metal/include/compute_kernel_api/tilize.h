@@ -158,6 +158,7 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb) {
 
 ALWI void unpack_tilize_block(uint32_t icb, uint32_t block) { UNPACK((llk_unpack_tilize_block(icb, block))); }
 
+template <bool neginf_srcA = true, std::uint32_t reload_srcB = true, bool zero_srcA = false, bool zero_srcA_reduce = false>
 ALWI void unpack_tilizeA_B_block(
     uint32_t icb0,
     uint32_t icb1,
@@ -165,7 +166,8 @@ ALWI void unpack_tilizeA_B_block(
     uint32_t tile_idx_b,
     uint32_t num_faces = 4,
     uint32_t srca_face_r_dim = 16) {
-    UNPACK((llk_unpack_tilizeA_B_block<true, true>(icb0, icb1, block, tile_idx_b, num_faces, srca_face_r_dim)));
+    UNPACK((llk_unpack_tilizeA_B_block<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+        icb0, icb1, block, tile_idx_b, num_faces, srca_face_r_dim)));
 }
 
 // clang-format off
