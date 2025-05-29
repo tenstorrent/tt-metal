@@ -6,6 +6,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -30,7 +31,8 @@ def test_vae(device, input_shape, host_fallback, pcc, reset_seeds):
     state_dict = vae.state_dict()
 
     logger.info("Loading weights to device")
-    tt_vae = TtAutoencoderKL(device, state_dict, gn_fallback=host_fallback)
+    model_config = ModelOptimisations()
+    tt_vae = TtAutoencoderKL(device, state_dict, model_config, gn_fallback=host_fallback)
     logger.info("Loaded weights")
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
 
