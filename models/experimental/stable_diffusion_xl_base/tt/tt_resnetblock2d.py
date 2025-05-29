@@ -133,7 +133,7 @@ class TtResnetBlock2D(nn.Module):
         self.conv3_config = model_config.get_conv_config(conv_path=f"{module_path}.conv_shortcut")
         if conv_shortcut:
             (
-                self.compute3_config,
+                self.compute_config_conv_linear,
                 _,
                 self.tt_conv3_weights,
                 self.tt_conv3_bias,
