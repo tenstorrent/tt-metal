@@ -214,7 +214,11 @@ int main() {
         golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K);
 
         // Tilize the input vectors to match the expected tiled layout for the device
-        // TODO: Explain this tilization
+        // The Tenstorrent hardware operates on data in 32x32 tiles rather than standard row-major format.
+        // tilize_nfaces() converts the input matrices from row-major layout to the tiled layout expected by the device.
+        // This transformation groups elements into 32x32 blocks and reorders them in memory so that each tile
+        // (32x32 elements) is stored contiguously. This matches the native data access patterns of the matrix engine
+        // and enables efficient operations on the accelerator.
         src0_vec = tilize_nfaces(src0_vec, M, K);
         src1_vec = tilize_nfaces(src1_vec, K, N);
 
