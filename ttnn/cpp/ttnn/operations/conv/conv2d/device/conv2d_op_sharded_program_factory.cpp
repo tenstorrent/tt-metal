@@ -845,6 +845,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         log_debug(LogOp, "packer_l1_acc: {}", packer_l1_acc);
     }
 
+    const auto weight_core_grid = b.memory_config().shard_spec().value();
+    const auto weight_cores = corerange_to_cores(weight_core_grid.grid);  // TODO: fix this call
+    const auto bank_id = device->allocator()->get_bank_ids_from_logical_core(BufferType::DRAM, weight_cores[0]);
+    tt::log_info("dram cores = {}, bank_id={}", weight_cores, bank_id);
+
     uint32_t window_outer;
     uint32_t window_inner;
 
@@ -1055,6 +1060,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     bool read_window_in_inner_loop = false;
     uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles / conv_act_c_blocks;
+    tt::log_info(
+        "initial cb tiles {} ({} x {} / {})",
+        num_weight_cb_tiles,
+        weight_block_h_ntiles,
+        weight_block_w_ntiles,
+        conv_act_c_blocks);
     bool fully_buffer_weights = false;
     uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles / conv_act_c_blocks;
 
@@ -1077,11 +1088,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         fully_buffer_weights = true;
     }
     uint32_t num_cb0_tilized_tiles = num_act_cb_tiles;
+    tt::log_info("num weight cb_tiles {} ", num_weight_cb_tiles);
 
     if (fully_buffer_weights) {
         num_weight_cb_tiles *= window_outer;
+        tt::log_info("fully bufer weights {}", num_weight_cb_tiles);
     } else if (enable_weights_double_buffer) {
         num_weight_cb_tiles = num_weight_cb_tiles * 2;
+        tt::log_info("enable double buf: {}", num_weight_cb_tiles);
     }
 
     if (enable_split_reader) {
@@ -1196,6 +1210,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             packer_l1_acc_en,
             cb_indices);
     }
+
+    tt::log_info("num_weight_cb_tiles {}", num_weight_cb_tiles);
+
     CBHandle cb_sharded_act = std::get<0>(input_output_cbs);
     CBHandle cb_output = std::get<1>(input_output_cbs);
     CBHandle cb_matmul_partials = std::get<2>(input_output_cbs);

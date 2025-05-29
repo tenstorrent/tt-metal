@@ -1043,10 +1043,16 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     if (parameters_on_device) {
         const auto core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({0, 0}));
         const auto grid = CoreRangeSet({core_range});
-        const auto shard_spec = tt::tt_metal::ShardSpec(grid, {576, 64});
+        const auto shard_spec = tt::tt_metal::ShardSpec(grid, {padded_target_shape[-2], padded_target_shape[-1]});
         const MemoryConfig config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::DRAM, shard_spec};
-        weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, config);
-        tt::log_info("sharding weight tensor {} ", weight_tensor_.memory_config());
+        bool skip_shard = original_weights_window_h == 1 && original_weights_window_w == 1;
+        if (skip_shard) {
+            weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
+        } else {
+            tt::log_info("truing to sharding weight tensor {} ", config);
+            weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, config);
+            tt::log_info("DONE sharding weight tensor {} ", weight_tensor_.memory_config());
+        }
     }
 
     if (bias_tensor.has_value()) {

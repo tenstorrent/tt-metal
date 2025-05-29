@@ -189,9 +189,6 @@ def run_conv(
         device=device if activations_dtype == ttnn.bfloat8_b else None,
     )
 
-    print("input", tt_input_tensor.shape)
-    print("weight", tt_weight_tensor.shape)
-
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
@@ -206,6 +203,7 @@ def run_conv(
         preprocess_weights_on_device=preprocess_weights_on_device,
         always_preprocess_weights=False,
         in_place=in_place,
+        enable_weights_double_buffer=True,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -1857,7 +1855,25 @@ def test_unet_conv_groups_2_wh(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, in_place",
-    ((16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False),),
+    (
+        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False),
+        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False),
+        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
+        (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, False),
+        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
+        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
+        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False),
+    ),
 )
 @pytest.mark.parametrize(
     "weights_dtype",
