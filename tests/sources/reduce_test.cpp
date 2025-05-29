@@ -51,10 +51,10 @@ void run_kernel()
 {
     const std::uint32_t math_fid = 4;
     const bool is_int_fpu_en     = false;
-    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, math_fid>(within_face_16x16_transpose);
     _llk_math_pack_sync_init_<DstSync::SyncFull, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<false, row_pool>(MATH_FORMAT, MATH_FORMAT);
     _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
+    _llk_math_hw_configure_<false, row_pool>(MATH_FORMAT, MATH_FORMAT);
+    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, math_fid>(within_face_16x16_transpose);
     _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, math_fid, is_fp32_dest_acc_en, is_int_fpu_en>(0);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
