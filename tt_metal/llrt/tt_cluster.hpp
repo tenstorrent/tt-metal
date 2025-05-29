@@ -148,26 +148,13 @@ public:
         const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
 
     void write_dram_vec(
-        std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access = false) const;
-    void read_dram_vec(
-        std::vector<uint32_t>& vec,
-        uint32_t size_in_bytes,
-        chip_id_t device_id,
-        int dram_view,
-        uint64_t addr,
-        bool small_access = false) const;
+        const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
+    void read_dram_vec(void* mem_ptr, uint32_t size_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
 
     // Accepts physical noc coordinates
-    void write_core(
-        const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
-    void read_core(
-        void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
-    void read_core(
-        std::vector<uint32_t>& data,
-        uint32_t sz_in_bytes,
-        tt_cxy_pair core,
-        uint64_t addr,
-        bool small_access = false) const;
+    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);

@@ -406,9 +406,6 @@ void FDMeshCommandQueue::write_shard_to_device(
     const auto region_value = region.value_or(BufferRegion(0, shard_view->size()));
 
     if (shard_view->is_nd_sharded()) {
-        TT_FATAL(
-            shard_view->is_l1(),
-            "Local device shard with BufferDistributionSpec must be L1 for write_shard_to_device!");
         const auto& [banks, bank_mapping_in_bytes] = shard_view->get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
@@ -455,9 +452,6 @@ void FDMeshCommandQueue::read_shard_from_device(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     if (shard_view->is_nd_sharded()) {
-        TT_FATAL(
-            shard_view->is_l1(),
-            "Local device shard with BufferDistributionSpec must be L1 for read_shard_from_device!");
         const auto& [banks, bank_mapping_in_bytes] = shard_view->get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =

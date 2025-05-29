@@ -226,7 +226,6 @@ void HWCommandQueue::enqueue_read_buffer(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     if (buffer_obj.is_nd_sharded()) {
-        TT_FATAL(buffer_obj.is_l1(), "Buffer with BufferDistributionSpec must be L1 for enqueue_read_buffer!");
         const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
@@ -311,7 +310,6 @@ void HWCommandQueue::enqueue_write_buffer(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     if (buffer_obj.is_nd_sharded()) {
-        TT_FATAL(buffer_obj.is_l1(), "Buffer with BufferDistributionSpec must be L1 for enqueue_write_buffer!");
         const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
