@@ -3,6 +3,7 @@
 # their own .clang-tidy within themselves and still not be clean against it <cough>flatbuffers</cough>
 set(CMAKE_C_CLANG_TIDY "")
 set(CMAKE_CXX_CLANG_TIDY "")
+set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
 ############################################################################################################################

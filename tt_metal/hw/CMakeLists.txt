@@ -274,6 +274,13 @@ add_library(Metalium::Metal::Hardware ALIAS hw)
 target_include_directories(hw INTERFACE inc)
 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
+    # These headers are for the device, not host; will require cross compiling to verify.
+    set_target_properties(
+        hw
+        PROPERTIES
+            VERIFY_INTERFACE_HEADER_SETS
+                FALSE
+    )
     target_sources(
         hw
         PUBLIC
