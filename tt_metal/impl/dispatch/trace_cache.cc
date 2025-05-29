@@ -15,10 +15,9 @@
 // Re-enter pre-allocate mode w/ large free node at bottom
 // Re-enter pre-allocate mode after sync
 
-// Number of programs executed before eviction
-// For now this is a const.  Could be a min combined w/ an allocationsize
-// heuritic for the max
-constexpr std::int32_t reuse_window = 2;
+// Number of programs executed before eviction + 1
+// When this is 1, programs can execute back to back
+constexpr std::int32_t max_reuse_window = 2;
 
 class Program {
 private:
@@ -72,6 +71,7 @@ public:
     bool does_stall() const { return this->stall_idx_ != -1; }
     float get_weight() const { return this->weight_; }
     bool is_allocated() const { return this->addr_ != unallocated_addr; }
+    static bool is_index_valid(std::int32_t idx) { return idx != next_use_unused; }
 
     void set_remaining(std::int32_t remaining) { this->remaining_ = remaining; }
     void set_next_idx(std::uint32_t idx) { this->next_idx_ = idx; }
@@ -107,7 +107,7 @@ class TraceProgramData {
 private:
     enum AllocationClass {
         NOT_ALLOCED,
-        HEAP,
+        ALLOCED,
     };
 
     std::int32_t count_;     // number of times this pgm was used in the trace
@@ -127,21 +127,20 @@ public:
     }
 
     void inc_count() { this->count_++; }
-    void alloc_heap() { this->alloced_ = HEAP; }
+    void alloc() { this->alloced_ = ALLOCED; }
     void dealloc() { this->alloced_ = NOT_ALLOCED; }
 
     std::int32_t get_count() const { return this->count_; }
     std::int32_t get_used() const { return this->used_idx_; }
     std::int32_t get_last_used() const { return this->last_used_idx_; }
     bool is_not_alloced() const { return this->alloced_ == NOT_ALLOCED; }
-    bool is_heap() const { return this->alloced_ == HEAP; }
 };
 
 TraceProgramData::TraceProgramData() : count_(0), used_idx_(0), last_used_idx_(0), alloced_(NOT_ALLOCED) {}
 
 class AllocNode {
 private:
-    static constexpr std::int32_t never_used = -reuse_window;
+    static constexpr std::int32_t never_used = -max_reuse_window;
 
     std::uint32_t pgm_id_;
     std::uint32_t addr_;       // base address of this allocation unit
@@ -200,7 +199,7 @@ private:
 
     // Allocate
     bool handle_trivial_cases(std::vector<TraceNode>& trace, const std::vector<Program>& programs);
-    void alloc_heap(std::vector<TraceNode>& trace, const std::vector<Program>& programs);
+    void alloc(std::int32_t reuse_window, std::vector<TraceNode>& trace, const std::vector<Program>& programs);
 
     // Helpers
     std::list<std::list<AllocNode>::iterator>::iterator find_eviction_candidates(
@@ -223,6 +222,7 @@ private:
         std::vector<TraceNode>& trace);
     void sort_preallocations(std::list<AllocNode>::iterator uncommitted_it, const std::vector<TraceNode>& trace);
     bool try_to_reenter_preallocation_mode(
+        std::int32_t reuse_window,
         std::uint32_t& pre_alloc_addr_top,
         std::uint32_t& pre_alloc_addr,
         std::list<AllocNode>::iterator& uncommitted_it,
@@ -311,6 +311,12 @@ std::vector<TraceProgramData> WorkerBufferManager::build_use_data(
     for (std::int32_t trace_idx = trace.size() - 1; trace_idx >= 0; trace_idx--) {
         std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
 
+        std::uint32_t size_needed = programs[pgm_id].get_size();
+        if (size_needed > this->buffer_size_) {
+            fprintf(stderr, "Program %d's size %d exceeds buffer size %d\n", pgm_id, size_needed, this->buffer_size_);
+            throw("failed");
+        }
+
         if (pgm_id >= program_data.size()) {
             program_data.resize(pgm_id + 1);
         }
@@ -343,11 +349,7 @@ bool WorkerBufferManager::handle_trivial_cases(std::vector<TraceNode>& trace, co
         std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
         std::uint32_t size_needed = programs[pgm_id].get_size();
 
-        // TODO: move this to build_use_data?  in production code, probably just assert (checked elsewhere?)
-        if (size_needed > this->buffer_size_) {
-            fprintf(stderr, "Program %d's size %d exceeds buffer size %d\n", pgm_id, size_needed, this->buffer_size_);
-            throw("");
-        }
+        assert(size_needed <= this->buffer_size_);
 
         total_alloced += size_needed;
     }
@@ -360,14 +362,13 @@ bool WorkerBufferManager::handle_trivial_cases(std::vector<TraceNode>& trace, co
             if (not trace[trace_idx].is_allocated()) {
                 std::uint32_t pgm_id = trace[trace_idx].get_pgm_id();
                 std::int32_t child_idx = trace_idx;
-                // TODO: move sentinal values behind the interface
-                while (child_idx != 0x7fffffff) {
+                while (TraceNode::is_index_valid(child_idx)) {
                     trace[child_idx].set_addr(alloc_addr);
                     child_idx = trace[child_idx].get_next_idx();
                 }
 
                 alloc_addr += programs[pgm_id].get_size();
-                this->program_data_[pgm_id].alloc_heap();
+                this->program_data_[pgm_id].alloc();
                 trace[trace_idx].set_does_dispatch();
             }
         }
@@ -391,7 +392,7 @@ void WorkerBufferManager::commit_preallocations(
             std::uint32_t size = alloc_it->get_size();
             addr -= size;
             alloc_it->set_addr(addr);
-            this->program_data_[pgm_id].alloc_heap();
+            this->program_data_[pgm_id].alloc();
             trace[trace_idx].set_does_dispatch();
 
             // Commit allocations up to how far we've progressed through this trace
@@ -515,8 +516,7 @@ std::list<AllocNode>::iterator WorkerBufferManager::evict(
             if (*lru_it == alloc_it) {
                 std::uint32_t pgm_id = alloc_it->get_pgm_id();
 
-                // TODO: clean this up (sentinel)
-                if (alloc_it->get_pgm_id() != 0xffffffff) {
+                if (not alloc_it->is_free()) {
                     this->program_data_[pgm_id].dealloc();
                     this->alloced_pgms_[pgm_id].reset();
                 }
@@ -612,10 +612,9 @@ void WorkerBufferManager::allocate_in_hole(
         }
     }
 
-    // TODO: aggegate all this bookkeeping in a helper?
     trace[trace_idx].set_does_dispatch();
     trace[trace_idx].set_addr(alloc_addr);
-    this->program_data_[pgm_id].alloc_heap();
+    this->program_data_[pgm_id].alloc();
     this->alloced_pgms_[pgm_id] = std::prev(this->lru_.end());
 }
 
@@ -628,7 +627,7 @@ void WorkerBufferManager::sort_preallocations(
     } else {
         tmp.splice(tmp.end(), this->allocator_, std::next(uncommitted_it), this->allocator_.end());
     }
-    fprintf(stderr, "size %ld\n", tmp.size());
+
     tmp.sort([&](const AllocNode& first, const AllocNode& second) {
         float first_weight = first.get_weight(trace, &TraceNode::get_weight);
         float second_weight = second.get_weight(trace, &TraceNode::get_weight);
@@ -652,6 +651,7 @@ void WorkerBufferManager::sort_preallocations(
 // we need a sync could give a better solution (use a slot up high, then
 // sync after that which defers the sync)
 bool WorkerBufferManager::try_to_reenter_preallocation_mode(
+    std::int32_t reuse_window,
     std::uint32_t& pre_alloc_addr_top,
     std::uint32_t& pre_alloc_addr,
     std::list<AllocNode>::iterator& uncommitted_it,
@@ -716,7 +716,8 @@ bool WorkerBufferManager::try_to_reenter_preallocation_mode(
 // 3) Free up what can be freed up and restart to first step
 // 4) At some point this may exhaust itself and we have to enter eviction mode
 // 5) Evict based on LRU and hole size from here on out
-void WorkerBufferManager::alloc_heap(std::vector<TraceNode>& trace, const std::vector<Program>& programs) {
+void WorkerBufferManager::alloc(
+    std::int32_t reuse_window, std::vector<TraceNode>& trace, const std::vector<Program>& programs) {
     this->alloced_pgms_.resize(programs.size());
     std::int32_t trace_idx = 0;
 
@@ -766,7 +767,6 @@ void WorkerBufferManager::alloc_heap(std::vector<TraceNode>& trace, const std::v
                     allocate_in_hole(trace_idx, freed_size, size_needed, alloc_it, trace);
                 } else {
                     fprintf(stderr, "Failed allocate %d bytes at trace_idx %d\n", size_needed, trace_idx);
-                    // TODO: need to be able to stall on the RB and vice versa to handle all cases
                     dump_allocator();
                     throw("failed");
                 }
@@ -786,7 +786,7 @@ void WorkerBufferManager::alloc_heap(std::vector<TraceNode>& trace, const std::v
                     sort_preallocations(uncommitted_it, trace);
                     commit_preallocations(pre_alloc_addr_top, uncommitted_it, trace);
                     eviction_mode = try_to_reenter_preallocation_mode(
-                        pre_alloc_addr_top, pre_alloc_addr, uncommitted_it, trace_idx, trace);
+                        reuse_window, pre_alloc_addr_top, pre_alloc_addr, uncommitted_it, trace_idx, trace);
                     continue;  // Reprocess this trace_idx
                 } else {
                     pre_alloc_addr -= size_needed;
@@ -822,8 +822,7 @@ void WorkerBufferManager::process_trace(std::vector<TraceNode>& trace, const std
     this->program_data_ = build_use_data(trace, programs);
 
     if (!handle_trivial_cases(trace, programs)) {
-        // Eventually may want to interleave these two
-        alloc_heap(trace, programs);
+        alloc(max_reuse_window, trace, programs);
     }
 }
 
@@ -968,7 +967,7 @@ void WorkerBufferManager::dump_stats(const std::vector<TraceNode>& trace, const 
 
             if (stall_idx == 1) {
                 n_single_cycle++;
-                fprintf(stderr, "single cycle at %d\n", trace_idx);
+                fprintf(stderr, "Single cycle stall at %d\n", trace_idx);
             }
             if (stall_idx < min_stall) {
                 min_stall = stall_idx;
