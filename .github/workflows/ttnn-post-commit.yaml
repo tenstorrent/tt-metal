@@ -164,4 +164,5 @@ jobs:
       - name: ttnn import test
         timeout-minutes: 5
         run: |
+          ./install_dependencies.sh
           python3 -c "import ttnn"
