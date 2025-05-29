@@ -240,16 +240,28 @@ public:
     void verify(const std::vector<TraceNode>& trace, const std::vector<Program>& programs);
     void dump(const std::vector<TraceNode>& trace, const std::vector<Program>& programs);
     void dump_stats(const std::vector<TraceNode>& trace, const std::vector<Program>& programs);
-    void dump_allocator();
+    void dump_allocator(std::optional<std::reference_wrapper<const std::vector<TraceNode>>> opt_trace = std::nullopt);
 };
 
 WorkerBufferManager::WorkerBufferManager(std::uint32_t buffer_size) : buffer_size_(buffer_size) {}
 
-void WorkerBufferManager::dump_allocator() {
+void WorkerBufferManager::dump_allocator(
+    std::optional<std::reference_wrapper<const std::vector<TraceNode>>> opt_trace) {
     fprintf(stderr, "Allocator:\n");
     for (const auto& node : this->allocator_) {
         std::uint32_t pgm_id = node.get_pgm_id();
-        fprintf(stderr, "  %s: %d %d\n", Program::get_name(pgm_id).c_str(), node.get_addr(), node.get_size());
+        if (opt_trace.has_value()) {
+            float weight = node.is_free() ? 0.0f : opt_trace->get()[node.get_prev_use()].get_weight();
+            fprintf(
+                stderr,
+                "  %s: %d %d %f\n",
+                Program::get_name(pgm_id).c_str(),
+                node.get_addr(),
+                node.get_size(),
+                weight);
+        } else {
+            fprintf(stderr, "  %s: %d %d\n", Program::get_name(pgm_id).c_str(), node.get_addr(), node.get_size());
+        }
     }
 
     fprintf(stderr, "LRU:\n");
