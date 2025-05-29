@@ -5,11 +5,11 @@ import pytest
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, assert_with_pcc
 
 
 @pytest.mark.parametrize(
-    "tensor_shape,shard_shape,layout",
+    "tensor_shape, shard_shape, layout",
     [
         # Row Major Layout
         ([3, 4, 5], [3, 4, 5], ttnn.ROW_MAJOR_LAYOUT),  # All data on a single core
@@ -57,10 +57,15 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
         ttnn.int32,
         ttnn.float32,
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
+        ttnn.bfloat4_b,
     ],
 )
 def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_type, tt_dtype, device):
     torch.manual_seed(0)
+
+    if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("{} is only valid for ttnn.TILE_LAYOUT!".format(tt_dtype))
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
@@ -81,4 +86,8 @@ def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_t
 
     tt_tensor = ttnn.from_torch(py_tensor, dtype=tt_dtype, device=device, layout=layout, memory_config=memory_config)
     py_tensor_after_round_trip = ttnn.to_torch(tt_tensor)
-    assert torch.allclose(py_tensor, py_tensor_after_round_trip)
+
+    if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        assert_with_pcc(py_tensor, py_tensor_after_round_trip, 0.95)
+    else:
+        assert torch.allclose(py_tensor, py_tensor_after_round_trip)
