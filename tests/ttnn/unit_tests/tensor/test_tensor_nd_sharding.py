@@ -83,6 +83,8 @@ def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_t
 
     nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, ttnn.ShardOrientation.ROW_MAJOR)
     memory_config = ttnn.MemoryConfig(buffer_type, nd_shard_spec)
+    assert memory_config.is_sharded()
+    assert memory_config.nd_shard_spec == nd_shard_spec
 
     tt_tensor = ttnn.from_torch(py_tensor, dtype=tt_dtype, device=device, layout=layout, memory_config=memory_config)
     py_tensor_after_round_trip = ttnn.to_torch(tt_tensor)
