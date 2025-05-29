@@ -57,23 +57,29 @@ Tensor Pool2DOp<pool_type>::invoke(
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
     if (!out_memory_config.shard_spec().has_value()) {
         // Input is not sharded. Perform sharding.
-        TT_FATAL(
-            (applied_shard_scheme.value() == TensorMemoryLayout::HEIGHT_SHARDED) ||
-                (applied_shard_scheme.value() == TensorMemoryLayout::WIDTH_SHARDED) ||
-                (applied_shard_scheme.value() == TensorMemoryLayout::BLOCK_SHARDED),
-            "Only height, width, or block sharding strategies are supported.");
-        shard_layout = applied_shard_scheme.value();
-        parallel_config = pool::determine_parallel_config(
-            shard_layout,
-            batch_size,
-            channels,
-            output_shape[1],
-            output_shape[2],
-            input_tensor.device()->compute_with_storage_grid_size(),
-            ShardOrientation::ROW_MAJOR,
-            false,
-            false,
-            false);
+        if (applied_shard_scheme.has_value()) {
+            TT_FATAL(
+                (applied_shard_scheme.value() == TensorMemoryLayout::HEIGHT_SHARDED) ||
+                    (applied_shard_scheme.value() == TensorMemoryLayout::WIDTH_SHARDED) ||
+                    (applied_shard_scheme.value() == TensorMemoryLayout::BLOCK_SHARDED),
+                "Only height, width, or block sharding strategies are supported.");
+            shard_layout = applied_shard_scheme.value();
+            parallel_config = pool::determine_parallel_config(
+                shard_layout,
+                batch_size,
+                channels,
+                output_shape[1],
+                output_shape[2],
+                input_tensor.device()->compute_with_storage_grid_size(),
+                ShardOrientation::ROW_MAJOR,
+                false,
+                false,
+                false);
+        } else {  // auto-sharding
+            parallel_config =
+                pool::determine_pool_config_for_auto_shard(input_tensor, sliding_window_config, channels, pool_type);
+            tt::log_debug(tt::LogOp, "auto sharding spec: {}", parallel_config->shard_scheme);
+        }
         TT_FATAL(parallel_config.has_value(), "Could not determine parallel config for pool2d.");
 
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config.value());
@@ -93,7 +99,6 @@ Tensor Pool2DOp<pool_type>::invoke(
         TT_FATAL(
             !applied_shard_scheme.has_value(), "A sharding scheme should not be specified for a sharded input tensor.");
         TT_FATAL(shard_orientation == ShardOrientation::ROW_MAJOR, "Only row major orientation is supported.");
-        parallel_config = std::make_optional(sliding_window::ParallelConfig{});
         parallel_config->grid = shard_grid;
         parallel_config->shard_scheme = shard_scheme;
         parallel_config->shard_orientation = shard_orientation;
