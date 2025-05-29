@@ -67,4 +67,4 @@ def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, d
     torch_result_from_preallocated_ttnn = ttnn.to_torch(ttnn_preallocated_result)
     assert torch_result_from_preallocated_ttnn.shape == torch_preallocated_result.shape
     assert torch_result_from_preallocated_ttnn.dtype == torch_preallocated_result.dtype
-    torch.testing.assert_close(torch_result_from_preallocated_ttnn, torch_preallocated_result)
+    torch.testing.assert_close(ttnn.to_torch(ttnn_output_preallocated), torch_output_preallocated)

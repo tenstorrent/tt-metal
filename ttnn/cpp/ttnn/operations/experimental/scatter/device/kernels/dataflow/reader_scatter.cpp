@@ -100,6 +100,7 @@ FORCE_INLINE void scatter_along_whole_axis(
                             // check if index value targets currently chosen input tile (tile_input)
                             const uint32_t dest_tile_id_in_row = index_value >> 5;
                             if (dest_tile_id_in_row != tile_input) {
+                                ASSERT(dest_tile_id_in_row == tile_input);
                                 continue;
                             }
                             volatile number_type& source_value =
