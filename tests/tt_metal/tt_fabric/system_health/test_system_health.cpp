@@ -114,14 +114,12 @@ TEST(Cluster, TestMeshFullConnectivity) {
     std::uint32_t num_expected_chips = 0;
     std::uint32_t num_connections_per_side = 0;
     auto cluster_type = cluster.get_cluster_type();
-    std::vector<std::uint16_t> tray_bus_ids;
     if (cluster_type == tt::ClusterType::T3K) {
         num_expected_chips = 8;
         num_connections_per_side = 2;
     } else if (cluster_type == tt::ClusterType::GALAXY) {
         num_expected_chips = 32;
         num_connections_per_side = 4;
-        tray_bus_ids = ubb_bus_ids.at(tt::tt_metal::MetalContext::instance().get_cluster().arch());
     } else {
         GTEST_SKIP() << "Mesh check not supported for system type " << magic_enum::enum_name(cluster_type);
     }
