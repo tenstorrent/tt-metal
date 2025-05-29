@@ -102,6 +102,7 @@ std::vector<Tensor> all_gather_matmul(
     const Tensor& weight_tensor,
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
+    const std::optional<const Tensor>& bias = std::nullopt,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config_ag = std::nullopt,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
