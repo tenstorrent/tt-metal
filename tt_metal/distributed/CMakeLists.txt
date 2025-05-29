@@ -15,6 +15,8 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/multihost/single_host_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp
 )
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
@@ -49,9 +51,6 @@ if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
             INTERFACE_INCLUDE_DIRECTORIES
                 ${ULFM_PREFIX}/include
     )
-
-    # Add MPI distributed context
-    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
 elseif(ENABLE_DISTRIBUTED)
     # Try to find system MPI if distributed is enabled
     find_package(MPI QUIET COMPONENTS C)
@@ -59,9 +58,6 @@ elseif(ENABLE_DISTRIBUTED)
         message(STATUS "ULFM MPI not found, using system MPI")
         add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
         set(USE_MPI TRUE)
-
-        # Add MPI distributed context
-        list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/mpi_distributed_context.cpp)
     else()
         message(
             FATAL_ERROR
@@ -69,12 +65,8 @@ elseif(ENABLE_DISTRIBUTED)
         )
     endif()
 else()
-    # Distributed is disabled, use single host context
-    message(STATUS "Distributed compute disabled, using single host context")
+    message(STATUS "Multihost compute with MPI disabled")
     set(USE_MPI FALSE)
-
-    # Add single host context
-    list(APPEND DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/multihost/single_host_context.cpp)
 endif()
 
 target_link_libraries(
