@@ -22,4 +22,7 @@ void dump_memory_config(const std::string& file_name, const MemoryConfig& memory
 MemoryConfig load_memory_config(FILE* input_file);
 MemoryConfig load_memory_config(const std::string& file_name);
 
+void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor);
+Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device = nullptr);
+
 }  // namespace tt::tt_metal

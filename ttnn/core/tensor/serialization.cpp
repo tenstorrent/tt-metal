@@ -18,8 +18,8 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "tensor/flatbuffer/tensor_types_from_flatbuffer.hpp"
-#include "tensor/flatbuffer/tensor_types_to_flatbuffer.hpp"
+#include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
+#include "tensor/flatbuffer/tensor_flatbuffer.hpp"
 
 namespace tt::tt_metal {
 
@@ -356,6 +356,85 @@ MemoryConfig load_memory_config(const std::string& file_name) {
     }
     std::unique_ptr<FILE, FileCloser> file_guard(input_file);
     return load_memory_config(input_file);
+}
+
+void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) {
+    FILE* output_file = fopen(file_name.c_str(), "wb");
+    if (not output_file) {
+        TT_THROW("Cannot open \"{}\"", file_name);
+    }
+    std::unique_ptr<FILE, FileCloser> file_guard(output_file);
+
+    Tensor cpu_tensor = tensor.cpu();
+
+    flatbuffers::FlatBufferBuilder builder;
+    auto tensor_offset = ttnn::tensor_to_flatbuffer(cpu_tensor, builder);
+    builder.Finish(tensor_offset);
+
+    uint64_t header_size = builder.GetSize();
+    safe_fwrite(&header_size, sizeof(header_size), 1, output_file);
+    safe_fwrite(builder.GetBufferPointer(), header_size, 1, output_file);
+
+    std::visit(
+        tt::stl::overloaded{
+            [&output_file](const HostStorage& storage) {
+                auto buffer_view = storage.buffer.view_bytes();
+                safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
+            },
+            [&output_file](const DeviceStorage&) {
+                TT_THROW("Device storage isn't supported in flatbuffer serialization");
+            },
+            [&output_file](const MultiDeviceHostStorage& storage) {
+                for (std::size_t i = 0; i < storage.num_buffers(); i++) {
+                    const auto& buffer = storage.get_buffer(i);
+                    auto buffer_view = buffer.view_bytes();
+                    safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
+                }
+            }},
+        cpu_tensor.get_storage());
+}
+
+Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) {
+    FILE* input_file = fopen(file_name.c_str(), "rb");
+    if (not input_file) {
+        TT_THROW("Cannot open \"{}\"", file_name);
+    }
+    std::unique_ptr<FILE, FileCloser> file_guard(input_file);
+
+    uint64_t header_size = 0;
+    safe_fread(&header_size, sizeof(header_size), 1, input_file);
+
+    std::vector<std::byte> header_buffer(header_size);
+    safe_fread(header_buffer.data(), header_size, 1, input_file);
+
+    auto fb_tensor = ttnn::flatbuffer::GetTensor(header_buffer.data());
+
+    uint64_t data_size = 0;
+    if (fb_tensor->tensor_type_type() == ttnn::flatbuffer::TensorType::ReplicatedTensor) {
+        const auto* replicated = fb_tensor->tensor_type_as_ReplicatedTensor();
+        const auto* inline_storage = replicated->buffer_as<ttnn::flatbuffer::InlineStorage>();
+        TT_FATAL(inline_storage != nullptr, "Only InlineStorage is supported in flatbuffer deserialization");
+        data_size = inline_storage->size();
+    } else if (fb_tensor->tensor_type_type() == ttnn::flatbuffer::TensorType::ShardedTensor) {
+        const auto* sharded = fb_tensor->tensor_type_as_ShardedTensor();
+        for (flatbuffers::uoffset_t i = 0; i < sharded->shards()->size(); i++) {
+            const auto* shard = sharded->shards()->Get(i);
+            const auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineStorage>();
+            TT_FATAL(inline_storage != nullptr, "Only InlineStorage is supported in flatbuffer deserialization");
+            data_size += inline_storage->size();
+        }
+    } else {
+        TT_THROW("Unknown TensorType in flatbuffer deserialization");
+    }
+
+    std::vector<std::byte> data_buffer(data_size);
+    safe_fread(data_buffer.data(), data_size, 1, input_file);
+
+    Tensor tensor = ttnn::flatbuffer_to_tensor(fb_tensor, data_buffer.data());
+    if (device != nullptr) {
+        tensor = tensor.to_device(device);
+    }
+    return tensor;
 }
 
 }  // namespace tt::tt_metal
