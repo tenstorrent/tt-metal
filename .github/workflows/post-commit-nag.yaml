@@ -11,7 +11,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  actions: read
+  actions: write
 jobs:
   check-and-approve:
     runs-on: ubuntu-latest
@@ -109,19 +109,32 @@ jobs:
                   pull_number: prNumber
                 });
 
-                await github.rest.actions.createWorkflowDispatch({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  workflow_id: targetWorkflow,
-                  ref: pr.head.ref
-                });
+                try {
+                  await github.rest.actions.createWorkflowDispatch({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    workflow_id: targetWorkflow,
+                    ref: pr.head.ref
+                  });
 
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: prNumber,
-                  body: `🔄 Running \`${targetWorkflow}\` on the latest commit...`
-                });
+                  // Construct the link to the workflow runs page, filtered by branch
+                  const workflowRunLink = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/${targetWorkflow}?query=branch%3A${encodeURIComponent(pr.head.ref)}`;
+
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: prNumber,
+                    body: `🔄 Running \`${targetWorkflow}\` on the latest commit. [View progress](${workflowRunLink})`
+                  });
+                } catch (dispatchError) {
+                  console.error("Error dispatching workflow:", dispatchError);
+                  await github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: prNumber,
+                      body: `⚠️ Failed to trigger workflow \`${targetWorkflow}\`. Ensure \`targetWorkflow\` is the correct filename and the GITHUB_TOKEN has \`actions:write\` permission. Error: ${dispatchError.message}`
+                    });
+                }
                 return; // Exit after triggering the workflow
               } else {
                 return; // Ignore other comments
@@ -137,7 +150,7 @@ jobs:
               pull_number: prNumber
             });
 
-            const happy = `**✅🎉 Thanks for running \`${targetWorkflow}\`! You’re clear to merge. 🎉✅**`;
+            const happy = `**✅🎉 Thanks for running \`${targetWorkflow}\`! You're clear to merge. 🎉✅**`;
             const angry = `**⛔️🚨 \`${targetWorkflow}\` has NOT run on the latest commit. Run it before merging! 🚨⛔️**\n - /run-it to run the workflow on the latest commit.\n - /override to ignore the workflow check.`;
 
             const body  = (forceGreen || await workflowGood(pr)) ? happy : angry;
