@@ -175,8 +175,6 @@ jobs:
     if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || inputs.tag-as-latest) }}
     needs:
       - get-image-tags
-      - test-wh-6u-image
-      - test-bh-image
     permissions:
       packages: write
       contents: read
