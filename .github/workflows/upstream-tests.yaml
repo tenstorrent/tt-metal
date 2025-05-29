@@ -183,7 +183,7 @@ jobs:
     if: >-
       ${{
         !cancelled() && (
-          (github.ref == 'refs/heads/rkim/22056-release-individual' && !contains(join(needs.*.result, ','), 'failure')) ||
+          (github.ref == 'refs/heads/main' && !contains(join(needs.*.result, ','), 'failure')) ||
           inputs.tag-as-latest
         )
       }}
