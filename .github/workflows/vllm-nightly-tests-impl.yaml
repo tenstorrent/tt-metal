@@ -13,11 +13,6 @@ on:
         required: true
         type: string
 
-env:
-  server_pid: "./server.pid"
-  server_log: "./output/vllm_server.log"
-  benchmark_log: "./output/vllm_benchmark.log"
-
 jobs:
   vllm-tests:
     strategy:
@@ -28,25 +23,30 @@ jobs:
             name: "[T3K] Llama-3.1-8B-Instruct",
             arch: wormhole_b0,
             model: "meta-llama/Llama-3.1-8B-Instruct",
-            server_timeout: 5,
-            benchmark_timeout: 5,
+            server-timeout: 5,
+            benchmark-timeout: 5,
             runner-label: config-t3000,
-            co-owner-1_id: U08E1JCDVNX, # Pavle Petrovic
-            co-owner-2_id: U08CEGF78ET, # Salar Hosseini Khorasgani
+            mesh-device: T3K,
+            tt-llama-text-ver: tt_transformers,
+            wh-arch-yaml: wormhole_b0_80_arch_eth_dispatch.yaml,
+            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
           {
             name: "[TG] Llama-3.3-70B-Instruct",
             arch: wormhole_b0,
             model: "meta-llama/Llama-3.3-70B-Instruct",
-            server_timeout: 35,
-            benchmark_timeout: 10,
+            server-timeout: 35,
+            benchmark-timeout: 10,
             runner-label: config-tg,
-            co-owner-1_id: U08E1JCDVNX, # Pavle Petrovic
-            co-owner-2_id: U08CEGF78ET, # Salar Hosseini Khorasgani
+            mesh-device: TG,
+            tt-llama-text-ver: llama3_subdevices,
+            override-tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D"}',
+            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
         ]
     runs-on:
-      - arch-${{ matrix.test-group.arch }}
       - ${{ matrix.test-group.runner-label }}
       - in-service
       - pipeline-functional
@@ -62,6 +62,9 @@ jobs:
         LOGURU_LEVEL: INFO
         HF_HUB_OFFLINE: 1
         HF_HOME: /mnt/MLPerf/huggingface
+        FILE_SERVER_PID: "./server.pid"
+        FILE_SERVER_LOG: "./output/vllm_server.log"
+        FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -98,21 +101,16 @@ jobs:
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
-          case "${{ matrix.test-group.runner-label }}" in
-            "config-t3000")
-              export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-              export MESH_DEVICE="T3K"
-              ;;
-            "config-tg")
-              export MESH_DEVICE="TG"
-              export TT_LLAMA_TEXT_VER="llama3_subdevices"
-              OVERRIDE_TT_CONFIG=(--override-tt-config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D"}')
-              ;;
-            *)
-              echo "❌ Unsupported runner-label: ${matrix.test-group.runner-label}"
-              exit 1
-              ;;
-          esac
+          if [ -n "${{ matrix.test-group.wh-arch-yaml }}" ]; then
+            export WH_ARCH_YAML=${{ matrix.test-group.wh-arch-yaml }}
+          fi
+
+          if [ -n "${{ matrix.test-group.override-tt-config }}" ]; then
+            OVERRIDE_TT_CONFIG=(--override-tt-config ${{ matrix.test-group.override-tt-config }})
+          fi
+
+          export MESH_DEVICE=${{ matrix.test-group.mesh-device }}
+          export TT_LLAMA_TEXT_VER=${{ matrix.test-group.tt-llama-text-ver }}
 
           # Keep TT cache separate from HF hub
           export HF_MODEL="${{ matrix.test-group.model }}"
@@ -125,35 +123,34 @@ jobs:
           python3 vllm/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
             "${OVERRIDE_TT_CONFIG[@]}" \
-            > "${{ env.server_log }}" 2>&1 &
+            > "${FILE_SERVER_LOG}" 2>&1 &
 
           # Store server's pid for cleanup
-          echo $! > ${{ env.server_pid }}
+          echo $! > ${FILE_SERVER_PID}
 
       - name: ⏰ Wait for server to be ready
         run: |
           echo "Waiting for server..."
 
-          timeout_seconds=$(( ${{ matrix.test-group.server_timeout }} * 60 ))
+          timeout_seconds=$(( ${{ matrix.test-group.server-timeout }} * 60 ))
           elapsed=0
-          interval=10
+          interval=20
 
           while [ $elapsed -lt $timeout_seconds ]; do
             if curl -sf http://localhost:8000/health; then
-              echo "Server is up! 🚀"
+              echo "Server is up! 🚀 [$elapsed sec]"
               exit 0
             fi
             sleep $interval
             elapsed=$((elapsed + interval))
           done
 
-          echo "Server did not become ready in time (${timeout_seconds}s)."
-          printf "\n\n----------- Server Log -----------\n\n"
-          cat "${{ env.server_log }}"
+          echo "❌ Server did not become ready in time (${timeout_seconds}s)."
+          echo "Check out the server log in a step below."
           exit 1
 
       - name: 📐 Run benchmark
-        timeout-minutes: ${{ matrix.test-group.benchmark_timeout }}
+        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
           python3 vllm/benchmarks/benchmark_serving.py \
             --backend vllm \
@@ -166,37 +163,42 @@ jobs:
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
             --result-filename output/vllm_result.json \
-            2>&1 | tee ${{ env.benchmark_log }}
+            2>&1 | tee ${FILE_BENCHMARK_LOG}
 
           # If the backend fails, the benchmark will still complete successfully but with all-zero results.
           # It will contain a warning message, though
           warning_message="All requests failed"
-          if grep -q "$warning_message" "${{ env.benchmark_log }}"; then
-            echo "❌ All requests failed, here's the server log:"
-            printf "\n\n----------- Server Log -----------\n\n"
-            cat "${{ env.server_log }}"
+          if grep -q "$warning_message" "${FILE_BENCHMARK_LOG}"; then
+            echo "❌ All requests failed"
+            echo "Check out the server log in a step below."
             exit 1
           fi
 
       - name: 🧹 Cleanup server process
         if: always()
         run: |
-          if [ -f "${{ env.server_pid }}" ]; then
-            pid=$(cat "${{ env.server_pid }}")
+          if [ -f "${FILE_SERVER_PID}" ]; then
+            pid=$(cat "${FILE_SERVER_PID}")
             if kill -0 "$pid" 2>/dev/null; then
               kill "$pid"
               echo "✅ Server process with PID $pid terminated."
-              rm -f "${{ env.server_pid }}"
+              rm -f "${FILE_SERVER_PID}"
             else
               echo "❌ Server process already down!"
-              printf "\n\n----------- Server Log -----------\n\n"
-              cat "${{ env.server_log }}"
+              echo "Check out the server log in a step below."
               exit 1
             fi
           else
             echo "❌ PID file not found. Server may not have started correctly."
             exit 1
           fi
+
+      - name: Show server log
+        if: ${{ failure() }}
+        continue-on-error: true
+        run: |
+          printf "---- ${FILE_SERVER_LOG} ----\n\n"
+          cat "${FILE_SERVER_LOG}"
 
       - name: Show report
         if: always()
@@ -208,13 +210,13 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.co-owner-1_id }}
+          owner: ${{ matrix.test-group.co-owner-1-id }}
 
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.co-owner-2_id }}
+          owner: ${{ matrix.test-group.co-owner-2-id }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
