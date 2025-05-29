@@ -13,7 +13,7 @@
 This kernel implements a parallel gather operation along the last dimension (Wt_index) of the tensor, enabling support
 for all tensor sizes without memory constraints.
 
---- Updated Algorithm Description ---
+--- Algorithm Description ---
 
 1. **Parallel Row Processing**:
     - Each core is assigned a portion of the Wt_index dimension (the axis along which the gather is performed).
@@ -120,6 +120,12 @@ void kernel_main() {
 
                                 // Calculate local index
                                 const uint32_t tile_idx = global_index >> __builtin_ctz(tt::constants::TILE_WIDTH);
+
+                                ASSERT(
+                                    tile_idx <= Wt_input,
+                                    "Index out of range. Index: {}, Max index: {}",
+                                    global_index,
+                                    Wt_input * tt::constants::TILE_WIDTH);
 
                                 if (tile_idx != wi) {
                                     // Index not in current input tile, skip

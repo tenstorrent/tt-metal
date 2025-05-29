@@ -147,13 +147,13 @@ def test_gather_datatype_cases(
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim",
     [
-        ([32, 151936], [1, 151936], -1),
         ([32, 256 * TILE_HEIGHT], [32, 64 * TILE_HEIGHT], -1),
         ([1, 1, 32, 256 * TILE_HEIGHT], [1, 1, 32, 128 * TILE_HEIGHT], -1),
         ([1, 1, 32, 63 * TILE_HEIGHT], [1, 1, 32, 63 * TILE_HEIGHT], -1),
         ([1, 1, 32, 20 * TILE_HEIGHT], [1, 1, 32, 20 * TILE_HEIGHT], -1),
         ([1, 1, 32, 96 * TILE_HEIGHT], [1, 1, 32, 96 * TILE_HEIGHT], -1),
         ([1, 1, 32, 256 * TILE_HEIGHT], [1, 1, 32, 256 * TILE_HEIGHT], -1),
+        ([1, 4748 * TILE_HEIGHT], [1, 4748 * TILE_HEIGHT], -1),
     ],
 )
 def test_gather_long_tensor(input_shape, index_shape, dim, device):
