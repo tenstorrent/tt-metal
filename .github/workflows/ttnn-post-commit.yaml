@@ -154,15 +154,20 @@ jobs:
   ttnn-import-test:
     name: ttnn import test ubuntu-22.04
     runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
-        timeout-minutes: 10
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: sudo ./install_dependencies.sh
+      - name: 🧪 Download Python Wheel
+        uses: actions/download-artifact@v4
         with:
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-
-      - name: ttnn import test
-        timeout-minutes: 5
+          name: ${{ inputs.wheel-artifact-name }}
+      - name: 💿 Install Wheel
         run: |
-          sudo ./install_dependencies.sh
-          python3 -c "import ttnn"
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install "$WHEEL_FILENAME"
+      - name: ttnn import test
+        run: python3 -c "import ttnn"
