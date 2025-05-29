@@ -1015,15 +1015,12 @@ void run_receiver_channel_step(
 };
 
 template <
-    typename EthChannels,
     typename EdmChannelWorkerIFs,
     uint8_t RECEIVER_NUM_BUFFERS,
     size_t NUM_RECEIVER_CHANNELS,
     uint8_t SENDER_NUM_BUFFERS,
     size_t NUM_SENDER_CHANNELS>
 bool all_channels_drained(
-    std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& local_receiver_channels,
-    EthChannels& local_sender_channels,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
     std::array<ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& receiver_channel_pointers) {
     bool eth_buffers_drained = local_sender_channel_worker_interfaces.template get<0>().all_eth_packets_completed() &&
@@ -1066,7 +1063,8 @@ bool all_channels_drained(
  * channels every iteration unless it is unsafe/undesirable to do so (e.g. for performance reasons).
  */
 template <
-    typename EthChannels,
+    typename EthSenderChannels,
+    typename EthReceiverChannels,
     typename EdmChannelWorkerIFs,
     bool enable_packet_header_recording,
     bool enable_fabric_counters,
@@ -1077,8 +1075,8 @@ template <
     size_t MAX_NUM_SENDER_CHANNELS,
     size_t MAX_NUM_RECEIVER_CHANNELS>
 void run_fabric_edm_main_loop(
-    std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& local_receiver_channels,
-    EthChannels& local_sender_channels,
+    EthReceiverChannels& local_receiver_channels,
+    EthSenderChannels& local_sender_channels,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
         downstream_edm_noc_interfaces,
@@ -1117,16 +1115,11 @@ void run_fabric_edm_main_loop(
         if (got_graceful_termination) {
             DPRINT << "EDM Graceful termination\n";
             bool all_drained = all_channels_drained<
-                EthChannels,
                 EdmChannelWorkerIFs,
                 RECEIVER_NUM_BUFFERS,
                 NUM_RECEIVER_CHANNELS,
                 SENDER_NUM_BUFFERS,
-                NUM_SENDER_CHANNELS>(
-                local_receiver_channels,
-                local_sender_channels,
-                local_sender_channel_worker_interfaces,
-                receiver_channel_pointers);
+                NUM_SENDER_CHANNELS>(local_sender_channel_worker_interfaces, receiver_channel_pointers);
 
             if (all_drained) {
                 return;
@@ -1165,7 +1158,7 @@ void run_fabric_edm_main_loop(
                         NUM_SENDER_CHANNELS,
                         to_receiver_packets_sent_streams[0],
                         0>(
-                        local_receiver_channels[0],
+                        local_receiver_channels.template get<0>(),
                         downstream_edm_noc_interfaces,
                         receiver_channel_counters_ptrs[0],
                         receiver_channel_pointers[0],
@@ -1185,7 +1178,7 @@ void run_fabric_edm_main_loop(
                         NUM_SENDER_CHANNELS,
                         to_receiver_packets_sent_streams[1],
                         1>(
-                        local_receiver_channels[1],
+                        local_receiver_channels.template get<1>(),
                         downstream_edm_noc_interfaces,
                         receiver_channel_counters_ptrs[1],
                         receiver_channel_pointers[1],
@@ -1590,7 +1583,16 @@ void kernel_main() {
                 my_sem_for_teardown_from_edm_4});
 
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> remote_receiver_channels;
-    std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> local_receiver_channels;
+    // create the local receiver channnel buffers with input array of number of buffers
+    auto local_receiver_channels = tt::tt_fabric::EthChannelBuffers<RECEIVER_NUM_BUFFERS_ARRAY>::make(
+        std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
+    // initialize the local receiver channel buffers
+    local_receiver_channels.init(
+        local_receiver_buffer_addresses.data(),
+        channel_buffer_size,
+        sizeof(PACKET_HEADER_TYPE),
+        eth_transaction_ack_word_addr,
+        receiver_channel_base_id);
     // create the sender channnel buffers with input array of number of buffers
     auto local_sender_channels = tt::tt_fabric::EthChannelBuffers<SENDER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_SENDER_CHANNELS>{});
@@ -1599,7 +1601,8 @@ void kernel_main() {
         local_sender_buffer_addresses.data(),
         channel_buffer_size,
         sizeof(PACKET_HEADER_TYPE),
-        0);  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
+        0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
+        sender_channel_base_id);
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -1764,12 +1767,6 @@ void kernel_main() {
         }
     }
     for (uint8_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
-        new (&local_receiver_channels[i]) tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>(
-            local_receiver_buffer_addresses[i],
-            channel_buffer_size,
-            sizeof(PACKET_HEADER_TYPE),
-            eth_transaction_ack_word_addr,  // Unused, otherwise probably need to have unique ack word per channel
-            receiver_channel_base_id + i);
         new (&remote_receiver_channels[i]) tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>(
             remote_receiver_buffer_addresses[i],
             channel_buffer_size,
@@ -1885,6 +1882,7 @@ void kernel_main() {
     //////////////////////////////
     run_fabric_edm_main_loop<
         decltype(local_sender_channels),
+        decltype(local_receiver_channels),
         decltype(local_sender_channel_worker_interfaces),
         enable_packet_header_recording,
         enable_fabric_counters,

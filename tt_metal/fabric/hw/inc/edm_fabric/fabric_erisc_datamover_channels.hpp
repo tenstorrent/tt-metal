@@ -123,7 +123,8 @@ struct EthChannelBufferTuple {
         const size_t channel_base_address[],
         const size_t buffer_size_bytes,
         const size_t header_size_bytes,
-        const size_t eth_transaction_ack_word_addr) {
+        const size_t eth_transaction_ack_word_addr,
+        const uint8_t channel_base_id) {
         std::apply(
             // <-- note the template<...> here
             [&]<typename... ChanT>(ChanT&... chans) {
@@ -134,7 +135,7 @@ struct EthChannelBufferTuple {
                         buffer_size_bytes,
                         header_size_bytes,
                         eth_transaction_ack_word_addr,
-                        idx),
+                        channel_base_id + idx),
                     ++idx,  // increment *after* the read
                     0       // dummy value
                     )...};

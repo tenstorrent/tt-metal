@@ -109,19 +109,25 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
 
 constexpr size_t SENDER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
+constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
 
-template <std::size_t... Is>
-constexpr std::array<unsigned int, NUM_SENDER_CHANNELS> make_buffers_array_impl(std::index_sequence<Is...>) {
-    // the ((void)Is, SENDER_NUM_BUFFERS) is just a trick
-    // to repeat the same value in each slot
-    return {{((void)Is, SENDER_NUM_BUFFERS)...}};
+// TODO: remove this workaround and add proper compile-time args
+template <std::size_t Val, std::size_t... Is>
+constexpr std::array<unsigned int, sizeof...(Is)> make_buffers_array_impl(std::index_sequence<Is...>) {
+    // ((void)Is, Val) just throws away Is and yields Val each time:
+    return {((void)Is, Val)...};
 }
 
-// the constexpr array you can now use everywhere
-static constexpr auto SENDER_NUM_BUFFERS_ARRAY =
-    make_buffers_array_impl(std::make_index_sequence<NUM_SENDER_CHANNELS>{});
+template <std::size_t Val, std::size_t N>
+constexpr auto make_buffers_array() {
+    // N is the array length; Val is the value to repeat.
+    return make_buffers_array_impl<Val>(std::make_index_sequence<N>{});
+}
 
-constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+static constexpr auto SENDER_NUM_BUFFERS_ARRAY = make_buffers_array<SENDER_NUM_BUFFERS, NUM_SENDER_CHANNELS>();
+
+static constexpr auto RECEIVER_NUM_BUFFERS_ARRAY = make_buffers_array<RECEIVER_NUM_BUFFERS, NUM_RECEIVER_CHANNELS>();
+
 constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
 constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 11);
 constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 12);
@@ -260,6 +266,7 @@ constexpr uint32_t edm_channels_mask =
 
 constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 
+constexpr size_t sender_channel_base_id = 0;
 constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
 // TRANSACTION IDS
