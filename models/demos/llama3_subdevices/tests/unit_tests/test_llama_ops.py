@@ -29,10 +29,6 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
     run_test_row_major_rotary_embedding_llama,
 )
 
-from models.demos.llama3_subdevices.tests.test_llama_embedding import (
-    test_llama_embedding,
-)
-
 
 @pytest.mark.parametrize(
     "device_params",
@@ -470,22 +466,3 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
     run_test_row_major_rotary_embedding_llama(
         mesh_device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
     )
-
-
-@torch.no_grad()
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(8, 4)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "batch_size",
-    (32,),
-)
-@pytest.mark.parametrize(
-    "max_seq_len",
-    (128,),
-)
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
-def test_llama_tg_Embeddings(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
-    test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc)
