@@ -70,10 +70,10 @@ target_include_directories(
     PRIVATE
         api/ttnn
         core
-        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
         cpp # FIXME: Depend on the Ops needed (make the circular obvious)
         . # FIXME: Depend on the Ops needed (make the circular obvious)
 )
+target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
     ttnn_core
     PRIVATE
