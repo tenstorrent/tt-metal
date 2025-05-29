@@ -40,7 +40,7 @@ constexpr FormatConfig get_data_formats(uint32_t input, uint32_t output, bool is
     uint32_t unpack_in  = input;
     uint32_t unpack_out = input;
     uint32_t pack_out   = output;
-    uint32_t pack_in;
+    uint32_t pack_in    = 0;
 
     if (input == (uint32_t)DataFormat::Float16 && output == (uint32_t)DataFormat::Bfp8_b && !is_fp32_dest_acc_en)
     {
