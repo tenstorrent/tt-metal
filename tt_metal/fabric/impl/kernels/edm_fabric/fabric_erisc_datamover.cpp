@@ -355,7 +355,7 @@ bool did_something;
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
 
-template <uint8_t SENDER_NUM_BUFFERS, uint8_t RECEIVER_NUM_BUFFERS, uint8_t to_receiver_pkts_sent_id>
+template <uint8_t VC_RECEIVER_CHANNEL, uint8_t SENDER_NUM_BUFFERS, uint8_t RECEIVER_NUM_BUFFERS>
 FORCE_INLINE void send_next_data(
     tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& sender_buffer_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& sender_worker_interface,
@@ -398,7 +398,7 @@ FORCE_INLINE void send_next_data(
     static constexpr uint32_t words_to_forward = 1;
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
-    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(words_to_forward);
+    remote_update_ptr_val<to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL], sender_txq_id>(words_to_forward);
 }
 
 /////////////////////////////////////////////
@@ -773,19 +773,18 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
 ////////////////////////////////////
 template <
     bool enable_packet_header_recording,
-    uint8_t to_receiver_pkts_sent_id,
-    bool SKIP_CONNECTION_LIVENESS_CHECK,
+    uint8_t VC_RECEIVER_CHANNEL,
+    uint8_t sender_channel_index,
     uint8_t RECEIVER_NUM_BUFFERS,
     uint8_t SENDER_NUM_BUFFERS>
-void run_sender_channel_step(
+void run_sender_channel_step_impl(
     tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
     tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& remote_receiver_channel,
     volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_counters,
     PacketHeaderRecorder& packet_header_recorder,
-    bool& channel_connection_established,
-    uint8_t sender_channel_index) {
+    bool& channel_connection_established) {
     // If the receiver has space, and we have one or more packets unsent from producer, then send one
     // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
     //       when moving to stream regs to manage rd/wr ptrs
@@ -807,7 +806,7 @@ void run_sender_channel_step(
             tt::tt_fabric::validate(*packet_header);
             packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
         }
-        send_next_data<SENDER_NUM_BUFFERS, RECEIVER_NUM_BUFFERS, to_receiver_pkts_sent_id>(
+        send_next_data<VC_RECEIVER_CHANNEL>(
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
@@ -824,7 +823,7 @@ void run_sender_channel_step(
         increment_local_update_ptr_val(
             to_sender_packets_completed_streams[sender_channel_index], -completions_since_last_check);
         if constexpr (!enable_first_level_ack) {
-            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+            if constexpr (sender_ch_live_check_skip[sender_channel_index]) {
                 local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
                     sender_rdptr.get_ptr());
             } else {
@@ -844,7 +843,7 @@ void run_sender_channel_step(
         auto& sender_ackptr = local_sender_channel_worker_interface.local_ackptr;
         if (acks_since_last_check > 0) {
             sender_ackptr.increment_n(acks_since_last_check);
-            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+            if constexpr (sender_ch_live_check_skip[sender_channel_index]) {
                 local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
                     sender_ackptr.get_ptr());
             } else {
@@ -858,7 +857,7 @@ void run_sender_channel_step(
         }
     }
 
-    if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
+    if constexpr (!sender_ch_live_check_skip[sender_channel_index]) {
         auto check_connection_status =
             !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
         if (check_connection_status) {
@@ -869,21 +868,48 @@ void run_sender_channel_step(
 };
 
 template <
+    bool enable_packet_header_recording,
+    uint8_t VC_RECEIVER_CHANNEL,
+    uint8_t sender_channel_index,
+    uint8_t RECEIVER_NUM_BUFFERS,
+    uint8_t SENDER_NUM_BUFFERS,
+    size_t NUM_SENDER_CHANNELS,
+    size_t NUM_RECEIVER_CHANNELS,
+    size_t MAX_NUM_SENDER_CHANNELS>
+FORCE_INLINE void run_sender_channel_step(
+    std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& local_sender_channels,
+    std::array<tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>&
+        local_sender_channel_worker_interfaces,
+    std::array<OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>&
+        outbound_to_receiver_channel_pointers,
+    std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& remote_receiver_channels,
+    std::array<volatile tt::tt_fabric::EdmFabricSenderChannelCounters*, MAX_NUM_SENDER_CHANNELS>&
+        sender_channel_counters_ptrs,
+    std::array<PacketHeaderRecorder, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
+    std::array<bool, NUM_SENDER_CHANNELS>& channel_connection_established) {
+    if constexpr (is_sender_channel_serviced[sender_channel_index]) {
+        run_sender_channel_step_impl<enable_packet_header_recording, VC_RECEIVER_CHANNEL, sender_channel_index>(
+            local_sender_channels[sender_channel_index],
+            local_sender_channel_worker_interfaces[sender_channel_index],
+            outbound_to_receiver_channel_pointers[VC_RECEIVER_CHANNEL],
+            remote_receiver_channels[VC_RECEIVER_CHANNEL],
+            sender_channel_counters_ptrs[sender_channel_index],
+            sender_channel_packet_recorders[sender_channel_index],
+            channel_connection_established[sender_channel_index]);
+    }
+}
+
+template <
     uint8_t to_receiver_pkts_sent_id,
     uint8_t receiver_channel,
     typename WriteTridTracker,
     uint8_t RECEIVER_NUM_BUFFERS,
-    uint8_t SENDER_NUM_BUFFERS,
-    size_t NUM_SENDER_CHANNELS>
-void run_receiver_channel_step(
+    uint8_t SENDER_NUM_BUFFERS>
+void run_receiver_channel_step_impl(
     tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_channel,
-    std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_sender_channels,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
-    volatile tt::tt_fabric::EdmFabricReceiverChannelCounters* receiver_channel_counters_ptr,
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
-    PacketHeaderRecorder& packet_header_recorder,
     WriteTridTracker& receiver_channel_trid_tracker,
-    uint8_t rx_channel_id,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
     auto& ack_counter = receiver_channel_pointers.ack_counter;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
@@ -956,11 +982,11 @@ void run_receiver_channel_step(
                     cached_routing_fields,
                     downstream_edm_interface,
                     trid,
-                    rx_channel_id,
+                    receiver_channel,
                     port_direction_table);
 #else
                 receiver_forward_packet(
-                    packet_header, cached_routing_fields, downstream_edm_interface, trid, rx_channel_id, hop_cmd);
+                    packet_header, cached_routing_fields, downstream_edm_interface, trid, receiver_channel, hop_cmd);
 #endif
             } else {
                 receiver_forward_packet(
@@ -968,7 +994,7 @@ void run_receiver_channel_step(
                     cached_routing_fields,
                     downstream_edm_interface[receiver_channel],
                     trid,
-                    rx_channel_id);
+                    receiver_channel);
             }
             wr_sent_counter.increment();
         }
@@ -1010,6 +1036,29 @@ void run_receiver_channel_step(
         }
     }
 };
+
+template <
+    uint8_t to_receiver_pkts_sent_id,
+    uint8_t receiver_channel,
+    typename WriteTridTracker,
+    uint8_t RECEIVER_NUM_BUFFERS,
+    uint8_t SENDER_NUM_BUFFERS,
+    size_t NUM_RECEIVER_CHANNELS>
+FORCE_INLINE void run_receiver_channel_step(
+    std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& local_receiver_channels,
+    std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
+    std::array<ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& receiver_channel_pointers,
+    WriteTridTracker& receiver_channel_trid_tracker,
+    std::array<uint8_t, num_eth_ports>& port_direction_table) {
+    if (is_receiver_channel_serviced[receiver_channel]) {
+        run_receiver_channel_step_impl<to_receiver_pkts_sent_id, receiver_channel, WriteTridTracker>(
+            local_receiver_channels[receiver_channel],
+            downstream_edm_interface,
+            receiver_channel_pointers[receiver_channel],
+            receiver_channel_trid_tracker,
+            port_direction_table);
+    }
+}
 
 template <
     uint8_t RECEIVER_NUM_BUFFERS,
@@ -1127,108 +1176,67 @@ void run_fabric_edm_main_loop(
 
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
             // so we interoduce this to provide finer grain control over when we disable the automatic switching
-            if constexpr (is_sender_channel_serviced[0]) {
-                run_sender_channel_step<
-                    enable_packet_header_recording,
-                    to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                    sender_ch_live_check_skip[0]>(
-                    local_sender_channels[0],
-                    local_sender_channel_worker_interfaces[0],
-                    outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                    remote_receiver_channels[VC0_RECEIVER_CHANNEL],
-                    sender_channel_counters_ptrs[0],
-                    sender_channel_packet_recorders[0],
-                    channel_connection_established[0],
-                    0);
+            run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointers,
+                remote_receiver_channels,
+                sender_channel_counters_ptrs,
+                sender_channel_packet_recorders,
+                channel_connection_established);
+
+            if constexpr (!dateline_connection) {
+                run_receiver_channel_step<to_receiver_packets_sent_streams[0], 0>(
+                    local_receiver_channels,
+                    downstream_edm_noc_interfaces,
+                    receiver_channel_pointers,
+                    receiver_channel_0_trid_tracker,
+                    port_direction_table);
             }
-            if constexpr (is_receiver_channel_serviced[0]) {
-                if constexpr (!dateline_connection) {
-                    run_receiver_channel_step<to_receiver_packets_sent_streams[0], 0>(
-                        local_receiver_channels[0],
-                        remote_sender_channels,
-                        downstream_edm_noc_interfaces,
-                        receiver_channel_counters_ptrs[0],
-                        receiver_channel_pointers[0],
-                        receiver_channel_packet_recorders[0],
-                        receiver_channel_0_trid_tracker,
-                        0,
-                        port_direction_table);
-                }
-            }
-            if constexpr (is_receiver_channel_serviced[1]) {
-                if constexpr (enable_ring_support) {
-                    run_receiver_channel_step<to_receiver_packets_sent_streams[1], 1>(
-                        local_receiver_channels[1],
-                        remote_sender_channels,
-                        downstream_edm_noc_interfaces,
-                        receiver_channel_counters_ptrs[1],
-                        receiver_channel_pointers[1],
-                        receiver_channel_packet_recorders[1],
-                        receiver_channel_1_trid_tracker,
-                        1,
-                        port_direction_table);
-                }
+            if constexpr (enable_ring_support) {
+                run_receiver_channel_step<to_receiver_packets_sent_streams[1], 1>(
+                    local_receiver_channels,
+                    downstream_edm_noc_interfaces,
+                    receiver_channel_pointers,
+                    receiver_channel_1_trid_tracker,
+                    port_direction_table);
             }
 
-            if constexpr (is_sender_channel_serviced[1]) {
-                run_sender_channel_step<
-                    enable_packet_header_recording,
-                    to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                    sender_ch_live_check_skip[1]>(
-                    local_sender_channels[1],
-                    local_sender_channel_worker_interfaces[1],
-                    outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                    remote_receiver_channels[VC0_RECEIVER_CHANNEL],
-                    sender_channel_counters_ptrs[1],
-                    sender_channel_packet_recorders[1],
-                    channel_connection_established[1],
-                    1);
-            }
+            run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 1>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointers,
+                remote_receiver_channels,
+                sender_channel_counters_ptrs,
+                sender_channel_packet_recorders,
+                channel_connection_established);
             if constexpr (is_2d_fabric) {
-                if constexpr (is_sender_channel_serviced[2]) {
-                    run_sender_channel_step<
-                        enable_packet_header_recording,
-                        to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                        sender_ch_live_check_skip[2]>(
-                        local_sender_channels[2],
-                        local_sender_channel_worker_interfaces[2],
-                        outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                        remote_receiver_channels[VC0_RECEIVER_CHANNEL],
-                        sender_channel_counters_ptrs[2],
-                        sender_channel_packet_recorders[2],
-                        channel_connection_established[2],
-                        2);
-                }
-                if constexpr (is_sender_channel_serviced[3]) {
-                    run_sender_channel_step<
-                        enable_packet_header_recording,
-                        to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
-                        sender_ch_live_check_skip[3]>(
-                        local_sender_channels[3],
-                        local_sender_channel_worker_interfaces[3],
-                        outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                        remote_receiver_channels[VC0_RECEIVER_CHANNEL],
-                        sender_channel_counters_ptrs[3],
-                        sender_channel_packet_recorders[3],
-                        channel_connection_established[3],
-                        3);
-                }
+                run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 2>(
+                    local_sender_channels,
+                    local_sender_channel_worker_interfaces,
+                    outbound_to_receiver_channel_pointers,
+                    remote_receiver_channels,
+                    sender_channel_counters_ptrs,
+                    sender_channel_packet_recorders,
+                    channel_connection_established);
+                run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 3>(
+                    local_sender_channels,
+                    local_sender_channel_worker_interfaces,
+                    outbound_to_receiver_channel_pointers,
+                    remote_receiver_channels,
+                    sender_channel_counters_ptrs,
+                    sender_channel_packet_recorders,
+                    channel_connection_established);
             }
             if constexpr (enable_ring_support && !dateline_connection) {
-                if constexpr (is_sender_channel_serviced[NUM_SENDER_CHANNELS - 1]) {
-                    run_sender_channel_step<
-                        enable_packet_header_recording,
-                        to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL],
-                        sender_ch_live_check_skip[NUM_SENDER_CHANNELS - 1]>(
-                        local_sender_channels[NUM_SENDER_CHANNELS - 1],
-                        local_sender_channel_worker_interfaces[NUM_SENDER_CHANNELS - 1],
-                        outbound_to_receiver_channel_pointers[VC1_RECEIVER_CHANNEL],
-                        remote_receiver_channels[VC1_RECEIVER_CHANNEL],
-                        sender_channel_counters_ptrs[NUM_SENDER_CHANNELS - 1],
-                        sender_channel_packet_recorders[NUM_SENDER_CHANNELS - 1],
-                        channel_connection_established[NUM_SENDER_CHANNELS - 1],
-                        NUM_SENDER_CHANNELS - 1);
-                }
+                run_sender_channel_step<enable_packet_header_recording, VC1_RECEIVER_CHANNEL, NUM_SENDER_CHANNELS - 1>(
+                    local_sender_channels,
+                    local_sender_channel_worker_interfaces,
+                    outbound_to_receiver_channel_pointers,
+                    remote_receiver_channels,
+                    sender_channel_counters_ptrs,
+                    sender_channel_packet_recorders,
+                    channel_connection_established);
             }
         }
 
