@@ -29,6 +29,9 @@ def test_vit_device_ops(
     test_infra = create_test_infra(device, batch_size)
 
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
+    sharded_output_mem_config_DRAM = test_infra.setup_dram_sharded_output(
+        device, (1, 8, 224, 1152, None, None)
+    )  # this is scandalous
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
@@ -37,6 +40,9 @@ def test_vit_device_ops(
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     output_tensor = test_infra.run()
 
+    # include final reshard in device perf test
+    output_tensor = ttnn.to_memory_config(output_tensor, sharded_output_mem_config_DRAM)
+
     ttnn.synchronize_device(device)
 
 
@@ -44,7 +50,7 @@ def test_vit_device_ops(
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_sec",
     [
-        1431,
+        1422,
     ],
 )
 def test_vit_perf_device(batch_size, expected_kernel_samples_per_sec):

@@ -10,7 +10,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
 from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
-from models.utility_functions import divup
+from models.utility_functions import divup, nearest_32
 
 
 class VitTestInfra:
@@ -128,6 +128,25 @@ class VitTestInfra:
         )
 
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
+
+    def setup_dram_sharded_output(self, device, output_tensor_shape):
+        dram_grid_size = device.dram_grid_size()
+        dram_shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
+            ),
+            [
+                nearest_32(
+                    divup(output_tensor_shape[0] * output_tensor_shape[1] * output_tensor_shape[2], dram_grid_size.x)
+                ),
+                output_tensor_shape[3],
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        sharded_mem_config_DRAM = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
+        )
+        return sharded_mem_config_DRAM
 
     def run(self, tt_input_tensor=None):
         self.output_tensor = None

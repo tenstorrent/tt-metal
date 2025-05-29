@@ -400,9 +400,6 @@ def vit_layer(
     attention_mask,
     parameters,
 ):
-    print("In vit layer, hidden_states mem_config is: ", hidden_states.memory_config())
-    print("in vit layer, LN_before program config is: ", config.program_configs["layernorm_before_program_config"])
-    print("In vit layer, LN hidden_states shape is: ", hidden_states.shape)
     layernorm_before_output = ttnn.layer_norm(
         hidden_states,
         weight=parameters.layernorm_before.weight,
@@ -425,15 +422,6 @@ def vit_layer(
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
     )
-
-    print(
-        "In vit layer_after, multi_head_attention_output mem_config is: ", multi_head_attention_output.memory_config()
-    )
-    print(
-        "in vit layer_after, LN after program config is: ",
-        config.program_configs["layernorm_after_output_program_config"],
-    )
-    print("In vit layer_after, LN multi_head_attention_output shape is: ", multi_head_attention_output.shape)
 
     layernorm_after_output = ttnn.layer_norm(
         multi_head_attention_output,
@@ -534,6 +522,15 @@ def vit(
         program_config=config.program_configs["classifer_matmul_program_config"],
     )
 
+    # Reshard to height sharded to be able tu use in e2e test. This is a temp workaround
+    height_shard_core_grid = ttnn.CoreGrid(y=8, x=7)
+    height_sharded_config_output = ttnn.create_sharded_memory_config(
+        classifier_output.padded_shape,
+        core_grid=height_shard_core_grid,  # 56
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    classifier_output = ttnn.reshard(classifier_output, height_sharded_config_output)
     return classifier_output
 
 
