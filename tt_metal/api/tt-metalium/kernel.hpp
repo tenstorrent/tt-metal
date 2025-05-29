@@ -74,12 +74,6 @@ struct KernelSource {
 
 class Kernel {
 public:
-    Kernel(
-        const KernelSource &kernel_src,
-        const CoreRangeSet &core_range_set,
-        const std::vector<uint32_t> &compile_args,
-        const std::map<std::string, std::string> &defines);
-
     virtual ~Kernel() {}
 
     std::string name() const;
@@ -160,6 +154,15 @@ protected:
 
 private:
     void register_kernel_with_watcher();
+
+    Kernel(
+        const KernelSource &kernel_src,
+        const CoreRangeSet &core_range_set,
+        const std::vector<uint32_t> &compile_args,
+        const std::map<std::string, std::string> &defines);
+
+    // Only allow KernelImpl to inherit from Kernel.
+    friend class KernelImpl;
 };
 
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);
