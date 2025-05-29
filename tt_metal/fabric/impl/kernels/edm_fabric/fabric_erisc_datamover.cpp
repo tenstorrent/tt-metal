@@ -580,14 +580,14 @@ FORCE_INLINE void receiver_forward_packet(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
         }
         if (start_distance_is_terminal_value) {
-            execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
+            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
         }
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         uint32_t routing = cached_routing_fields.value & tt::tt_fabric::LowLatencyRoutingFields::FIELD_MASK;
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         switch (routing) {
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_ONLY:
-                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
                 forward_payload_to_downstream_edm<enable_ring_support, true>(
@@ -596,7 +596,7 @@ FORCE_INLINE void receiver_forward_packet(
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
                 forward_payload_to_downstream_edm<enable_ring_support, true>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
-                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
             default: ASSERT(false);
         }
@@ -632,7 +632,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             transaction_id);
     } else {
         if (dest_chip_id == routing_table->my_device_id || mcast_active) {
-            execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
+            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             if (mcast_active) {
                 // This packet is in an active mcast
                 for (size_t i = eth_chan_directions::EAST; i < eth_chan_directions::COUNT; i++) {
@@ -677,7 +677,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::NOOP: break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
             if constexpr (my_direction == eth_chan_directions::EAST) {
-                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
                 forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
@@ -689,7 +689,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             break;
         case LowLatencyMeshRoutingFields::FORWARD_WEST:
             if constexpr (my_direction == eth_chan_directions::WEST) {
-                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
                 forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
@@ -715,11 +715,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     downstream_edm_interface[eth_chan_directions::WEST],
                     transaction_id);
             }
-            execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
+            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             break;
         case LowLatencyMeshRoutingFields::FORWARD_NORTH:
             if constexpr (my_direction == eth_chan_directions::NORTH) {
-                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
                 forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
@@ -731,7 +731,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             break;
         case LowLatencyMeshRoutingFields::FORWARD_SOUTH:
             if constexpr (my_direction == eth_chan_directions::SOUTH) {
-                execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
                 forward_payload_to_downstream_edm<enable_ring_support, false>(
                     packet_start,
@@ -757,7 +757,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     downstream_edm_interface[eth_chan_directions::SOUTH],
                     transaction_id);
             }
-            execute_chip_unicast_to_local_chip<rx_channel_id>(packet_start, payload_size_bytes, transaction_id);
+            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             break;
         default: __builtin_unreachable();
     }
