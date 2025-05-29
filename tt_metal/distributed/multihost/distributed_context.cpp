@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/tt-metalium/distributed_context.hpp"
+
 #if defined(OPEN_MPI)
 #include "mpi_distributed_context.hpp"
 #else
@@ -10,28 +11,17 @@
 #endif
 
 namespace tt::tt_metal::distributed::multihost {
+
+#if defined(OPEN_MPI)
+using ContextImpl = MPIContext;
+#else
+using ContextImpl = SingleHostContext;
+#endif
+
 /* -------------------- factory for generic interface --------------------- */
-void DistributedContext::create(int argc, char** argv) {
-#if defined(OPEN_MPI)
-    MPIContext::create(argc, argv);
-#else
-    SingleHostContext::create(argc, argv);
-#endif
-}
+void DistributedContext::create(int argc, char** argv) { ContextImpl::create(argc, argv); }
 
-const ContextPtr& DistributedContext::get_current_world() {
-#if defined(OPEN_MPI)
-    return MPIContext::get_current_world();
-#else
-    return SingleHostContext::get_current_world();
-#endif
-}
+const ContextPtr& DistributedContext::get_current_world() { return ContextImpl::get_current_world(); }
 
-void DistributedContext::set_current_world(const ContextPtr& ctx) {
-#if defined(OPEN_MPI)
-    MPIContext::set_current_world(ctx);
-#else
-    SingleHostContext::set_current_world(ctx);
-#endif
-}
+void DistributedContext::set_current_world(const ContextPtr& ctx) { ContextImpl::set_current_world(ctx); }
 }  // namespace tt::tt_metal::distributed::multihost
