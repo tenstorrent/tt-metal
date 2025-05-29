@@ -193,6 +193,7 @@ class CMakeBuild(build_ext):
                         "-DTT_UNITY_BUILDS=ON",
                         "-DTT_ENABLE_LIGHT_METAL_TRACE=ON",
                         "-DWITH_PYTHON_BINDINGS=ON",
+                        "-DTT_USE_SYSTEM_SFPI=ON",
                         "-S",
                         source_dir,
                     ]
