@@ -1,0 +1,144 @@
+name: Post-commit nag bot
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_run:
+    workflows: ["All post-commit tests"]
+    types:
+      - completed
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+jobs:
+  check-and-approve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const targetWorkflow = 'All post-commit tests';
+            const overrideCmd    = '/override';
+            const runWorkflowCmd = '/run-it';
+
+            /* -------- helpers -------- */
+
+            // locate (or create) the single bot comment for this PR
+            async function upsertComment(prNumber, body) {
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: prNumber
+              });
+
+              const existing = comments.data.find(
+                c => c.user.login === 'github-actions[bot]' &&
+                     c.body.startsWith('**⛔️') || c.body.startsWith('**✅')
+              );
+
+              if (existing) {
+                // avoid churn: only patch when body actually changes
+                if (existing.body !== body) {
+                  await github.rest.issues.updateComment({
+                    owner: context.repo.owner,
+                    repo:  context.repo.repo,
+                    comment_id: existing.id,
+                    body
+                  });
+                }
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  issue_number: prNumber,
+                  body
+                });
+              }
+            }
+
+            // has the target workflow run successfully on the HEAD commit?
+            async function workflowGood(pr) {
+              const runs = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                branch: pr.head.ref,
+                status: 'success'
+              });
+              return runs.data.workflow_runs.some(r =>
+                r.name === targetWorkflow && r.head_sha === pr.head.sha);
+            }
+
+            /* -------- router -------- */
+
+            let prNumber, forceGreen = false;
+
+            if (context.eventName === 'pull_request') {
+              prNumber = context.payload.pull_request.number;
+
+            } else if (context.eventName === 'workflow_run') {
+              const run = context.payload.workflow_run;
+              if (run.name !== targetWorkflow || run.conclusion !== 'success') return;
+
+              const prs = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                head:  `${context.repo.owner}:${run.head_branch}`
+              });
+              if (!prs.data.length) return;
+              prNumber = prs.data[0].number;
+
+            } else if (context.eventName === 'issue_comment') {
+              if (!context.payload.issue.pull_request) return;
+
+              const commentBody = context.payload.comment.body;
+
+              if (commentBody.includes(overrideCmd)) {
+                prNumber   = context.payload.issue.number;
+                forceGreen = true;
+              } else if (commentBody.includes(runWorkflowCmd)) {
+                prNumber = context.payload.issue.number;
+
+                const { data: pr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  pull_number: prNumber
+                });
+
+                await github.rest.actions.createWorkflowDispatch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: targetWorkflow,
+                  ref: pr.head.ref
+                });
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: `🔄 Running \`${targetWorkflow}\` on the latest commit...`
+                });
+                return; // Exit after triggering the workflow
+              } else {
+                return; // Ignore other comments
+              }
+
+            } else return;   // ignore other events
+
+            /* -------- main logic -------- */
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              pull_number: prNumber
+            });
+
+            const happy = `**✅🎉 Thanks for running \`${targetWorkflow}\`! You’re clear to merge. 🎉✅**`;
+            const angry = `**⛔️🚨 \`${targetWorkflow}\` has NOT run on the latest commit. Run it before merging! 🚨⛔️**\n - /run-it to run the workflow on the latest commit.\n - /override to ignore the workflow check.`;
+
+            const body  = (forceGreen || await workflowGood(pr)) ? happy : angry;
+            await upsertComment(prNumber, body);
