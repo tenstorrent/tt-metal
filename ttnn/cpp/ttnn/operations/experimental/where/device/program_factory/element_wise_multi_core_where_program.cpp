@@ -125,7 +125,7 @@ WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/dataflow/writer.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_writer_kernel.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
@@ -143,23 +143,7 @@ WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
             .compile_args = compute_kernel_args});
 
     set_eltwise_ternary_runtime_args<true>(
-        program,
-        a,
-        *b,
-        *c,
-        output,
-        reader_kernel_id,
-        writer_kernel_id,
-        compute_kernel_id,
-        cb_src0,
-        cb_src1,
-        cb_src2,
-        cb_output,
-        all_device_cores,
-        src0_single_tile_size,
-        src1_single_tile_size,
-        src2_single_tile_size,
-        dst_single_tile_size);
+        program, a, *b, *c, output, reader_kernel_id, writer_kernel_id, compute_kernel_id, all_device_cores);
     return {
         std::move(program),
         {reader_kernel_id,

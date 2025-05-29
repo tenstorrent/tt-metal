@@ -20,6 +20,7 @@ WhereDeviceOperation::BroadcastScalarsWhereProgram::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    TT_FATAL(false, "BroadcastScalarsWhereProgram is not implemented!")
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::constants;
@@ -86,18 +87,18 @@ WhereDeviceOperation::BroadcastScalarsWhereProgram::create(
             .compile_args = compute_kernel_args,
         });
 
-    set_eltwise_unary_runtime_args<true>(
-        program,
-        a,
-        output,
-        reader_kernel_id,
-        writer_kernel_id,
-        compute_kernel_id,
-        cb_src0,
-        cb_output,
-        all_device_cores,
-        src0_single_tile_size,
-        dst_single_tile_size);
+    // set_eltwise_unary_runtime_args<true>(
+    //     program,
+    //     a,
+    //     output,
+    //     reader_kernel_id,
+    //     writer_kernel_id,
+    //     compute_kernel_id,
+    //     cb_src0,
+    //     cb_output,
+    //     all_device_cores,
+    //     src0_single_tile_size,
+    //     dst_single_tile_size);
     return {
         std::move(program),
         {reader_kernel_id,
