@@ -443,10 +443,6 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
         sizeof(tt::tt_fabric::PacketHeader) + test_config.packet_payload_size_bytes;
     size_t buffer_size_bytes_header_only_channel = sizeof(tt::tt_fabric::PacketHeader);
 
-    // Default to TENSIX for now
-    const auto programmable_core_type = tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX);
-
     for (auto i = 0; i < devices.size(); i++) {
         program_handles[i] = tt_metal::CreateProgram();
         // use logical core (0,0) for the mux kernel
@@ -462,8 +458,7 @@ void run_mux_test_variant(FabricMuxFixture* fixture, TestConfig test_config) {
             test_config.num_buffers_full_size_channel,
             test_config.num_buffers_header_only_channel,
             buffer_size_bytes_full_size_channel,
-            mux_base_l1_address,
-            programmable_core_type);
+            mux_base_l1_address);
         if (test_config.num_full_size_channel_iters > 1) {
             mux_kernel_config.set_num_full_size_channel_iters(test_config.num_full_size_channel_iters);
         }

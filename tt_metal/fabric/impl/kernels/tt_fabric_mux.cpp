@@ -11,6 +11,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #include <cstddef>
+#include <array>
 // clang-format on
 
 constexpr size_t NUM_FULL_SIZE_CHANNELS = get_compile_time_arg_val(0);

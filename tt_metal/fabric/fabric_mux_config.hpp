@@ -11,6 +11,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {
 
@@ -91,7 +92,7 @@ struct FabricMuxConfig {
         uint8_t num_buffers_header_only_channel,
         size_t buffer_size_bytes_full_size_channel,
         size_t base_l1_address,
-        uint8_t core_type_index) :
+        CoreType core_type = CoreType::WORKER) :
         num_full_size_channels(num_full_size_channels),
         num_header_only_channels(num_header_only_channels),
         // set to default number of buffers only for compilation purposes, no functional impact
@@ -99,8 +100,7 @@ struct FabricMuxConfig {
             num_buffers_full_size_channel == 0 ? default_num_buffers : num_buffers_full_size_channel),
         num_buffers_header_only_channel(
             num_buffers_header_only_channel == 0 ? default_num_buffers : num_buffers_header_only_channel),
-        buffer_size_bytes_full_size_channel(buffer_size_bytes_full_size_channel),
-        core_type_index(core_type_index) {
+        buffer_size_bytes_full_size_channel(buffer_size_bytes_full_size_channel) {
         size_t max_buffer_size_bytes_full_size_channel = get_max_buffer_size_bytes_full_size_channel();
         if (buffer_size_bytes_full_size_channel > max_buffer_size_bytes_full_size_channel) {
             TT_THROW(
@@ -138,6 +138,15 @@ struct FabricMuxConfig {
             this->full_size_channels_base_address + (num_full_size_channels * this->full_size_channel_size_bytes);
         this->memory_map_end_address =
             this->header_only_channels_base_address + (num_header_only_channels * this->header_only_channel_size_bytes);
+
+        const auto& hal = tt_metal::MetalContext::instance().hal();
+        if (core_type == CoreType::WORKER) {
+            core_type_index = hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
+        } else if (core_type == CoreType::ETH) {
+            core_type_index = hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::IDLE_ETH);
+        } else {
+            TT_THROW("Fabric Mux does not support core type {}", magic_enum::enum_name(core_type));
+        }
     }
 
     size_t get_buffer_size_bytes(FabricMuxChannelType channel_type) const {
