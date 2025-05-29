@@ -18,14 +18,14 @@ namespace ttnn::operations::pool {
 // this is why we use start and end indices to know how many sequential output elements should be multiplied by the same
 // scalar value.
 std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
-    AvgPoolConfig config, uint32_t output_stick_x, uint32_t output_stick_y, uint32_t num_of_elements_per_core) {
+    AvgPoolConfig config, uint32_t output_stick_x, uint32_t output_stick_y) {
     std::vector<ScalarInfo> scalars;
     float value;
     bool first_scalar = true;
     uint32_t last_pool_area = 0;
 
     if (config.ceil_mode && (config.ceil_w > 0 || config.ceil_h > 0)) {
-        for (uint32_t i = 0; i < num_of_elements_per_core; i++) {
+        for (uint32_t i = 0; i < config.out_nhw_per_core; i++) {
             // Compute starting and ending indices of the pooling window
             int h_start = output_stick_x * config.stride_h - config.pad_h;
             int w_start = output_stick_y * config.stride_w - config.pad_w;
@@ -74,9 +74,9 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
         }
     } else {
         value = 1. / (float)(config.kernel_h * config.kernel_w);
-        scalars.push_back({0, bfloat16(value).to_packed() << 16, num_of_elements_per_core});
+        scalars.push_back({0, bfloat16(value).to_packed() << 16, config.out_nhw_per_core});
     }
-    scalars.back().end = num_of_elements_per_core;
+    scalars.back().end = config.out_nhw_per_core;
     return scalars;
 }
 

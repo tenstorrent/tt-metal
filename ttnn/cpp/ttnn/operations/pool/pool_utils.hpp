@@ -41,10 +41,11 @@ struct AvgPoolConfig {
     uint32_t ceil_w;
     uint32_t pad_h;
     uint32_t pad_w;
+    uint32_t out_nhw_per_core;
 };
 
 std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
-    AvgPoolConfig config, uint32_t output_stick_x, uint32_t output_stick_y, uint32_t num_of_elements_per_core);
+    AvgPoolConfig config, uint32_t output_stick_x, uint32_t output_stick_y);
 
 uint32_t get_bf16_pool_scalar(
     Pool2DType pool_type, uint32_t kernel_h, uint32_t kernel_w, std::optional<int32_t> divisor_override);

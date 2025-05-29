@@ -22,30 +22,19 @@ namespace ttnn::operations::pool {
 // is filled with out_nhw_per_core number of ScalarInfos for each core and then sharded across the cores.
 // Since we don't usually have that many different scalars, we fill the rest of the config tensor with 0s.
 static Tensor create_scalar_config_tensor(
-    AvgPoolConfig config, uint32_t in_n, uint32_t num_shards_c, uint32_t out_nhw_per_core, CoreRangeSet all_cores) {
+    AvgPoolConfig config, uint32_t in_n, uint32_t num_shards_c, CoreRangeSet all_cores) {
     auto ranges = all_cores.ranges();
-
-    std::vector<uint32_t> total_elems_per_c_shards(num_shards_c, config.out_h * config.out_w * in_n);
 
     std::vector<uint32_t> config_vector;
 
     uint32_t output_stick_x = 0;
     uint32_t output_stick_y = 0;
-    uint32_t num_of_elements = out_nhw_per_core;
     uint32_t channel = 0;
     uint32_t batch = 0;
 
     for (const auto& range : ranges) {
         for (auto it = range.begin(); it != range.end(); ++it) {
-            if (total_elems_per_c_shards[channel] > out_nhw_per_core) {
-                total_elems_per_c_shards[channel] -= out_nhw_per_core;
-                num_of_elements = out_nhw_per_core;
-            } else {
-                num_of_elements = total_elems_per_c_shards[channel];
-            }
-
-            std::vector<ScalarInfo> scalars =
-                get_bf16_avg_pool_config_scalars(config, output_stick_x, output_stick_y, num_of_elements);
+            std::vector<ScalarInfo> scalars = get_bf16_avg_pool_config_scalars(config, output_stick_x, output_stick_y);
 
             for (const auto& scalar : scalars) {
                 config_vector.push_back(scalar.start);
@@ -54,7 +43,7 @@ static Tensor create_scalar_config_tensor(
             }
 
             // Fill with 0 values when the scalars count is less than out_nhw_per_core
-            for (uint32_t j = scalars.size(); j < out_nhw_per_core; j++) {
+            for (uint32_t j = scalars.size(); j < config.out_nhw_per_core; j++) {
                 config_vector.push_back(0);
                 config_vector.push_back(0);
                 config_vector.push_back(0);
@@ -63,7 +52,7 @@ static Tensor create_scalar_config_tensor(
             // Advance core and tensor location tracking
             channel = (channel + 1) % num_shards_c;
             if (channel == 0) {
-                uint32_t delta_y = output_stick_y + num_of_elements;
+                uint32_t delta_y = output_stick_y + config.out_nhw_per_core;
                 output_stick_y = delta_y % config.out_w;
                 uint32_t delta_x = output_stick_x + delta_y / config.out_w;
                 output_stick_x = delta_x % config.out_h;
@@ -77,7 +66,7 @@ static Tensor create_scalar_config_tensor(
     }
 
     const uint32_t entry_size = 3;
-    const uint32_t entries_per_core = entry_size * out_nhw_per_core;
+    const uint32_t entries_per_core = entry_size * config.out_nhw_per_core;
 
     TT_FATAL(
         config_vector.size() % entries_per_core == 0,
@@ -343,9 +332,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             .ceil_h = ceil_pad_h,
             .ceil_w = ceil_pad_w,
             .pad_h = pad_h / 2,  // pad_h is the total padding, so divide by 2 for each side
-            .pad_w = pad_w / 2   // pad_w is the total padding, so divide by 2 for each side
-        };
-        config_tensor = create_scalar_config_tensor(avg_pool_config, in_n, num_shards_c, out_nhw_per_core, all_cores);
+            .pad_w = pad_w / 2,  // pad_w is the total padding, so divide by 2 for each side
+            .out_nhw_per_core = out_nhw_per_core};
+        config_tensor = create_scalar_config_tensor(avg_pool_config, in_n, num_shards_c, all_cores);
 
         std::array<uint32_t, 2> shard_shape =
             std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
