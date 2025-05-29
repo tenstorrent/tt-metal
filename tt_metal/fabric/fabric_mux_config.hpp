@@ -55,6 +55,7 @@ enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_C
     -> Buffer size in bytes for a full size channel (for a header only channel its equal to the pre-determined packet
         header size)
     -> Base address where the channels start in the mux's L1
+    -> Core Type of the mux. Supports Worker and Ethernet (idle)
 
     Advanced configuration parameters:
     -> Number of full size channel iters
