@@ -85,7 +85,7 @@ fi
 
 configure_only="OFF"
 enable_coverage="OFF"
-enable_distributed="ON"
+enable_distributed="OFF"
 with_python_bindings="ON"
 
 declare -a cmake_args

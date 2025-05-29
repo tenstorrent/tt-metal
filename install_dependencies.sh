@@ -12,7 +12,7 @@ usage()
     echo "[--help, -h]                List this help"
     echo "[--validate, -v]            Validate that required packages are installed"
     echo "[--docker, -d]              Specialize execution for docker"
-    echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
+    echo "[--distributed, -D]         Install distributed compute dependencies (OpenMPI)"
     echo "[--mode, -m <mode>]         Select installation mode: runtime, build, baremetal"
     exit 1
 }
@@ -37,7 +37,7 @@ fi
 
 validate=0
 docker=0
-distributed=1
+distributed=0
 mode="baremetal"
 
 while [ $# -gt 0 ]; do
@@ -53,8 +53,8 @@ while [ $# -gt 0 ]; do
             docker=1
             shift
             ;;
-        --no-distributed)
-            distributed=0
+        --distributed|-D)
+            distributed=1
             shift
             ;;
 	--mode|-m)
