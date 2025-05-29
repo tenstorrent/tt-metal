@@ -142,6 +142,12 @@ public:
             tt::round_up(shard_spec.shape[0], tile_height) / tile_height,
             tt::round_up(shard_spec.shape[1], tile_width) / tile_width};
 
+        TT_FATAL(
+            shard_shape[0] != 0 and shard_shape[1] != 0,
+            "Shard shape must not contain zero dimensions but got {{{}, {}}}",
+            shard_shape[0],
+            shard_shape[1]);
+
         const auto [N, C, Ht, Wt] = get_shape_dims(tensor);
         const auto unrolled_Ht = N * C * Ht;
         last_shard_shape = {
