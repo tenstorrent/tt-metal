@@ -2,15 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tensor.hpp"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <set>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/operators.h>
 
-#include <utility>
-
-#include "tensor.hpp"
 #include "ttnn-pybind/json_class.hpp"
-#include "export_enum.hpp"
+#include "ttnn-pybind/export_enum.hpp"
 
 #include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/serialization.hpp"
@@ -20,8 +30,6 @@
 #include "ttnn/distributed/types.hpp"
 
 using namespace tt::tt_metal;
-
-namespace py = pybind11;
 
 namespace ttnn::tensor {
 
