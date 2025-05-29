@@ -55,7 +55,7 @@ enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_C
     -> Buffer size in bytes for a full size channel (for a header only channel its equal to the pre-determined packet
         header size)
     -> Base address where the channels start in the mux's L1
-    -> Core Type of the mux. Supports Worker and Ethernet (idle)
+    -> Core Type of the mux. Supports Worker and Idle Ethernet
 
     Advanced configuration parameters:
     -> Number of full size channel iters
@@ -143,7 +143,7 @@ struct FabricMuxConfig {
         const auto& hal = tt_metal::MetalContext::instance().hal();
         if (core_type == CoreType::WORKER) {
             core_type_index = hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
-        } else if (core_type == CoreType::ETH) {
+        } else if (core_type == CoreType::IDLE_ETH) {
             core_type_index = hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::IDLE_ETH);
         } else {
             TT_THROW("Fabric Mux does not support core type {}", magic_enum::enum_name(core_type));
