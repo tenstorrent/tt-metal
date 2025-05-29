@@ -63,9 +63,11 @@ int main() {
 
         // Configuration for the buffers.
         tt::tt_metal::InterleavedBufferConfig dram_config{
-            .device = device,                                // Device which owns the buffer
-            .size = dram_buffer_size,                        // Size of the buffer in bytes
-            .page_size = dram_buffer_size,                   // See <insert link> for details
+            .device = device,          // Device which owns the buffer
+            .size = dram_buffer_size,  // Size of the buffer in bytes
+            .page_size =
+                dram_buffer_size,  // Number of bytes when round-robin between banks. Usually this is the same as the
+                                   // tile size for efficiency. But just for demo, we show it can be different.
             .buffer_type = tt::tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1)
         tt::tt_metal::InterleavedBufferConfig l1_config{
             .device = device,
