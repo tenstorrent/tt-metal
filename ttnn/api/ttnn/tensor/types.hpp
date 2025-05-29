@@ -90,8 +90,16 @@ using Array8D = std::array<uint32_t, 8>;
 
 struct NdShardSpec {
     Shape shard_shape;
-    CoreRangeSet cores;
+    CoreRangeSet grid;
     ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
+
+    bool operator==(const NdShardSpec& other) const = default;
+    bool operator!=(const NdShardSpec& other) const = default;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("shard_shape", "grid", "shard_orientation");
+    constexpr auto attribute_values() const {
+        return std::forward_as_tuple(this->shard_shape, this->grid, this->shard_orientation);
+    }
 };
 
 class MemoryConfig final {
@@ -160,6 +168,16 @@ bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b);
 
 }  // namespace tt_metal
 }  // namespace tt
+
+template <>
+struct tt::stl::json::to_json_t<tt::tt_metal::NdShardSpec> {
+    nlohmann::json operator()(const tt::tt_metal::NdShardSpec& spec) const;
+};
+
+template <>
+struct tt::stl::json::from_json_t<tt::tt_metal::NdShardSpec> {
+    tt::tt_metal::NdShardSpec operator()(const nlohmann::json& json_object) const;
+};
 
 template <>
 struct tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig> {

@@ -85,10 +85,10 @@ TEST_P(LegacyToNdShardingTests, LegacyToNdSharding) {
     if (nd_shard_spec.has_value()) {
         ASSERT_EQ(nd_shard_spec->shard_shape, params.shard_shape_nd.value());
         if (params.grid_size.has_value()) {
-            ASSERT_EQ(nd_shard_spec->cores.ranges().size(), 1);
-            ASSERT_EQ(nd_shard_spec->cores.ranges()[0].grid_size(), params.grid_size.value());
+            ASSERT_EQ(nd_shard_spec->grid.ranges().size(), 1);
+            ASSERT_EQ(nd_shard_spec->grid.ranges()[0].grid_size(), params.grid_size.value());
         } else {
-            ASSERT_EQ(nd_shard_spec->cores, cores);
+            ASSERT_EQ(nd_shard_spec->grid, cores);
         }
     }
 }
