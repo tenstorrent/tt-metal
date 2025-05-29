@@ -40,8 +40,8 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=1 (per DP 
 | Phi3.5-mini              | N150       |           |           | 43.2          | 98        |
 | Phi3.5-mini              | N300       |           |           | 57.8          | 62        |
 | Phi3.5-mini              | T3K        |           |           | 48.8          | 51        |
-| Phi-3-mini-128k-instruct | N150       | 91        | 99        | 43.1          | 78        |
-| Phi-3-mini-128k-instruct | N300       | 91        | 99        | 56.2          | 63        |
+| Phi-3-mini-128k-instruct | N150       | 91        | 99        | 43.4          | 78        |
+| Phi-3-mini-128k-instruct | N300       | 91        | 99        | 56.9          | 60        |
 
 ## Accuracy
 
@@ -72,8 +72,8 @@ This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model and the Qwen
 | Phi3.5-mini              | N150   |           |           | 38.8          | 92        |
 | Phi3.5-mini              | N300   |           |           | 53.9          | 63        |
 | Phi3.5-mini              | T3K    |           |           | 48.6          | 53        |
-| Phi-3-mini-128k-instruct | N150   | 95        | 99        | 38.5          | 87        |
-| Phi-3-mini-128k-instruct | N300   | 95        | 99        | 53.3          | 60        |
+| Phi-3-mini-128k-instruct | N150   | 95        | 99        | 39.1          | 87        |
+| Phi-3-mini-128k-instruct | N300   | 95        | 99        | 53.5          | 66        |
 
 ##  Long-context (64K Tokens)
 
@@ -107,7 +107,7 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=1 and pref
 
 | Model                     | Device | Speed (t/s/u) | TTFT (ms) |
 |---------------------------|--------|---------------|-----------|
-| Phi-3-mini-128k-instruct  | N300   | 23.17         | 11335.01  |
+| Phi-3-mini-128k-instruct  | N300   | 24.4          | 11259.6  |
 
 ## Short-Context, Batch-32
 
@@ -134,8 +134,8 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=32 and pre
 | Llama3.1-70B              | TG     |               |               |
 | Qwen2.5-7B                | N300   |               |               |
 | Qwen2.5-72B               | T3K    |               |               |
-| Phi-3-mini-128k-instruct  | 150    | 25.20         | 192.43        |
-| Phi-3-mini-128k-instruct  | N300   | 37.02         | 172.77        |
+| Phi-3-mini-128k-instruct  | 150    | 25.4          | 192.5         |
+| Phi-3-mini-128k-instruct  | N300   | 36.8          | 173.1         |
 
 
 # Llama 3 model precision and math fidelity
