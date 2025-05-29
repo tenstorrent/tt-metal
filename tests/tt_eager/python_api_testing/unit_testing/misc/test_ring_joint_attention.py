@@ -124,6 +124,7 @@ def run_ring_joint_sdpa(
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
+    print(f"tt_lse.shape: {tt_lse.shape}")
     tt_out = ttnn.to_torch(tt_out)
     tt_joint_out = ttnn.to_torch(tt_joint_out)
     tt_lse = ttnn.to_torch(tt_lse)
@@ -134,17 +135,9 @@ def run_ring_joint_sdpa(
     logger.debug(f"tt_out: {tt_out.shape}")
     logger.debug(f"tt_joint_out: {tt_joint_out.shape}")
 
-    pt_Q = torch.cat([Q, joint_Q], dim=2)
-    pt_K = torch.cat([K, joint_K], dim=2)
-    pt_V = torch.cat([V, joint_V], dim=2)
-
     gt, gt_lse_list = torch_sdpa(Q, K, V, joint_Q, joint_K, joint_V, num_devices)
     gt_out = gt[:, :, :local_seq_len, :]
     gt_joint_out = gt[:, :, local_seq_len:, :]
-
-    # gt = torch.nn.functional.scaled_dot_product_attention(pt_Q, pt_K, pt_V, attn_mask=None, is_causal=False)
-    # gt_out = gt[:, :, :local_seq_len, :]
-    # gt_joint_out = gt[:, :, local_seq_len:, :]
 
     passing = True
     for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out)]:
@@ -174,7 +167,7 @@ def run_ring_joint_sdpa(
 @pytest.mark.parametrize(
     "seq_len, joint_seq_len",
     [
-        (4096, 96),
+        (4096, 333),
     ],
 )
 def test_ring_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, reset_seeds):
@@ -185,15 +178,43 @@ def test_ring_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size,
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", [32], ids=["q256"])
+@pytest.mark.parametrize("q_chunk_size", [64, 128], ids=["q64", "q128"])
+@pytest.mark.parametrize("k_chunk_size", [64, 128], ids=["k64", "k128"])
+@pytest.mark.parametrize(
+    "b, nh, seq_len, joint_seq_len, d",
+    [
+        (1, 5, 4096, 333, 64),  # SD3.5 large
+        (1, 5, 1024, 118, 64),
+        (1, 3, 44 * 1024, 118, 128),  # Mochi
+        (1, 2, 8192, 666, 64),
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "worker_l1_size": 1344544,  # This increases space for ring-buffer, required for large kernel binary
+        }
+    ],
+    indirect=True,
+)
+def test_ring_joint_sdpa_stress(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype):
+    if q_chunk_size == 512 and k_chunk_size == 512:
+        pytest.skip("OOM config.")
+    ttnn.device.DisablePersistentKernelCache()
+    run_ring_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [64], ids=["q256"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k256"])
 @pytest.mark.parametrize("b", [1], ids=["b1"])
-@pytest.mark.parametrize("nh", [3], ids=["nh3"])
-@pytest.mark.parametrize("d", [128], ids=["d128"])
+@pytest.mark.parametrize("nh", [5], ids=["nh5"])
+@pytest.mark.parametrize("d", [64], ids=["d64"])
 @pytest.mark.parametrize(
     "seq_len, joint_seq_len",
     [
-        (4096, 128),
+        (4096, 333),
     ],
 )
 @pytest.mark.parametrize("n_iters, trace_enabled", [(10, False), (10, True)], ids=["no_trace", "yes_trace"])
@@ -336,6 +357,7 @@ def test_ring_joint_sdpa_perf(
                 tt_joint_K,
                 tt_joint_V,
                 joint_strategy="rear",
+                logical_n=seq_len,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
             )
@@ -359,10 +381,7 @@ def test_ring_joint_sdpa_perf(
         print("Run without trace")
         run_iters(tt_out_list, tt_joint_out_list)
 
-    pt_Q = torch.cat([Q, joint_Q], dim=2)
-    pt_K = torch.cat([K, joint_K], dim=2)
-    pt_V = torch.cat([V, joint_V], dim=2)
-    gt, gt_lse_list = torch_sdpa(pt_Q, pt_K, pt_V, num_devices)
+    gt, gt_lse_list = torch_sdpa(Q, K, V, joint_Q, joint_K, joint_V, num_devices)
     gt_out = gt[:, :, :seq_len, :]
     gt_joint_out = gt[:, :, seq_len:, :]
 
@@ -387,31 +406,31 @@ def test_ring_joint_sdpa_perf(
         assert passing
 
 
-# @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-# @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
-# @pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
-# @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
-# @pytest.mark.parametrize("b", [1], ids=["b1"])
-# @pytest.mark.parametrize("nh", [1], ids=["nh1"])
-# @pytest.mark.parametrize(
-#     "seq_len, joint_seq_len",
-#     [
-#         (3000, 100),
-#     ],
-# )
-# @pytest.mark.parametrize(
-#     "d",
-#     [128],
-#     ids=[
-#         "d128",
-#     ],
-# )
-# def test_joint_sdpa_program_cache(
-#     device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, use_program_cache
-# ):
-#     dummy_tensors = []
-#     for _ in range(3):
-#         dummy_tensors.append(
-#             ttnn.from_torch(fa_rand(b, nh, seq_len, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-#         )
-#         run_ring_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, dummy_tensors)
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
+@pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
+@pytest.mark.parametrize("b", [1], ids=["b1"])
+@pytest.mark.parametrize("nh", [1], ids=["nh1"])
+@pytest.mark.parametrize(
+    "seq_len, joint_seq_len",
+    [
+        (4096, 100),
+    ],
+)
+@pytest.mark.parametrize(
+    "d",
+    [128],
+    ids=[
+        "d128",
+    ],
+)
+def test_ring_joint_sdpa_program_cache(
+    device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, use_program_cache
+):
+    dummy_tensors = []
+    for _ in range(3):
+        dummy_tensors.append(
+            ttnn.from_torch(fa_rand(b, nh, seq_len, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        )
+        run_ring_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, dummy_tensors)

@@ -128,7 +128,13 @@ void kernel_main() {
                                                nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) +
                                                q_chunk * Sq_chunk_t;
                         uint32_t lse_addr = get_write_ptr(cb_lse_in);
-                        for (uint32_t i = 0; i < Sq_chunk_t; i++) {
+                        // Don't write beyond the end of the LSE in sequence length
+                        uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
+                        uint32_t lse_seq_end = lse_seq_start + Sq_chunk_t;
+                        lse_seq_start = std::min(lse_seq_start, (local_Nt + logical_Lt));
+                        lse_seq_end = std::min(lse_seq_end, (local_Nt + logical_Lt));
+
+                        for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
                             noc_async_read_tile(lse_tile_id, lse_writer, lse_addr);
                             lse_tile_id++;
                             lse_addr += tile_bytes;
@@ -145,7 +151,12 @@ void kernel_main() {
                                            nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) +
                                            q_chunk * Sq_chunk_t;
                     uint32_t lse_addr = get_read_ptr(cb_lse_out);
-                    for (uint32_t i = 0; i < Sq_chunk_t; i++) {
+                    uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
+                    uint32_t lse_seq_end = lse_seq_start + Sq_chunk_t;
+                    lse_seq_start = std::min(lse_seq_start, (local_Nt + logical_Lt));
+                    lse_seq_end = std::min(lse_seq_end, (local_Nt + logical_Lt));
+
+                    for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
                         noc_async_write_tile(lse_tile_id, lse_writer, lse_addr);
                         lse_tile_id++;
                         lse_addr += tile_bytes;
