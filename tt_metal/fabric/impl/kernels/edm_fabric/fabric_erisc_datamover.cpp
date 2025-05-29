@@ -1065,6 +1065,7 @@ bool all_channels_drained(
 template <
     typename EthSenderChannels,
     typename EthReceiverChannels,
+    typename RemoteEthReceiverChannels,
     typename EdmChannelWorkerIFs,
     bool enable_packet_header_recording,
     bool enable_fabric_counters,
@@ -1080,7 +1081,7 @@ void run_fabric_edm_main_loop(
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
         downstream_edm_noc_interfaces,
-    std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& remote_receiver_channels,
+    RemoteEthReceiverChannels& remote_receiver_channels,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
     std::array<volatile tt::tt_fabric::EdmFabricReceiverChannelCounters*, MAX_NUM_RECEIVER_CHANNELS>
         receiver_channel_counters_ptrs,
@@ -1142,7 +1143,7 @@ void run_fabric_edm_main_loop(
                     local_sender_channels.template get<0>(),
                     local_sender_channel_worker_interfaces.template get<0>(),
                     outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                    remote_receiver_channels[VC0_RECEIVER_CHANNEL],
+                    remote_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                     sender_channel_counters_ptrs[0],
                     sender_channel_packet_recorders[0],
                     channel_connection_established[0],
@@ -1200,7 +1201,7 @@ void run_fabric_edm_main_loop(
                     local_sender_channels.template get<1>(),
                     local_sender_channel_worker_interfaces.template get<1>(),
                     outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                    remote_receiver_channels[VC0_RECEIVER_CHANNEL],
+                    remote_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                     sender_channel_counters_ptrs[1],
                     sender_channel_packet_recorders[1],
                     channel_connection_established[1],
@@ -1218,7 +1219,7 @@ void run_fabric_edm_main_loop(
                         local_sender_channels.template get<2>(),
                         local_sender_channel_worker_interfaces.template get<2>(),
                         outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                        remote_receiver_channels[VC0_RECEIVER_CHANNEL],
+                        remote_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                         sender_channel_counters_ptrs[2],
                         sender_channel_packet_recorders[2],
                         channel_connection_established[2],
@@ -1235,7 +1236,7 @@ void run_fabric_edm_main_loop(
                         local_sender_channels.template get<3>(),
                         local_sender_channel_worker_interfaces.template get<3>(),
                         outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
-                        remote_receiver_channels[VC0_RECEIVER_CHANNEL],
+                        remote_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                         sender_channel_counters_ptrs[3],
                         sender_channel_packet_recorders[3],
                         channel_connection_established[3],
@@ -1254,7 +1255,7 @@ void run_fabric_edm_main_loop(
                         local_sender_channels.template get<NUM_SENDER_CHANNELS - 1>(),
                         local_sender_channel_worker_interfaces.template get<NUM_SENDER_CHANNELS - 1>(),
                         outbound_to_receiver_channel_pointers[VC1_RECEIVER_CHANNEL],
-                        remote_receiver_channels[VC1_RECEIVER_CHANNEL],
+                        remote_receiver_channels.template get<VC1_RECEIVER_CHANNEL>(),
                         sender_channel_counters_ptrs[NUM_SENDER_CHANNELS - 1],
                         sender_channel_packet_recorders[NUM_SENDER_CHANNELS - 1],
                         channel_connection_established[NUM_SENDER_CHANNELS - 1],
@@ -1582,7 +1583,16 @@ void kernel_main() {
                 my_sem_for_teardown_from_edm_3,
                 my_sem_for_teardown_from_edm_4});
 
-    std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> remote_receiver_channels;
+    // create the remote receiver channel buffers with input array of number of buffers
+    auto remote_receiver_channels = tt::tt_fabric::EthChannelBuffers<REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make(
+        std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
+    // initialize the remote receiver channel buffers
+    remote_receiver_channels.init(
+        remote_receiver_buffer_addresses.data(),
+        channel_buffer_size,
+        sizeof(PACKET_HEADER_TYPE),
+        eth_transaction_ack_word_addr,
+        receiver_channel_base_id);
     // create the local receiver channnel buffers with input array of number of buffers
     auto local_receiver_channels = tt::tt_fabric::EthChannelBuffers<RECEIVER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
@@ -1766,14 +1776,6 @@ void kernel_main() {
                     tt::tt_fabric::forward_and_local_write_noc_vc>();
         }
     }
-    for (uint8_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
-        new (&remote_receiver_channels[i]) tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>(
-            remote_receiver_buffer_addresses[i],
-            channel_buffer_size,
-            sizeof(PACKET_HEADER_TYPE),
-            eth_transaction_ack_word_addr,  // Unused, otherwise probably need to have unique ack word per channel
-            receiver_channel_base_id + i);
-    }
 
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, 0> receiver_channel_0_trid_tracker;
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, NUM_TRANSACTION_IDS>
@@ -1883,6 +1885,7 @@ void kernel_main() {
     run_fabric_edm_main_loop<
         decltype(local_sender_channels),
         decltype(local_receiver_channels),
+        decltype(remote_receiver_channels),
         decltype(local_sender_channel_worker_interfaces),
         enable_packet_header_recording,
         enable_fabric_counters,

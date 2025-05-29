@@ -128,6 +128,9 @@ static constexpr auto SENDER_NUM_BUFFERS_ARRAY = make_buffers_array<SENDER_NUM_B
 
 static constexpr auto RECEIVER_NUM_BUFFERS_ARRAY = make_buffers_array<RECEIVER_NUM_BUFFERS, NUM_RECEIVER_CHANNELS>();
 
+static constexpr auto REMOTE_RECEIVER_NUM_BUFFERS_ARRAY =
+    make_buffers_array<RECEIVER_NUM_BUFFERS, NUM_RECEIVER_CHANNELS>();
+
 constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
 constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 11);
 constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 12);
