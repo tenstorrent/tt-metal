@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_stl/overloaded.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include <tt-metalium/assert.hpp>
@@ -12,177 +13,189 @@
 namespace ttnn::distributed {
 namespace {
 
-class ReplicateTensorToMesh : public TensorToMesh {
+class NdTensorToMesh : public TensorToMesh {
 public:
-    ReplicateTensorToMesh(size_t num_devices) : num_devices_(num_devices) {}
+    NdTensorToMesh(
+        const ttnn::MeshShape& shape,
+        const MeshMapperConfig& config,
+        const tt::tt_metal::DistributedTensorConfig& distributed_tensor_config) :
+        shape_(shape), config_(config), distributed_tensor_config_(distributed_tensor_config) {}
 
     std::vector<Tensor> map(const Tensor& tensor) const override {
-        std::vector<Tensor> tensors;
-        tensors.reserve(num_devices_);
-        std::fill_n(std::back_inserter(tensors), num_devices_, tensor);
-        return tensors;
-    }
+        std::vector<Tensor> current_tensors = {tensor};
 
-    tt::tt_metal::DistributedTensorConfig config() const override {
-        return tt::tt_metal::DistributedTensorConfig{tt::tt_metal::ReplicateTensor{num_devices_}};
-    }
+        for (size_t mesh_dim_idx = 0; mesh_dim_idx < shape_.dims(); ++mesh_dim_idx) {
+            std::vector<Tensor> next_tensors;
+            const size_t mesh_dim_size = shape_[mesh_dim_idx];
+            const auto& placement = config_.placements[mesh_dim_idx];
+            next_tensors.reserve(current_tensors.size() * mesh_dim_size);
 
-private:
-    size_t num_devices_ = 0;
-};
-
-class ShardTensorToMesh : public TensorToMesh {
-public:
-    ShardTensorToMesh(size_t num_devices, int dim) : num_devices_(num_devices), shard_dim_(dim) {}
-
-    std::vector<Tensor> map(const Tensor& tensor) const override {
-        return experimental::xtensor::chunk(tensor, num_devices_, shard_dim_);
-    }
-
-    tt::tt_metal::DistributedTensorConfig config() const override {
-        return tt::tt_metal::DistributedTensorConfig{tt::tt_metal::ShardTensor{shard_dim_}};
-    }
-
-private:
-    size_t num_devices_ = 0;
-    int shard_dim_ = -1;
-};
-
-class ShardTensorTo2dMesh : public TensorToMesh {
-public:
-    ShardTensorTo2dMesh(size_t mesh_rows, size_t mesh_cols, const Shard2dConfig& config) :
-        mesh_rows_(mesh_rows), mesh_cols_(mesh_cols), config_(config) {}
-
-    std::vector<Tensor> map(const Tensor& tensor) const override {
-        const auto [row_dim, col_dim] = config_;
-
-        std::vector<Tensor> row_tensors;
-
-        // Shard along rows
-        if (!row_dim.has_value()) {
-            row_tensors.reserve(mesh_rows_);
-            for (int i = 0; i < mesh_rows_; ++i) {
-                row_tensors.push_back(tensor);
+            for (const auto& current_tensor : current_tensors) {
+                std::visit(
+                    tt::stl::overloaded{
+                        [&](const MeshMapperConfig::Replicate&) {
+                            for (size_t i = 0; i < mesh_dim_size; ++i) {
+                                next_tensors.push_back(current_tensor);
+                            }
+                        },
+                        [&](const MeshMapperConfig::Shard& shard) {
+                            auto chunks = experimental::xtensor::chunk(current_tensor, mesh_dim_size, shard.dim);
+                            TT_FATAL(
+                                shape_.dims() == 1 || chunks.size() == mesh_dim_size,
+                                "ND sharding requires the number of chunks {} to match the mesh dimension size {}",
+                                chunks.size(),
+                                mesh_dim_size);
+                            next_tensors.insert(
+                                next_tensors.end(),
+                                std::make_move_iterator(chunks.begin()),
+                                std::make_move_iterator(chunks.end()));
+                        },
+                    },
+                    placement);
             }
-        } else {
-            row_tensors = experimental::xtensor::chunk(tensor, mesh_rows_, *row_dim);
-        }
-
-        std::vector<Tensor> tensor_shards;
-        tensor_shards.reserve(mesh_rows_ * mesh_cols_);
-        // Shard along columns
-        if (!col_dim.has_value()) {
-            for (const auto& t : row_tensors) {
-                for (int i = 0; i < mesh_cols_; ++i) {
-                    tensor_shards.push_back(t);
-                }
-            }
-        } else {
-            for (const auto& t : row_tensors) {
-                auto col_chunks = experimental::xtensor::chunk(t, mesh_cols_, *col_dim);
-                tensor_shards.insert(tensor_shards.end(), col_chunks.begin(), col_chunks.end());
-            }
+            current_tensors = std::move(next_tensors);
         }
 
         TT_FATAL(
-            static_cast<int>(tensor_shards.size()) == mesh_rows_ * mesh_cols_,
-            "ShardTensorTo2dMesh: Sharding failed. Number of shards should match the product of the mesh "
-            "dimensions. Size: {}, rows: {}, cols: {}",
-            tensor_shards.size(),
-            mesh_rows_,
-            mesh_cols_);
+            current_tensors.size() <= shape_.mesh_size(),
+            "NdTensorToMesh: Mapping failed. Expected at most {} tensors for mesh shape {}, but got {}.",
+            shape_.mesh_size(),
+            shape_,
+            current_tensors.size());
 
-        return tensor_shards;
+        return current_tensors;
     }
 
-    tt::tt_metal::DistributedTensorConfig config() const override {
-        return tt::tt_metal::DistributedTensorConfig{
-            tt::tt_metal::ShardTensor2D{tt::tt_metal::ShardMesh{mesh_rows_, mesh_cols_}}};
-    }
+    tt::tt_metal::DistributedTensorConfig config() const override { return distributed_tensor_config_; }
 
 private:
-    size_t mesh_rows_ = 0;
-    size_t mesh_cols_ = 0;
-    Shard2dConfig config_;
+    ttnn::MeshShape shape_;
+    MeshMapperConfig config_;
+    tt::tt_metal::DistributedTensorConfig distributed_tensor_config_;
 };
 
-class ConcatMeshToTensor : public MeshToTensor {
+class NdMeshToTensor : public MeshToTensor {
 public:
-    ConcatMeshToTensor(int dim) : concat_dim_(dim) {}
+    NdMeshToTensor(const ttnn::MeshShape& shape, const MeshComposerConfig& config) : shape_(shape), config_(config) {}
 
     Tensor compose(const std::vector<Tensor>& tensors) const override {
-        return experimental::xtensor::concat(tensors, concat_dim_);
-    }
+        TT_FATAL(
+            shape_.dims() == 1 || tensors.size() == shape_.mesh_size(),
+            "ND composition requires the number of tensors {} to match the mesh shape {}",
+            tensors.size(),
+            shape_);
 
-private:
-    int concat_dim_ = -1;
-};
+        std::vector<Tensor> current_tensors = tensors;
+        size_t outer_stride = shape_.dims() == 1 ? tensors.size() : shape_.mesh_size();
 
-class Concat2dMeshToTensor : public MeshToTensor {
-public:
-    Concat2dMeshToTensor(size_t mesh_rows, size_t mesh_cols, const Concat2dConfig& config) :
-        mesh_rows_(mesh_rows), mesh_cols_(mesh_cols), config_(config) {}
+        for (int mesh_dim_idx = shape_.dims() - 1; mesh_dim_idx >= 0; --mesh_dim_idx) {
+            const size_t mesh_dim_size = shape_.dims() == 1 ? tensors.size() : shape_[mesh_dim_idx];
+            const int concat_dim = config_.dims[mesh_dim_idx];
+            outer_stride /= mesh_dim_size;
 
-    Tensor compose(const std::vector<Tensor>& tensors) const override {
-        const auto [row_dim, col_dim] = config_;
+            std::vector<Tensor> next_tensors;
+            next_tensors.reserve(outer_stride);
 
-        std::vector<Tensor> row_concatenated;
-        row_concatenated.reserve(mesh_rows_);
-        for (int i = 0; i < mesh_rows_; ++i) {
-            auto row_start = tensors.begin() + i * mesh_cols_;
-            auto row_end = row_start + mesh_cols_;
-            std::vector<Tensor> row_tensors(row_start, row_end);
-            row_concatenated.push_back(experimental::xtensor::concat(row_tensors, col_dim));
+            for (size_t outer_idx = 0; outer_idx < outer_stride; ++outer_idx) {
+                std::vector<Tensor> group_to_concat;
+                group_to_concat.reserve(mesh_dim_size);
+                size_t group_start_idx = outer_idx * mesh_dim_size;
+                for (size_t inner_idx = 0; inner_idx < mesh_dim_size; ++inner_idx) {
+                    group_to_concat.push_back(current_tensors[outer_idx * mesh_dim_size + inner_idx]);
+                }
+                next_tensors.push_back(experimental::xtensor::concat(group_to_concat, concat_dim));
+            }
+            current_tensors = std::move(next_tensors);
         }
 
-        return experimental::xtensor::concat(row_concatenated, row_dim);
+        TT_FATAL(
+            current_tensors.size() == 1,
+            "NdMeshToTensor: Composition failed. Expected 1 final tensor, but got {}.",
+            current_tensors.size());
+        return current_tensors[0];
     }
 
 private:
-    size_t mesh_rows_ = 0;
-    size_t mesh_cols_ = 0;
-    Concat2dConfig config_;
+    ttnn::MeshShape shape_;
+    MeshComposerConfig config_;
 };
 
 }  // namespace
 
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {
-    return std::make_unique<ReplicateTensorToMesh>(mesh_device.num_devices());
+    return std::make_unique<NdTensorToMesh>(
+        MeshShape(mesh_device.num_devices()),
+        MeshMapperConfig{
+            .placements =
+                {
+                    MeshMapperConfig::Replicate{},
+                }},
+        tt::tt_metal::DistributedTensorConfig{tt::tt_metal::ReplicateTensor{mesh_device.num_devices()}});
 }
 
 std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim) {
-    return std::make_unique<ShardTensorToMesh>(mesh_device.num_devices(), dim);
+    return std::make_unique<NdTensorToMesh>(
+        MeshShape(mesh_device.num_devices()),
+        MeshMapperConfig{
+            .placements =
+                {
+                    MeshMapperConfig::Shard{dim},
+                }},
+        tt::tt_metal::DistributedTensorConfig{tt::tt_metal::ShardTensor{dim}});
 }
 
-std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
-    MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config) {
-    TT_FATAL(
-        config.row_dim.has_value() || config.col_dim.has_value(),
-        "Sharding a tensor to 2D mesh requires at least one dimension to shard");
-    TT_FATAL(mesh_shape.dims() == 2, "Mesh shape is not 2D: {}", mesh_shape);
-    TT_FATAL(mesh_device.shape().dims() == 2, "Mesh device is not configured as a 2D mesh: {}", mesh_device.shape());
-    TT_FATAL(
-        mesh_shape[0] <= mesh_device.shape()[0] &&  //
-            mesh_shape[1] <= mesh_device.shape()[1],
-        "Device mesh shape {} does not match the provided mesh shape ({}, {}).",
-        mesh_device.shape(),
-        mesh_shape[0],
-        mesh_shape[1]);
-    return std::make_unique<ShardTensorTo2dMesh>(mesh_shape[0], mesh_shape[1], config);
+std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_device, int dim) {
+    return std::make_unique<NdMeshToTensor>(
+        MeshShape(mesh_device.num_devices()),
+        MeshComposerConfig{
+            .dims = {dim},
+        });
 }
 
-std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int dim) {
-    return std::make_unique<ConcatMeshToTensor>(dim);
+std::unique_ptr<TensorToMesh> create_mesh_mapper(
+    MeshDevice& mesh_device, const MeshMapperConfig& config, const std::optional<ttnn::MeshShape>& shape) {
+    const auto distributed_shape = shape.value_or(mesh_device.shape());
+    TT_FATAL(
+        distributed_shape.mesh_size() <= mesh_device.shape().mesh_size(),
+        "The size of the supplied mesh shape {} does not match the device shape size {}",
+        distributed_shape,
+        mesh_device.shape());
+    TT_FATAL(
+        distributed_shape.dims() == config.placements.size(),
+        "The number of dimensions in the mesh shape {} does not match the "
+        "number of placements in the config {}",
+        distributed_shape,
+        config);
+
+    // TODO: #22258 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used directly
+    // in Tensor storage.
+    tt::tt_metal::DistributedTensorConfig distributed_tensor_config;
+    if (distributed_shape.dims() == 2) {
+        distributed_tensor_config = tt::tt_metal::DistributedTensorConfig{
+            tt::tt_metal::ShardTensor2D{tt::tt_metal::ShardMesh{.y = distributed_shape[0], .x = distributed_shape[1]}}};
+    } else {
+        distributed_tensor_config = tt::tt_metal::DistributedTensorConfig{tt::tt_metal::AllGatherTensor{}};
+    }
+
+    return std::make_unique<NdTensorToMesh>(distributed_shape, config, distributed_tensor_config);
 }
 
-std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config) {
+std::unique_ptr<MeshToTensor> create_mesh_composer(
+    MeshDevice& mesh_device, const MeshComposerConfig& config, const std::optional<ttnn::MeshShape>& shape) {
+    const auto distributed_shape = shape.value_or(mesh_device.shape());
     TT_FATAL(
-        config.row_dim != config.col_dim,
-        "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
-        config.row_dim,
-        config.col_dim);
-    TT_FATAL(mesh_device.shape().dims() == 2, "Mesh device is not configured as a 2D mesh: {}", mesh_device.shape());
-    return std::make_unique<Concat2dMeshToTensor>(mesh_device.shape()[0], mesh_device.shape()[1], config);
+        distributed_shape.mesh_size() <= mesh_device.shape().mesh_size(),
+        "The size of the supplied mesh shape {} does not match the device shape size {}",
+        distributed_shape,
+        mesh_device.shape());
+    TT_FATAL(
+        distributed_shape.dims() == config.dims.size(),
+        "The number of dimensions in the mesh shape {} does not match the "
+        "number of dimensions in the config {}",
+        distributed_shape,
+        config);
+
+    return std::make_unique<NdMeshToTensor>(distributed_shape, config);
 }
 
 Tensor distribute_tensor(
