@@ -84,7 +84,7 @@ jobs:
         with:
           repository: tenstorrent/vllm
           path: docker-job/vllm
-          ref: dev
+          ref: skhorasgani/dev_rebase_upstream7
           fetch-depth: 1
 
       - name: 📀 Install vLLM
