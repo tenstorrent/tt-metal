@@ -246,6 +246,18 @@ public:
 WorkerBufferManager::WorkerBufferManager(std::uint32_t buffer_size) : buffer_size_(buffer_size) {}
 
 void WorkerBufferManager::dump_allocator() {
+    fprintf(stderr, "Allocator:\n");
+    for (const auto& node : this->allocator_) {
+        std::uint32_t pgm_id = node.get_pgm_id();
+        fprintf(stderr, "  %s: %d %d\n", Program::get_name(pgm_id).c_str(), node.get_addr(), node.get_size());
+    }
+
+    fprintf(stderr, "LRU:\n");
+    for (const auto& node : this->lru_) {
+        std::uint32_t pgm_id = node->get_pgm_id();
+        fprintf(stderr, "  %s: last use %d\n", Program::get_name(pgm_id).c_str(), node->get_prev_use());
+    }
+
     // Check consistency
     fprintf(stderr, "Check allocator consistency: #entries(%ld)\n", this->allocator_.size());
     if (this->allocator_.begin() != this->allocator_.end()) {
@@ -258,18 +270,6 @@ void WorkerBufferManager::dump_allocator() {
 
             addr -= it->get_size();
         }
-    }
-
-    fprintf(stderr, "Allocator:\n");
-    for (const auto& node : this->allocator_) {
-        std::uint32_t pgm_id = node.get_pgm_id();
-        fprintf(stderr, "  %s: %d %d\n", Program::get_name(pgm_id).c_str(), node.get_addr(), node.get_size());
-    }
-
-    fprintf(stderr, "LRU:\n");
-    for (const auto& node : this->lru_) {
-        std::uint32_t pgm_id = node->get_pgm_id();
-        fprintf(stderr, "  %s: last use %d\n", Program::get_name(pgm_id).c_str(), node->get_prev_use());
     }
 }
 
@@ -371,7 +371,7 @@ void WorkerBufferManager::commit_preallocations(
     std::uint32_t addr = addr_top;
 
     std::list<AllocNode>::iterator alloc_it =
-        (commit_start == this->allocator_.end()) ? this->allocator_.begin() : commit_start;
+        (commit_start == this->allocator_.end()) ? this->allocator_.begin() : std::next(commit_start);
     while (alloc_it != this->allocator_.end()) {
         if (not alloc_it->is_free()) {  // hmm, can this happen?
             std::int32_t trace_idx = alloc_it->get_first_use();
@@ -578,7 +578,12 @@ void WorkerBufferManager::sort_preallocations(
     std::list<AllocNode>::iterator uncommitted_it, const std::vector<TraceNode>& trace) {
     // Sort just the sub-range that we pre-allocated since last commit
     std::list<AllocNode> tmp;
-    tmp.splice(tmp.end(), this->allocator_, uncommitted_it, this->allocator_.end());
+    if (uncommitted_it == this->allocator_.end()) {
+        tmp.splice(tmp.end(), this->allocator_, this->allocator_.begin(), this->allocator_.end());
+    } else {
+        tmp.splice(tmp.end(), this->allocator_, std::next(uncommitted_it), this->allocator_.end());
+    }
+    fprintf(stderr, "size %ld\n", tmp.size());
     tmp.sort([&](const AllocNode& first, const AllocNode& second) {
         float first_weight = first.get_weight(trace, &TraceNode::get_weight);
         float second_weight = second.get_weight(trace, &TraceNode::get_weight);
@@ -595,7 +600,7 @@ void WorkerBufferManager::sort_preallocations(
     this->allocator_.splice(this->allocator_.end(), tmp);
 }
 
-// Walk the allocation backwards from the bottom, look for the last
+// Walk the allocations backwards from the bottom, look for the last
 // entry which doesn't have a next use. Set addr_top and retry
 // Note: these are sorted above from newest use down to oldest use;
 // this is simple but not optimal.  Sorting the other way and tracking if
@@ -615,6 +620,7 @@ bool WorkerBufferManager::try_to_reenter_preallocation_mode(
         auto& node = this->allocator_.back();
         std::int32_t last_use = node.get_prev_use();
         pre_alloc_addr = pre_alloc_addr_top = node.get_addr();
+
         if (last_use + reuse_window >= trace_idx || trace[last_use].get_remaining() != 0) {
             done = true;
         } else {
@@ -622,15 +628,13 @@ bool WorkerBufferManager::try_to_reenter_preallocation_mode(
             this->alloced_pgms_[node.get_pgm_id()].reset();
             stall_idx = node.get_prev_use();
             // Ugh, search through LRU.  Should be near the front so not too deep a search
+            // TODO: could use back-iterators from allocator to LRU to save this search
             auto lru_it = this->lru_.begin();
-            auto lru_end = std::prev(this->allocator_.end());
-            while (1) {
-                if (*lru_it == lru_end) {
-                    this->lru_.erase(lru_it);
-                    break;
-                }
+            auto last = std::prev(this->allocator_.end());
+            while (*lru_it != last) {
                 ++lru_it;
             }
+            this->lru_.erase(lru_it);
             this->allocator_.pop_back();
             eviction_mode = false;
         }
@@ -648,7 +652,11 @@ bool WorkerBufferManager::try_to_reenter_preallocation_mode(
     } else {
         uncommitted_it = std::prev(this->allocator_.end());
         fprintf(
-            stderr, "Staying in pre-allocation mode: %ld at addr %d\n", this->allocator_.size(), pre_alloc_addr_top);
+            stderr,
+            "Staying in pre-allocation mode at %d: %ld existing allocations ending at addr %d\n",
+            trace_idx,
+            this->allocator_.size(),
+            pre_alloc_addr_top);
     }
 
     trace[trace_idx].set_stall_idx(stall_idx);
