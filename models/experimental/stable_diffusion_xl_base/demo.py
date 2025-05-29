@@ -13,6 +13,7 @@ import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 
 
 # Copied from sdxl pipeline
@@ -134,14 +135,17 @@ def run_demo_inference(
     )
 
     # 2. Load tt_unet, tt_vae and tt_scheduler
+    tt_model_config = ModelOptimisations(conv_w_dtype=ttnn.bfloat16)
     tt_unet = TtUNet2DConditionModel(
         ttnn_device,
         pipeline.unet.state_dict(),
         "unet",
-        conv_weights_dtype=ttnn.bfloat16,
+        model_config=tt_model_config,
         transformer_weights_dtype=ttnn.bfloat16,
     )
-    tt_vae = TtAutoencoderKL(ttnn_device, pipeline.vae.state_dict()) if vae_on_device else None
+    tt_vae = (
+        TtAutoencoderKL(ttnn_device, pipeline.vae.state_dict(), model_config=tt_model_config) if vae_on_device else None
+    )
     tt_scheduler = TtEulerDiscreteScheduler(
         ttnn_device,
         pipeline.scheduler.config.num_train_timesteps,
