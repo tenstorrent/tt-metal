@@ -202,7 +202,7 @@ jobs:
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Manylinux image
+      - name: Build and push ManyLinux image
         if: needs.check-docker-images.outputs.manylinux-exists != 'true'
         uses: docker/build-push-action@v6
         with:

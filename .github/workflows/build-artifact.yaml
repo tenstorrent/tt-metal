@@ -1,5 +1,8 @@
 name: "Build tt-metal artifacts"
 
+permissions:
+  packages: write
+
 on:
   workflow_call:
     inputs:
