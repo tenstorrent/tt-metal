@@ -15,7 +15,7 @@ namespace tt_metal {
 
 ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
-int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint32_t> strides);
+int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const size_t> strides);
 
 std::size_t compute_buffer_size(const ttnn::Shape& shape, DataType data_type, const Tile& tile);
 

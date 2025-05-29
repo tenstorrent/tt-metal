@@ -1300,18 +1300,6 @@ Tensor pad(
             return output_buffer;
         }
 
-        // Note: compute_strides from shape.hpp can overflow
-        auto compute_strides = [](const tt::tt_metal::Shape& shape) -> tt::stl::SmallVector<size_t> {
-            size_t num_elements = shape.volume();
-
-            ttnn::SmallVector<size_t> strides;
-            for (size_t index = 0; index < shape.rank(); index++) {
-                num_elements /= static_cast<size_t>(shape[index]);
-                strides.push_back(num_elements);
-            }
-            return strides;
-        };
-
         // Calculate strides
         auto input_strides = compute_strides(input_padded_shape);
         auto output_strides = compute_strides(output_padded_shape);
