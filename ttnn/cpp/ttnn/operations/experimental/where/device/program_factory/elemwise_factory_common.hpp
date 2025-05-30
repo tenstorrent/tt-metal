@@ -4,15 +4,14 @@
 
 #pragma once
 
-#include <optional>
+#include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/work_split.hpp>
-
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <optional>
 
 namespace ttnn::operations::experimental::where {
 

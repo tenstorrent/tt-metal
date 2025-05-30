@@ -4,18 +4,14 @@
 
 #pragma once
 
+#include "ttnn/operations/experimental/where/device/where_device_operation_types.hpp"
+#include "ttnn/operations/experimental/where/device/program_factory/element_wise_multi_core_where_program.hpp"
+
+#include "ttnn/tensor/tensor.hpp"
+
 #include <optional>
 #include <type_traits>
 #include <variant>
-
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/command_queue.hpp>
-
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"
-
-#include "ttnn/operations/experimental/where/device/where_device_operation_types.hpp"
-#include "ttnn/operations/experimental/where/device/program_factory/element_wise_multi_core_where_program.hpp"
 
 namespace ttnn::operations::experimental::where {
 
@@ -54,13 +50,5 @@ struct WhereDeviceOperation {
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> output_tensor);
 };
-
-static_assert(
-    ttnn::device_operation::DeviceOperationConcept<WhereDeviceOperation>,
-    "WhereDeviceOperation must satisfy DeviceOperationConcept");
-
-static_assert(
-    ttnn::decorators::PrimitiveOperationConcept<WhereDeviceOperation>,
-    "WhereDeviceOperation must satisfy PrimitiveOperationConcept");
 
 }  // namespace ttnn::operations::experimental::where

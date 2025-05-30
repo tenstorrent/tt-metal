@@ -5,9 +5,14 @@
 
 #include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
 
+#include "ttnn/decorators.hpp"
+#include "ttnn/operation_concepts.hpp"
+
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
 
 #include <tracy/Tracy.hpp>
 #include "tt-metalium/assert.hpp"
@@ -15,6 +20,14 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::where {
+
+static_assert(
+    ttnn::device_operation::DeviceOperationConcept<WhereDeviceOperation>,
+    "WhereDeviceOperation must satisfy DeviceOperationConcept");
+
+static_assert(
+    ttnn::decorators::PrimitiveOperationConcept<WhereDeviceOperation>,
+    "WhereDeviceOperation must satisfy PrimitiveOperationConcept");
 
 template <typename... Tensors>
 static void fail_on_shape_mismatch(const Tensor& tensor_a, const Tensors&... other_tensors) {
@@ -171,13 +184,6 @@ WhereDeviceOperation::invoke(
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output_tensor) {
-    // TODO: Should we do that check earlier?
-    if (dtype.has_value() && output_tensor.has_value()) {
-        TT_FATAL(
-            dtype.value() == output_tensor.value().get_dtype(),
-            "If both output dtype and output tensor provided dtype should match");
-    }
-
     CoreRangeSet worker_grid;
     auto device = a_tensor.device();
     for (const auto& sub_device_id : device->get_sub_device_ids()) {

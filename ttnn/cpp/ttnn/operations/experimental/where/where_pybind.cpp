@@ -65,15 +65,24 @@ void bind_where(pybind11::module& module) {
                const Tensor& predicate,
                const Tensor& true_value,
                const Tensor& false_value,
+               std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
                QueueId queue_id) {
-                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
+                return self(
+                    queue_id,
+                    predicate,
+                    true_value,
+                    false_value,
+                    output_dtype,
+                    memory_config,
+                    std::move(output_tensor));
             },
             py::arg("predicate"),
             py::arg("true_value"),
             py::arg("false_value"),
             py::kw_only(),
+            py::arg("dtype").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
@@ -82,15 +91,24 @@ void bind_where(pybind11::module& module) {
                const Tensor& predicate,
                const float true_value,
                const Tensor& false_value,
+               std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
                QueueId queue_id) {
-                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
+                return self(
+                    queue_id,
+                    predicate,
+                    true_value,
+                    false_value,
+                    output_dtype,
+                    memory_config,
+                    std::move(output_tensor));
             },
             py::arg("predicate"),
             py::arg("true_value"),
             py::arg("false_value"),
             py::kw_only(),
+            pybind11::arg("dtype").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
@@ -99,15 +117,24 @@ void bind_where(pybind11::module& module) {
                const Tensor& predicate,
                const Tensor& true_value,
                const float false_value,
+               std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
                QueueId queue_id) {
-                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
+                return self(
+                    queue_id,
+                    predicate,
+                    true_value,
+                    false_value,
+                    output_dtype,
+                    memory_config,
+                    std::move(output_tensor));
             },
             py::arg("predicate"),
             py::arg("true_value"),
             py::arg("false_value"),
             py::kw_only(),
+            py::arg("dtype").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
@@ -116,15 +143,24 @@ void bind_where(pybind11::module& module) {
                const Tensor& predicate,
                const float true_value,
                const float false_value,
+               std::optional<const DataType> output_dtype,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
                QueueId queue_id) {
-                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
+                return self(
+                    queue_id,
+                    predicate,
+                    true_value,
+                    false_value,
+                    output_dtype,
+                    memory_config,
+                    std::move(output_tensor));
             },
             py::arg("predicate"),
             py::arg("true_value"),
             py::arg("false_value"),
             py::kw_only(),
+            py::arg("dtype").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});

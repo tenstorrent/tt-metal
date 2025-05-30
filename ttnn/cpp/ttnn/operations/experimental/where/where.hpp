@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <optional>
-
 #include "ttnn/decorators.hpp"
 #include "ttnn/common/queue_id.hpp"
+
+#include <optional>
 
 namespace ttnn {
 
@@ -19,6 +19,7 @@ struct WhereOperation {
         const Tensor& predicate,
         const Tensor& value_true,
         const Tensor& value_false,
+        std::optional<const DataType> output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
 
@@ -27,6 +28,7 @@ struct WhereOperation {
         const Tensor& predicate,
         const float value_true,
         const Tensor& value_false,
+        std::optional<const DataType> output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
 
@@ -35,6 +37,7 @@ struct WhereOperation {
         const Tensor& predicate,
         const Tensor& value_true,
         const float value_false,
+        std::optional<const DataType> output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
 
@@ -43,6 +46,7 @@ struct WhereOperation {
         const Tensor& predicate,
         const float value_true,
         const float value_false,
+        std::optional<const DataType> output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
 
@@ -50,36 +54,44 @@ struct WhereOperation {
         const Tensor& predicate,
         const Tensor& value_true,
         const Tensor& value_false,
+        std::optional<const DataType> output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, std::move(output_tensor));
+        return invoke(
+            DefaultQueueId, predicate, value_true, value_false, output_dtype, memory_config, std::move(output_tensor));
     }
 
     static Tensor invoke(
         const Tensor& predicate,
         const float value_true,
         const Tensor& value_false,
+        std::optional<const DataType> output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, std::move(output_tensor));
+        return invoke(
+            DefaultQueueId, predicate, value_true, value_false, output_dtype, memory_config, std::move(output_tensor));
     }
 
     static Tensor invoke(
         const Tensor& predicate,
         const Tensor& value_true,
         const float value_false,
+        std::optional<const DataType> output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, std::move(output_tensor));
+        return invoke(
+            DefaultQueueId, predicate, value_true, value_false, output_dtype, memory_config, std::move(output_tensor));
     }
 
     static Tensor invoke(
         const Tensor& predicate,
         const float value_true,
         const float value_false,
+        std::optional<const DataType> output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, predicate, value_true, value_false, memory_config, std::move(output_tensor));
+        return invoke(
+            DefaultQueueId, predicate, value_true, value_false, output_dtype, memory_config, std::move(output_tensor));
     }
 };
 
