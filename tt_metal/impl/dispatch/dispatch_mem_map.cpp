@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <magic_enum/magic_enum.hpp>
-#include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <optional>
 
 #include "dispatch_mem_map.hpp"
 #include "assert.hpp"
@@ -126,7 +125,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES <= DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET / l1_alignment + 1,
         "Number of dispatch message entries exceeds max representable offset");
 
-    uint8_t num_dev_cq_addrs = magic_enum::enum_count<CommandQueueDeviceAddrType>();
+    constexpr uint8_t num_dev_cq_addrs = magic_enum::enum_count<CommandQueueDeviceAddrType>();
     std::vector<uint32_t> device_cq_addr_sizes_(num_dev_cq_addrs, 0);
     for (auto dev_addr_idx = 0; dev_addr_idx < num_dev_cq_addrs; dev_addr_idx++) {
         CommandQueueDeviceAddrType dev_addr_type =
@@ -137,12 +136,11 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
             device_cq_addr_sizes_[dev_addr_idx] = settings.prefetch_q_pcie_rd_ptr_size_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM) {
             device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
-        } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_INTERFACE) {
-            if (tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
-                device_cq_addr_sizes_[dev_addr_idx] = tt_fabric::PACKET_HEADER_SIZE_BYTES;
-            } else {
-                device_cq_addr_sizes_[dev_addr_idx] = 0;
-            }
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB) {
+            device_cq_addr_sizes_[dev_addr_idx] =
+                tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES * sizeof(PACKET_HEADER_TYPE);
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS) {
+            device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t) * 128;
         } else {
             device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
         }
@@ -155,7 +153,9 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
         CommandQueueDeviceAddrType dev_addr_type = magic_enum::enum_value<CommandQueueDeviceAddrType>(dev_addr_idx);
         if (dev_addr_type == CommandQueueDeviceAddrType::UNRESERVED) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], pcie_alignment);
-        } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_INTERFACE) {
+        } else if (
+            dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB ||
+            dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);
         }
     }
