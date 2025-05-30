@@ -53,7 +53,7 @@ void call_sfpu_operation(SfpuType operation)
             ckernel::sfpu::_calculate_abs_<APPROX_MODE, 10>(10);
             break;
         case SfpuType::cosine:
-            ckernel::sfpu::_calculate_cosine_<APPROX_MODE, 10>();
+            ckernel::sfpu::_calculate_cosine_<APPROX_MODE, 10>(10);
             break;
         case SfpuType::log:
             ckernel::sfpu::_init_log_<APPROX_MODE>();
