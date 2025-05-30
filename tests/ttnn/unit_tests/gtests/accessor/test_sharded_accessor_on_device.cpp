@@ -181,7 +181,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
         input_compile_time_args.push_back(cb_in0_idx);
         input_compile_time_args.push_back(aligned_page_size);
 
-        // Set up compile-time args for writer  kernel
+        // Set up compile-time args for writer kernel
         const auto& output_buffer_distribution_spec =
             std::get<BufferDistributionSpec>(output_mesh_buffer->device_local_config().shard_parameters.value());
         const auto output_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(

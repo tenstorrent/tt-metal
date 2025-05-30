@@ -142,6 +142,12 @@ public:
             tt::round_up(shard_spec.shape[0], tile_height) / tile_height,
             tt::round_up(shard_spec.shape[1], tile_width) / tile_width};
 
+        TT_FATAL(
+            shard_shape[0] != 0 and shard_shape[1] != 0,
+            "Shard shape must not contain zero dimensions but got {{{}, {}}}",
+            shard_shape[0],
+            shard_shape[1]);
+
         const auto [N, C, Ht, Wt] = get_shape_dims(tensor);
         const auto unrolled_Ht = N * C * Ht;
         last_shard_shape = {
@@ -178,6 +184,9 @@ void set_or_update_runtime_arguments(
     KernelHandle reader_kernel_id,
     KernelHandle writer_kernel_id,
     KernelHandle compute_kernel_id,
+    tt::tt_metal::CBHandle cb_src_a,
+    tt::tt_metal::CBHandle cb_src_b,
+    tt::tt_metal::CBHandle cb_src_c,
     const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
     const BinaryNgDeviceOperation::tensor_args_t& tensor_args,
     BinaryNgDeviceOperation::tensor_return_value_t& c,
@@ -394,6 +403,17 @@ void set_or_update_runtime_arguments(
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         start_tile_id += c_num_tiles;
+    }
+    if (has_sharding) {
+        if (a.is_sharded()) {
+            UpdateDynamicCircularBufferAddress(program, cb_src_a, *a.buffer());
+        }
+        if (b.has_value() and b->is_sharded()) {
+            UpdateDynamicCircularBufferAddress(program, cb_src_b, *b->buffer());
+        }
+        if (c.is_sharded()) {
+            UpdateDynamicCircularBufferAddress(program, cb_src_c, *c.buffer());
+        }
     }
 }
 
@@ -647,12 +667,17 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         reader_kernel_id,
         writer_kernel_id,
         compute_kernel_id,
+        a_cb_handle,
+        b_cb_handle,
+        c_cb_handle,
         operation_attributes,
         tensor_args,
         c,
         set_runtime_args);
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id}};
+    return {
+        std::move(program),
+        {reader_kernel_id, writer_kernel_id, compute_kernel_id, a_cb_handle, b_cb_handle, c_cb_handle}};
 }
 
 void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
@@ -671,6 +696,9 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
         cached_program.shared_variables.reader_kernel_id,
         cached_program.shared_variables.writer_kernel_id,
         cached_program.shared_variables.compute_kernel_id,
+        cached_program.shared_variables.cb_src_a,
+        cached_program.shared_variables.cb_src_b,
+        cached_program.shared_variables.cb_src_c,
         operation_attributes,
         tensor_args,
         c,

@@ -42,12 +42,12 @@ public:
 
     Status wait() override;
     std::optional<Status> test() override;
-    void                 cancel() override;
-    bool                 active() const override;
+    void cancel() override;
+    bool active() const override;
 
 private:
     mutable MPI_Request req_{};
-    bool                done_{};
+    bool done_{};
 };
 
 // ---------------------------------------------------------------------
@@ -66,17 +66,18 @@ public:
     /* ---------------- basic info / sync ---------------- */
     [[nodiscard]] Rank rank() const override;
     [[nodiscard]] Size size() const override;
+    [[nodiscard]] bool supports_fault_tolerance() const override;
     void barrier() const override;
 
     /* ---------------- point‑to‑point ------------------- */
-    void send (tt::stl::Span<std::byte> buf, Rank dest,   Tag tag) const override;
-    void recv (tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
+    void send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
+    void recv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
 
-    [[nodiscard]] RequestPtr isend(tt::stl::Span<std::byte> buf, Rank dest,   Tag tag) const override;
+    [[nodiscard]] RequestPtr isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const override;
     [[nodiscard]] RequestPtr irecv(tt::stl::Span<std::byte> buf, Rank source, Tag tag) const override;
 
     /* ---------------- collectives ---------------------- */
-    void broadcast    (tt::stl::Span<std::byte> buf,                              Rank root) const override;
+    void broadcast(tt::stl::Span<std::byte> buf, Rank root) const override;
     void all_reduce(
         tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
     void reduce(
@@ -85,12 +86,10 @@ public:
         ReduceOp op,
         DType dtype,
         Rank root) const override;
-    void gather       (tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf,
-                       Rank root) const override;
-    void scatter      (tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf,
-                       Rank root) const override;
-    void all_gather   (tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const override;
-    void all_to_all   (tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const override;
+    void gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const override;
+    void scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const override;
+    void all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const override;
+    void all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const override;
     void reduce_scatter(
         tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const override;
     void scan(
@@ -118,11 +117,11 @@ public:
 private:
     MPI_Comm comm_{MPI_COMM_NULL};
     MPI_Group group_{MPI_GROUP_NULL};
-    int      rank_{0};
-    int      size_{0};
+    int rank_{0};
+    int size_{0};
 
     // caching our own world communicator which is duplicator of MPI_COMM_WORLD
     inline static ContextPtr current_world_;
 };
 
-} // namespace tt::tt_metal::distributed::multihost
+}  // namespace tt::tt_metal::distributed::multihost

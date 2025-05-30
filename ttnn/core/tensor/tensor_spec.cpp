@@ -176,8 +176,8 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
 
     NdShardSpec nd_shard_spec{
         .shard_shape = ttnn::Shape().to_rank(padded_shape().rank()),
-        .cores = shard_spec.grid,
-        .shard_orientation = shard_spec.orientation,
+        .grid = shard_spec.grid,
+        .orientation = shard_spec.orientation,
     };
 
     if (mem_layout == TensorMemoryLayout::SINGLE_BANK) {
@@ -223,7 +223,7 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
         TT_FATAL(
             shard_spec.grid.ranges().size() == 1, "Shard grid must be one full rectangular grid for block sharded!");
         auto orig_cores = shard_spec.grid.ranges()[0];
-        nd_shard_spec.cores = CoreRangeSet(CoreRange(
+        nd_shard_spec.grid = CoreRangeSet(CoreRange(
             orig_cores.start_coord,
             {orig_cores.start_coord.x + num_shards_along_width - 1,
              orig_cores.start_coord.y + num_shards_along_height - 1}));
@@ -251,15 +251,15 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return MemoryConfig::create_with_prepopulated_shard_specs(
             TensorMemoryLayout::SINGLE_BANK,
             mem_config.buffer_type(),
-            ShardSpec(nd_shard_spec.cores, physical_shape(), nd_shard_spec.shard_orientation),
+            ShardSpec(nd_shard_spec.grid, physical_shape(), nd_shard_spec.orientation),
             mem_config.nd_shard_spec(),
             mem_config.created_with_nd_shard_spec());
     }
 
     ShardSpec shard_spec(
-        nd_shard_spec.cores,
+        nd_shard_spec.grid,
         {nd_shard_shape.volume() / nd_shard_shape[-1], nd_shard_shape[-1]},
-        nd_shard_spec.shard_orientation);
+        nd_shard_spec.orientation);
 
     bool width_sharded = shard_spec.shape[0] == padded_shape().volume() / padded_shape()[-1];
 

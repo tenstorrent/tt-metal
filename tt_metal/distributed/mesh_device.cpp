@@ -664,6 +664,11 @@ uint32_t MeshDevice::dram_channel_from_logical_core(const CoreCoord& logical_cor
         return device->dram_channel_from_logical_core(logical_core);
     });
 }
+uint32_t MeshDevice::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
+    return validate_and_get_reference_value(scoped_devices_->root_devices(), [virtual_core](const auto& device) {
+        return device->dram_channel_from_virtual_core(virtual_core);
+    });
+}
 
 // Core management and network operations
 const std::set<CoreCoord>& MeshDevice::ethernet_cores() const {
@@ -720,6 +725,14 @@ std::shared_ptr<MeshTraceBuffer>& MeshDevice::create_mesh_trace(const MeshTraceI
 
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) {
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
+    const auto& trace_mesh_buffer = trace_buffer_pool_.at(trace_id)->mesh_buffer;
+    TT_FATAL(
+        trace_mesh_buffer and trace_mesh_buffer->is_allocated(),
+        "Trace buffer for {} is not allocated when calling {}",
+        *trace_id,
+        __FUNCTION__);
+    auto current_trace_buffers_size = this->get_trace_buffers_size();
+    this->set_trace_buffers_size(current_trace_buffers_size - trace_mesh_buffer->size());
     trace_buffer_pool_.erase(trace_id);
 }
 

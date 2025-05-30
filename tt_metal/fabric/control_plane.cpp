@@ -47,17 +47,10 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped
 }
 
 // Get the physical chip ids for a mesh
-// TODO: get this from Cluster, once UMD unique id changes are merged
 std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) {
-    std::vector<uint32_t> ubb_asic_loc_vec;
-    const auto& eth_cores = tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(physical_chip_id, false);
-    auto virtual_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-        physical_chip_id, *eth_cores.begin(), CoreType::ETH);
-
-    std::uint32_t addr = 0x1ec0 + 65 * sizeof(uint32_t);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        ubb_asic_loc_vec, sizeof(uint32_t), tt_cxy_pair(physical_chip_id, virtual_eth_core), addr);
-    return ((ubb_asic_loc_vec[0] >> 24) & 0xFF);
+    auto unique_chip_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
+    return ((unique_chip_id >> 56) & 0xFF);
 }
 
 bool is_external_ubb_cable(chip_id_t physical_chip_id, CoreCoord eth_core) {
@@ -212,7 +205,9 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     std::uint32_t num_ports_per_side =
         routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
 
-    const auto user_chips = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    const auto user_chips = cluster.user_exposed_chip_ids();
     std::set<chip_id_t> corner_chips;
     std::set<chip_id_t> edge_chips;
     // Check if user provided chip is on corner or edge of mesh
@@ -252,10 +247,10 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
         q.pop();
 
         auto eth_links = get_ethernet_cores_grouped_by_connected_chips(current_chip_id);
+        bool is_ubb = cluster.get_board_type(current_chip_id) == BoardType::UBB;
         for (const auto& [connected_chip_id, eth_ports] : eth_links) {
             // Do not include any corner to corner links on UBB
-            if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(connected_chip_id) ==
-                BoardType::UBB) {
+            if (is_ubb) {
                 if (is_external_ubb_cable(current_chip_id, eth_ports[0])) {
                     continue;
                 }
@@ -324,8 +319,9 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
             auto eth_links_grouped_by_connected_chips =
                 get_ethernet_cores_grouped_by_connected_chips(physical_chip_id_from_north);
             bool found_chip = false;
+            bool is_ubb = cluster.get_board_type(physical_chip_id_from_north) == BoardType::UBB;
             for (const auto& [connected_chip_id, eth_ports] : eth_links_grouped_by_connected_chips) {
-                if (is_external_ubb_cable(physical_chip_id_from_north, eth_ports[0])) {
+                if (is_ubb and is_external_ubb_cable(physical_chip_id_from_north, eth_ports[0])) {
                     continue;
                 }
                 if (visited_physical_chips.find(connected_chip_id) == visited_physical_chips.end() and
@@ -791,8 +787,7 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                 sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 tt_cxy_pair(physical_chip_id, virtual_eth_core),
                 tt_metal::MetalContext::instance().hal().get_dev_addr(
-                    tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG),
-                false);
+                    tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG));
         }
     }
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_chip_id);

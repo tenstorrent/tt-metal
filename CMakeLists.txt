@@ -110,6 +110,7 @@ message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
 message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
+message(STATUS "Build with Multihost Distributed Compute: ${ENABLE_DISTRIBUTED}")
 
 ############################################################################################################################
 
@@ -125,14 +126,6 @@ endif()
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-include(CPM)
-if(CMAKE_VERSION VERSION_LESS 3.25)
-    # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
-    add_subdirectory(third_party)
-else()
-    add_subdirectory(third_party SYSTEM)
-endif()
-
 if(WITH_PYTHON_BINDINGS)
     set(Python3_FIND_STRATEGY LOCATION)
     find_package(
@@ -149,8 +142,15 @@ if(NOT NUMA_LIBRARY)
     message(FATAL_ERROR "NUMA library not found")
 endif()
 
-# Bring in UMD and all it's dependencies
-add_subdirectory(tt_metal/third_party/umd)
+include(CPM)
+if(CMAKE_VERSION VERSION_LESS 3.25)
+    # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
+    add_subdirectory(third_party)
+    add_subdirectory(tt_metal/third_party)
+else()
+    add_subdirectory(third_party SYSTEM)
+    add_subdirectory(tt_metal/third_party SYSTEM)
+endif()
 
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries

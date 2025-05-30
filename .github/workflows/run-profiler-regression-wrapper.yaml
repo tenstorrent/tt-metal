@@ -7,6 +7,8 @@ on:
 jobs:
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     with:
       tracy: true
       build-wheel: true
