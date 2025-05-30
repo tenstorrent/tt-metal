@@ -84,7 +84,7 @@ jobs:
           WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov8s_world/tests -m models_device_performance_bare_metal
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/vgg_unet/tests -m models_device_performance_bare_metal
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov10/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov10/tests -m models_device_performance_bare_metal
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal
           python3 models/perf/merge_device_perf_results.py
 
