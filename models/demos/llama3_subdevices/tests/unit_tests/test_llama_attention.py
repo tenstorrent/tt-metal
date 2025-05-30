@@ -197,7 +197,7 @@ def test_llama_attention_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mats = rope_setup.get_rm_rot_mats(current_pos)
 
         ttnn.dram_prefetcher(
             prefetcher_setup.get_input_tensors(),
