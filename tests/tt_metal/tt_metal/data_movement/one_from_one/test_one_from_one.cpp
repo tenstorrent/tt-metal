@@ -173,4 +173,55 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     }
 }
 
+/* ========== Test case for one from one data movement; Test id = 51 ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
+    uint32_t test_id = 51;  // Arbitrary test ID
+
+    // Parameters
+    /*
+        L1 Capacity: 1.5 MB (I think, might be wrong)
+        - Max transaction size
+            = 4 * 32 pages
+            = 128 pages * 32 (or 64) bytes/page
+            = 4096 bytes for WH; 8192 bytes for BH
+        - Max total transaction size
+            = 128 transactions * 4096 bytes
+            = 524,288 Bytes
+            < 1.25 MB ~= L1 buffer capacity (.25 MB is allocated for the kernel code and other overheads)
+    */
+    uint32_t page_size_bytes, num_of_transactions;
+    uint32_t transaction_size_pages = 4 * 32;
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes = 64;  // (=flit size): 64 bytes for BH
+        num_of_transactions = 64;
+    } else {
+        page_size_bytes = 32;  // (=flit size): 32 bytes for WH
+        num_of_transactions = 128;
+    }
+
+    // Cores
+    /*
+        Any two cores that are next to each other on the torus
+         - May be worth considering the performance of this test with different pairs of adjacent cores
+    */
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    // Test Config
+    unit_tests::dm::core_to_core::OneFromOneConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .subordinate_core_coord = subordinate_core_coord,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
 }  // namespace tt::tt_metal

@@ -28,3 +28,4 @@ Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B fo
 Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
 1. One to One Packet Sizes: Tests different number of transactions and transaction sizes by varying the num_of_transactions and transaction_size_pages parameters.
+2. One to One Directed Ideal: Tests the most optimal data movement setup between two cores that maximizes the transaction size and performs enough transactions to amortize initialization overhead. This test is performed between neigbouring cores on a torus to minimize latency.

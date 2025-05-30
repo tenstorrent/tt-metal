@@ -39,3 +39,4 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 7. One to All Multicast Linked 2x2 Packet Sizes: Tests one to all linked multicast on a 2x2 grid.
 8. One to All Multicast Linked 5x5 Packet Sizes: Tests one to all linked multicast on a 5x5 grid.
 9. One to All Multicast Linked 11x10 Packet Sizes: Tests one to all linked multicast on a 11x10 grid.
+10. One to All Directed Ideal: Tests the most optimal one to all linked multicast data movement setup. A high number of transactions is performed to amortize initialization overhead.
