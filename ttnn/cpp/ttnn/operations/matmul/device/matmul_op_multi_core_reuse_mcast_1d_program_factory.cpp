@@ -2403,7 +2403,7 @@ namespace operations {
 
 namespace matmul {
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
+ttnn::operations::matmul::process_program_return_t matmul_multi_core_reuse_mcast_1d_optimized_(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -2533,170 +2533,123 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         for (const auto& output_tensor : output_tensors) {
             out_buffers.push_back(output_tensor.buffer());
         }
-        ttnn::operations::matmul::process_program_return_t shared_variables =
-            reuse_mcast_1d_optimized_helpers::process_program_gather_in0(
-                program,
-                a,
-                b_tensors,
-                device,
-                math_fidelity,
-                fp32_dest_acc_en,
-                math_approx_mode,
-                packer_l1_acc,
-                dst_full_sync_en,
-                compute_with_storage_grid_size,
-                B,
-                Mt,
-                Nt,
-                Kt,
-                bcast_batch,
-                in0_block_w,
-                out_subblock_h,
-                out_subblock_w,
-                per_core_M,
-                per_core_N,
-                fused_activation,
-                hop_cores,
-                in0_buffer,
-                in1_buffer,
-                out_buffers,
-                in0_tile,
-                in1_tile,
-                output_tile,
-                in0_data_format,
-                in1_data_format,
-                output_data_format,
-                untilize_out,
-                global_cb,
-                num_global_cb_receivers,
-                sub_device_id);
-        const ttnn::operations::matmul::matmul_shared_variables_t shared_vars = shared_variables.shared_variables;
-        auto override_runtime_arguments_callback =
-            [shared_vars](
-                const void* operation,
-                tt::tt_metal::Program& program,
-                const std::vector<tt::tt_metal::Tensor>& input_tensors,
-                const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-                const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-                reuse_mcast_1d_optimized_helpers::override_program(
-                    shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
-            };
-        return {
-            .program = std::move(shared_variables.program),
-            .override_runtime_arguments_callback = override_runtime_arguments_callback};
+        return reuse_mcast_1d_optimized_helpers::process_program_gather_in0(
+            program,
+            a,
+            b_tensors,
+            device,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode,
+            packer_l1_acc,
+            dst_full_sync_en,
+            compute_with_storage_grid_size,
+            B,
+            Mt,
+            Nt,
+            Kt,
+            bcast_batch,
+            in0_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            per_core_M,
+            per_core_N,
+            fused_activation,
+            hop_cores,
+            in0_buffer,
+            in1_buffer,
+            out_buffers,
+            in0_tile,
+            in1_tile,
+            output_tile,
+            in0_data_format,
+            in1_data_format,
+            output_data_format,
+            untilize_out,
+            global_cb,
+            num_global_cb_receivers,
+            sub_device_id);
     }
 
     if (mcast_in0) {
-        ttnn::operations::matmul::process_program_return_t shared_variables =
-            reuse_mcast_1d_optimized_helpers::process_program_mcast_in0(
-                program,
-                a,
-                device,
-                math_fidelity,
-                fp32_dest_acc_en,
-                math_approx_mode,
-                packer_l1_acc,
-                compute_with_storage_grid_size,
-                B,
-                Mt,
-                Nt,
-                Kt,
-                bcast_batch,
-                in0_block_w,
-                out_subblock_h,
-                out_subblock_w,
-                out_block_h,
-                out_block_w,
-                per_core_M,
-                per_core_N,
-                fused_activation,
-                in0_buffer,
-                in1_buffer,
-                bias_buffer,
-                out_buffer,
-                in0_tile,
-                in1_tile,
-                bias.has_value() ? bias->get_tensor_spec().tile() : output_tile,
-                output_tile,
-                in0_data_format,
-                in1_data_format,
-                bias_data_format,
-                output_data_format,
-                a.memory_config().is_sharded(),
-                b.memory_config().is_sharded(),
-                bias.has_value() ? bias->memory_config().is_sharded() : false,
-                output.memory_config().is_sharded(),
-                untilize_out,
-                fused_op_signaler);
-        const ttnn::operations::matmul::matmul_shared_variables_t shared_vars = shared_variables.shared_variables;
-        auto override_runtime_arguments_callback =
-            [shared_vars](
-                const void* operation,
-                tt::tt_metal::Program& program,
-                const std::vector<tt::tt_metal::Tensor>& input_tensors,
-                const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-                const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-                reuse_mcast_1d_optimized_helpers::override_program(
-                    shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
-            };
-
-        return {
-            .program = std::move(shared_variables.program),
-            .override_runtime_arguments_callback = override_runtime_arguments_callback};
+        return reuse_mcast_1d_optimized_helpers::process_program_mcast_in0(
+            program,
+            a,
+            device,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode,
+            packer_l1_acc,
+            compute_with_storage_grid_size,
+            B,
+            Mt,
+            Nt,
+            Kt,
+            bcast_batch,
+            in0_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            out_block_h,
+            out_block_w,
+            per_core_M,
+            per_core_N,
+            fused_activation,
+            in0_buffer,
+            in1_buffer,
+            bias_buffer,
+            out_buffer,
+            in0_tile,
+            in1_tile,
+            bias.has_value() ? bias->get_tensor_spec().tile() : output_tile,
+            output_tile,
+            in0_data_format,
+            in1_data_format,
+            bias_data_format,
+            output_data_format,
+            a.memory_config().is_sharded(),
+            b.memory_config().is_sharded(),
+            bias.has_value() ? bias->memory_config().is_sharded() : false,
+            output.memory_config().is_sharded(),
+            untilize_out,
+            fused_op_signaler);
     } else {
-        ttnn::operations::matmul::process_program_return_t shared_variables =
-            reuse_mcast_1d_optimized_helpers::process_program_mcast_in1(
-                program,
-                a,
-                device,
-                math_fidelity,
-                fp32_dest_acc_en,
-                math_approx_mode,
-                packer_l1_acc,
-                compute_with_storage_grid_size,
-                B,
-                Mt,
-                Nt,
-                Kt,
-                bcast_batch,
-                in0_block_w,
-                out_subblock_h,
-                out_subblock_w,
-                out_block_h,
-                out_block_w,
-                per_core_M,
-                per_core_N,
-                fused_activation,
-                in0_buffer,
-                in1_buffer,
-                bias_buffer,
-                out_buffer,
-                in0_tile,
-                in1_tile,
-                bias.has_value() ? bias->get_tensor_spec().tile() : output_tile,
-                output_tile,
-                in0_data_format,
-                in1_data_format,
-                bias_data_format,
-                output_data_format,
-                a.memory_config().is_sharded(),
-                output.memory_config().is_sharded(),
-                untilize_out);
-        const ttnn::operations::matmul::matmul_shared_variables_t shared_vars = shared_variables.shared_variables;
-
-        auto override_runtime_arguments_callback =
-            [shared_vars](
-                const void* operation,
-                tt::tt_metal::Program& program,
-                const std::vector<tt::tt_metal::Tensor>& input_tensors,
-                const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-                const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-                reuse_mcast_1d_optimized_helpers::override_program(
-                    shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
-            };
-        return {
-            .program = std::move(shared_variables.program),
-            .override_runtime_arguments_callback = override_runtime_arguments_callback};
+        return reuse_mcast_1d_optimized_helpers::process_program_mcast_in1(
+            program,
+            a,
+            device,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode,
+            packer_l1_acc,
+            compute_with_storage_grid_size,
+            B,
+            Mt,
+            Nt,
+            Kt,
+            bcast_batch,
+            in0_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            out_block_h,
+            out_block_w,
+            per_core_M,
+            per_core_N,
+            fused_activation,
+            in0_buffer,
+            in1_buffer,
+            bias_buffer,
+            out_buffer,
+            in0_tile,
+            in1_tile,
+            bias.has_value() ? bias->get_tensor_spec().tile() : output_tile,
+            output_tile,
+            in0_data_format,
+            in1_data_format,
+            bias_data_format,
+            output_data_format,
+            a.memory_config().is_sharded(),
+            output.memory_config().is_sharded(),
+            untilize_out);
     }
 }
 
@@ -2727,7 +2680,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
 
-    return matmul_multi_core_reuse_mcast_1d_optimized_(
+    auto shared_variables = matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
         a,
         b_tensors,
@@ -2753,6 +2706,21 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         global_cb,
         num_global_cb_receivers,
         sub_device_id);
+    const ttnn::operations::matmul::matmul_shared_variables_t shared_vars = shared_variables.shared_variables;
+    auto override_runtime_arguments_callback =
+        [shared_vars](
+            const void* operation,
+            tt::tt_metal::Program& program,
+            const std::vector<tt::tt_metal::Tensor>& input_tensors,
+            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+            reuse_mcast_1d_optimized_helpers::override_program(
+                shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
+        };
+
+    return {
+        .program = std::move(shared_variables.program),
+        .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
@@ -2771,7 +2739,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
-    return matmul_multi_core_reuse_mcast_1d_optimized_(
+    auto shared_variables = matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
         a,
         b_tensors,
@@ -2797,6 +2765,21 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         global_cb,
         config.num_global_cb_receivers,
         sub_device_id);
+    const ttnn::operations::matmul::matmul_shared_variables_t shared_vars = shared_variables.shared_variables;
+    auto override_runtime_arguments_callback =
+        [shared_vars](
+            const void* operation,
+            tt::tt_metal::Program& program,
+            const std::vector<tt::tt_metal::Tensor>& input_tensors,
+            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+            reuse_mcast_1d_optimized_helpers::override_program(
+                shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
+        };
+
+    return {
+        .program = std::move(shared_variables.program),
+        .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace matmul
