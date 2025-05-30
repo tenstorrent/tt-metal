@@ -11,7 +11,7 @@
  * LLK UNPACK TILIZE
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_tilize_hw_configure(const llk_unpack_A_params_t* unpack_tilize_params) {
     constexpr bool within_face_16x16_transpose = false;
     constexpr StochRndType stoch_rnd_mode = StochRndType::None;
