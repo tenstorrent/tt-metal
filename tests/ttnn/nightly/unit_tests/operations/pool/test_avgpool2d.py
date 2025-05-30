@@ -87,6 +87,7 @@ def run_avg_pool2d(
             padding=padding,
             ceil_mode=ceil_mode,
             divisor_override=divisor_override,
+            count_include_pad=count_include_pad,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             applied_shard_scheme=shard_scheme,
         )
