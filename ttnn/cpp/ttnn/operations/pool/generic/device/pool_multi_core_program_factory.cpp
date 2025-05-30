@@ -130,32 +130,36 @@ static Tensor create_scalar_config_tensor(
 
     std::vector<uint32_t> config_vector;
 
-    uint32_t output_stick_x = 0;
-    uint32_t output_stick_y = 0;
-    uint32_t channel = 0;
-    uint32_t batch = 0;
+    uint32_t output_stick_w = 0;
+    uint32_t output_stick_h = 0;
+    uint32_t output_stick_c = 0;
+    uint32_t output_stick_n = 0;
 
     uint32_t max_scalars_cnt = 0;
     std::vector<std::vector<ScalarInfo>> scalars_per_core = {};
 
     for (const auto& range : ranges) {
         for (auto it = range.begin(); it != range.end(); ++it) {
-            std::vector<ScalarInfo> scalars = get_bf16_avg_pool_config_scalars(config, output_stick_x, output_stick_y);
+            std::vector<ScalarInfo> scalars = get_bf16_avg_pool_config_scalars(config, output_stick_w, output_stick_h);
 
             max_scalars_cnt = std::max(max_scalars_cnt, (uint32_t)scalars.size());
             scalars_per_core.push_back(scalars);
 
             // Advance core and tensor location tracking
-            channel = (channel + 1) % num_shards_c;
-            if (channel == 0) {
-                uint32_t delta_y = output_stick_y + config.out_nhw_per_core;
-                output_stick_y = delta_y % config.out_w;
-                uint32_t delta_x = output_stick_x + delta_y / config.out_w;
-                output_stick_x = delta_x % config.out_h;
-                batch += delta_x / config.out_h;
-                if (batch == in_n) {
-                    batch = 0;
-                    output_stick_x = output_stick_y = 0;
+            if (++output_stick_c == num_shards_c) {
+                output_stick_c = 0;
+
+                output_stick_h += config.out_nhw_per_core;
+                output_stick_w += output_stick_h / config.out_w;
+                output_stick_h %= config.out_w;
+
+                output_stick_n += output_stick_w / config.out_h;
+                output_stick_w %= config.out_h;
+
+                if (output_stick_n == in_n) {
+                    output_stick_n = 0;
+                    output_stick_h = 0;
+                    output_stick_w = 0;
                 }
             }
         }
