@@ -9,6 +9,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
 from models.tt_transformers.tt.model_config import TensorGroup, OpGroup
+from typing import List
 
 
 class Attention(LightweightModule):
@@ -465,7 +466,6 @@ class Attention(LightweightModule):
 
             start_v = max(0, cur_page - N + 1)
             end_v = cur_page + 1
-
             slice_pt = ttnn.slice(
                 page_table_t,
                 slice_start=[0, start_v],
@@ -473,6 +473,14 @@ class Attention(LightweightModule):
             )
             local_phys_ids = ttnn.to_torch(slice_pt)[0].tolist()
             high_set = set(local_phys_ids)
+
+            def _hierarchical_concat(tensors: List[ttnn.Tensor], max_args: int = 120) -> ttnn.Tensor:
+                if len(tensors) <= max_args:
+                    return ttnn.concat(tensors, dim=0)
+                mids: List[ttnn.Tensor] = []
+                for i in range(0, len(tensors), max_args):
+                    mids.append(_hierarchical_concat(tensors[i : i + max_args], max_args))
+                return _hierarchical_concat(mids, max_args)
 
             new_keys_shards = []
             for shard in keys_shards:
@@ -488,7 +496,15 @@ class Attention(LightweightModule):
                 if prev < B:
                     runs.append((prev, B, False))
 
-                chunks = []
+                merged = []
+                for s, e, is_high in runs:
+                    if merged and merged[-1][2] == is_high:
+                        merged[-1] = (merged[-1][0], e, is_high)
+                    else:
+                        merged.append((s, e, is_high))
+                runs = merged
+
+                chunks: List[ttnn.Tensor] = []
                 for s, e, is_high in runs:
                     chunk = ttnn.slice(
                         shard,
@@ -501,7 +517,7 @@ class Attention(LightweightModule):
                         low4 = ttnn.typecast(chunk, dtype=ttnn.bfloat4_b)
                         chunks.append(ttnn.typecast(low4, dtype=ttnn.bfloat8_b))
 
-                new_keys_shards.append(ttnn.concat(chunks, dim=0))
+                new_keys_shards.append(_hierarchical_concat(chunks, max_args=30))
 
             keys_q = ttnn.aggregate_as_tensor(new_keys_shards)
             vals_q = ttnn.aggregate_as_tensor(values_shards)
@@ -519,6 +535,7 @@ class Attention(LightweightModule):
             )
 
             # keys = ttnn.typecast(keys, dtype=ttnn.bfloat4_b)
+            # keys = ttnn.typecast(keys, dtype=ttnn.bfloat8_b)
 
             # attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             #     q_heads_1BQD,
