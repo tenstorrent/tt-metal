@@ -1235,7 +1235,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const auto num_enabled_eth_cores = edm_builders.size();
     const auto num_enabled_risc_cores =
-        edm_builders.begin()->second.get_enabled_risc_cores();  // same across all eth cores
+        edm_builders.begin()->second.get_configured_risc_count();  // same across all eth cores
     for (auto& [eth_chan, edm_builder] : edm_builders) {
         edm_builder.set_wait_for_host_signal(true);
         const std::vector<uint32_t> rt_args = edm_builder.get_runtime_args();
