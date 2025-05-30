@@ -70,6 +70,9 @@ void kernel_main() {
 #else
     constexpr uint32_t total_passes = 2;
 #endif
+#if CAUSAL_MASK
+    uint32_t mask_index = mask_id_offset;
+#endif
 
     for (uint32_t ncht = 0; ncht < NCht; ncht++) {
         // We need to pass once in order to calcualte the sum and then to calculate the final value.
@@ -82,14 +85,41 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_reserve_back(cb_id_in0, blk);
                 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+#if FUSED_SCALE_MASK
+                cb_reserve_back(cb_id_attn, blk);
+                uint32_t l1_write_addr_mask = get_write_ptr(cb_id_attn);
+#endif
                 for (uint32_t regs = 0; regs < blk; regs++) {
                     noc_async_read_tile(tile_index, src_a, l1_write_addr);  // TODO(AP): data type size
                     tile_index++;
                     l1_write_addr += src0_tile_bytes;
+#if FUSED_SCALE_MASK
+                    noc_async_read_tile(mask_index, addr_mask, l1_write_addr_mask);  // TODO(AP): data type size
+                    mask_index++;
+                    l1_write_addr_mask += mask_tile_bytes;
+#endif
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, blk);
+#if FUSED_SCALE_MASK
+                cb_push_back(cb_id_attn, blk);
+
+#endif
             }
         }
+#if CAUSAL_MASK
+        ht++;
+        if (ht == Wt) {
+            ht = 0;
+            if (ht != Ht) {
+                // If we exhaust the diagnol mask, restart the mask
+                mask_index = mask_id_offset;
+            } else {
+                // Saves the current mask location for future restart
+                // TODO: Change this logic, to have the outer most forloop to be for NC then for Ht then for Wt
+                mask_id_offset = mask_index;
+            }
+        }
+#endif
     }
 }
