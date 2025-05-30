@@ -113,7 +113,23 @@ FDKernel* FDKernel::Generate(
     }
 }
 
-[[maybe_unused]] tt::tt_metal::KernelHandle FDKernel::configure_kernel_variant(
+uint32_t FDKernel::get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core) {
+    uint32_t programmable_core_type_index =
+        (dispatch_core_type == CoreType::WORKER)
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
+        : is_active_eth_core
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
+            : MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+
+    return programmable_core_type_index;
+}
+
+CoreCoord FDKernel::get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const CoreType& core_type) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    return cluster.get_virtual_coordinate_from_logical_coordinates(logical_cxy, core_type);
+}
+
+KernelHandle FDKernel::configure_kernel_variant(
     const string& path,
     const std::vector<uint32_t>& compile_args,
     std::map<string, string> defines_in,
@@ -121,7 +137,6 @@ FDKernel* FDKernel::Generate(
     bool send_to_brisc,
     bool force_watcher_no_inline,
     KernelBuildOptLevel opt_level) {
-    // TODO: just pass in the programmable index
     uint32_t programmable_core_type_index = get_programmable_core_type_index(GetCoreType(), is_active_eth_core);
 
     std::map<string, string> defines = {

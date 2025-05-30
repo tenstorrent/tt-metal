@@ -428,13 +428,12 @@ void PrefetchKernel::CreateKernel() {
         static_config_.is_h_variant.value(),
     };
 
-    auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
-    auto upstream_virtual_core =
-        device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
+    auto my_virtual_core = get_virtual_core_coord(logical_core_, GetCoreType());
+    auto upstream_virtual_core = get_virtual_core_coord(dependent_config_.upstream_logical_core.value(), GetCoreType());
     auto downstream_virtual_core =
-        device_->virtual_core_from_logical_core(dependent_config_.downstream_logical_core.value(), GetCoreType());
+        get_virtual_core_coord(dependent_config_.downstream_logical_core.value(), GetCoreType());
     auto downstream_s_virtual_core =
-        device_->virtual_core_from_logical_core(dependent_config_.downstream_s_logical_core.value(), GetCoreType());
+        get_virtual_core_coord(dependent_config_.downstream_s_logical_core.value(), GetCoreType());
 
     auto my_virtual_noc_coords = device_->virtual_noc0_coordinate(noc_selection_.non_dispatch_noc, my_virtual_core);
     auto upstream_virtual_noc_coords =
