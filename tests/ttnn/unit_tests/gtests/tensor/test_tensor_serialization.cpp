@@ -194,5 +194,91 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2DTensorRoundtrip) {
     }
 }
 
+TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DFewerShardsThanDevicesRoundtrip) {
+    TemporaryFile test_file("shard1d_fewer_flatbuffer.bin");
+    const int num_devices = mesh_device_->num_devices();
+    std::vector<float> test_data;
+    for (int i = 0; i < num_devices - 1; i++) {
+        test_data.insert(test_data.end(), {i * 1.0f, i * 2.0f, i * 3.0f});
+    }
+
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_devices - 1, 3, 1}, DataType::FLOAT32));
+
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+    Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
+
+    ASSERT_TRUE(sharded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+
+    dump_tensor_flatbuffer(test_file.string(), sharded_tensor);
+
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), sharded_tensor.get_tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.get_dtype(), sharded_tensor.get_dtype());
+    ASSERT_EQ(loaded_tensor.get_layout(), sharded_tensor.get_layout());
+    ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+
+    std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
+    std::vector<Tensor> loaded_device_tensors = ttnn::distributed::get_device_tensors(loaded_tensor);
+
+    ASSERT_THAT(loaded_device_tensors, SizeIs(original_device_tensors.size()));
+    ASSERT_THAT(loaded_device_tensors, SizeIs(num_devices - 1));
+
+    for (size_t i = 0; i < original_device_tensors.size(); i++) {
+        EXPECT_THAT(
+            loaded_device_tensors[i].to_vector<float>(),
+            Pointwise(FloatEq(), original_device_tensors[i].to_vector<float>()));
+    }
+}
+
+TEST_F(TensorSerializationFlatbufferT3000Test, Shard2x3SubmeshRoundtrip) {
+    TemporaryFile test_file("shard2x3_flatbuffer.bin");
+    constexpr int kNumRows = 2;
+    constexpr int kNumCols = 3;
+    const int num_devices = kNumRows * kNumCols;
+
+    std::vector<float> test_data;
+    for (int i = 0; i < num_devices; i++) {
+        test_data.insert(test_data.end(), {i * 1.0f, i * 2.0f, i * 3.0f});
+    }
+
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, 3}, DataType::FLOAT32));
+
+    auto mapper = ttnn::distributed::create_mesh_mapper(
+        *mesh_device_,
+        ttnn::distributed::MeshMapperConfig{
+            .placements =
+                {ttnn::distributed::MeshMapperConfig::Shard{1}, ttnn::distributed::MeshMapperConfig::Shard{2}},
+        },
+        ttnn::distributed::MeshShape(kNumRows, kNumCols));
+
+    Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
+
+    ASSERT_TRUE(sharded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+
+    dump_tensor_flatbuffer(test_file.string(), sharded_tensor);
+
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), sharded_tensor.get_tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.get_dtype(), sharded_tensor.get_dtype());
+    ASSERT_EQ(loaded_tensor.get_layout(), sharded_tensor.get_layout());
+    ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+
+    std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
+    std::vector<Tensor> loaded_device_tensors = ttnn::distributed::get_device_tensors(loaded_tensor);
+
+    ASSERT_THAT(loaded_device_tensors, SizeIs(original_device_tensors.size()));
+
+    for (size_t i = 0; i < original_device_tensors.size(); i++) {
+        EXPECT_THAT(
+            loaded_device_tensors[i].to_vector<float>(),
+            Pointwise(FloatEq(), original_device_tensors[i].to_vector<float>()));
+        EXPECT_EQ(loaded_device_tensors[i].get_logical_shape(), original_device_tensors[i].get_logical_shape());
+    }
+}
+
 }  // namespace
 }  // namespace ttnn
