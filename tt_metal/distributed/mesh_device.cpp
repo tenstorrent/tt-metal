@@ -725,6 +725,14 @@ std::shared_ptr<MeshTraceBuffer>& MeshDevice::create_mesh_trace(const MeshTraceI
 
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) {
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
+    const auto& trace_mesh_buffer = trace_buffer_pool_.at(trace_id)->mesh_buffer;
+    TT_FATAL(
+        trace_mesh_buffer and trace_mesh_buffer->is_allocated(),
+        "Trace buffer for {} is not allocated when calling {}",
+        *trace_id,
+        __FUNCTION__);
+    auto current_trace_buffers_size = this->get_trace_buffers_size();
+    this->set_trace_buffers_size(current_trace_buffers_size - trace_mesh_buffer->size());
     trace_buffer_pool_.erase(trace_id);
 }
 
