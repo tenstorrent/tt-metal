@@ -125,7 +125,7 @@ void MAIN {
                 pad_input(cb_in0, cb_x, cb_length_t, blk);
                 cb_processed_input = cb_x;
             } else {
-                DPRINT << "PM" << ENDL();
+                // DPRINT << "No Pad" << ENDL();
                 // no Pad
                 cb_processed_input = cb_in0;
             }
@@ -144,6 +144,8 @@ void MAIN {
 #endif
 
         /*
+        DPRINT << "in: " << ENDL();
+        UNPACK(tt::compute::common::print_full_tile(cb_in, 0));
          * --------------------------------------------------------
          * --------------------------------------------------------
          * ------------------Calcualte sum of exp values-----------
@@ -345,7 +347,6 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
             } else {
                 copy_tile(cb_in, cur_dst, cur_dst);
             }
-            dprint_tensix_dest_reg(cur_dst);
         }
         tile_regs_wait();
         tile_regs_commit();
@@ -450,6 +451,7 @@ void reduce_cb(
     tile_regs_commit();
     pack_tile(0, cb_out);
     cb_push_back(cb_out, 1);
+    cb_wait_front(cb_out, 1);
     tile_regs_release();
 }
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
