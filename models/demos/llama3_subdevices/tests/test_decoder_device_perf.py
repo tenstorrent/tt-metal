@@ -28,8 +28,8 @@ perf_targets = {
         "op_name": "RMS_0",
         "kernel_duration": 18530.621527777777,
         "op_to_op": 839.6666666666666,
-        "first_to_last_start": 2484.1111111111113,
-        "non-overlapped-dispatch-time": 8380,
+        "first_to_last_start": 2405.1111111111113,
+        "non-overlapped-dispatch-time": 8934.14375,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -39,8 +39,8 @@ perf_targets = {
         "op_name": "RMS_1",
         "kernel_duration": 18100.121527777777,
         "op_to_op": 816.2222222222222,
-        "first_to_last_start": 2509.6666666666665,
-        "non-overlapped-dispatch-time": 8139.7,
+        "first_to_last_start": 2413.4444444444443,
+        "non-overlapped-dispatch-time": 8532.15,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -50,8 +50,8 @@ perf_targets = {
         "op_name": "AllGatherConcat",
         "kernel_duration": 12419.194444444445,
         "op_to_op": 796.8888888888889,
-        "first_to_last_start": 1866.0,
-        "non-overlapped-dispatch-time": 12541.7,
+        "first_to_last_start": 1634.3333333333333,
+        "non-overlapped-dispatch-time": 13155.0,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -61,8 +61,8 @@ perf_targets = {
         "op_name": "AllGatherAsync_Binary_Mult",
         "kernel_duration": 11328.694444444445,
         "op_to_op": 959.5555,
-        "first_to_last_start": 1565.888888888889,
-        "non-overlapped-dispatch-time": 4351.1,
+        "first_to_last_start": 1349.4444444444443,
+        "non-overlapped-dispatch-time": 4836.1,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -72,8 +72,8 @@ perf_targets = {
         "op_name": "QKV_MM",
         "kernel_duration": 8556.222222222223,
         "op_to_op": 716.4444444444445,
-        "first_to_last_start": 2106.0,
-        "non-overlapped-dispatch-time": 5653.2,
+        "first_to_last_start": 2058.6666666666665,
+        "non-overlapped-dispatch-time": 6848.059375,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -83,8 +83,8 @@ perf_targets = {
         "op_name": "DO_MM",
         "kernel_duration": 8902,
         "op_to_op": 723.0,
-        "first_to_last_start": 2207.5555555555557,
-        "non-overlapped-dispatch-time": 5760.2,
+        "first_to_last_start": 2163.3333333333335,
+        "non-overlapped-dispatch-time": 6761.315625,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -94,8 +94,8 @@ perf_targets = {
         "op_name": "FF1_MM",
         "kernel_duration": 9483.888888888889,
         "op_to_op": 711.8888888888889,
-        "first_to_last_start": 2120.6666666666665,
-        "non-overlapped-dispatch-time": 5380.6,
+        "first_to_last_start": 2079.3333333333335,
+        "non-overlapped-dispatch-time": 6716.7875,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -105,8 +105,8 @@ perf_targets = {
         "op_name": "FF3_MM",
         "kernel_duration": 9435.333333333334,
         "op_to_op": 688.7777777777778,
-        "first_to_last_start": 2132.3333333333335,
-        "non-overlapped-dispatch-time": 7093.7,
+        "first_to_last_start": 2106.222222222222,
+        "non-overlapped-dispatch-time": 7675.934375,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -116,8 +116,8 @@ perf_targets = {
         "op_name": "FF2_MM",
         "kernel_duration": 15891.0,
         "op_to_op": 658.7777777777778,
-        "first_to_last_start": 1719.111111111111,
-        "non-overlapped-dispatch-time": 6770.3,
+        "first_to_last_start": 1697.4444444444443,
+        "non-overlapped-dispatch-time": 7359.925,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -127,8 +127,8 @@ perf_targets = {
         "op_name": "AllReduce_Fuse_Createheads",
         "kernel_duration": 14541.059027777777,
         "op_to_op": 966.0,
-        "first_to_last_start": 1906.2222222222222,
-        "non-overlapped-dispatch-time": 7932.2,
+        "first_to_last_start": 1683.6666666666667,
+        "non-overlapped-dispatch-time": 8884.7,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.4,
         "first_to_last_start_relative_margin": 0.2,
@@ -137,9 +137,9 @@ perf_targets = {
     "AllReduceAsync_0": {
         "op_name": "AllReduceAsync_DO",
         "kernel_duration": 21736.76736111111,
-        "op_to_op": 626.5555555555555,
-        "first_to_last_start": 1660.7777777777778,
-        "non-overlapped-dispatch-time": 8510.2,
+        "op_to_op": 758.8888888888889,
+        "first_to_last_start": 1572.2222222222222,
+        "non-overlapped-dispatch-time": 7843.5,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.3,
         "first_to_last_start_relative_margin": 0.2,
@@ -149,8 +149,8 @@ perf_targets = {
         "op_name": "AllReduceAsync_FF2",
         "kernel_duration": 22341.23263888889,
         "op_to_op": 637.1111111111111,
-        "first_to_last_start": 1785.2222222222222,
-        "non-overlapped-dispatch-time": 7252.4,
+        "first_to_last_start": 1712.4444444444443,
+        "non-overlapped-dispatch-time": 7846.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -160,8 +160,8 @@ perf_targets = {
         "op_name": "ReduceScatter_FF1",
         "kernel_duration": 9952.402777777777,
         "op_to_op": 708.1111111111111,
-        "first_to_last_start": 1993.7777777777778,
-        "non-overlapped-dispatch-time": 8058.9,
+        "first_to_last_start": 1898.6666666666667,
+        "non-overlapped-dispatch-time": 8405.8,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -171,8 +171,8 @@ perf_targets = {
         "op_name": "ReduceScatter_FF3",
         "kernel_duration": 9817.020833333334,
         "op_to_op": 812.1111111111111,
-        "first_to_last_start": 2018.2222222222222,
-        "non-overlapped-dispatch-time": 7359.9,
+        "first_to_last_start": 1942.111111111111,
+        "non-overlapped-dispatch-time": 8425.3,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -180,10 +180,10 @@ perf_targets = {
     },
     "RotaryEmbeddingLlamaFusedQK_0": {
         "op_name": "RotaryEmbeddingLlamaFusedQK",
-        "kernel_duration": 4296,
+        "kernel_duration": 4000.1111111111113,
         "op_to_op": 606.1111111111111,
-        "first_to_last_start": 2560.8888888888887,
-        "non-overlapped-dispatch-time": 2844.3,
+        "first_to_last_start": 2250.222222222222,
+        "non-overlapped-dispatch-time": 3867.934375,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -191,10 +191,10 @@ perf_targets = {
     },
     "PagedUpdateCacheDeviceOperation_0": {
         "op_name": "PagedUpdateCache",
-        "kernel_duration": 5963,
+        "kernel_duration": 5511.444444444444,
         "op_to_op": 860.2222222222222,
-        "first_to_last_start": 2317.1111111111113,
-        "non-overlapped-dispatch-time": 5890.0,
+        "first_to_last_start": 1972.3333333333333,
+        "non-overlapped-dispatch-time": 5793.3,
         "kernel_duration_relative_margin": 0.2,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -204,8 +204,8 @@ perf_targets = {
         "op_name": "SDPA",
         "kernel_duration": 13338,
         "op_to_op": 652.6666666666666,
-        "first_to_last_start": 2766.222222222222,
-        "non-overlapped-dispatch-time": 9741.5,
+        "first_to_last_start": 2601.777777777778,
+        "non-overlapped-dispatch-time": 9363.0,
         "kernel_duration_relative_margin": 0.07,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -215,8 +215,8 @@ perf_targets = {
         "op_name": "Binary_Mult_Silu",
         "kernel_duration": 2923.5555555555557,
         "op_to_op": 661.0,
-        "first_to_last_start": 1857.5555555555557,
-        "non-overlapped-dispatch-time": 6111.2,
+        "first_to_last_start": 1800.111111111111,
+        "non-overlapped-dispatch-time": 7682.809375,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -224,10 +224,10 @@ perf_targets = {
     },
     "Untilize_0": {
         "op_name": "Untilize",
-        "kernel_duration": 1517.3333333333335,
+        "kernel_duration": 1032.88888888888,
         "op_to_op": 800,
-        "first_to_last_start": 2043.3333333333333,
-        "non-overlapped-dispatch-time": 3113.6,
+        "first_to_last_start": 1808.0,
+        "non-overlapped-dispatch-time": 4579.2,
         "kernel_duration_relative_margin": 0.2,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
@@ -902,18 +902,22 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
+    # Add kernel duration of an op to the dispatch time for the next op
+    df["TOTAL DISPATCH TIME [ns]"] = df["OP TO OP LATENCY [ns]"] + df["DEVICE KERNEL DURATION [ns]"].shift(
+        1, fill_value=0
+    )
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
     # Add 1 as early return means
     df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     assert len(df_layers) % num_layers == 0
 
-    all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
-        orient="records"
-    )
+    all_layers_raw_dict = df_layers[
+        ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]", "TOTAL DISPATCH TIME [ns]"]
+    ].to_dict(orient="records")
 
     # Build dicts of op_code to list of durations
-    dispatch_duration_dict = build_duration_dict(all_layers_raw_dict, "OP TO OP LATENCY [ns]")
+    dispatch_duration_dict = build_duration_dict(all_layers_raw_dict, "TOTAL DISPATCH TIME [ns]")
 
     # Build dicts of op_code_with_id to list of durations - one list per op instance
     dispatch_duration_per_instance_dict = build_duration_per_instance_dict(dispatch_duration_dict, num_layers)
@@ -924,6 +928,18 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     dispatch_duration_per_instance_max_dict = max_per_instance_dict(dispatch_duration_per_instance_dict)
 
     print(f"dispatch_duration_per_instance_averaged_dict: {dispatch_duration_per_instance_averaged_dict}")
+
+    # Build dicts of op_code to list of durations
+    kernel_duration_dict = build_duration_dict(all_layers_raw_dict, "DEVICE KERNEL DURATION [ns]")
+
+    # Build dicts of op_code_with_id to list of durations - one list per op instance
+    kernel_duration_per_instance_dict = build_duration_per_instance_dict(kernel_duration_dict, num_layers)
+
+    # Average over all iterations of each op instance
+    kernel_duration_per_instance_averaged_dict = average_per_instance_dict(kernel_duration_per_instance_dict)
+    kernel_duration_per_instance_min_dict = min_per_instance_dict(kernel_duration_per_instance_dict)
+    kernel_duration_per_instance_max_dict = max_per_instance_dict(kernel_duration_per_instance_dict)
+    print(f"kernel_duration_per_instance_averaged_dict: {kernel_duration_per_instance_averaged_dict}")
 
     assert len(dispatch_duration_per_instance_averaged_dict) == len(
         perf_targets

@@ -344,7 +344,7 @@ KernelGroup::KernelGroup(
     uint32_t programmable_core_type_index,
     kernel_id_array_t kernel_ids,
     bool /*erisc_is_idle*/,
-    uint32_t max_local_cb_end_index,
+    uint32_t local_cb_mask,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges) :
     core_ranges(CoreRangeSet()) {
@@ -406,7 +406,7 @@ KernelGroup::KernelGroup(
     this->launch_msg.kernel_config.ncrisc_kernel_size16 = 0;
 
     this->launch_msg.kernel_config.exit_erisc_kernel = false;
-    this->launch_msg.kernel_config.max_local_cb_end_index = max_local_cb_end_index;
+    this->launch_msg.kernel_config.local_cb_mask = local_cb_mask;
     this->launch_msg.kernel_config.min_remote_cb_start_index = min_remote_cb_start_index;
     this->go_msg.signal = RUN_MSG_GO;
 }
@@ -526,6 +526,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
             // Start inclusive, max exclusive
             uint32_t max_local_cb_end_index = 0;
             uint32_t min_remote_cb_start_index = NUM_CIRCULAR_BUFFERS;
+            uint32_t local_cb_mask = 0;
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : kg_to_cores.second) {
@@ -541,6 +542,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         auto local_val = per_core_local_cb_indices_.find(core);
                         if (local_val != per_core_local_cb_indices_.end() && local_val->second.any()) {
                             uint32_t used_cbs = local_val->second.to_ulong();
+                            local_cb_mask |= used_cbs;
                             max_local_cb_end_index = std::max(
                                 max_local_cb_end_index, NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(used_cbs));
                             if (!logged_noncontiguous) {
@@ -615,16 +617,14 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 programmable_core_type_index,
                 max_local_cb_end_index,
                 min_remote_cb_start_index);
-            kernel_groups_[programmable_core_type_index].push_back(
-                std::make_shared<KernelGroup>(
-                    *this,
-                    programmable_core_type_index,
-                    kg_to_cores.first.kernel_ids,
-                    erisc_is_idle,
-                    max_local_cb_end_index,
-                    min_remote_cb_start_index,
-                    kg_to_cores.second)
-                );
+            kernel_groups_[programmable_core_type_index].push_back(std::make_shared<KernelGroup>(
+                *this,
+                programmable_core_type_index,
+                kg_to_cores.first.kernel_ids,
+                erisc_is_idle,
+                local_cb_mask,
+                min_remote_cb_start_index,
+                kg_to_cores.second));
             index++;
         }
     }
