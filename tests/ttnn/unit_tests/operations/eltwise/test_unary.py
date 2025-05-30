@@ -631,6 +631,11 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     assert pcc == 1
 
 
+def is_int32_overflow(tensor, scalar):
+    result = tensor.to(torch.int64) - scalar
+    return (result < -(2**31) + 1) | (result > 2**31 - 1)
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -643,7 +648,7 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     ),
 )
 @pytest.mark.parametrize("scalar", [-100, -54, -1, 0, 1, 13, 29])
-@pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq])
+@pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq, ttnn.gt, ttnn.lt])
 @pytest.mark.parametrize("use_legacy", [True, False])
 def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
     torch.manual_seed(213919)
@@ -657,7 +662,7 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
 
-    if is_wormhole_b0() and use_legacy == False and ((in_data - scalar) < -2147483647).any():
+    if use_legacy == False and is_int32_overflow(in_data, scalar).any():
         pytest.xfail("Overflow occurs as in case of binary_ng, sub_tile is called")
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
