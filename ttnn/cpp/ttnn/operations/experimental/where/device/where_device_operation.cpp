@@ -16,15 +16,18 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::where {
 
+template <typename... Tensors>
+static void fail_on_shape_mismatch(const Tensor& tensor_a, const Tensors&... other_tensors) {
+    const auto& shape_a = tensor_a.logical_shape();
+
+    bool all_shapes_match = ((shape_a == other_tensors.logical_shape()) && ...);
+
+    TT_FATAL(all_shapes_match, "Not all input shapes match tensor_a's shape");
+}
+
 WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // TODO : Add all programs
     ZoneScopedN("WhereDeviceOperation::select_program_factory");
-
-    TT_FATAL(
-        !operation_attributes.b_scalar.has_value() && !operation_attributes.c_scalar.has_value(),
-        "Scalar input arguments are not supported in the current implementation of where!");
-
     return ElementWiseMultiCoreWhereProgram{};
 }
 
@@ -36,123 +39,38 @@ static void validate_memory_config(
     const auto& input_tensor_c = tensor_args.input_tensor_c;
     const auto& output_tensor = tensor_args.output_tensor;
 
-    bool tensor_b_sharded = false;
-    if (input_tensor_b.has_value()) {
-        tensor_b_sharded = input_tensor_b->memory_config().is_sharded();
-        TT_FATAL(
-            input_tensor_a.device() == input_tensor_b->device(),
-            "Operands to eltwise ternary need to be on the same device!");
-        TT_FATAL(input_tensor_b->get_layout() == Layout::TILE, "Inputs to eltwise ternary must be tilized");
-    }
+    TT_FATAL(
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Input tensor 'a' memory layout is required to be INTERLEAVED.");
+    TT_FATAL(
+        attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "attributes memory layout is required to be INTERLEAVED.");
 
-    if (input_tensor_a.memory_config().is_sharded()) {
-        if (tensor_b_sharded) {
-            TT_FATAL(
-                input_tensor_a.memory_config().memory_layout() == input_tensor_b->memory_config().memory_layout(),
-                "Error");
-            TT_FATAL(input_tensor_a.shard_spec().value() == input_tensor_b->shard_spec().value(), "Error");
-        }
-        if (attributes.memory_config.is_sharded()) {
-            TT_FATAL(
-                input_tensor_a.memory_config().memory_layout() == attributes.memory_config.memory_layout(), "Error");
-        } else {
-            TT_FATAL(attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-        }
-    } else if (tensor_b_sharded) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-        if (attributes.memory_config.is_sharded()) {
-            TT_FATAL(
-                input_tensor_b->memory_config().memory_layout() == attributes.memory_config.memory_layout(), "Error");
-        } else {
-            TT_FATAL(attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-        }
-    } else {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-        if (input_tensor_b.has_value()) {
-            TT_FATAL((input_tensor_b->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED), "Error");
-        }
-        if (!attributes.memory_config.is_sharded()) {
-            TT_FATAL(attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-        }
-    }
+    TT_FATAL(
+        (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED),
+        "Input tensor 'b' memory layout is required to be INTERLEAVED.");
+
+    TT_FATAL(
+        (input_tensor_c.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED),
+        "Input tensor 'c' memory layout is required to be INTERLEAVED.");
 }
 
 void WhereDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
-    const auto& input_tensor_c = tensor_args.input_tensor_c;
-    const auto& output_tensor = tensor_args.output_tensor;
-
-    // TODO: We can check it earlier
-    TT_FATAL(
-        input_tensor_b.has_value() != attributes.b_scalar.has_value(), "Either the tensor b or scalar should be set");
-
-    TT_FATAL(
-        input_tensor_c.has_value() != attributes.c_scalar.has_value(), "Either the tensor c or scalar should be set");
 
     validate_memory_config(attributes, tensor_args);
     WhereDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
-    // TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Input to eltwise ternary must be tilized");
-
-    // auto program_factory = select_program_factory(attributes, tensor_args);
-    // std::visit(
-    //     [&attributes](auto&& program_factory) {
-    //         if constexpr (std::is_same_v<decltype(program_factory), ElementWiseMultiCore>) {
-    //             TT_FATAL(not attributes.activations.has_value(), "Error");
-    //         }
-    //     },
-    //     program_factory);
+    TT_FATAL(
+        input_tensor_a.get_layout() == Layout::TILE,
+        "Condition tensor used in the where operation is required to be tiled!");
 }
 
 void WhereDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& output_tensor = tensor_args.output_tensor;
-
-    const auto& input_shape_a = input_tensor_a.get_logical_shape();
-
-    auto batch_size_0_a = input_shape_a.rank() >= 4 ? input_shape_a[-4] : 1;
-    auto batch_size_1_a = input_shape_a.rank() >= 3 ? input_shape_a[-3] : 1;
-    auto height_a = input_shape_a[-2];
-    auto width_a = input_shape_a[-1];
-
-    const auto input_shape_b =
-        tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
-    auto batch_size_0_b = input_shape_b.rank() >= 4 ? input_shape_b[-4] : 1;
-    auto batch_size_1_b = input_shape_b.rank() >= 3 ? input_shape_b[-3] : 1;
-    auto height_b = input_shape_b[-2];
-    auto width_b = input_shape_b[-1];
-
-    const auto input_shape_c =
-        tensor_args.input_tensor_c.has_value() ? tensor_args.input_tensor_c->get_logical_shape() : ttnn::Shape{1, 1};
-    auto batch_size_0_c = input_shape_c.rank() >= 4 ? input_shape_c[-4] : 1;
-    auto batch_size_1_c = input_shape_c.rank() >= 3 ? input_shape_c[-3] : 1;
-    auto height_c = input_shape_c[-2];
-    auto width_c = input_shape_c[-1];
-
-    // TODO: Add c_tensor into account, simplify the logic
-
-    // Input shape b must be the same as or broadcastable to input shape a
-    if (batch_size_0_a != batch_size_0_b) {
-        TT_ASSERT(
-            batch_size_0_a > batch_size_0_b and batch_size_0_b == 1,
-            "ttnn::operations::experimental::where::WhereDeviceOperation: batch size mismatch");
-    }
-    if (batch_size_1_a != batch_size_1_b) {
-        TT_ASSERT(
-            batch_size_1_a > batch_size_1_b and batch_size_1_b == 1,
-            "ttnn::operations::experimental::where::WhereDeviceOperation: batch size mismatch");
-    }
-
-    TT_FATAL(
-        height_a == height_b || height_a == 1 || height_b == 1,
-        "ttnn::operations::experimental::where::WhereDeviceOperation: height mismatch");
-    TT_FATAL(
-        width_a == width_b || width_a == 1 || width_b == 1,
-        "ttnn::operations::experimental::where::WhereDeviceOperation: width mismatch");
+    fail_on_shape_mismatch(tensor_args.input_tensor_a, tensor_args.input_tensor_b, tensor_args.input_tensor_c);
 }
 
 WhereDeviceOperation::spec_return_value_t WhereDeviceOperation::compute_output_specs(
@@ -162,84 +80,9 @@ WhereDeviceOperation::spec_return_value_t WhereDeviceOperation::compute_output_s
         return output_tensor->get_tensor_spec();
     }
 
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto input_shape_a = input_tensor_a.logical_shape();
-    const auto& tensor_b = tensor_args.input_tensor_b;
-    const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::Shape{};
-
-    const auto& tensor_c = tensor_args.input_tensor_c;
-    const auto input_shape_c = tensor_c.has_value() ? tensor_c->logical_shape() : ttnn::Shape{};
-
-    // TODO: take C_tensor into account
-
-    const int rank_a = input_shape_a.rank();
-    const int rank_b = input_shape_b.rank();
-    const int rank_c = input_shape_c.rank();
-    const int larger_rank = std::max(std::max(rank_a, rank_b), rank_c);
-
-    // Broadcasting Rules Overview:
-    // - If the two tensors have different ranks, we virtually pad the smaller-rank tensor's shape
-    //   with ones on the left (i.e., higher-order dimensions) until both shapes have the same length.
-    // - For each dimension (starting from the rightmost), the sizes are compatible if:
-    //     - They are equal, or
-    //     - One of them is 1 (the dimension can be broadcast to match the other size).
-    auto compute_broadcasted_output = [rank_a, rank_b, rank_c, larger_rank](
-                                          const auto& shape_a, const auto& shape_b, const auto& shape_c) {
-        SmallVector<uint32_t> output_shape(larger_rank, 1);
-        for (int i = -1; i >= -larger_rank; --i) {
-            auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
-            auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;
-            auto dim_c = (i >= -rank_c) ? shape_c[i] : 1;
-
-            // TODO: Implement all cases
-            if (dim_a != 1 && dim_b != 1 && dim_c != 1) {
-                TT_FATAL(dim_a == dim_b, "Incompatible dimensions {} and {}", dim_a, dim_b);
-                TT_FATAL(dim_a == dim_c, "Incompatible dimensions {} and {}", dim_a, dim_c);
-                output_shape[i + larger_rank] = dim_a;
-            } else if (dim_a != 1 && dim_b == 1 && dim_c == 1) {
-                // One of the dimension is one, calculating the other one
-                output_shape[i + larger_rank] = dim_a;
-            }
-        }
-        return ttnn::Shape(output_shape);
-    };
-    auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b, input_shape_c);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-    if (std::holds_alternative<ElementWiseMultiCoreWhereProgram>(program_factory)) {
-        const auto& input_tensor_b = *tensor_args.input_tensor_b;
-        const auto& input_tensor_c = *tensor_args.input_tensor_c;
-        if (operation_attributes.memory_config.is_sharded()) {
-            ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
-            if (input_tensor_a.memory_config().is_sharded()) {
-                shard_spec = input_tensor_a.shard_spec().value();
-            } else if (input_tensor_b.memory_config().is_sharded()) {
-                shard_spec = input_tensor_b.shard_spec().value();
-            } else if (input_tensor_c.memory_config().is_sharded()) {
-                shard_spec = input_tensor_c.shard_spec().value();
-            } else {
-                shard_spec = operation_attributes.memory_config.shard_spec().value();
-            }
-            // TODO: We put modified copy of memory_config to TensorSpec.
-            // It can cause confusion to have more than one memconfig
-            auto memory_config = operation_attributes.memory_config.with_shard_spec(shard_spec);
-            return TensorSpec(
-                output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), memory_config));
-        }
-    } else {
-        if (operation_attributes.memory_config.is_sharded()) {
-            ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
-            if (input_tensor_a.memory_config().is_sharded()) {
-                // Derive output shard_spec based on input
-                shard_spec = input_tensor_a.shard_spec().value();
-            }
-            auto memory_config = operation_attributes.memory_config.with_shard_spec(shard_spec);
-            return TensorSpec(
-                output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), memory_config));
-        }
-    }
+    fail_on_shape_mismatch(tensor_args.input_tensor_a, tensor_args.input_tensor_b, tensor_args.input_tensor_c);
     return TensorSpec(
-        output_shape,
+        tensor_args.input_tensor_a.logical_shape(),
         TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
 }
 
@@ -256,35 +99,31 @@ tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
+    const auto& input_tensor_c = tensor_args.input_tensor_c;
 
-    // TODO: take C_tensor into account
-
-    auto program_factory = select_program_factory(attributes, tensor_args);
     TT_ASSERT(
         std::holds_alternative<DeviceStorage>(input_tensor_a.get_storage()),
-        "Unexpected type {}",
+        "Unexpected type {} for tensor 'a' storage",
         tt::stl::get_active_type_name_in_variant(input_tensor_a.get_storage()));
+    TT_ASSERT(
+        std::holds_alternative<DeviceStorage>(input_tensor_b.get_storage()),
+        "Unexpected type {} for tensor 'b' storage",
+        tt::stl::get_active_type_name_in_variant(input_tensor_b.get_storage()));
+    TT_ASSERT(
+        std::holds_alternative<DeviceStorage>(input_tensor_c.get_storage()),
+        "Unexpected type {} for tensor 'c' storage",
+        tt::stl::get_active_type_name_in_variant(input_tensor_c.get_storage()));
 
-    if (input_tensor_b.has_value()) {
-        TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->get_storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->get_storage()));
-
-        return operation::hash_operation<WhereDeviceOperation>(
-            attributes,
-            program_factory.index(),
-            input_tensor_a.dtype(),
-            std::get<DeviceStorage>(input_tensor_a.storage()).memory_config(),
-            input_tensor_b->dtype(),
-            std::get<DeviceStorage>(input_tensor_b->storage()).memory_config());
-    }
-
+    auto program_factory = select_program_factory(attributes, tensor_args);
     return operation::hash_operation<WhereDeviceOperation>(
         attributes,
         program_factory.index(),
         input_tensor_a.dtype(),
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config());
+        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config(),
+        input_tensor_b.dtype(),
+        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config(),
+        input_tensor_c.dtype(),
+        std::get<DeviceStorage>(input_tensor_c.storage()).memory_config());
 }
 
 operation::OpPerformanceModel WhereDeviceOperation::create_op_performance_model(
@@ -293,28 +132,27 @@ operation::OpPerformanceModel WhereDeviceOperation::create_op_performance_model(
     tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
+    const auto& input_tensor_c = tensor_args.input_tensor_c;
     const auto& output_tensor = tensor_return_value;
     // GS specific parameters
     // 80 B/cycle unpacker BW shared
     // 128 datums per cycle math, but unpacker cant keep up
-    constexpr uint32_t num_cores = 9 * 12;
+    constexpr uint32_t unpacker_byte_per_cycle = 80;
+    uint32_t num_cores = attributes.worker_grid.num_cores();
 
     uint32_t total_bytes = 0;
     std::vector<Tensor> input_tensors = {input_tensor_a};
     total_bytes += input_tensor_a.volume() * input_tensor_a.element_size();
-    if (input_tensor_b.has_value()) {
-        input_tensors.push_back(*input_tensor_b);
-        total_bytes += input_tensor_b->volume() * input_tensor_b->element_size();
-    }
-    uint32_t ideal_eltwise_cycles = total_bytes / 80 / num_cores;
 
-    // TODO: update OpPerformanceModel to work on variadic arguments
+    input_tensors.push_back(input_tensor_b);
+    total_bytes += input_tensor_b.volume() * input_tensor_b.element_size();
+
+    input_tensors.push_back(input_tensor_c);
+    total_bytes += input_tensor_c.volume() * input_tensor_c.element_size();
+
+    uint32_t ideal_eltwise_cycles = total_bytes / unpacker_byte_per_cycle / num_cores;
+
     operation::OpPerformanceModel result(input_tensors, {output_tensor}, ideal_eltwise_cycles);
-#if 0
-        tt::log_info(tt::LogOp, "WhereDeviceOperation PerfModel:");
-        tt::log_info(tt::LogOp, "\t Data (Bytes): {}", total_bytes);
-        tt::log_info(tt::LogOp, "\t ideal_eltwise_cycles: {}", ideal_eltwise_cycles);
-#endif
     return result;
 }
 
@@ -323,6 +161,43 @@ bool WhereDeviceOperation::skip_launch(
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
+}
+
+std::tuple<WhereDeviceOperation::operation_attributes_t, WhereDeviceOperation::tensor_args_t>
+WhereDeviceOperation::invoke(
+    const Tensor& a_tensor,
+    const Tensor& b_tensor,
+    const Tensor& c_tensor,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<Tensor> output_tensor) {
+    // TODO: Should we do that check earlier?
+    if (dtype.has_value() && output_tensor.has_value()) {
+        TT_FATAL(
+            dtype.value() == output_tensor.value().get_dtype(),
+            "If both output dtype and output tensor provided dtype should match");
+    }
+
+    CoreRangeSet worker_grid;
+    auto device = a_tensor.device();
+    for (const auto& sub_device_id : device->get_sub_device_ids()) {
+        const auto& sub_device_workers =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
+        worker_grid = worker_grid.merge(sub_device_workers);
+    }
+
+    return {
+        operation_attributes_t{
+            .memory_config = memory_config.value_or(
+                output_tensor.has_value() ? output_tensor->memory_config() : a_tensor.memory_config()),
+            .dtype = dtype.value_or(a_tensor.get_dtype()),
+            .worker_grid = std::move(worker_grid),
+            .compute_kernel_config = std::nullopt},
+        tensor_args_t{
+            .input_tensor_a = a_tensor,
+            .input_tensor_b = b_tensor,
+            .input_tensor_c = c_tensor,
+            .output_tensor = output_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::where

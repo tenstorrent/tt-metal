@@ -41,9 +41,9 @@ WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b->get_dtype());
+    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
     uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
-    tt::DataFormat src2_cb_data_format = tt_metal::datatype_to_dataformat_converter(c->get_dtype());
+    tt::DataFormat src2_cb_data_format = tt_metal::datatype_to_dataformat_converter(c.get_dtype());
     uint32_t src2_single_tile_size = tt_metal::detail::TileSize(src2_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
@@ -102,8 +102,8 @@ WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
     std::map<string, string> reader_defines;
     bool block_or_width_sharded = false;
     bool src0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src1_is_dram = b->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src2_is_dram = c->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    bool src1_is_dram = b.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    bool src2_is_dram = c.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_is_dram,
         (std::uint32_t)src1_is_dram,
@@ -143,7 +143,7 @@ WhereDeviceOperation::ElementWiseMultiCoreWhereProgram::create(
             .compile_args = compute_kernel_args});
 
     set_eltwise_ternary_runtime_args<true>(
-        program, a, *b, *c, output, reader_kernel_id, writer_kernel_id, compute_kernel_id, all_device_cores);
+        program, a, b, c, output, reader_kernel_id, writer_kernel_id, compute_kernel_id, all_device_cores);
     return {
         std::move(program),
         {reader_kernel_id,

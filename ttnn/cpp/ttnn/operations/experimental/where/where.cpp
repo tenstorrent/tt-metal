@@ -5,17 +5,15 @@
 #include "where.hpp"
 
 #include <functional>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 
-// #include "ttnn/operations/eltwise/binary/binary.hpp"
-// #include "ttnn/operations/eltwise/unary/unary.hpp"
-
 #include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
-// #include "ttnn/operations/experimental/where/common/ternary_op_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace operations::experimental::where {
@@ -36,8 +34,13 @@ Tensor where_impl(
     std::optional<Tensor> output_tensor) {
     // TODO: missing const dtype
     auto dtype = ttnn::DataType::BFLOAT16;
-    return ttnn::prim::where_impl(
-        queue_id, predicate, value_true, value_false, dtype, output_mem_config, std::move(output_tensor));
+    if constexpr (std::is_same_v<T, Tensor> and std::is_same_v<U, Tensor>) {
+        return ttnn::prim::where_impl(
+            queue_id, predicate, value_true, value_false, dtype, output_mem_config, std::move(output_tensor));
+    } else {
+        TT_FATAL((!std::is_same_v<T, Tensor> || !std::is_same_v<U, Tensor>), "Scalar values are not supported!");
+        return Tensor();
+    }
 }
 }  // namespace details
 

@@ -32,8 +32,6 @@ inline void set_eltwise_ternary_runtime_args(
     using namespace tt::tt_metal;
     using namespace tt::constants;
 
-    // TODO: assert(interleaved)? Could be moved to upper level
-
     // zero_start_grid is a flag to indicate that we are using a single rectangular grid that starts at (0, 0)
     // as well as having the sharded tensors (if any) start at (0, 0)
     // This will run the original work/core distribution algorithms that are specifically for this setup, as these
