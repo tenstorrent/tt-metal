@@ -1193,7 +1193,8 @@ void setup_test_with_persistent_fabric(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     size_t switch_interval = 0,
     bool loopback_on_last_device = false,
-    bool is_galaxy = false) {
+    bool is_galaxy = false,
+    bool use_closest_sockets = false) {
     if (enable_persistent_fabric) {
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
@@ -1208,7 +1209,14 @@ void setup_test_with_persistent_fabric(
     }
 
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, topology, is_galaxy);
+        devices,
+        fabric_program_ptrs,
+        enable_persistent_fabric,
+        num_links.value_or(1),
+        false,
+        topology,
+        is_galaxy,
+        use_closest_sockets);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
@@ -2256,6 +2264,7 @@ struct WriteThroughputStabilityTestWithPersistentFabricParams {
 
     bool disable_end_workers_in_backward_direction = false;
     bool senders_are_unidirectional = false;
+    bool clothese_eth_core_selection = false;
 };
 
 std::vector<CoreCoord> compute_top_row_ethernet_cores(
@@ -2553,7 +2562,8 @@ void Run1DFabricPacketSendTest(
             topology,
             fabric_context_switch_interval,
             false,
-            is_6u_galaxy);
+            is_6u_galaxy,
+            params.clothese_eth_core_selection);
         packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     } else {
         // TODO: get packet header size from control plane after it adds APIs to present this information
@@ -2774,7 +2784,8 @@ void Run1DFabricPacketSendTest(
                         &program,
                         enable_persistent_fabric_mode,
                         params.num_links,
-                        topology);
+                        topology,
+                        params.clothese_eth_core_selection);
             }
 
             // reserve CB

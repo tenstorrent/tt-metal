@@ -30,7 +30,8 @@ public:
         std::optional<size_t> desired_num_links = std::nullopt,
         bool build_in_worker_connection_mode = false,
         Topology topology = Topology::Linear,
-        bool is_galaxy = false);
+        bool is_galaxy = false,
+        bool use_closest_sockets = false);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)
@@ -42,14 +43,16 @@ public:
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links,
         bool build_in_worker_connection_mode = false,
-        Topology topology = Topology::Linear);
+        Topology topology = Topology::Linear,
+        bool use_closest_sockets = false);
 
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
         const std::vector<tt::tt_metal::IDevice*>& device_sequence,
         const std::vector<tt::tt_metal::Program*>& program_sequence,
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links = std::nullopt,
-        Topology topology = Topology::Linear);
+        Topology topology = Topology::Linear,
+        bool use_closest_sockets = false);
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
         tt::tt_metal::IDevice* local_device,
         tt::tt_metal::IDevice* forward_device,
@@ -57,7 +60,8 @@ public:
         tt::tt_metal::Program* program,
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links = std::nullopt,
-        Topology topology = Topology::Linear);
+        Topology topology = Topology::Linear,
+        bool use_closest_sockets = false);
 
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique
@@ -128,7 +132,8 @@ void initialize_edm_fabric(
     distributed::MeshDevice* mesh_device,
     bool wrap_fabric_around_mesh = false,
     std::optional<size_t> context_switch_interval_override = std::nullopt,
-    Topology topology = Topology::Linear);
+    Topology topology = Topology::Linear,
+    bool use_closest_sockets = false);
 void teardown_edm_fabric(
     distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh = false, Topology topology = Topology::Linear);
 

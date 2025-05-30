@@ -61,6 +61,7 @@ def summarize_to_csv(
     *,
     noc_message_type,
     senders_are_unidirectional,
+    clothese_eth_core_selection,
 ):
     """Write test results to a CSV file organized by packet size"""
     csv_path = os.path.join(os.environ["TT_METAL_HOME"], "generated/profiler/.logs/bandwidth_summary.csv")
@@ -79,6 +80,7 @@ def summarize_to_csv(
                     "Disable Interior Workers",
                     "Unidirectional",
                     "Senders Are Unidirectional",
+                    "Clothest Eth Core Selection",
                     "Bandwidth (B/c)",
                     "Packets/Second",
                 ]
@@ -97,6 +99,7 @@ def summarize_to_csv(
                 disable_sends_for_interior_workers,
                 unidirectional,
                 senders_are_unidirectional,
+                clothese_eth_core_selection,
                 bandwidth,
                 packets_per_second,
             ]
@@ -113,6 +116,7 @@ def read_golden_results(
     *,
     noc_message_type,
     senders_are_unidirectional=False,  # coming out of any given worker
+    clothese_eth_core_selection=False,
 ):
     """Print a summary table of all test results by packet size"""
     csv_path = os.path.join(
@@ -135,6 +139,7 @@ def read_golden_results(
         & (df["Disable Interior Workers"] == disable_sends_for_interior_workers)
         & (df["Unidirectional"] == unidirectional)
         & (df["Senders Are Unidirectional"] == senders_are_unidirectional)
+        # & (df["Clothest Eth Core Selection"] == clothese_eth_core_selection)
     ]
 
     if len(results["Bandwidth (B/c)"]) == 0 or len(results["Packets/Second"]) == 0:
@@ -218,6 +223,7 @@ def process_results(
     disable_sends_for_interior_workers,
     unidirectional=False,
     senders_are_unidirectional=False,
+    clothese_eth_core_selection=False,
 ):
     bandwidth_inner_loop, packets_per_second_inner_loop = profile_results(
         zone_name_inner,
@@ -254,6 +260,7 @@ def process_results(
         packets_per_second,
         noc_message_type=noc_message_type,
         senders_are_unidirectional=senders_are_unidirectional,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
     expected_bw, expected_pps = read_golden_results(
         test_name,
@@ -264,6 +271,7 @@ def process_results(
         unidirectional,
         noc_message_type=noc_message_type,
         senders_are_unidirectional=senders_are_unidirectional,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
     bw_threshold_general = 0.07
     pps_threshold_general = 0.01
@@ -308,6 +316,7 @@ def run_fabric_edm(
     test_mode="1_fabric_instance",
     num_cluster_rows=0,
     num_cluster_cols=0,
+    clothese_eth_core_selection=False,
 ):
     if test_mode == "1_fabric_instance":
         assert num_cluster_rows == 0 and num_cluster_cols == 0
@@ -338,7 +347,8 @@ def run_fabric_edm(
                 {fabric_mode.value} \
                 {int(disable_sends_for_interior_workers)} \
                 {int(unidirectional)} \
-                {int(senders_are_unidirectional)}"
+                {int(senders_are_unidirectional)} \
+                {int(clothese_eth_core_selection)}"
     if test_mode == "1D_fabric_on_mesh":
         cmd += f" \
             {num_cluster_rows} \
@@ -372,6 +382,7 @@ def run_fabric_edm(
         disable_sends_for_interior_workers=disable_sends_for_interior_workers,
         unidirectional=unidirectional,
         senders_are_unidirectional=senders_are_unidirectional,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
     # Reset for the next test case
@@ -384,6 +395,7 @@ def run_fabric_edm(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
 @pytest.mark.parametrize("line_size, num_links", [(4, 1), (4, 2), (4, 3), (4, 4)])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_edm_mcast_half_ring_bw(
     num_messages,
     num_links,
@@ -391,6 +403,7 @@ def test_fabric_edm_mcast_half_ring_bw(
     line_sync,
     line_size,
     packet_size,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -405,6 +418,7 @@ def test_fabric_edm_mcast_half_ring_bw(
         disable_sends_for_interior_workers=False,
         unidirectional=False,
         senders_are_unidirectional=False,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -415,6 +429,7 @@ def test_fabric_edm_mcast_half_ring_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_4chip_one_link_mcast_full_ring_bw(
     num_messages,
     num_links,
@@ -422,6 +437,7 @@ def test_fabric_4chip_one_link_mcast_full_ring_bw(
     line_sync,
     line_size,
     packet_size,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -434,6 +450,7 @@ def test_fabric_4chip_one_link_mcast_full_ring_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.FullRing,
         disable_sends_for_interior_workers=False,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -444,13 +461,9 @@ def test_fabric_4chip_one_link_mcast_full_ring_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [2, 3, 4])
 @pytest.mark.parametrize("packet_size", [4096])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_4chip_multi_link_mcast_full_ring_bw(
-    num_messages,
-    num_links,
-    num_op_invocations,
-    line_sync,
-    line_size,
-    packet_size,
+    num_messages, num_links, num_op_invocations, line_sync, line_size, packet_size, clothese_eth_core_selection
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -463,6 +476,7 @@ def test_fabric_4chip_multi_link_mcast_full_ring_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.FullRing,
         disable_sends_for_interior_workers=False,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -473,6 +487,7 @@ def test_fabric_4chip_multi_link_mcast_full_ring_bw(
 @pytest.mark.parametrize("line_size", [8])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
     num_messages,
     num_links,
@@ -480,6 +495,7 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
     line_sync,
     line_size,
     packet_size,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -492,6 +508,7 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.FullRing,
         disable_sends_for_interior_workers=False,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -501,6 +518,7 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
 @pytest.mark.parametrize("line_size", [8])
 @pytest.mark.parametrize("num_links", [2, 3, 4])
 @pytest.mark.parametrize("packet_size", [4096])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_8chip_multi_link_edm_mcast_full_ring_bw(
     num_messages,
     num_links,
@@ -508,6 +526,7 @@ def test_fabric_8chip_multi_link_edm_mcast_full_ring_bw(
     line_sync,
     line_size,
     packet_size,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -520,6 +539,7 @@ def test_fabric_8chip_multi_link_edm_mcast_full_ring_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.FullRing,
         disable_sends_for_interior_workers=False,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -559,6 +579,7 @@ def test_fabric_4chip_multi_link_edm_unicast_full_ring_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
     num_messages,
     num_links,
@@ -566,6 +587,7 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
     line_sync,
     line_size,
     packet_size,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -578,6 +600,7 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.SaturateChipToChipRing,
         disable_sends_for_interior_workers=False,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -587,6 +610,7 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("num_links", [2, 3, 4])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("packet_size", [4096])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
     num_messages,
     num_links,
@@ -594,6 +618,7 @@ def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
     line_sync,
     line_size,
     packet_size,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -606,6 +631,7 @@ def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.SaturateChipToChipRing,
         disable_sends_for_interior_workers=False,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -619,6 +645,7 @@ def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_cols", [4])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_t3k_4chip_cols_mcast_bw(
     num_messages,
     num_links,
@@ -628,6 +655,7 @@ def test_fabric_t3k_4chip_cols_mcast_bw(
     packet_size,
     fabric_test_mode,
     num_cluster_cols,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -645,6 +673,7 @@ def test_fabric_t3k_4chip_cols_mcast_bw(
         test_mode="1D_fabric_on_mesh",
         num_cluster_rows=0,
         num_cluster_cols=num_cluster_cols,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -658,6 +687,7 @@ def test_fabric_t3k_4chip_cols_mcast_bw(
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_rows", [2])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_t3k_4chip_rows_mcast_bw(
     num_messages,
     num_links,
@@ -667,6 +697,7 @@ def test_fabric_t3k_4chip_rows_mcast_bw(
     packet_size,
     fabric_test_mode,
     num_cluster_rows,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -684,6 +715,7 @@ def test_fabric_t3k_4chip_rows_mcast_bw(
         test_mode="1D_fabric_on_mesh",
         num_cluster_rows=num_cluster_rows,
         num_cluster_cols=0,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -698,6 +730,7 @@ def test_fabric_t3k_4chip_rows_mcast_bw(
 @pytest.mark.parametrize("packet_size", [2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.FullRing, FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_cols", [4])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_6u_4chip_cols_mcast_bw(
     is_unicast,
     num_messages,
@@ -708,6 +741,7 @@ def test_fabric_6u_4chip_cols_mcast_bw(
     packet_size,
     fabric_test_mode,
     num_cluster_cols,
+    clothese_eth_core_selection,
 ):
     is_ring = fabric_test_mode == FabricTestMode.FullRing
     if is_ring:
@@ -728,6 +762,7 @@ def test_fabric_6u_4chip_cols_mcast_bw(
         test_mode="1D_fabric_on_mesh",
         num_cluster_rows=0,
         num_cluster_cols=num_cluster_cols,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -742,6 +777,7 @@ def test_fabric_6u_4chip_cols_mcast_bw(
 @pytest.mark.parametrize("packet_size", [2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.FullRing, FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_rows", [8])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_6u_4chip_rows_mcast_bw(
     is_unicast,
     num_messages,
@@ -752,6 +788,7 @@ def test_fabric_6u_4chip_rows_mcast_bw(
     packet_size,
     fabric_test_mode,
     num_cluster_rows,
+    clothese_eth_core_selection,
 ):
     is_ring = fabric_test_mode == FabricTestMode.FullRing
     if is_ring:
@@ -772,6 +809,7 @@ def test_fabric_6u_4chip_rows_mcast_bw(
         test_mode="1D_fabric_on_mesh",
         num_cluster_rows=num_cluster_rows,
         num_cluster_cols=0,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -784,6 +822,7 @@ def test_fabric_6u_4chip_rows_mcast_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_4chip_one_link_mcast_bw(
     num_messages,
     num_links,
@@ -792,6 +831,7 @@ def test_fabric_4chip_one_link_mcast_bw(
     line_size,
     packet_size,
     fabric_test_mode,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -806,6 +846,7 @@ def test_fabric_4chip_one_link_mcast_bw(
         disable_sends_for_interior_workers=False,
         unidirectional=False,
         senders_are_unidirectional=True,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -816,6 +857,7 @@ def test_fabric_4chip_one_link_mcast_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
     num_messages,
     num_links,
@@ -824,6 +866,7 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
     line_size,
     packet_size,
     fabric_test_mode,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -838,6 +881,7 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
         disable_sends_for_interior_workers=True,
         unidirectional=False,
         senders_are_unidirectional=True,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -848,6 +892,7 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
     num_messages,
     num_links,
@@ -856,6 +901,7 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
     line_size,
     packet_size,
     fabric_test_mode,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -870,6 +916,7 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
         disable_sends_for_interior_workers=True,
         unidirectional=True,
         senders_are_unidirectional=True,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -880,6 +927,7 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
 @pytest.mark.parametrize("num_links", [2, 3, 4])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_4chip_two_link_mcast_bw(
     num_messages,
     num_links,
@@ -888,6 +936,7 @@ def test_fabric_4chip_two_link_mcast_bw(
     line_size,
     packet_size,
     fabric_test_mode,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -901,6 +950,7 @@ def test_fabric_4chip_two_link_mcast_bw(
         fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=False,
         senders_are_unidirectional=True,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -912,6 +962,7 @@ def test_fabric_4chip_two_link_mcast_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_one_link_non_forwarding_unicast_bw(
     num_messages,
     num_links,
@@ -920,6 +971,7 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
     line_size,
     packet_size,
     fabric_test_mode,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -933,6 +985,7 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
         fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=False,
         senders_are_unidirectional=True,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -943,6 +996,7 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_two_link_non_forwarding_unicast_bw(
     num_messages,
     num_links,
@@ -951,6 +1005,7 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
     line_size,
     packet_size,
     fabric_test_mode,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -964,6 +1019,7 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
         fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=False,
         senders_are_unidirectional=True,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -975,6 +1031,7 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     num_messages,
     num_links,
@@ -983,6 +1040,7 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     line_size,
     packet_size,
     fabric_test_mode,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -996,6 +1054,7 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
         fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=False,
         senders_are_unidirectional=True,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -1007,6 +1066,7 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
     num_messages,
     num_links,
@@ -1015,6 +1075,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
     line_size,
     packet_size,
     fabric_test_mode,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -1029,6 +1090,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
         disable_sends_for_interior_workers=True,
         unidirectional=False,
         senders_are_unidirectional=True,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -1039,6 +1101,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("clothese_eth_core_selection", [True, False])
 def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multihop_bw(
     num_messages,
     num_links,
@@ -1047,6 +1110,7 @@ def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multi
     line_size,
     packet_size,
     fabric_test_mode,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -1061,6 +1125,7 @@ def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multi
         disable_sends_for_interior_workers=True,
         unidirectional=True,
         senders_are_unidirectional=True,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -1072,6 +1137,7 @@ def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multi
 @pytest.mark.parametrize("noc_message_type", ["noc_unicast_flush_atomic_inc", "noc_unicast_no_flush_atomic_inc"])
 @pytest.mark.parametrize("packet_size", [16])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("clothese_eth_core_selection", [False, True])
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_bw(
     num_messages,
     num_links,
@@ -1081,6 +1147,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
     noc_message_type,
     packet_size,
     fabric_test_mode,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -1094,6 +1161,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
         fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=True,
         senders_are_unidirectional=True,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -1110,6 +1178,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
     "noc_message_type", ["noc_fused_unicast_write_flush_atomic_inc", "noc_fused_unicast_write_no_flush_atomic_inc"]
 )
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("clothese_eth_core_selection", [False, True])
 def test_fabric_one_link_multihop_fused_write_atomic_inc_bw(
     is_unicast,
     num_messages,
@@ -1122,6 +1191,7 @@ def test_fabric_one_link_multihop_fused_write_atomic_inc_bw(
     noc_message_type,
     unidirectional,
     fabric_test_mode,
+    clothese_eth_core_selection,
 ):
     run_fabric_edm(
         is_unicast=is_unicast,
@@ -1136,6 +1206,7 @@ def test_fabric_one_link_multihop_fused_write_atomic_inc_bw(
         disable_sends_for_interior_workers=disable_sends_for_interior_workers,
         unidirectional=unidirectional,
         senders_are_unidirectional=True,
+        clothese_eth_core_selection=clothese_eth_core_selection,
     )
 
 
@@ -1160,6 +1231,7 @@ def print_bandwidth_summary():
             "Disable Interior Workers",
             "Unidirectional",
             "Senders Are Unidirectional",
+            "Clothest Eth Core Selection",
         ]
     )
 
@@ -1175,6 +1247,7 @@ def print_bandwidth_summary():
             "Disable Interior Workers",
             "Unidirectional",
             "Senders Are Unidirectional",
+            "Clothest Eth Core Selection",
             "Bandwidth (B/c)",
             "Packets/Second",
         ],
