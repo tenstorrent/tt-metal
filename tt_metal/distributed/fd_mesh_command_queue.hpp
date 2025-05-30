@@ -7,8 +7,8 @@
 #include "mesh_command_queue_base.hpp"
 
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/multi_producer_single_consumer_queue.hpp>
 
+#include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/worker_config_buffer.hpp"
