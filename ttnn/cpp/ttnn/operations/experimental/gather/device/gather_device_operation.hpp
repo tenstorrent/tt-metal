@@ -18,7 +18,8 @@ struct GatherDeviceOperation {
     using tensor_args_t = gather::tensor_args_t;
     using spec_return_value_t = gather::spec_return_value_t;
     using tensor_return_value_t = gather::tensor_return_value_t;
-    using program_factory_t = std::variant<gather::program::GatherProgramFactory>;
+    using program_factory_t =
+        std::variant<gather::program::GatherProgramFactorySRSC, gather::program::GatherProgramFactorySRMC>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
