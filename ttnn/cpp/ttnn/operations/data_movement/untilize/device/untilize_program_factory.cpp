@@ -753,10 +753,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
     bool input_is_sharded = a.is_sharded();
     bool output_is_sharded = output.is_sharded();
 
-    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
-    uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / tile_width;
+    uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / tile_height;
 
-    uint32_t num_tiles = a.volume() / tile_height;
+    uint32_t num_tiles = a.volume() / tile_volume;
     uint32_t num_tiles_per_block = a.get_padded_shape()[-1] / tile_width;
     uint32_t num_blocks = std::ceil((float)num_tiles / num_tiles_per_block);
     uint32_t block_size_nbytes = a.get_padded_shape()[-1] * output.element_size();
@@ -825,7 +825,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
     CoreCoord end_core;
-    std::vector<CoreCoord> cores_with_rtargs;
 
     if (input_is_sharded) {
         auto shard_spec = a.shard_spec().value();
@@ -876,6 +875,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Reader compile-time args
     KernelHandle unary_reader_kernel_id;
     if (input_is_sharded) {
+        // Sharded input
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -883,6 +883,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
+        // Interleaved input
         bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram};
         unary_reader_kernel_id = CreateKernel(
@@ -972,40 +973,43 @@ operation::ProgramWithCallbacks untilize_multi_core(
         ncores_full -= 1;
         full_cores = core_range;
     }
+
+    // Run-time arg assignment
+    std::vector<CoreCoord> cores_with_run_time_args;
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
-    auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
 
     // Run-time args (full cores)
+    auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
         if (!full_cores.contains(core)) {
             continue;
         }
-        // reader runtime args
-        std::vector<uint32_t> reader_rt_args;
 
+        // Reader
+        uint32_t num_tiles_to_read = num_tiles_per_block * nblocks_per_core;
+        std::vector<uint32_t> reader_run_time_args;
         if (input_is_sharded) {
-            reader_rt_args = {
-                num_tiles_per_block * nblocks_per_core  // ntiles
-            };
+            // Sharded input
+            reader_rtreader_run_time_args_args = {num_tiles_to_read};
         } else {
-            reader_rt_args = {
-                src0_buffer->address(),                  // src_addr
-                num_tiles_per_block * nblocks_per_core,  // ntiles
-                tile_start_id                            // start_id
+            // Interleaved input
+            reader_run_time_args = {
+                src0_buffer->address(),  // src_addr
+                num_tiles_to_read,       // ntiles
+                tile_start_id            // start_id
             };
         }
-        // log_debug(tt::LogOp, "reader[{}]: {},{} = {} ({})", src0_buffer->address(), core.x, core.y, tile_start_id,
-        // ntiles_per_block * nblocks_per_core);
 
-        // writer runtime args
-        std::vector<uint32_t> writer_rt_args;
+        // Writer
+        std::vector<uint32_t> writer_run_time_args;
         if (output_is_sharded) {
-            writer_rt_args = {
-                num_tiles_per_block * nblocks_per_core  // ntiles
-            };
+            // Sharded output
+            uint32_t num_tiles_to_write = num_tiles_per_block * nblocks_per_core;
+            writer_run_time_args = {num_tiles_to_write};
         } else {
+            // Interleaved output
             if (src_block_sharded) {
                 uint32_t block_start_row_offset;
                 uint32_t block_start_row_id_offset;
@@ -1031,7 +1035,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     }
                 }
 
-                writer_rt_args = {
+                writer_run_time_args = {
                     dst_buffer->address(),  // dst_addr
                     num_rows_block,
                     block_row_size,
@@ -1044,7 +1048,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     block_start_row_id_offset,
                     block_start_row_offset};
             } else {
-                writer_rt_args = {
+                writer_run_time_args = {
                     dst_buffer->address(),           // dst_addr
                     nblocks_per_core * TILE_HEIGHT,  // nblocks per core
                     block_size_nbytes,               // block_size_nbytes
@@ -1056,46 +1060,45 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     row_start_id};
             }
         }
-        // log_debug(tt::LogOp, "writer[{}]: {},{} = {} {}", dst_buffer->address(), core.x, core.y, block_size_nbytes,
-        // row_start_id);
 
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
 
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
-        cores_with_rtargs.push_back(core);
+        cores_with_run_time_args.push_back(core);
+
         tile_start_id += num_tiles_per_block * nblocks_per_core;
         row_start_id += TILE_HEIGHT * nblocks_per_core;
     }
 
-    // Run-time args (cliff cores)
+    // Run-time args (cliff core)
     if (ncores_full < ncores) {
-        // last core is the cliff core with nblocks_per_core_cliff blocks
+        // Last core is the cliff core with nblocks_per_core_cliff blocks
         CoreCoord core = row_major ? CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x}
                                    : CoreCoord{ncores_full / ncores_y, ncores_full % ncores_y};
-        // reader runtime args
-        std::vector<uint32_t> reader_rt_args;
 
+        // Reader
+        uint32_t num_tiles_to_read = num_tiles_per_block * nblocks_per_core_cliff;
+        std::vector<uint32_t> reader_run_time_args;
         if (input_is_sharded) {
-            reader_rt_args = {
-                num_tiles_per_block * nblocks_per_core_cliff  // ntiles
-            };
+            // Sharded input
+            reader_run_time_args = {num_tiles_to_read};
         } else {
-            reader_rt_args = {
-                src0_buffer->address(),                                  // src_addr
-                (uint32_t)num_tiles_per_block * nblocks_per_core_cliff,  // ntiles
-                tile_start_id                                            // start_id
+            // Interleaved input
+            reader_run_time_args = {
+                src0_buffer->address(),  // src_addr
+                num_tiles_to_read,       // ntiles
+                tile_start_id            // start_id
             };
         }
-        // log_debug(tt::LogOp, "reader: {},{} = {} ({})", core.x, core.y, tile_start_id, ntiles_per_block *
-        // nblocks_per_core_cliff);
 
-        // writer runtime args
-        std::vector<uint32_t> writer_rt_args;
+        // Writer
+        std::vector<uint32_t> writer_run_time_args;
         if (output_is_sharded) {
-            writer_rt_args = {
-                num_tiles_per_block * nblocks_per_core_cliff  // ntiles
-            };
+            // Sharded output
+            uint32_t num_tiles_to_write = num_tiles_per_block * nblocks_per_core_cliff;
+            writer_run_time_args = {num_tiles_to_write};
         } else {
+            // Interleaved output
             if (src_block_sharded) {
                 uint32_t block_start_row_offset;
                 uint32_t block_start_row_id_offset;
@@ -1120,7 +1123,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                         num_rows_unpadded = num_output_rows_unpadded;
                     }
                 }
-                writer_rt_args = {
+                writer_run_time_args = {
                     dst_buffer->address(),  // dst_addr
                     num_rows_block,
                     block_row_size,
@@ -1133,7 +1136,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     block_start_row_id_offset,
                     block_start_row_offset};
             } else {
-                writer_rt_args = {
+                writer_run_time_args = {
                     dst_buffer->address(),                 // dst_addr
                     nblocks_per_core_cliff * TILE_HEIGHT,  // nsticks
                     block_size_nbytes,                     // stick_size_nbytes
@@ -1145,19 +1148,18 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     row_start_id};
             }
         }
-        // log_debug(tt::LogOp, "writer: {},{} = {} {}", core.x, core.y, block_size_nbytes, row_start_id);
 
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
 
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
-        cores_with_rtargs.push_back(core);
+        cores_with_run_time_args.push_back(core);
     }
 
     auto override_runtime_arguments_callback = [reader_kernel_id = unary_reader_kernel_id,
                                                 writer_kernel_id = unary_writer_kernel_id,
                                                 cb_src0 = cb_src0,
                                                 cb_output = cb_output,
-                                                cores_with_rtargs](
+                                                cores_with_run_time_args](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -1174,7 +1176,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         } else {
             auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            for (const CoreCoord& core : cores_with_rtargs) {
+            for (const CoreCoord& core : cores_with_run_time_args) {
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = src_buffer->address();
             }
@@ -1185,7 +1187,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         } else {
             auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-            for (const CoreCoord& core : cores_with_rtargs) {
+            for (const CoreCoord& core : cores_with_run_time_args) {
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = dst_buffer->address();
             }
