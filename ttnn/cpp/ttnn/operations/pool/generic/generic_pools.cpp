@@ -78,10 +78,10 @@ Tensor Pool2DOp<pool_type>::invoke(
         } else {  // auto-sharding
             parallel_config =
                 pool::determine_pool_config_for_auto_shard(input_tensor, sliding_window_config, channels, pool_type);
-            tt::log_debug(tt::LogOp, "auto sharding spec: {}", parallel_config->shard_scheme);
         }
         TT_FATAL(parallel_config.has_value(), "Could not determine parallel config for pool2d.");
 
+        tt::log_debug(tt::LogOp, "auto sharding spec: {}", parallel_config->shard_scheme);
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config.value());
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config.value());
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
@@ -99,6 +99,7 @@ Tensor Pool2DOp<pool_type>::invoke(
         TT_FATAL(
             !applied_shard_scheme.has_value(), "A sharding scheme should not be specified for a sharded input tensor.");
         TT_FATAL(shard_orientation == ShardOrientation::ROW_MAJOR, "Only row major orientation is supported.");
+        parallel_config = sliding_window::ParallelConfig{};
         parallel_config->grid = shard_grid;
         parallel_config->shard_scheme = shard_scheme;
         parallel_config->shard_orientation = shard_orientation;
@@ -155,17 +156,17 @@ Tensor Pool2DOp<pool_type>::invoke(
         is_out_tiled,
         in_place_halo);
 
-    uint32_t pre_allocate_size = haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+    uint32_t pre_allocate_size =
+        haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
     auto output_tensor = ttnn::prim::pool2d(
         queue_id,
         haloed_tensor,
         sliding_window_config,
         pool_type,
-        DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
+        DataType::BFLOAT16,  // input_tensor.dtype(), // currently only bfp16 output is supported
         out_memory_config,
         pre_allocate_size);
-
 
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
         output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);
