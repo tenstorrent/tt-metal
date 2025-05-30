@@ -13,6 +13,24 @@ from models.experimental.functional_pointpillars.tt.ttnn_fpn import TtFPN
 from models.experimental.functional_pointpillars.tt.ttnn_anchor3d_head import TtAnchor3DHead
 from mmengine.structures import InstanceData
 
+import math
+from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
+
+
+def interleaved_to_sharded(x):
+    if x.get_layout() == ttnn.TILE_LAYOUT:
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    if x.shape[1] == 1:
+        x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
+    nhw = x.shape[0] * x.shape[1] * x.shape[2]
+    num_cores = determine_num_cores(nhw, x.shape[2])
+    core_grid = get_core_grid_from_num_cores(num_cores)
+    shardspec = ttnn.create_sharded_memory_config_(
+        x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+
+    return ttnn.reshard(x, shardspec) if x.is_sharded() else ttnn.interleaved_to_sharded(x, shardspec)
+
 
 class TtMVXFasterRCNN:
     def __init__(
@@ -219,6 +237,7 @@ class TtMVXFasterRCNN:
         x = self.pts_middle_encoder(voxel_features, voxel_dict["coors"], batch_size)
         voxel_features = ttnn.deallocate(voxel_features)
         x = ttnn.permute(x, (0, 2, 3, 1))
+        x = interleaved_to_sharded(x)
         x = self.pts_backbone(x)
         if self.with_pts_neck:
             x = self.pts_neck(x)

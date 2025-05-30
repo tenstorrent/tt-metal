@@ -133,7 +133,6 @@ class TtFPN:
 
     def __call__(self, inputs) -> tuple:
         assert len(inputs) == len(self.in_channels)
-
         # build laterals
         laterals = [lateral_conv(inputs[i + self.start_level]) for i, lateral_conv in enumerate(self.lateral_convs)]
 
