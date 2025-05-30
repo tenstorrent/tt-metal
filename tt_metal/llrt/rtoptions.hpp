@@ -371,6 +371,12 @@ public:
 
     inline bool get_erisc_iram_enabled() const { return erisc_iram_enabled; }
 
+    // Temporary API until all multi-device workloads are ported to run on fabric.
+    // It's currently not possible to enable Erisc IRAM by default for all legacy CCL
+    // workloads. In those workloads, erisc kernels are loaded every CCL op; the binary
+    // copy to IRAM can noticeably degrade legacy CCL op performance in those cases.
+    inline void set_erisc_iram_enabled(bool enable) { erisc_iram_enabled = enable; }
+
     inline bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
     inline uint32_t get_arc_debug_buffer_size() { return arc_debug_buffer_size; }
