@@ -158,6 +158,8 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b);
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b);
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout);
+
 }  // namespace tt_metal
 }  // namespace tt
 

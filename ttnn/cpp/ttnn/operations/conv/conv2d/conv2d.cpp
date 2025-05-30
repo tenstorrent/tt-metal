@@ -190,8 +190,6 @@ Result conv2d_DRAM(
     ttnn::Tensor weight_tensor_on_device;
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
-    TT_FATAL(
-        !conv_config.deallocate_activation, "Deallocate activation is not supported for Conv2D with DRAM Slicing.");
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
     TT_FATAL(
@@ -372,6 +370,9 @@ Result conv2d_DRAM(
         slice_index++;
     }
 
+    if (conv_config.deallocate_activation) {
+        input_tensor_on_device.deallocate(true);
+    }
     const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.get_logical_shape());
     const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.get_padded_shape());
 
