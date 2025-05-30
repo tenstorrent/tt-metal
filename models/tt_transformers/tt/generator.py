@@ -599,14 +599,18 @@ class Generator:
             return tt_logits
 
     # Note: This function is called by vLLM
-    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
+    def read_decode_output(self, tt_out, unpadded_batch, padded_batch=None, is_tokens=False):
         """
         Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
-        batch_per_dp = unpadded_batch // self.data_parallel
+        if padded_batch is None:
+            padded_batch = unpadded_batch
+
+        batch_per_dp = padded_batch // self.data_parallel
         logits = []
-        for i in range(self.data_parallel):
-            logits_i = self.model[i].process_output_decode(tt_out[i], B=batch_per_dp, S=1, is_tokens=is_tokens)
+        for i in range((unpadded_batch + batch_per_dp - 1) // batch_per_dp):
+            B = min(batch_per_dp, unpadded_batch - i * batch_per_dp)
+            logits_i = self.model[i].process_output_decode(tt_out[i], B=B, S=1, is_tokens=is_tokens)
             logits.append(logits_i)
         logits = torch.cat(logits, 0)
         return logits
