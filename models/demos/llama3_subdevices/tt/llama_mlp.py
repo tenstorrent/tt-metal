@@ -133,17 +133,13 @@ class TtLlamaMLP(LightweightModule):
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
-
-        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+        w1_out_reduced, w3_out = self.tt_ccl.matmul_line_reduce_scatter(
+            x,
+            self.w3,
             w1_out,
             cluster_axis=1,
             num_links=3,
-            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-        )
-
-        w3_out = ttnn.linear(
-            x,
-            self.w3,
+            RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2,
@@ -151,7 +147,7 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         ttnn.deallocate(x)
         try:
