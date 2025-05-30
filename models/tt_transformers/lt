@@ -41,7 +41,7 @@ local_window_sizes = list(range(0, 101, 10))
 local_window_commands = {
     f"window-{pct}": (
         f"pytest models/tt_transformers/tests/test_accuracy.py "
-        f"-k '_{pct}_pct and 512-128-1024 and paged_attention and accuracy and reference_file'"
+        f"-k '_{pct}_pct and paged_attention and accuracy and reference_file'"
     )
     for pct in local_window_sizes
 }
@@ -1564,7 +1564,7 @@ def export_results_to_markdown(output_entries, stdscr):
         plt.plot(pcts, top5s, marker="o", label="Top‑5")
         plt.xlabel("Local window (%)")
         plt.ylabel("Accuracy (%)")
-        plt.title(f"Local‐window vs Accuracy on {output_entries[0].model}/{output_entries[0].device}")
+        plt.title(f"Local‐window vs Accuracy (seq = 33280) on {output_entries[0].model}/{output_entries[0].device}")
         plt.legend()
         plt.grid(True)
 

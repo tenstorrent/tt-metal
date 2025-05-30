@@ -67,11 +67,12 @@ def get_accuracy_thresholds(model_args, optimizations):
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",
     [
-        (512, 128, 1024),
-        # (2048, 256, 2304),
+        # (512, 128, 1024),
+        # (2048, 128, 2304),
         # (4096, 512, 4608),
-        # (8192, 512, 8704),
+        # (8192, 128, 8704),
         # (16384, 64, 16896),
+        (32768, 128, 33280),
     ],
 )
 @pytest.mark.parametrize(
@@ -105,7 +106,7 @@ def get_accuracy_thresholds(model_args, optimizations):
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 2048, "local_window_pct": pct} for pct in range(0, 101, 10)],
+    [{"page_block_size": 32, "page_max_num_blocks": 4096, "local_window_pct": pct} for pct in range(0, 101, 10)],
     ids=[f"_{pct}_pct" for pct in range(0, 101, 10)],
 )
 @pytest.mark.parametrize(
