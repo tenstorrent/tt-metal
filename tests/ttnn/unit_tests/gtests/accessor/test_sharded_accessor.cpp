@@ -87,6 +87,8 @@ struct ShardedAccessorParams {
     using expected = Expected;
 };
 
+// Completely compile time case test //
+
 namespace params {
 
 constexpr size_t rank_1 = 2;
@@ -222,15 +224,157 @@ TYPED_TEST(ShardedAccessorTests, PageLookUp) {
     using expected = TypeParam::expected;
 
     // Create sharded accessor
-    auto sharded_accessor = ShardedAccessor<dspec_t, 0>{.bank_base_address = 0};
+    auto sharded_accessor = ShardedAccessor<dspec_t, 0>(0);
 
     // Check that the computed values in DSpec match the expected values
-    ASSERT_EQ(dspec_val.tensor_strides, expected::dspec.tensor_strides);
-    ASSERT_EQ(dspec_val.tensor_volume, expected::dspec.tensor_volume);
-    ASSERT_EQ(dspec_val.shard_strides, expected::dspec.shard_strides);
-    ASSERT_EQ(dspec_val.shard_volume, expected::dspec.shard_volume);
-    ASSERT_EQ(dspec_val.shard_grid, expected::dspec.shard_grid);
-    ASSERT_EQ(dspec_val.shard_grid_strides, expected::dspec.shard_grid_strides);
+    ASSERT_EQ(dspec_val.get_tensor_strides(), expected::dspec.tensor_strides);
+    ASSERT_EQ(dspec_val.get_tensor_volume(), expected::dspec.tensor_volume);
+    ASSERT_EQ(dspec_val.get_shard_strides(), expected::dspec.shard_strides);
+    ASSERT_EQ(dspec_val.get_shard_volume(), expected::dspec.shard_volume);
+    ASSERT_EQ(dspec_val.get_shard_grid(), expected::dspec.shard_grid);
+    ASSERT_EQ(dspec_val.get_shard_grid_strides(), expected::dspec.shard_grid_strides);
+
+    // Check that the computed bank and offset values match the expected values
+    for (const auto& expected_bank_and_offset : expected::bank_and_offset) {
+        auto [bank_id, bank_offset] = sharded_accessor.get_bank_and_offset(expected_bank_and_offset.page_id);
+        EXPECT_EQ(bank_id, expected_bank_and_offset.bank_id);
+        EXPECT_EQ(bank_offset, expected_bank_and_offset.bank_offset);
+    }
+}
+
+// Runtime tensor and shard shape, compile time banks test case //
+constexpr size_t rank_4 = 2;
+constexpr size_t num_banks_4 = 4;
+constexpr std::array<uint32_t, num_banks_4> bank_coord_array_4{};
+
+TEST(ShardedAccessorTestsCRTA, RuntimeTensorAndShardShapeCompileTimeBanks) {
+    using TensorShapeT = ::detail::ShapeWrapperDynamic<rank_4>;
+    using ShardShapeT = ::detail::ShapeWrapperDynamic<rank_4>;
+    USING_STRUCT_FROM_ARRAY_WRAPPER(::detail::BankCoordWrapper, bank_coords_4, bank_coord_array_4);
+
+    using dspec_t = ::detail::DistributionSpec<TensorShapeT, ShardShapeT, bank_coords_4>;
+    std::array<uint32_t, rank_4> tensor_shape_array = {2, 3};
+    std::array<uint32_t, rank_4> shard_shape_array = {1, 2};
+    auto dspec_val = dspec_t(tensor_shape_array, shard_shape_array);
+
+    auto sharded_accessor = ShardedAccessor<dspec_t, 0>(dspec_val, 0);
+
+    using expected = ShardedAccessorExpected<
+        ExpectedDSpec<rank_4>{
+            .tensor_strides = {3, 1},
+            .tensor_volume = 6,
+            .shard_strides = {2, 1},
+            .shard_volume = 2,
+            .shard_grid = {2, 2},
+            .shard_grid_strides = {2, 1}},
+        ExpectedBankAndOffset{.page_id = 0, .bank_id = 0, .bank_offset = 0},
+        ExpectedBankAndOffset{.page_id = 1, .bank_id = 0, .bank_offset = 1},
+        ExpectedBankAndOffset{.page_id = 2, .bank_id = 1, .bank_offset = 0},
+        ExpectedBankAndOffset{.page_id = 3, .bank_id = 2, .bank_offset = 0},
+        ExpectedBankAndOffset{.page_id = 4, .bank_id = 2, .bank_offset = 1},
+        ExpectedBankAndOffset{.page_id = 5, .bank_id = 3, .bank_offset = 0}>;
+
+    // Check that the computed values in DSpec match the expected values
+    ASSERT_EQ(dspec_val.get_tensor_strides(), expected::dspec.tensor_strides);
+    ASSERT_EQ(dspec_val.get_tensor_volume(), expected::dspec.tensor_volume);
+    ASSERT_EQ(dspec_val.get_shard_strides(), expected::dspec.shard_strides);
+    ASSERT_EQ(dspec_val.get_shard_volume(), expected::dspec.shard_volume);
+    ASSERT_EQ(dspec_val.get_shard_grid(), expected::dspec.shard_grid);
+    ASSERT_EQ(dspec_val.get_shard_grid_strides(), expected::dspec.shard_grid_strides);
+
+    // Check that the computed bank and offset values match the expected values
+    for (const auto& expected_bank_and_offset : expected::bank_and_offset) {
+        auto [bank_id, bank_offset] = sharded_accessor.get_bank_and_offset(expected_bank_and_offset.page_id);
+        EXPECT_EQ(bank_id, expected_bank_and_offset.bank_id);
+        EXPECT_EQ(bank_offset, expected_bank_and_offset.bank_offset);
+    }
+}
+
+// Runtime tensor and shard shape, compile time banks test case //
+constexpr size_t rank_5 = 2;
+constexpr size_t num_banks_5 = 4;
+constexpr std::array<uint32_t, num_banks_5> bank_coord_array_5{};
+
+TEST(ShardedAccessorTestsCRTA, RuntimeTensorCompiletimeShardShapeCompileTimeBanks) {
+    using TensorShapeT = ::detail::ShapeWrapperDynamic<rank_5>;
+    using ShardShapeT = ::detail::ShapeWrapper<1, 2>;
+    USING_STRUCT_FROM_ARRAY_WRAPPER(::detail::BankCoordWrapper, bank_coords_5, bank_coord_array_5);
+
+    using dspec_t = ::detail::DistributionSpec<TensorShapeT, ShardShapeT, bank_coords_5>;
+    std::array<uint32_t, rank_5> tensor_shape_array = {2, 3};
+    auto dspec_val = dspec_t(tensor_shape_array);
+
+    auto sharded_accessor = ShardedAccessor<dspec_t, 0>(dspec_val, 0);
+
+    using expected = ShardedAccessorExpected<
+        ExpectedDSpec<rank_5>{
+            .tensor_strides = {3, 1},
+            .tensor_volume = 6,
+            .shard_strides = {2, 1},
+            .shard_volume = 2,
+            .shard_grid = {2, 2},
+            .shard_grid_strides = {2, 1}},
+        ExpectedBankAndOffset{.page_id = 0, .bank_id = 0, .bank_offset = 0},
+        ExpectedBankAndOffset{.page_id = 1, .bank_id = 0, .bank_offset = 1},
+        ExpectedBankAndOffset{.page_id = 2, .bank_id = 1, .bank_offset = 0},
+        ExpectedBankAndOffset{.page_id = 3, .bank_id = 2, .bank_offset = 0},
+        ExpectedBankAndOffset{.page_id = 4, .bank_id = 2, .bank_offset = 1},
+        ExpectedBankAndOffset{.page_id = 5, .bank_id = 3, .bank_offset = 0}>;
+
+    // Check that the computed values in DSpec match the expected values
+    ASSERT_EQ(dspec_val.get_tensor_strides(), expected::dspec.tensor_strides);
+    ASSERT_EQ(dspec_val.get_tensor_volume(), expected::dspec.tensor_volume);
+    ASSERT_EQ(dspec_val.get_shard_strides(), expected::dspec.shard_strides);
+    ASSERT_EQ(dspec_val.get_shard_volume(), expected::dspec.shard_volume);
+    ASSERT_EQ(dspec_val.get_shard_grid(), expected::dspec.shard_grid);
+    ASSERT_EQ(dspec_val.get_shard_grid_strides(), expected::dspec.shard_grid_strides);
+
+    // Check that the computed bank and offset values match the expected values
+    for (const auto& expected_bank_and_offset : expected::bank_and_offset) {
+        auto [bank_id, bank_offset] = sharded_accessor.get_bank_and_offset(expected_bank_and_offset.page_id);
+        EXPECT_EQ(bank_id, expected_bank_and_offset.bank_id);
+        EXPECT_EQ(bank_offset, expected_bank_and_offset.bank_offset);
+    }
+}
+
+// Runtime tensor and shard shape, compile time banks test case //
+constexpr size_t rank_6 = 2;
+constexpr size_t num_banks_6 = 4;
+constexpr std::array<uint32_t, num_banks_6> bank_coord_array_6{};
+
+TEST(ShardedAccessorTestsCRTA, CompiletimeTensorRuntimeShardShapeCompileTimeBanks) {
+    using TensorShapeT = ::detail::ShapeWrapper<2, 3>;
+    using ShardShapeT = ::detail::ShapeWrapperDynamic<rank_6>;
+    USING_STRUCT_FROM_ARRAY_WRAPPER(::detail::BankCoordWrapper, bank_coords_6, bank_coord_array_6);
+
+    using dspec_t = ::detail::DistributionSpec<TensorShapeT, ShardShapeT, bank_coords_6>;
+    std::array<uint32_t, rank_6> shard_shape_array = {1, 2};
+    auto dspec_val = dspec_t(shard_shape_array);
+
+    auto sharded_accessor = ShardedAccessor<dspec_t, 0>(dspec_val, 0);
+
+    using expected = ShardedAccessorExpected<
+        ExpectedDSpec<rank_6>{
+            .tensor_strides = {3, 1},
+            .tensor_volume = 6,
+            .shard_strides = {2, 1},
+            .shard_volume = 2,
+            .shard_grid = {2, 2},
+            .shard_grid_strides = {2, 1}},
+        ExpectedBankAndOffset{.page_id = 0, .bank_id = 0, .bank_offset = 0},
+        ExpectedBankAndOffset{.page_id = 1, .bank_id = 0, .bank_offset = 1},
+        ExpectedBankAndOffset{.page_id = 2, .bank_id = 1, .bank_offset = 0},
+        ExpectedBankAndOffset{.page_id = 3, .bank_id = 2, .bank_offset = 0},
+        ExpectedBankAndOffset{.page_id = 4, .bank_id = 2, .bank_offset = 1},
+        ExpectedBankAndOffset{.page_id = 5, .bank_id = 3, .bank_offset = 0}>;
+
+    // Check that the computed values in DSpec match the expected values
+    ASSERT_EQ(dspec_val.get_tensor_strides(), expected::dspec.tensor_strides);
+    ASSERT_EQ(dspec_val.get_tensor_volume(), expected::dspec.tensor_volume);
+    ASSERT_EQ(dspec_val.get_shard_strides(), expected::dspec.shard_strides);
+    ASSERT_EQ(dspec_val.get_shard_volume(), expected::dspec.shard_volume);
+    ASSERT_EQ(dspec_val.get_shard_grid(), expected::dspec.shard_grid);
+    ASSERT_EQ(dspec_val.get_shard_grid_strides(), expected::dspec.shard_grid_strides);
 
     // Check that the computed bank and offset values match the expected values
     for (const auto& expected_bank_and_offset : expected::bank_and_offset) {

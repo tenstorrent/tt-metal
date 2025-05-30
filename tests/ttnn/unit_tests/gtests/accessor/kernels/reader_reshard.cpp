@@ -22,10 +22,10 @@ void kernel_main() {
     // - get_tile_size(cb_id) only works for tile layout
     constexpr uint32_t page_size = get_compile_time_arg_val(new_base_idx + 1);
 
-    auto sharded_accessor = ShardedAccessor<input_dspec, page_size>{.bank_base_address = bank_base_address};
+    auto sharded_accessor = ShardedAccessor<input_dspec, page_size>(bank_base_address);
 
     constexpr uint32_t one_tile = 1;
-    for (size_t i = 0; i < input_dspec::tensor_volume; ++i) {
+    for (size_t i = 0; i < sharded_accessor.get_dspec().get_tensor_volume(); ++i) {
         cb_reserve_back(cb_id, one_tile);
         uint32_t l1_write_addr = get_write_ptr(cb_id);
         sharded_accessor.noc_async_read_page(i, l1_write_addr);
