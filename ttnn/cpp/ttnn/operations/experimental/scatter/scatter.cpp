@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -50,6 +51,8 @@ Tensor post_scatter_transform_tensor(
         "Output tensor transformation did not create correct output shape! Got: {}, expected: {}",
         output_tensor.get_logical_shape(),
         original_lshape);
+
+    // return ttnn::fill_implicit_tile_padding(output_tensor, 100);
 
     return output_tensor;
 }

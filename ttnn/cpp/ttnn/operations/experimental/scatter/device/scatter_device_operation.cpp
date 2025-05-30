@@ -40,8 +40,6 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
         args.dim,
         static_cast<int32_t>(input_rank));
 
-    const int32_t dim{(args.dim < 0) ? (args.dim + input_tensor.get_padded_shape().rank()) : args.dim};
-
     if (tensor_args.opt_output.has_value()) {
         const auto& output_tensor{tensor_args.opt_output.value()};
         const auto& output_shape{output_tensor.get_logical_shape()};
@@ -61,14 +59,14 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
             magic_enum::enum_name(output_dtype));
 
         TT_FATAL(
-            static_cast<int32_t>(dim) >= -static_cast<int32_t>(output_rank),
+            static_cast<int32_t>(args.dim) >= -static_cast<int32_t>(output_rank),
             "dim cannot be lower than output shape's negative rank (dim: {}, rank: {}).",
-            dim,
+            args.dim,
             -static_cast<int32_t>(output_rank));
         TT_FATAL(
-            static_cast<int32_t>(dim) < static_cast<int32_t>(output_rank),
+            static_cast<int32_t>(args.dim) < static_cast<int32_t>(output_rank),
             "dim must be lower than output shape's positive rank (dim: {}, rank: {}).",
-            dim,
+            args.dim,
             static_cast<int32_t>(output_rank));
 
         TT_FATAL(
@@ -102,6 +100,8 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
             index_dtype == DataType::UINT32,
         "index_dtype is not integer, it is {}.",
         magic_enum::enum_name(index_dtype));
+
+    const int32_t dim{(args.dim < 0) ? (args.dim + input_tensor.get_padded_shape().rank()) : args.dim};
 
     for (uint32_t probe_dim = 0; probe_dim < input_shape.rank(); ++probe_dim) {
         if (probe_dim != dim) {

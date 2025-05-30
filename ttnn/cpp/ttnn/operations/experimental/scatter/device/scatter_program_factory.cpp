@@ -93,6 +93,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     constexpr const char* writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/scatter/device/kernels/dataflow/writer_scatter.cpp";
 
+    const auto& tile_spec = input_tensor.get_tensor_spec().tile();
+
     const std::vector<uint32_t> compile_time_args{
         {input_tensor_is_dram,
          index_tensor_is_dram,
@@ -112,7 +114,11 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
          Wt_index,
          Ht,
          total_number_of_cores,
-         compute_with_storage_grid_size.x}};
+         compute_with_storage_grid_size.x,
+         tile_spec.get_height(),
+         tile_spec.get_width(),
+         tile_spec.get_face_shape()[0],
+         tile_spec.get_face_shape()[1]}};
 
     auto reader_kernel =
         create_kernel(program, reader_kernel_path, all_cores, ReaderDataMovementConfig{compile_time_args});

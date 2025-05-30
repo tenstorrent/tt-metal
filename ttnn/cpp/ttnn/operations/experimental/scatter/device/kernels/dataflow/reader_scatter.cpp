@@ -41,6 +41,10 @@ FORCE_INLINE void scatter_along_whole_axis(
     const uint32_t& logical_index_width,
     const uint32_t& logical_index_height,
     const uint32_t& Wt_index,
+    const uint32_t& tile_height,
+    const uint32_t& tile_width,
+    const uint32_t& face_height,
+    const uint32_t& face_width,
     const uint32_t& input_cb,
     const uint32_t& index_cb,
     const uint32_t& source_cb,
@@ -49,6 +53,8 @@ FORCE_INLINE void scatter_along_whole_axis(
     const IAGF<index_tensor_is_dram>& index_addr_gtor,
     const IAGF<source_tensor_is_dram>& source_addr_gtor) {
     // for each tile along the scatter axis (Wt_input, or input_shape[scatter_axis]) in the input tensor...
+    const uint32_t FACE_NUM_X = tile_width / face_width;
+    const uint32_t FACE_NUM_Y = tile_height / face_height;
     for (uint32_t tile_input = 0; tile_input < Wt_input; ++tile_input) {
         cb_reserve_back(output_cb, ONE_TILE);
         // read an input tile + get fresh pointers
@@ -78,15 +84,15 @@ FORCE_INLINE void scatter_along_whole_axis(
             volatile tt_l1_ptr number_type* source_l1_ptr =
                 reinterpret_cast<volatile tt_l1_ptr number_type*>(source_l1_read_addr);
             // gut the tiles
-            for (uint32_t face_x = 0; face_x < TILE_FACES_PER_AXIS; ++face_x) {
-                for (uint32_t face_y = 0; face_y < TILE_FACES_PER_AXIS; ++face_y) {
-                    for (uint32_t scalar_x = 0; scalar_x < TILE_FACE_WIDTH; ++scalar_x) {
+            for (uint32_t face_x = 0; face_x < FACE_NUM_X; ++face_x) {
+                for (uint32_t face_y = 0; face_y < FACE_NUM_Y; ++face_y) {
+                    for (uint32_t scalar_x = 0; scalar_x < face_width; ++scalar_x) {
                         const uint32_t width_scalar_index = get_width_scalar_index(tile_index_w, face_x, scalar_x);
                         // break sooner if the pointer went past logical width
                         if (width_scalar_index >= logical_index_width) {
                             break;
                         }
-                        for (uint32_t scalar_y = 0; scalar_y < TILE_FACE_HEIGHT; ++scalar_y) {
+                        for (uint32_t scalar_y = 0; scalar_y < face_height; ++scalar_y) {
                             // get global coords + assert
                             const uint32_t height_scalar_index = get_height_scalar_index(ht_offset, face_y, scalar_y);
                             // break sooner if the pointer went past logical height
@@ -99,8 +105,8 @@ FORCE_INLINE void scatter_along_whole_axis(
                                 tile_guts<index_type>(index_l1_ptr, face_x, face_y, scalar_x, scalar_y);
                             // check if index value targets currently chosen input tile (tile_input)
                             const uint32_t dest_tile_id_in_row = index_value >> 5;
+                            ASSERT(dest_tile_id_in_row < Wt_input);
                             if (dest_tile_id_in_row != tile_input) {
-                                ASSERT(dest_tile_id_in_row == tile_input);
                                 continue;
                             }
                             volatile number_type& source_value =
@@ -158,6 +164,10 @@ void kernel_main() {
             ctas.logical_index_width,
             ctas.logical_index_height,
             ctas.Wt_index,
+            ctas.tile_height,
+            ctas.tile_width,
+            ctas.face_height,
+            ctas.face_width,
             ctas.input_tensor_cb,
             ctas.index_tensor_cb,
             ctas.source_tensor_cb,

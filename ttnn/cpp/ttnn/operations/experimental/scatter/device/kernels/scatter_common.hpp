@@ -116,27 +116,19 @@ struct ScatterCTAs {
     const uint32_t Ht;
     const uint32_t total_number_of_cores;
     const uint32_t compute_with_storage_grid_size_x;
+    const uint32_t tile_height;
+    const uint32_t tile_width;
+    const uint32_t face_height;
+    const uint32_t face_width;
 };
 
 constexpr ScatterCTAs get_ctas() {
-    return {
-        get_compile_time_arg_val(0) == 1,
-        get_compile_time_arg_val(1) == 1,
-        get_compile_time_arg_val(2) == 1,
-        get_compile_time_arg_val(3) == 1,
-        get_compile_time_arg_val(4),
-        get_compile_time_arg_val(5),
-        get_compile_time_arg_val(6),
-        get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10),
-        get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12),
-        get_compile_time_arg_val(13),
-        get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16),
-        get_compile_time_arg_val(17),
-        get_compile_time_arg_val(18)};
+    return {get_compile_time_arg_val(0) == 1, get_compile_time_arg_val(1) == 1, get_compile_time_arg_val(2) == 1,
+            get_compile_time_arg_val(3) == 1, get_compile_time_arg_val(4),      get_compile_time_arg_val(5),
+            get_compile_time_arg_val(6),      get_compile_time_arg_val(7),      get_compile_time_arg_val(8),
+            get_compile_time_arg_val(9),      get_compile_time_arg_val(10),     get_compile_time_arg_val(11),
+            get_compile_time_arg_val(12),     get_compile_time_arg_val(13),     get_compile_time_arg_val(14),
+            get_compile_time_arg_val(15),     get_compile_time_arg_val(16),     get_compile_time_arg_val(17),
+            get_compile_time_arg_val(18),     get_compile_time_arg_val(19),     get_compile_time_arg_val(20),
+            get_compile_time_arg_val(21),     get_compile_time_arg_val(22)};
 }
