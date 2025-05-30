@@ -159,6 +159,114 @@ inline void _calculate_ceil_()
     }
 }
 
+template <bool APPROXIMATION_MODE, bool USE_FP32 = false, int ITERATIONS = 8>
+inline void _calculate_trunc_()
+{
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        sfpi::vFloat in     = sfpi::dst_reg[0];
+        sfpi::vFloat result = in;
+        sfpi::vInt tmp;
+
+        v_if (in < 0)
+        {
+            result = 0 - result;
+        }
+        v_endif;
+
+        sfpi::vFloat v = result;
+
+        if constexpr (USE_FP32)
+        {
+            tmp = _float_to_int32_(result);
+        }
+        else
+        {
+            tmp = float_to_int16(result, 0);
+        }
+
+        result = int32_to_float(tmp, 0);
+
+        v_if (result > v)
+        {
+            result = result - 1;
+        }
+        v_endif;
+
+        if constexpr (!USE_FP32)
+        {
+            v_if (v <= SHRT_MIN || v >= SHRT_MAX)
+            {
+                result = v;
+            }
+            v_endif;
+        }
+
+        v_if (in < 0)
+        {
+            result = 0 - result;
+        }
+        v_endif;
+
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, bool USE_FP32 = false, int ITERATIONS = 8>
+inline void _calculate_frac_()
+{
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        sfpi::vFloat in     = sfpi::dst_reg[0];
+        sfpi::vFloat result = in;
+        sfpi::vInt tmp;
+
+        v_if (in < 0)
+        {
+            result = 0 - result;
+        }
+        v_endif;
+
+        sfpi::vFloat v = result;
+
+        if constexpr (USE_FP32)
+        {
+            tmp = _float_to_int32_(result);
+        }
+        else
+        {
+            tmp = float_to_int16(result, 0);
+        }
+
+        result = int32_to_float(tmp, 0);
+
+        v_if (result > v)
+        {
+            result = result - 1;
+        }
+        v_endif;
+
+        if constexpr (!USE_FP32)
+        {
+            v_if (v <= SHRT_MIN || v >= SHRT_MAX)
+            {
+                result = v;
+            }
+            v_endif;
+        }
+
+        v_if (in < 0)
+        {
+            result = 0 - result;
+        }
+        v_endif;
+
+        sfpi::dst_reg[0] = in - result;
+        sfpi::dst_reg++;
+    }
+}
+
 inline sfpi::vFloat _round_even_(sfpi::vFloat v)
 {
     sfpi::vFloat result;
