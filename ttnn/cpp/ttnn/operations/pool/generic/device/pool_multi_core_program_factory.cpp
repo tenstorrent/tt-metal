@@ -17,7 +17,6 @@ namespace ttnn::operations::pool {
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
-
 // This function creates a scalar config tensor for the AvgPool2D operation. It is entirely made of
 // a vector of ScalarInfo structs, which are used to configure the pooling operation. The config tensor
 // is filled with out_nhw_per_core number of ScalarInfos for each core and then sharded across the cores.
@@ -112,6 +111,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
     bool ceil_mode,
+    bool count_include_pad,
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t num_shards_c,
@@ -326,8 +326,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
     uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
     uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
-    bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false ||
-                               (ceil_pad_h == 0 && ceil_pad_w == 0) || divisor_override.has_value();
+    bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
+                               (ceil_mode == false && count_include_pad == true) ||
+                               (ceil_pad_h == 0 && ceil_pad_w == 0 && pad_h == 0 && pad_w == 0);
 
     CBHandle config_cb;
     tt::tt_metal::DeviceStorage scalar_config_storage;
@@ -347,6 +348,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             .ceil_mode = ceil_mode,
             .ceil_h = ceil_pad_h,
             .ceil_w = ceil_pad_w,
+            .count_include_pad = count_include_pad,
             .pad_h = pad_h / 2,  // pad_h is the total padding, so divide by 2 for each side
             .pad_w = pad_w / 2,  // pad_w is the total padding, so divide by 2 for each side
             .out_nhw_per_core = out_nhw_per_core};
@@ -535,6 +537,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
     const auto& out_mem_config = op_attr.memory_config_;
+    bool count_include_pad = op_attr.count_include_pad_;
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
 
     tt::tt_metal::Program program{};
@@ -597,6 +600,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         ceil_pad_h,
         ceil_pad_w,
         ceil_mode,
+        count_include_pad,
         dilation_h,
         dilation_w,
         num_shards_c,

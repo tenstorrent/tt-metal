@@ -5,7 +5,6 @@
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/assert.hpp>
-#include <algorithm>
 
 namespace ttnn::operations::pool {
 // This function generates a vector of elements of type ScalarInfo. It is called once per core and generates the
@@ -24,7 +23,8 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
     bool first_scalar = true;
     uint32_t last_pool_area = 0;
 
-    if (config.ceil_mode && (config.ceil_w > 0 || config.ceil_h > 0)) {
+    if ((config.ceil_mode && (config.ceil_w > 0 || config.ceil_h > 0)) ||
+        (!config.count_include_pad && (config.pad_h > 0 || config.pad_w > 0))) {
         for (uint32_t i = 0; i < config.out_nhw_per_core; i++) {
             // Compute starting and ending indices of the pooling window
             int h_start = output_stick_x * config.stride_h - config.pad_h;
@@ -36,24 +36,36 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
                 w_start + static_cast<int>(config.kernel_w),
                 static_cast<int>(config.in_w + config.pad_w + config.ceil_w));
 
-            // Initial pool area
-            int pool_area = (h_end - h_start) * (w_end - w_start);
+            int valid_h_start = (h_start > 0) ? h_start : 0;
+            int valid_w_start = (w_start > 0) ? w_start : 0;
+            int valid_h_end = std::min(h_end, static_cast<int>(config.in_h));
+            int valid_w_end = std::min(w_end, static_cast<int>(config.in_w));
 
-            // Calculate ceil induced padding overflow beyond input dimensions
-            int pad_h_over = std::max(h_end - static_cast<int>(config.in_h) - static_cast<int>(config.pad_h), 0);
-            int pad_w_over = std::max(w_end - static_cast<int>(config.in_w) - static_cast<int>(config.pad_w), 0);
+            int effective_h = valid_h_end - valid_h_start;
+            int effective_w = valid_w_end - valid_w_start;
+            int pool_area = 0;
+            if (config.count_include_pad) {
+                // Initial pool area
+                pool_area = (h_end - h_start) * (w_end - w_start);
 
-            // Adjust pool area to exclude padded overflow
-            pool_area -= pad_h_over * config.kernel_w;
-            pool_area -= pad_w_over * config.kernel_h;
+                // Calculate ceil induced padding overflow beyond input dimensions
+                int pad_h_over = std::max(h_end - static_cast<int>(config.in_h) - static_cast<int>(config.pad_h), 0);
+                int pad_w_over = std::max(w_end - static_cast<int>(config.in_w) - static_cast<int>(config.pad_w), 0);
 
-            // Re-add intersection if both directions overflowed
-            if (pad_h_over > 0 && pad_w_over > 0) {
-                pool_area += pad_h_over * pad_w_over;
+                // Adjust pool area to exclude padded overflow
+                pool_area -= pad_h_over * config.kernel_w;
+                pool_area -= pad_w_over * config.kernel_h;
+
+                // Re-add intersection if both directions overflowed
+                if (pad_h_over > 0 && pad_w_over > 0) {
+                    pool_area += pad_h_over * pad_w_over;
+                }
+
+                // Avoid division by zero
+                pool_area = pool_area > 1 ? pool_area : 1;
+            } else {
+                pool_area = (effective_h > 0 && effective_w > 0) ? effective_h * effective_w : 0;
             }
-
-            // Avoid division by zero
-            pool_area = pool_area > 1 ? pool_area : 1;
             float value = pool_area > 0 ? 1.f / (float)pool_area : 0.f;
 
             // Add new scalar if padding config changes
@@ -81,8 +93,8 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
 }
 
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
-// For the maxpool it is 1, for the avg pool it is 1/kernel_size or the divisor override used to initialize compile time
-// argument sent to kernels. If there are multiple scalars needed call get_bf16_avg_pool_config_scalars
+// For the maxpool it is 1, for the avg pool it is 1/kernel_size or the divisor override used to initialize compile
+// time argument sent to kernels. If there are multiple scalars needed call get_bf16_avg_pool_config_scalars
 uint32_t get_bf16_pool_scalar(
     Pool2DType pool_type, uint32_t kernel_h, uint32_t kernel_w, std::optional<int32_t> divisor_override) {
     float value;

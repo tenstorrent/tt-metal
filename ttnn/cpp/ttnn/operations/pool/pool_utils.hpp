@@ -39,6 +39,7 @@ struct AvgPoolConfig {
     bool ceil_mode;
     uint32_t ceil_h;
     uint32_t ceil_w;
+    bool count_include_pad;
     uint32_t pad_h;
     uint32_t pad_w;
     uint32_t out_nhw_per_core;
