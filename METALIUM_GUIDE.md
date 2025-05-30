@@ -114,6 +114,8 @@ TODO: Describe that TT wins at scale-out, best compute density at the server an
   <img width="1176" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/d3c89155-6e4d-49cb-a95c-85654ac29e7d">
 <img width="1171" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/73039d17-3bce-4ff5-b797-da1aa9b147c4">
 
+(CB stands for circular buffer)
+
 #### Behind the scenes, a Compute Kernel becomes Unpack, Math, Pack Kernels
 
 As the above single Tensix core architecture shows, the Compute Kernel uses
@@ -243,7 +245,7 @@ inline __attribute__((always_inline)) void acquire_dst() {
     ;
 }
 ```
-* The UNPACK kernel waits for the end of MATH kernel:
+* The PACK kernel waits for the end of MATH kernel:
 ```
 inline __attribute__((always_inline)) void acquire_dst() {
     ;
