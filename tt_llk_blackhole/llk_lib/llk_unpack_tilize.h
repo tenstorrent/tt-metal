@@ -288,7 +288,7 @@ inline void _llk_unpack_tilizeA_B_init_(
     _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(narrow_tile, num_faces);
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_(
     std::uint32_t unpA_src_format,
     std::uint32_t face_r_dim,
@@ -328,6 +328,10 @@ inline void _llk_unpack_tilizeA_B_(
         if constexpr (neginf_srcA)
         {
             TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
+        }
+        else if constexpr (zero_srcA_reduce)
+        {
+            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
         }
 
         // Get tile address
