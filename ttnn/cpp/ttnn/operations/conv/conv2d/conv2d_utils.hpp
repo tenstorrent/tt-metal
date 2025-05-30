@@ -143,7 +143,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     bool is_mm_conv,
     DeviceType* device,
     Layout input_tensor_layout,
-    std::optional<sliding_window::ParallelConfig> input_tensor_parallel_config = std::nullopt);
+    const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt);
 
 template <typename DeviceType>
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(DeviceType* device);

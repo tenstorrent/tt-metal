@@ -472,7 +472,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     bool is_mm_conv,
     DeviceType* device,
     Layout input_tensor_layout,
-    std::optional<ParallelConfig> input_tensor_parallel_config) {
+    const std::optional<ParallelConfig>& input_tensor_parallel_config) {
     TT_FATAL(conv_config.shard_layout.has_value(), "Shard layout must be set in Conv2dConfig.");
     auto shard_layout = conv_config.shard_layout.value();
     auto block_shard_orientation =
@@ -493,14 +493,12 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t input_num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
 
-    // TT_ASSERT(input_tensor.get_padded_shape() == input_tensor.get_shape());
     uint32_t tensor_height = input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2];
     uint32_t round_up_size = tt::constants::TILE_HEIGHT;
     if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED && input_tensor_layout == Layout::ROW_MAJOR) {
         round_up_size = 1;
     }
     uint32_t input_tensor_height_snapped_to_tile = tt::round_up(tensor_height, input_num_cores_nhw * round_up_size);
-    TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
     const uint32_t input_channels_alignment =
         get_input_channels_alignment(shard_layout, input_tensor_layout, is_mm_conv, std::nullopt);
 
@@ -1463,7 +1461,7 @@ template std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_conf
     bool is_mm_conv,
     IDevice* device,
     Layout input_tensor_layout,
-    std::optional<ParallelConfig> input_tensor_parallel_config);
+    const std::optional<ParallelConfig>& input_tensor_parallel_config);
 
 template std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config<MeshDevice>(
     const Conv2dConfig& conv_config,
@@ -1473,7 +1471,7 @@ template std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_conf
     bool is_mm_conv,
     MeshDevice* device,
     Layout input_tensor_layout,
-    std::optional<ParallelConfig> input_tensor_parallel_config);
+    const std::optional<ParallelConfig>& input_tensor_parallel_config);
 
 template DeviceComputeKernelConfig get_conv_default_compute_kernel_config<tt::tt_metal::IDevice>(
     tt::tt_metal::IDevice* device);
