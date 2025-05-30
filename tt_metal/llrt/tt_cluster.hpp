@@ -340,6 +340,12 @@ public:
 
     const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
 
+    std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) const;
+
+    // TODO: move to separate system descriptor class
+    // return enum for connection type, Internal, QSFP, Other, Unknown
+    bool is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) const;
+
 private:
     void detect_arch_and_target();
     void generate_cluster_descriptor();
