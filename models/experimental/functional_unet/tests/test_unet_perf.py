@@ -21,7 +21,7 @@ from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_S
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((1, 4, 1407.0),),
+    ((1, 4, 1420.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_model.py::test_unet_model[device_params0-{groups}-{batch}]"
@@ -61,7 +61,7 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_throughput",
-    ((1, 4, 256, 30.0, 1254.0),),
+    ((1, 4, 256, 30.0, 1315.0),),
 )
 def test_unet_trace_perf(
     batch: int,
