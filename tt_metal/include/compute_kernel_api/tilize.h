@@ -271,7 +271,7 @@ ALWI void fast_tilize_block(
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
-        UNPACK((llk_unpack_fast_tilize_block(icb, t + input_tile_index, block_dim)));
+        UNPACK((llk_unpack_fast_tilize_block(icb, t + input_tile_index, block_dim, full_dim)));
         MATH((llk_math_fast_eltwise_unary_datacopy_block(0, block_dim)));
         PACK((llk_pack_fast_tilize_block(0, ocb, t + output_tile_index, block_dim)));
 
@@ -282,7 +282,7 @@ ALWI void fast_tilize_block(
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
-        UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index + full_dim_divisible, last_block)));
+        UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index + full_dim_divisible, last_block, full_dim)));
         MATH((llk_math_fast_eltwise_unary_datacopy_block(0, last_block)));
         PACK((llk_pack_fast_tilize_block(0, ocb, output_tile_index + full_dim_divisible, last_block)));
 

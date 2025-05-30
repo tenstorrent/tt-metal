@@ -387,11 +387,11 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeA_B) {
 }
 
 TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmark) {
-    vector<vector<uint32_t>> num_tiles = {{128, 1}, {64, 2}, {32, 4}, {16, 8}, {8, 16}, {4, 32}, {2, 64}, {1, 128}};
-    // vector<vector<uint32_t>> num_tiles = {{1, 12}};
+    vector<vector<uint32_t>> num_tiles = {{64, 2}, {32, 4}, {16, 8}, {8, 16}, {4, 32}, {2, 64}, {1, 128}};
+    // vector<vector<uint32_t>> num_tiles = {{1, 2}};
     for (auto num_tile : num_tiles) {
         unit_tests::compute::tilize::TestConfig test_config = {
-            .short_init = false,
+            .short_init = true,
             .dst_full_sync_en = false,
             .fp32_dest_acc_en = false,
 

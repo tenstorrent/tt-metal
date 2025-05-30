@@ -255,9 +255,12 @@ inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, const std::
 inline void llk_unpack_fast_tilize_uninit() { _llk_unpack_fast_tilize_uninit_(); }
 
 inline void llk_unpack_fast_tilize_block(
-    const std::uint32_t operand, const std::uint32_t tile_index, const std::uint32_t block_dim) {
+    const std::uint32_t operand,
+    const std::uint32_t tile_index,
+    const std::uint32_t block_dim,
+    const std::uint32_t full_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
 
-    _llk_unpack_fast_tilize_block_(base_address, tile_index, block_dim);
+    _llk_unpack_fast_tilize_block_(base_address, tile_index, block_dim, full_dim);
 }
