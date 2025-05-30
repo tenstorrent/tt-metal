@@ -321,12 +321,8 @@ Result conv2d_DRAM(
                 input_tensor_on_device,
                 ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
                 ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
-                ttnn::SmallVector<uint32_t>{
-                    1,
-                    1,
-                    1,
-                    1,
-                });
+                ttnn::SmallVector<uint32_t>{1, 1, 1, 1}  // Step
+            );
         } else {
             auto sliced_input_tensor_memory_config = std::get<1>(determine_input_memory_config(
                 conv_config,
@@ -344,12 +340,7 @@ Result conv2d_DRAM(
                 input_tensor_on_device,
                 ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
                 ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
-                ttnn::SmallVector<uint32_t>{
-                    1,
-                    1,
-                    1,
-                    1,
-                },  // Step
+                ttnn::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
                 sliced_input_tensor_memory_config);
         }
         auto conv_config_l1 = conv_config;
