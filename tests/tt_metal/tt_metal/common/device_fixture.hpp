@@ -30,7 +30,7 @@ protected:
         }
 
         std::vector<chip_id_t> ids;
-        for (unsigned int id = 0; id < num_devices_; id++) {
+        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             ids.push_back(id);
         }
         this->create_devices(ids);
@@ -101,7 +101,8 @@ protected:
     }
 
     void create_devices() {
-        const chip_id_t mmio_device_id = 0;
+        const chip_id_t mmio_device_id =
+            *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin();
         this->reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
         this->device_ = this->reserved_devices_.at(mmio_device_id);
         this->devices_ = tt::DevicePool::instance().get_all_active_devices();
