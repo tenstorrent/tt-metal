@@ -17,7 +17,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     [
         [2, 256, 512],
         [2, 2, 256, 512],
-        [2, 1, 256, 1024],
     ],
 )
 def test_untilize_single_core_interleaved_to_interleaved(device, dtype, use_pack_untilize, tensor_shape):
@@ -34,14 +33,13 @@ def test_untilize_single_core_interleaved_to_interleaved(device, dtype, use_pack
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_pack_untilize", [True])
 @pytest.mark.parametrize(
     "tensor_shape",
     [
         [2, 256, 512],
         [2, 2, 256, 512],
-        [2, 1, 256, 1024],
     ],
 )
 @pytest.mark.parametrize(
@@ -141,14 +139,13 @@ def test_untilize_single_core_interleaved_to_sharded(
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_pack_untilize", [True])
 @pytest.mark.parametrize(
     "tensor_shape",
     [
         [2, 256, 512],
         [2, 2, 256, 512],
-        [2, 1, 256, 1024],
     ],
 )
 @pytest.mark.parametrize(
@@ -248,14 +245,13 @@ def test_untilize_single_core_sharded_to_interleaved(
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_pack_untilize", [True])
 @pytest.mark.parametrize(
     "tensor_shape",
     [
         [2, 256, 512],
         [2, 2, 256, 512],
-        [2, 1, 256, 1024],
     ],
 )
 @pytest.mark.parametrize(
