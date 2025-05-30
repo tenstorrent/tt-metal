@@ -299,6 +299,7 @@ Result conv2d_DRAM(
                 input_slice_width,
                 compute_grid_size,
                 input_tensor_on_device.layout(),
+                input_tensor_on_device.dtype(),
                 std::make_optional(input_tensor_on_device.memory_config()),
                 kernel_size,
                 groups,
@@ -457,6 +458,7 @@ Result conv2d_L1(
             input_width,
             compute_grid_size,
             input_tensor.layout(),
+            input_tensor.dtype(),
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
