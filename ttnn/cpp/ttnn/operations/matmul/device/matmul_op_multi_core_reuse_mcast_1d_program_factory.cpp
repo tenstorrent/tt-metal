@@ -2723,7 +2723,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+ttnn::operations::matmul::process_program_return_t matmul_multi_core_reuse_mcast_1d_optimized_expander(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -2739,7 +2739,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
-    auto shared_variables = matmul_multi_core_reuse_mcast_1d_optimized_(
+    return matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
         a,
         b_tensors,
@@ -2765,6 +2765,35 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         global_cb,
         config.num_global_cb_receivers,
         sub_device_id);
+}
+
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& a,
+    const std::vector<Tensor>& b_tensors,
+    const std::optional<const Tensor>& bias,
+    const std::vector<Tensor>& output_tensors,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    ttnn::operations::matmul::process_program_return_t shared_variables =
+        matmul_multi_core_reuse_mcast_1d_optimized_expander(
+            program,
+            a,
+            b_tensors,
+            bias,
+            output_tensors,
+            broadcast_batch,
+            compute_kernel_config,
+            program_config,
+            untilize_out,
+            fused_op_signaler,
+            global_cb,
+            sub_device_id);
     const ttnn::operations::matmul::matmul_shared_variables_t shared_vars = shared_variables.shared_variables;
     auto override_runtime_arguments_callback =
         [shared_vars](
