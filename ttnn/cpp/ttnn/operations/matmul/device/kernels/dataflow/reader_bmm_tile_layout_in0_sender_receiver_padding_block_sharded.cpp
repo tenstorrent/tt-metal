@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
-#include "pad_tile.hpp"
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
@@ -15,27 +14,25 @@ void kernel_main() {
 
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(4);
-
     // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(5);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(6);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(4);
+    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(5);
+    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(6);
     // in0 mcast args
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(10);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(11);
-    constexpr uint32_t num_x = get_compile_time_arg_val(12);
-    constexpr uint32_t num_y = get_compile_time_arg_val(13);
-    constexpr bool transpose_mcast = (bool)get_compile_time_arg_val(14);
-    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(15);
-    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(16);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(17);
-    constexpr uint32_t in0_block_h = get_compile_time_arg_val(18);
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(7));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
+    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(9);
+    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(10);
+    constexpr uint32_t num_x = get_compile_time_arg_val(11);
+    constexpr uint32_t num_y = get_compile_time_arg_val(12);
+    constexpr bool transpose_mcast = (bool)get_compile_time_arg_val(13);
+    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(14);
+    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(15);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(16);
+    constexpr uint32_t in0_block_h = get_compile_time_arg_val(17);
 
-    constexpr uint32_t batch = get_compile_time_arg_val(19);
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(20);
+    constexpr uint32_t batch = get_compile_time_arg_val(18);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(19);
 
     uint32_t rt_args_idx = 0;
     const uint32_t sender_id = get_arg_val<uint32_t>(rt_args_idx++);
@@ -169,24 +166,9 @@ void kernel_main() {
                             in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
 
                             noc_async_read_barrier();
-
-                            if constexpr (in0_last_ktile_w > 0) {
-                                if ((block == num_blocks_inner_dim - 1)) {
-                                    auto in0_last_ktile_w_ptr = l1_write_extract_shard_in0 - in0_single_tile_size_bytes;
-                                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
-                                }
-                            }
                         } else {
                             in0_tensor_read_addr = in0_tensor_current_inner_dim_block_start_addr;
                             in0_tensor_current_inner_dim_block_start_addr += in0_block_size_bytes;
-
-                            if constexpr (in0_last_ktile_w > 0) {
-                                if ((block == num_blocks_inner_dim - 1)) {
-                                    auto in0_last_ktile_w_ptr =
-                                        in0_tensor_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
-                                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
-                                }
-                            }
                         }
 
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr

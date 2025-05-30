@@ -96,7 +96,6 @@ target_sources(
             api/tt-metalium/tt_metal.hpp
             api/tt-metalium/util.hpp
             api/tt-metalium/utils.hpp
-            api/tt-metalium/work_executor_types.hpp
             api/tt-metalium/work_split.hpp
             api/tt-metalium/distributed_context.hpp
 )

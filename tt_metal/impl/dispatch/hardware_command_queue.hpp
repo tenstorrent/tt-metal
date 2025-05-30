@@ -22,16 +22,16 @@
 #include "event.hpp"
 #include "host_runtime_commands.hpp"
 #include "launch_message_ring_buffer_state.hpp"
-#include "multi_producer_single_consumer_queue.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include "sub_device_types.hpp"
 #include "trace/trace_buffer.hpp"
-#include "tt_metal/impl/buffers/dispatch.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
+#include "tt_metal/impl/buffers/dispatch.hpp"
+#include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 
 namespace tt {
 namespace tt_metal {

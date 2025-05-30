@@ -10,6 +10,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn {
 
@@ -149,6 +150,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t input_width,
     const CoreCoord& compute_grid_size,
     Layout input_layout,
+    tt::tt_metal::DataType input_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
     const uint32_t groups,
