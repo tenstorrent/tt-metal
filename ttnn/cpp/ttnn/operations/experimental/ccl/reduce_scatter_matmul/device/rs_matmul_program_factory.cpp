@@ -58,8 +58,8 @@ AllGatherRS::Matmul_RS_PF::create_at(
                 operation_attributes.matmul.program_config.value(),
                 operation_attributes.matmul.untilize_out,
                 empty_fused_op_signaler,
-                std::nullopt,
-                std::nullopt)}};
+                operation_attributes.matmul.global_cb,
+                operation_attributes.matmul.sub_device_id)}};
 }
 
 void AllGatherRS::Matmul_RS_PF::override_runtime_arguments(
