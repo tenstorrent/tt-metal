@@ -138,7 +138,7 @@ void MAIN {
 
     cb_reserve_back(cb_ex_partial2, 1);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
-    reduce_init_delta<false>(cb_x2, cb_scaler, cb_ex_partial2);
+    reduce_init(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     tile_regs_acquire();
     for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
@@ -150,7 +150,7 @@ void MAIN {
     pack_tile(dst0, cb_ex_partial2);
     tile_regs_release();
     index_h_offset += block_w;
-    reduce_revert_delta(cb_ex_partial2);
+    reduce_revert_delta();
     cb_pop_front(cb_x2, num_tiles_per_block);
     cb_push_back(cb_ex_partial2, 1);
 
@@ -166,7 +166,7 @@ void MAIN {
         cb_wait_front(cb_scaler_global, 1);
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
-        reduce_init_delta<false>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
+        reduce_init(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         cb_reserve_back(cb_reduction_out, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
@@ -188,7 +188,7 @@ void MAIN {
             pack_tile(dst0, cb_reduction_out);
             tile_regs_release();
         }
-        reduce_revert_delta(cb_reduction_out);
+        reduce_revert_delta();
         cb_push_back(cb_reduction_out, num_tiles_per_allgather_worker);
     }
 
