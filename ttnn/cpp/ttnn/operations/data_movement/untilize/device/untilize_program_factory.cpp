@@ -1288,7 +1288,15 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram};
+    uint32_t tile_bytes = tile_volume * output.element_size();
+    uint32_t start_page_id = 0;
+    std::vector<uint32_t> reader_compile_time_args = {
+        (uint32_t)src0_is_dram,
+        (uint32_t)src0_cb_index,
+        (uint32_t)num_tiles,
+        (uint32_t)tile_bytes,
+        (uint32_t)start_page_id,
+    };
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(a, reader_compile_time_args);
     }
@@ -1298,10 +1306,17 @@ operation::ProgramWithCallbacks untilize_single_core(
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(stick_size) - 1) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (uint32_t)tile_height,
         (uint32_t)output_is_dram,
+        (uint32_t)output_cb_index,
         (uint32_t)stick_size_is_power_of_two,
         (uint32_t)log2_stick_size,
+        (uint32_t)tile_height,
+        (uint32_t)num_blocks_across_height,
+        (uint32_t)num_columns_of_blocks,
+        (uint32_t)num_blocks_per_column_row,
+        (uint32_t)num_tiles_per_block,
+        (uint32_t)single_block_width_size,
+        (uint32_t)stick_size,
     };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
@@ -1350,22 +1365,14 @@ operation::ProgramWithCallbacks untilize_single_core(
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
 
     // Reader run-time args
-    std::vector<uint32_t> reader_run_time_args = {src0_buffer->address(), uint32_t(num_tiles), 0};
+    std::vector<uint32_t> reader_run_time_args = {src0_buffer->address()};
     if (input_is_sharded) {
         shard_builder::extend_sharding_run_time_args(a, reader_run_time_args);
     }
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
 
     // Writer run-time args
-    std::vector<uint32_t> writer_run_time_args = {
-        dst_buffer->address(),
-        num_blocks_across_height,
-        num_columns_of_blocks,
-        num_blocks_per_column_row,
-        num_tiles_per_block,
-        single_block_width_size,
-        stick_size,
-    };
+    std::vector<uint32_t> writer_run_time_args = {dst_buffer->address()};
     if (output_is_sharded) {
         shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
     }
