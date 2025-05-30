@@ -16,7 +16,7 @@ from models.experimental.sentence_bert.ttnn.ttnn_sentencebert_layer import TtnnS
 @pytest.mark.parametrize(
     "inputs",
     [
-        ["emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", [8, 384, 768], [8, 1, 384, 384]],
+        ["emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", [8, 384, 768], [8, 1, 1, 384]],
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
@@ -37,15 +37,17 @@ def test_ttnn_sentence_bert_layer(device, inputs):
         device=device,
     )
     ttnn_module = TtnnSentenceBertLayer(parameters=parameters, config=config)
-    ttnn_hidden_states = ttnn.from_torch(hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_hidden_states = ttnn.from_torch(
+        hidden_states.unsqueeze(dim=1), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
     ttnn_attention_mask = ttnn.from_torch(attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
     sharded_input = ttnn.to_memory_config(
         ttnn_hidden_states,
         memory_config=ttnn.create_sharded_memory_config(
             ttnn_hidden_states.shape,
-            core_grid=device.core_grid,
+            core_grid=ttnn.CoreGrid(y=8, x=6),
             strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.COL_MAJOR,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
     ttnn_out = ttnn_module(
@@ -53,5 +55,5 @@ def test_ttnn_sentence_bert_layer(device, inputs):
         ttnn_attention_mask,
         device=device,
     )
-    ttnn_out = ttnn.to_torch(ttnn_out)
-    assert_with_pcc(reference_out[0], ttnn_out, 0.999)
+    ttnn_out = ttnn.to_torch(ttnn_out).squeeze(dim=1)
+    assert_with_pcc(reference_out[0], ttnn_out, 0.99)

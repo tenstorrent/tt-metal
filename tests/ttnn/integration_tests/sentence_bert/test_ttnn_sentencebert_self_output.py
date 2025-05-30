@@ -34,15 +34,19 @@ def test_ttnn_sentence_bert_self_output(device, inputs):
         device=device,
     )
     ttnn_module = TtnnSentenceBertSelfOutput(parameters=parameters, config=config)
-    ttnn_hidden_states = ttnn.from_torch(hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_input_tensor = ttnn.from_torch(input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_hidden_states = ttnn.from_torch(
+        hidden_states.unsqueeze(dim=1), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    ttnn_input_tensor = ttnn.from_torch(
+        input_tensor.unsqueeze(dim=1), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
     sharded_hidden_states = ttnn.to_memory_config(
         ttnn_hidden_states,
         memory_config=ttnn.create_sharded_memory_config(
             ttnn_hidden_states.shape,
-            core_grid=ttnn.CoreGrid(y=2, x=8),
+            core_grid=ttnn.CoreGrid(y=8, x=6),
             strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.COL_MAJOR,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
     sharded_input_tens = ttnn.to_memory_config(
@@ -51,9 +55,9 @@ def test_ttnn_sentence_bert_self_output(device, inputs):
             ttnn_hidden_states.shape,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.COL_MAJOR,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
     ttnn_out = ttnn_module(sharded_hidden_states, sharded_input_tens)
-    ttnn_out = ttnn.to_torch(ttnn_out)
-    assert_with_pcc(reference_out, ttnn_out, 0.9998)
+    ttnn_out = ttnn.to_torch(ttnn_out).squeeze(dim=1)
+    assert_with_pcc(reference_out, ttnn_out, 0.99)

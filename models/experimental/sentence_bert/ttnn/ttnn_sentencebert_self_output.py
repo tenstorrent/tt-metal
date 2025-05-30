@@ -4,7 +4,7 @@
 
 import ttnn
 from models.experimental.sentence_bert.ttnn.common import (
-    query_key_value_matmul_program_config,
+    self_out_program_config,
     layernorm_program_config,
 )
 
@@ -22,9 +22,10 @@ class TtnnSentenceBertSelfOutput:
             self.parameters.dense.weight,
             bias=self.parameters.dense.bias,
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-            program_config=query_key_value_matmul_program_config,
+            program_config=self_out_program_config,
+            dtype=ttnn.bfloat8_b,
         )
-        output = ttnn.reshard(output, input_tensor.memory_config())
+        input_tensor = ttnn.reshard(input_tensor, output.memory_config())
         output = self.LayerNorm(
             output,
             residual_input_tensor=input_tensor,

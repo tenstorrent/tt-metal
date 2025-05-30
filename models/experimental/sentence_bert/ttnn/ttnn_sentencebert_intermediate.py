@@ -23,5 +23,6 @@ class TtnnSentenceBertIntermediate:
                 math_approx_mode=False,
                 packer_l1_acc=False,
             ),
+            dtype=ttnn.bfloat8_b,
         )
         return out_intermediate

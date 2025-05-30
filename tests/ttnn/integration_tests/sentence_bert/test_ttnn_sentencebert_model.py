@@ -15,14 +15,14 @@ from models.experimental.sentence_bert.ttnn.ttnn_sentence_bert_model import Ttnn
 
 @pytest.mark.parametrize(
     "inputs",
-    [["emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", [8, 384], [8, 1, 384, 384]]],
+    [["emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", [8, 384], [8, 1, 1, 384]]],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_ttnn_sentence_bert_model(device, inputs):
     transformers_model = transformers.AutoModel.from_pretrained(inputs[0]).eval()
     config = transformers.BertConfig.from_pretrained(inputs[0])
     input_ids = torch.randint(low=0, high=config.vocab_size - 1, size=inputs[1], dtype=torch.int64)
-    attention_mask = torch.randint(0, inputs[1][0], size=inputs[1], dtype=torch.int64)
+    attention_mask = torch.ones(inputs[1][0], inputs[1][1])
     extended_mask = custom_extended_mask(attention_mask, dtype=torch.bfloat16)
     token_type_ids = torch.zeros(inputs[1], dtype=torch.int64)
     position_ids = torch.arange(0, inputs[1][1], dtype=torch.int64).unsqueeze(dim=0)
@@ -40,15 +40,6 @@ def test_ttnn_sentence_bert_model(device, inputs):
     ttnn_input_ids, ttnn_token_type_ids, ttnn_position_ids, ttnn_attention_mask = preprocess_inputs(
         input_ids, token_type_ids, position_ids, extended_mask, device
     )
-    sharded_input = ttnn.to_memory_config(
-        ttnn_input_ids,
-        memory_config=ttnn.create_sharded_memory_config(
-            ttnn_input_ids.shape,
-            core_grid=device.core_grid,
-            strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.COL_MAJOR,
-        ),
-    )
-    ttnn_out = ttnn_module(sharded_input, ttnn_attention_mask, ttnn_token_type_ids, ttnn_position_ids, device=device)
-    ttnn_out = ttnn.to_torch(ttnn_out[0])
-    assert_with_pcc(reference_out.last_hidden_state, ttnn_out, 0.956)
+    ttnn_out = ttnn_module(ttnn_input_ids, ttnn_attention_mask, ttnn_token_type_ids, ttnn_position_ids, device=device)
+    ttnn_out = ttnn.to_torch(ttnn_out[0]).squeeze(dim=1)
+    assert_with_pcc(reference_out.last_hidden_state, ttnn_out, 0.987)

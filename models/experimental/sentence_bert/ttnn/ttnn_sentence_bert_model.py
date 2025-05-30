@@ -23,18 +23,6 @@ class TtnnSentenceBertModel:
         device=None,
     ):
         embedding_output = self.embeddings(input_ids, token_type_ids, position_ids, device=device)
-        encoder_input = ttnn.to_memory_config(
-            embedding_output,
-            memory_config=ttnn.create_sharded_memory_config(
-                embedding_output.shape,
-                core_grid=device.core_grid,
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.COL_MAJOR,
-            ),
-        )
+        sequence_output = self.encoder(embedding_output, attention_mask, device=device)
         ttnn.deallocate(embedding_output)
-        sequence_output = self.encoder(encoder_input, attention_mask, device=device)
-        ttnn.deallocate(encoder_input)
-        sequence_output = ttnn.to_memory_config(sequence_output, ttnn.L1_MEMORY_CONFIG)
-        pooled_output = self.pooler(sequence_output)
-        return (sequence_output, pooled_output)
+        return (sequence_output,)

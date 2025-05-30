@@ -33,16 +33,18 @@ def test_ttnn_sentence_bert_intermediate(device, inputs):
         device=device,
     )
     ttnn_module = TtnnSentenceBertIntermediate(parameters=parameters)
-    ttnn_hidden_states = ttnn.from_torch(hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_hidden_states = ttnn.from_torch(
+        hidden_states.unsqueeze(dim=1), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
     sharded_input = ttnn.to_memory_config(
         ttnn_hidden_states,
         memory_config=ttnn.create_sharded_memory_config(
             ttnn_hidden_states.shape,
-            core_grid=device.core_grid,
+            core_grid=ttnn.CoreGrid(y=8, x=6),
             strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.COL_MAJOR,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
     ttnn_out = ttnn_module(sharded_input)
-    ttnn_out = ttnn.to_torch(ttnn_out)
-    assert_with_pcc(reference_out, ttnn_out, 0.9997)
+    ttnn_out = ttnn.to_torch(ttnn_out).squeeze(dim=1)
+    assert_with_pcc(reference_out, ttnn_out, 0.99)

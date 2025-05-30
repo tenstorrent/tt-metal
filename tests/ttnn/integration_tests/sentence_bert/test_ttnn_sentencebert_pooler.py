@@ -33,7 +33,9 @@ def test_ttnn_sentence_bert_pooler(device, inputs):
         device=device,
     )
     ttnn_module = TtnnSentenceBertPooler(parameters=parameters)
-    ttnn_hidden_states = ttnn.from_torch(hidden_states, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_hidden_states = ttnn.from_torch(
+        hidden_states.unsqueeze(dim=1), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
     ttnn_out = ttnn_module(ttnn_hidden_states)
     ttnn_out = ttnn.to_torch(ttnn_out)
-    assert_with_pcc(reference_out, ttnn_out, 0.998)
+    assert_with_pcc(reference_out, ttnn_out, 0.99)

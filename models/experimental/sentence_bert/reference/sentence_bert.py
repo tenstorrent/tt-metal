@@ -6,6 +6,7 @@ import math
 from typing import List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
+from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 
 class BaseModelOutputWithPoolingAndCrossAttentions:
@@ -576,10 +577,8 @@ class BertModel(nn.Module):
         )
 
 
-def custom_extended_mask(mask, tgt_len=None, dtype=torch.bfloat16):
-    batch_size, seq_length = mask.shape
-    tgt_len = tgt_len if tgt_len is not None else seq_length
-    expanded_mask = mask[:, None, None, :].expand(batch_size, 1, tgt_len, seq_length).to(dtype)
-    inverted_mask = 1.0 - expanded_mask
-    inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
-    return inverted_mask
+def custom_extended_mask(mask, dtype=torch.float32):
+    attention_mask_extended = get_extended_attention_mask(mask, mask.shape, dtype)
+    attention_mask_extended = attention_mask_extended.expand((mask.shape[0], -1, -1, -1))
+    attention_mask_extended = torch.clamp(attention_mask_extended, min=-100000)
+    return attention_mask_extended

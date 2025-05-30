@@ -20,6 +20,7 @@ class TtnnSentenceBertOutput:
             bias=self.parameters.dense.bias,
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             program_config=ff2_program_config,
+            dtype=ttnn.bfloat8_b,
         )
         bert_output_lin = ttnn.reshard(bert_output_lin, input_tensor.memory_config())
         bert_output_lin = self.LayerNorm(

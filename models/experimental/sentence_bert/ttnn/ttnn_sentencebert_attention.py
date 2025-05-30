@@ -19,14 +19,5 @@ class TtnnSentenceBertAttention:
         device=None,
     ):
         self_outputs = self.self(hidden_states, attention_mask, device=device)
-        self_outputs = ttnn.to_memory_config(
-            self_outputs,
-            memory_config=ttnn.create_sharded_memory_config(
-                self_outputs.shape,
-                core_grid=device.core_grid,
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.COL_MAJOR,
-            ),
-        )
         self_outputs = self.output(self_outputs, hidden_states)
         return self_outputs
