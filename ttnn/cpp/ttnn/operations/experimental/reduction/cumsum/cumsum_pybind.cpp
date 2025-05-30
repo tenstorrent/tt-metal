@@ -33,6 +33,7 @@ void bind_cumsum_operation(py::module& module) {
         Keyword Args:
             dtype (ttnn.DataType, optional): desired output type. If specified then input tensor will be casted to `dtype` before processing.
             output (ttnn.Tensor, optional): preallocated output. If specified, `output` must have same shape as `input`, and must be on the same device.
+            memory_config (ttnn.MemoryConfig, optional): memory config
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -91,22 +92,26 @@ void bind_cumsum_operation(py::module& module) {
                const int64_t dim,
                std::optional<tt::tt_metal::DataType>& dtype,
                std::optional<Tensor> preallocated_tensor,
-               QueueId queue_id) { return self(queue_id, input_tensor, dim, dtype, preallocated_tensor); },
+               const std::optional<MemoryConfig>& memory_config,
+               QueueId queue_id) {
+                return self(queue_id, input_tensor, dim, dtype, preallocated_tensor, false, memory_config);
+            },
             py::arg("input").noconvert(),
             py::arg("dim"),
             py::kw_only(),
             py::arg("dtype") = std::nullopt,
             py::arg("output") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("queueId") = DefaultQueueId});
 }
 
-void bind_cumsum_bw_operation(py::module& module) {
+void bind_cumsum_backward_operation(py::module& module) {
     auto docstring = "Returns backward cumulative sum of `input` along dimension `dim`";
 
-    using OperationType = decltype(ttnn::experimental::cumsum_bw);
+    using OperationType = decltype(ttnn::experimental::cumsum_backward);
     bind_registered_operation(
         module,
-        ttnn::experimental::cumsum_bw,
+        ttnn::experimental::cumsum_backward,
         docstring,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -114,8 +119,17 @@ void bind_cumsum_bw_operation(py::module& module) {
                const int64_t dim,
                std::optional<tt::tt_metal::DataType>& dtype,
                std::optional<Tensor> preallocated_tensor,
-               QueueId queue_id) { return self(queue_id, input_tensor, dim, dtype, preallocated_tensor); },
-        });
+               const std::optional<MemoryConfig>& memory_config,
+               QueueId queue_id) {
+                return self(queue_id, input_tensor, dim, dtype, preallocated_tensor, memory_config);
+            },
+            py::arg("output_grad").noconvert(),
+            py::arg("dim"),
+            py::kw_only(),
+            py::arg("dtype") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queueId") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::reduction::detail
