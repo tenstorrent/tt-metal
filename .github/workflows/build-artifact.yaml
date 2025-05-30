@@ -232,7 +232,7 @@ jobs:
             build_command="$build_command --build-umd-tests"
           fi
 
-          nice -n 19 $build_command
+          $build_command
 
       - name: 🛠️ Compile
         run: |
@@ -243,12 +243,12 @@ jobs:
         if: ${{ inputs.profile }}
         run: |
           echo "maxNameLength = 300" > ClangBuildAnalyzer.ini
-          nice -n 19 ClangBuildAnalyzer --all build capture.bin
-          nice -n 19 ClangBuildAnalyzer --analyze capture.bin
+          ClangBuildAnalyzer --all build capture.bin
+          ClangBuildAnalyzer --analyze capture.bin
 
       - name: 📦 Package
         run: |
-          nice -n 19 cmake --build build --target package
+          cmake --build build --target package
           ls -1sh build/*.deb build/*.ddeb || true
 
       - name: Publish ccache summary
