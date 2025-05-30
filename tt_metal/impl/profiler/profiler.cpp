@@ -152,6 +152,7 @@ HalProgrammableCoreType get_core_type(chip_id_t device_id, const CoreCoord& core
 void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
     ZoneScoped;
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
+    const DeviceAddr profiler_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
     uint32_t profile_buffer_idx = 0;
 
     const CoreCoord dram_grid_size = device->dram_grid_size();
@@ -162,10 +163,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
                     .enqueue_read_shard_from_core(
-                        distributed::DeviceMemoryAddress{
-                            device_coord,
-                            dram_core,
-                            MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER)},
+                        distributed::DeviceMemoryAddress{device_coord, dram_core, profiler_addr},
                         &(profile_buffer[profile_buffer_idx]),
                         profile_buffer_bank_size_bytes,
                         true);
@@ -174,7 +172,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
                     .enqueue_read_from_core(
                         dram_core,
                         &(profile_buffer[profile_buffer_idx]),
-                        MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER),
+                        profiler_addr,
                         profile_buffer_bank_size_bytes,
                         true);
             }
@@ -185,16 +183,13 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
 
 void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
     ZoneScoped;
+    const DeviceAddr profiler_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
     uint32_t profile_buffer_idx = 0;
     const int num_dram_channels = device->num_dram_channels();
     for (int dram_channel = 0; dram_channel < num_dram_channels; ++dram_channel) {
         std::vector<uint32_t> profile_buffer_bank_data(profile_buffer_bank_size_bytes / sizeof(uint32_t), 0);
         tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-            profile_buffer_bank_data.data(),
-            profile_buffer_bank_size_bytes,
-            device->id(),
-            dram_channel,
-            MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER));
+            profile_buffer_bank_data.data(), profile_buffer_bank_size_bytes, device->id(), dram_channel, profiler_addr);
 
         std::copy(
             profile_buffer_bank_data.begin(),
