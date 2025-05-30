@@ -37,6 +37,7 @@ class TtYOLOv9cConv2D:
         is_dfl=False,
         config_override=None,
         deallocate_activation=False,
+        conv_transpose=False,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -50,6 +51,9 @@ class TtYOLOv9cConv2D:
         self.groups = conv.groups
         self.use_1d_systolic_array = use_1d_systolic_array
         self.deallocate_activation = deallocate_activation
+        self.conv_transpose = conv_transpose
+        self.output_padding = conv.output_padding if conv_transpose else None
+
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -68,7 +72,8 @@ class TtYOLOv9cConv2D:
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
-        config_override = {"act_block_h": 64} if conv.in_channels == 3 else None
+        if config_override is None and conv.in_channels == 3:
+            config_override = {"act_block_h": 64}
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
@@ -77,7 +82,6 @@ class TtYOLOv9cConv2D:
             self.bias = bias
         else:
             self.bias = None
-
         weight = ttnn.from_device(conv_pth.weight)
         self.weight = weight
 
@@ -94,30 +98,55 @@ class TtYOLOv9cConv2D:
             batch_size = self.conv.batch_size
             input_height = self.conv.input_height
             input_width = self.conv.input_width
-
-        [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self.weight,
-            bias_tensor=self.bias,
-            device=self.device,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            input_height=input_height,
-            input_width=input_width,
-            batch_size=batch_size,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            conv_config=self.conv_config,
-            groups=self.groups,
-            compute_config=self.compute_config,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-        )
-        hw = output_height * output_width
-        if x.shape[2] != hw:
+        if not self.conv_transpose:
+            [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
+                input_tensor=x,
+                weight_tensor=self.weight,
+                bias_tensor=self.bias,
+                device=self.device,
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                input_height=input_height,
+                input_width=input_width,
+                batch_size=batch_size,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding,
+                conv_config=self.conv_config,
+                groups=self.groups,
+                compute_config=self.compute_config,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
+            hw = output_height * output_width
+            if x.shape[2] != hw:
+                x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+                x = x[:, :, :hw, :]
+        else:
+            x, [output_height, output_width], [self.weight, self.bias] = ttnn.conv_transpose2d(
+                input_tensor=x,
+                weight_tensor=self.weight,
+                bias_tensor=self.bias,
+                device=self.device,
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                input_height=input_height,
+                input_width=input_width,
+                batch_size=batch_size,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding,
+                conv_config=self.conv_config,
+                groups=self.groups,
+                compute_config=self.compute_config,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+                output_padding=(1, 1),
+                dilation=(1, 1),
+                mirror_kernel=True,
+            )
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-            x = x[:, :, :hw, :]
+            x = ttnn.reshape(x, (x.shape[0], output_height, output_width, x.shape[3]))
         return x
 
 
@@ -553,11 +582,93 @@ class TtnnDetect:
         ttnn.deallocate(z)
         ttnn.deallocate(yb)
 
-        return out
+        return [out, y1, y2, y3]
+
+
+class TtnnProto:
+    def __init__(self, device, parameters):
+        self.cv1 = TtYOLOv9cConv2D(
+            conv=parameters.conv_args[22].proto.cv1.conv, conv_pth=parameters.model[22].proto.cv1.conv, device=device
+        )
+        self.upsample = TtYOLOv9cConv2D(
+            conv=parameters.conv_args[22].proto.upsample,
+            conv_pth=parameters.model[22].proto.upsample,
+            device=device,
+            activation="silu",
+            config_override={"act_block_h": 32},
+            conv_transpose=True,
+        )
+
+        self.cv2 = TtYOLOv9cConv2D(
+            device=device,
+            conv=parameters.conv_args[22].proto.cv2.conv,
+            conv_pth=parameters.model[22].proto.cv2.conv,
+            activation="silu",
+            config_override={"act_block_h": 32},
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )
+        self.cv3 = TtYOLOv9cConv2D(
+            conv=parameters.conv_args[22].proto.cv3.conv, conv_pth=parameters.model[22].proto.cv3.conv, device=device
+        )
+
+    def __call__(self, x):
+        x = self.cv1(x)
+        x = self.upsample(x)
+        x = self.cv2(x)
+        x = self.cv3(x)
+        return x
+
+
+class TtnnSegment:
+    def __init__(self, device, parameters):
+        self.proto = TtnnProto(device=device, parameters=parameters)
+        self.cv4 = []
+        for i in range(3):
+            block = []
+            conv1 = TtYOLOv9cConv2D(
+                conv=parameters.model_args.model[22].cv4[i][0].conv,
+                conv_pth=parameters.model[22].cv4[i][0].conv,
+                device=device,
+                is_detect=True,
+            )
+            block.append(conv1)
+            conv2 = TtYOLOv9cConv2D(
+                conv=parameters.model_args.model[22].cv4[i][1].conv,
+                conv_pth=parameters.model[22].cv4[i][1].conv,
+                device=device,
+                is_detect=True,
+            )
+            block.append(conv2)
+            conv3 = TtYOLOv9cConv2D(
+                conv=parameters.model_args.model[22].cv4[i][2],
+                conv_pth=parameters.model[22].cv4[i][2],
+                device=device,
+                is_detect=True,
+            )
+            block.append(conv3)
+            self.cv4.append(block)
+        self.detect = TtnnDetect(device, parameters.model_args.model[22], parameters.model[22])
+
+    def __call__(self, x):
+        p = self.proto(x[0])
+        bs = p.shape[0]
+        mc_blocks = []
+        for i in range(3):
+            out = x[i]
+            for conv in self.cv4[i]:
+                out = conv(out)
+            out = ttnn.squeeze(out, 0)
+            out = ttnn.permute(out, (0, 2, 1))
+            mc_blocks.append(out)
+
+        mc = concat(2, False, mc_blocks[0], mc_blocks[1], mc_blocks[2])
+        x = self.detect(*x)
+
+        return [concat(1, False, x[0], mc), [x[1], mc, p]]
 
 
 class YoloV9:
-    def __init__(self, device, parameters):
+    def __init__(self, device, parameters, enable_segment=True):
         self.device = device
         self.conv1 = TtYOLOv9cConv2D(
             device=device,
@@ -589,7 +700,10 @@ class YoloV9:
         self.repncspelan4_7 = TtnnRepncspelan4(device, parameters.conv_args[18], parameters.model[18])  # 18
         self.adown_7 = TtnnADown(device, parameters.conv_args[19], parameters.model[19])  # 19
         self.repncspelan4_8 = TtnnRepncspelan4(device, parameters.conv_args[21], parameters.model[21])  # 21
-        self.detect = TtnnDetect(device, parameters.model_args.model[22], parameters.model[22])  # 22
+        if enable_segment:
+            self.segment_detect = TtnnSegment(device, parameters)  # 22
+        else:
+            self.segment_detect = TtnnDetect(device, parameters.model_args.model[22], parameters.model[22])  # 22
 
     def __call__(self, x):
         x = self.conv1(x)  # 0
@@ -635,7 +749,7 @@ class YoloV9:
 
         x = self.repncspelan4_8(x)  # 21
         x22 = x
-        x = self.detect(x16, x19, x22)  # 22
+        x = self.segment_detect((x16, x19, x22))  # 22
 
         ttnn.deallocate(x16)
         ttnn.deallocate(x19)

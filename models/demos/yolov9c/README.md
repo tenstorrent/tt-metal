@@ -16,6 +16,8 @@ If running on Wormhole N300 (not required for N150 or Blackhole), the following 
 export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
+Use `yolov9c-seg.pt` pre-trained weights for segmentation tasks and `yolov9c.pt` pre-trained weights for detection in tests and demos. Set the `enable_segment` or `enable_detect` flags accordingly when initializing the TTNN model. Segmentation task is set as default in model.
+
 Use the following command to run the Yolov9c model :
 ```
 pytest --disable-warnings tests/ttnn/integration_tests/yolov9c/test_ttnn_yolov9c.py::test_yolov9c

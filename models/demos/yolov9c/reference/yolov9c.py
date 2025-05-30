@@ -23,7 +23,16 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
 
 class Conv(nn.Module):
     def __init__(
-        self, in_channel, out_channel, kernel=1, stride=1, padding=0, dilation=1, groups=1, enable_identity=False
+        self,
+        in_channel,
+        out_channel,
+        kernel=1,
+        stride=1,
+        padding=0,
+        dilation=1,
+        groups=1,
+        enable_identity=False,
+        enable_bn=True,
     ):
         super().__init__()
         self.conv = nn.Conv2d(
@@ -36,7 +45,8 @@ class Conv(nn.Module):
             groups=groups,
             bias=False,
         )
-        self.bn = nn.BatchNorm2d(out_channel, eps=0.001, momentum=0.03)
+        if enable_bn:
+            self.bn = nn.BatchNorm2d(out_channel, eps=0.001, momentum=0.03)
         if enable_identity:
             self.act = nn.Identity()
         else:
@@ -44,7 +54,8 @@ class Conv(nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
-        x = self.bn(x)
+        if self.bn:
+            x = self.bn(x)
         x = self.act(x)
         return x
 
@@ -323,34 +334,99 @@ class Detect(nn.Module):
         return out
 
 
-class YoloV9(nn.Module):
-    def __init__(self):
+class Proto(nn.Module):
+    def __init__(self, c1, c_=256, c2=32):
         super().__init__()
-        self.model = nn.Sequential(
-            Conv(3, 64, kernel=3, stride=2, padding=1),  # 0
-            Conv(64, 128, kernel=3, stride=2, padding=1),  # 1
-            RepNCSPELAN4(128, 128, 64, 64, 64, 64, 256, 256),  # 2
-            ADown(128, 128),  # 3
-            RepNCSPELAN4(256, 256, 128, 128, 128, 128, 512, 512),  # 4
-            ADown(256, 256),  # 5
-            RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 6
-            ADown(256, 256),  # 7
-            RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 8
-            SPPELAN(512, 256),  # 9
-            nn.Upsample(scale_factor=2.0, mode="nearest"),  # 10
-            Concat(),  # 11
-            RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 12
-            nn.Upsample(scale_factor=2.0, mode="nearest"),  # 13
-            Concat(),  # 14
-            RepNCSPELAN4(1024, 256, 128, 128, 128, 128, 512, 256),  # 15
-            ADown(128, 128),  # 16
-            Concat(),  # 17
-            RepNCSPELAN4(768, 512, 256, 256, 256, 256, 1024, 512),  # 18
-            ADown(256, 256),  # 19
-            Concat(),  # 20
-            RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 21
-            Detect([256, 64, 64, 512, 64, 64, 512, 64, 64, 256, 256, 256, 512, 256, 256, 512, 256, 256]),  # 22
+        self.cv1 = Conv(c1, c_, 3)
+        self.upsample = nn.ConvTranspose2d(c_, c_, 2, 2, 0, bias=True)  # nn.Upsample(scale_factor=2, mode='nearest')
+        self.cv2 = Conv(c_, c_, 3)
+        self.cv3 = Conv(c_, c2)
+
+    def forward(self, x):
+        return self.cv3(self.cv2(self.upsample(self.cv1(x))))
+
+
+class Segment(Detect):
+    def __init__(self, nc=80, nm=32, npr=256, ch=()):
+        super().__init__(ch)
+        self.nm = nm
+        self.npr = npr
+        self.nc = nc
+        self.proto = Proto(ch[0], self.npr, self.nm)
+        c4 = max(ch[0] // 4, self.nm)
+        ch = (ch[0], ch[3], ch[6])
+        self.cv4 = nn.ModuleList(
+            nn.Sequential(Conv(x, c4, 3, 1, 1), Conv(64, 64, 3, 1, 1), nn.Conv2d(c4, self.nm, 1)) for x in ch
         )
+
+    def forward(self, x):
+        p = self.proto(x[0])
+        bs = p.shape[0]
+        mc = torch.cat([self.cv4[i](x[i]).view(bs, self.nm, -1) for i in range(3)], 2)
+        x = Detect.forward(self, x[0], x[1], x[2])
+        return (torch.cat([x, mc], 1), p)
+
+
+class YoloV9(nn.Module):
+    def __init__(self, enable_segment=True):
+        super().__init__()
+        if enable_segment:
+            self.model = nn.Sequential(
+                Conv(3, 64, kernel=3, stride=2, padding=1),  # 0
+                Conv(64, 128, kernel=3, stride=2, padding=1),  # 1
+                RepNCSPELAN4(128, 128, 64, 64, 64, 64, 256, 256),  # 2
+                ADown(128, 128),  # 3
+                RepNCSPELAN4(256, 256, 128, 128, 128, 128, 512, 512),  # 4
+                ADown(256, 256),  # 5
+                RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 6
+                ADown(256, 256),  # 7
+                RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 8
+                SPPELAN(512, 256),  # 9
+                nn.Upsample(scale_factor=2.0, mode="nearest"),  # 10
+                Concat(),  # 11
+                RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 12
+                nn.Upsample(scale_factor=2.0, mode="nearest"),  # 13
+                Concat(),  # 14
+                RepNCSPELAN4(1024, 256, 128, 128, 128, 128, 512, 256),  # 15
+                ADown(128, 128),  # 16
+                Concat(),  # 17
+                RepNCSPELAN4(768, 512, 256, 256, 256, 256, 1024, 512),  # 18
+                ADown(256, 256),  # 19
+                Concat(),  # 20
+                RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 21
+                # Detect([64, 256, 64, 64, 512, 64, 64, 512, 64, 64, 256, 256, 256, 512, 256, 256, 512, 256, 256]),  # 22 Enable this to use the model only for object detection
+                Segment(
+                    nc=80, ch=[256, 64, 64, 512, 64, 64, 512, 64, 64, 256, 256, 256, 512, 256, 256, 512, 256, 256]
+                ),  # 22 Enable this to use the model only for instance segmentation
+            )
+        else:
+            self.model = nn.Sequential(
+                Conv(3, 64, kernel=3, stride=2, padding=1),  # 0
+                Conv(64, 128, kernel=3, stride=2, padding=1),  # 1
+                RepNCSPELAN4(128, 128, 64, 64, 64, 64, 256, 256),  # 2
+                ADown(128, 128),  # 3
+                RepNCSPELAN4(256, 256, 128, 128, 128, 128, 512, 512),  # 4
+                ADown(256, 256),  # 5
+                RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 6
+                ADown(256, 256),  # 7
+                RepNCSPELAN4(512, 512, 256, 256, 256, 256, 1024, 512),  # 8
+                SPPELAN(512, 256),  # 9
+                nn.Upsample(scale_factor=2.0, mode="nearest"),  # 10
+                Concat(),  # 11
+                RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 12
+                nn.Upsample(scale_factor=2.0, mode="nearest"),  # 13
+                Concat(),  # 14
+                RepNCSPELAN4(1024, 256, 128, 128, 128, 128, 512, 256),  # 15
+                ADown(128, 128),  # 16
+                Concat(),  # 17
+                RepNCSPELAN4(768, 512, 256, 256, 256, 256, 1024, 512),  # 18
+                ADown(256, 256),  # 19
+                Concat(),  # 20
+                RepNCSPELAN4(1024, 512, 256, 256, 256, 256, 1024, 512),  # 21
+                Detect(
+                    [64, 256, 64, 64, 512, 64, 64, 512, 64, 64, 256, 256, 256, 512, 256, 256, 512, 256, 256]
+                ),  # 22 Enable this to use the model only for object detection
+            )
 
     def forward(self, x):
         x = self.model[0](x)  # 0
@@ -382,7 +458,8 @@ class YoloV9(nn.Module):
         x = torch.cat((x, x10), 1)  # 20
         x = self.model[21](x)  # 21
         x22 = x
-        x = self.model[22](y1=x16, y2=x19, y3=x22)  # 22
+        y = (x16, x19, x22)
+        x = self.model[22](y)  # 22
         return x
 
 
@@ -416,4 +493,9 @@ class BaseModel(nn.Module):
 
 class DetectionModel(BaseModel):
     def __init__(self, cfg="yolov9c.yaml", ch=3, nc=None, verbose=True):
+        super().__init__()
+
+
+class SegmentModel(BaseModel):
+    def __init__(self, cfg="yolov9c-seg.pt", ch=3, nc=None, verbose=True):
         super().__init__()

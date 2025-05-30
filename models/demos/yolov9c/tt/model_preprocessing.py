@@ -26,6 +26,12 @@ def custom_preprocessor(model, name):
         bias = bias.reshape((1, 1, 1, -1))
         parameters["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
 
+    if isinstance(model, nn.ConvTranspose2d):
+        parameters["weight"] = ttnn.from_torch(model.weight, dtype=ttnn.float32)
+        if model.bias is not None:
+            bias = model.bias.reshape((1, 1, 1, -1))
+            parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+
     return parameters
 
 
