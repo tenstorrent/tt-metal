@@ -193,7 +193,7 @@ jobs:
     # - Forcefully publish a latest image if the user requested such,
     #   regardless of the statuses of the test jobs Recall that jobs which depend
     #   on other upstreams which fail will never get to run even if their
-    #   conditions are met, unless we things like !cancelled()
+    #   conditions are met, unless we use things like !cancelled()
     # - On main branch, don't publish an image unless the tests pass. We want to keep
     #   this functionality on main, unless of course someone dispatches this workflow
     #   with the tag-as-latest option which will force publish the image.
