@@ -88,16 +88,14 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
             (std::uint32_t)src0_cb_index,
             (std::uint32_t)src_is_dram,
             (std::uint32_t)src_stick_size_is_power_of_two,
-            (std::uint32_t)src_log2_stick_size,
-            (std::uint32_t)full_input_row};
+            (std::uint32_t)src_log2_stick_size};
         bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_unit_size);
         uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(output_unit_size) : 0;
         writer_compile_time_args = {
             (std::uint32_t)output_cb_index,
             (std::uint32_t)dst_is_dram,
             (std::uint32_t)dst_stick_size_is_power_of_two,
-            (std::uint32_t)dst_log2_stick_size,
-            (std::uint32_t)full_output_row};
+            (std::uint32_t)dst_log2_stick_size};
     }
     std::map<string, string> kernel_defines;
     if (sharded) {
@@ -170,9 +168,13 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
             tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
         } else {
             std::vector<uint32_t> reader_runtime_args = {
-                src_buffer->address(), input_unit_size, num_units_per_core, start_id};
+                src_buffer->address(), input_unit_size, num_units_per_core, start_id, full_input_row / input_unit_size};
             std::vector<uint32_t> writer_runtime_args = {
-                dst_buffer->address(), output_unit_size, num_units_per_core, start_id};
+                dst_buffer->address(),
+                output_unit_size,
+                num_units_per_core,
+                start_id,
+                full_output_row / output_unit_size};
             if (sharded) {
                 shard_builder::extend_sharding_run_time_args(input, reader_runtime_args);
                 shard_builder::extend_sharding_run_time_args(input, writer_runtime_args);
