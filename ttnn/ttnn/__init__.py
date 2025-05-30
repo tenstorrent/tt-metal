@@ -162,6 +162,7 @@ from ttnn.types import (
     ShardOrientation,
     ShardMode,
     ShardSpec,
+    NdShardSpec,
     CoreRangeSet,
     CoreRange,
     CoreCoord,
