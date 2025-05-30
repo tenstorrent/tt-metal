@@ -285,19 +285,17 @@ INSTANTIATE_TEST_SUITE_P(
                 .shard_shape = Shape({30, 10, 50}),
                 .layout = Layout::ROW_MAJOR,
             },
-            // TODO(#22781): Uneven sharding on width currently does not work
-            /*NDShardingParams{
+            NDShardingParams{
                 .shape = Shape({30, 40, 55}),
                 .shard_shape = Shape({30, 40, 10}),
                 .layout = Layout::ROW_MAJOR,
-            },*/
+            },
             NDShardingParams{
                 .shape = Shape({35, 45, 50}),
                 .shard_shape = Shape({10, 10, 50}),
                 .layout = Layout::ROW_MAJOR,
-            }
-            // TODO(#22781): Uneven sharding on width currently does not work
-            /*NDShardingParams{
+            },
+            NDShardingParams{
                 .shape = Shape({35, 40, 55}),
                 .shard_shape = Shape({10, 40, 10}),
                 .layout = Layout::ROW_MAJOR,
@@ -311,7 +309,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shape = Shape({35, 45, 55}),
                 .shard_shape = Shape({10, 10, 10}),
                 .layout = Layout::ROW_MAJOR,
-            }*/),
+            }),
         ::testing::Values(BufferType::L1, BufferType::DRAM),
         ::testing::Values(ShardOrientation::ROW_MAJOR, ShardOrientation::COL_MAJOR)));
 
