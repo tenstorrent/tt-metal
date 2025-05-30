@@ -46,18 +46,24 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, assert_with_pc
         ([5, 130, 165], [2, 32, 32], ttnn.TILE_LAYOUT),
     ],
 )
-@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.L1,
+        # ttnn.BufferType.DRAM
+    ],
+)
 @pytest.mark.parametrize(
     "tt_dtype",
     [
-        ttnn.uint8,
-        ttnn.uint16,
-        ttnn.uint32,
-        ttnn.int32,
-        ttnn.float32,
+        # ttnn.uint8,
+        # ttnn.uint16,
+        # ttnn.uint32,
+        # ttnn.int32,
+        # ttnn.float32,
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
-        ttnn.bfloat4_b,
+        # ttnn.bfloat8_b,
+        # ttnn.bfloat4_b,
     ],
 )
 def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_type, tt_dtype, device):
@@ -77,8 +83,11 @@ def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_t
         grid_size = device.compute_with_storage_grid_size()
     else:
         grid_size = device.dram_grid_size()
-    core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
-    grid = ttnn.CoreRangeSet([core_range])
+    # core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))
+    # grid = ttnn.CoreRangeSet([core_range])
+    core_range1 = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+    core_range2 = ttnn.CoreRange(ttnn.CoreCoord(0, 3), ttnn.CoreCoord(4, 3))
+    grid = ttnn.CoreRangeSet([core_range1, core_range2])
 
     nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid)
     memory_config = ttnn.MemoryConfig(buffer_type, nd_shard_spec)

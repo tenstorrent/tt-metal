@@ -9,7 +9,85 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
+#include "ttnn/operations/sharding_utilities.hpp"
+#include <tt-metalium/buffer_distribution_spec.hpp>
+
 namespace ttnn::operations::moreh::moreh_sgd {
+
+
+using tt::tt_metal::sharded_accessor_utils::ArgConfig;
+using tt::tt_metal::sharded_accessor_utils::ArgsConfig;
+
+struct InputOutputBufferParams {
+    tt::tt_metal::Shape physical_tensor_shape;
+    tt::tt_metal::Shape2D page_shape;
+    float bytes_per_element;
+    tt::DataFormat data_format;  // Used for setting up CBs
+
+    struct DistributionSpecParams {
+        tt::tt_metal::Shape physical_shard_shape;
+        tt::tt_metal::CoreRangeSet grid;
+        tt::tt_metal::ShardOrientation shard_orientation;
+        tt::tt_metal::BufferType buffer_type;
+    };
+    DistributionSpecParams input_shard_spec;
+    DistributionSpecParams output_shard_spec;
+};
+
+std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_mesh_buffer(
+    const Tensor& input, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    // These values would be passed from tensor correctly based on PageConfig
+    // const auto host_size_in_bytes = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
+    // const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
+
+    auto tensor_sepc = input.get_tensor_spec();
+
+    // auto phyiscal_tensor_shape = tensor_sepc.physical_shape();
+    auto phyiscal_tensor_shape = tensor_sepc.logical_shape();
+
+    // auto host_size_in_bytes = phyiscal_tensor_shape.volume() * input.element_size();
+
+    float bytes_per_element = input.element_size();
+    if (input.get_dtype() == DataType::BFLOAT8_B) {
+        bytes_per_element = 1088.0f / 1024;  // 1.0625
+    }
+    std::cout << "bytes_per_element : " << bytes_per_element << "\n";
+    auto host_size_in_bytes = phyiscal_tensor_shape.volume() * bytes_per_element;
+    std::cout << "host_size_in_bytes : " << host_size_in_bytes << "\n";
+
+    auto tensor_layout = tensor_sepc.tensor_layout();
+
+    auto page_config = tensor_sepc.page_config();
+
+    auto physical_shape = tensor_sepc.physical_shape();
+    auto page_shape = tensor_layout.compute_page_shape(physical_shape);
+    auto page_size = page_config.get_page_size_bytes(page_shape, input.get_dtype());
+
+    // Mirrors allocate_mesh_buffer_on_device in ttnn
+    const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
+
+    if (input.nd_shard_spec().has_value() == false) {
+        TT_THROW("Input tensor must have a valid nd_shard_spec to create a replicated input mesh buffer.");
+    }
+    auto nd_shard_spec = input.nd_shard_spec().value();
+
+    // Create input mesh buffer
+    auto input_buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
+        phyiscal_tensor_shape, nd_shard_spec.shard_shape, page_shape, nd_shard_spec.grid, nd_shard_spec.orientation);
+
+    const tt::tt_metal::distributed::DeviceLocalBufferConfig input_device_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .buffer_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+        .shard_parameters = input_buffer_distribution_spec,
+    };
+
+    const auto input_mesh_buffer =
+        tt::tt_metal::distributed::MeshBuffer::create(mesh_buffer_config, input_device_local_config, mesh_device);
+
+    return input_mesh_buffer;
+}
+
 MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -45,7 +123,8 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::IDevice* device = param_in.device();
+    // tt::tt_metal::IDevice* device = param_in.device();
+    auto* device = param_in.mesh_device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t units_to_divide = num * Ht * Wt;
     uint32_t core_w = grid.x;
@@ -88,6 +167,15 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     std::map<string, string> writer_defines;
     std::map<string, string> compute_defines;
 
+    if (param_in.is_sharded()) {
+        reader_defines["PARAM_IN_SHARDED"] = 1;
+    }
+    
+    if (grad.is_sharded()) {
+        reader_defines["GRAD_SHARDED"] = 1;
+    }
+
+
     if (weight_decay != 0) {
         reader_defines["WEIGHT_DECAY"] = 1;
         compute_defines["WEIGHT_DECAY"] = 1;
@@ -118,10 +206,49 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    const std::vector<uint32_t> reader_compile_time_args{
+    //RankCRTA | NumBanksCRTA | TensorShapeCRTA | ShardShapeCRTA | BankCoordsCRTA
+    ArgsConfig crta_config = {ArgConfig::NumBanksCRTA | ArgConfig::TensorShapeCRTA | ArgConfig::ShardShapeCRTA | ArgConfig::BankCoordsCRTA};
+
+
+    // param_in
+    const auto input_mesh_buffer = create_replicated_input_mesh_buffer(param_in, device);
+
+    const auto& input_buffer_distribution_spec =
+        std::get<BufferDistributionSpec>(input_mesh_buffer->device_local_config().shard_parameters.value());
+
+    const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
+    const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
+
+    const auto input_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+        *device, input_buffer_distribution_spec, input_shard_view->core_type(), crta_config);
+
+    // grad
+    const auto grad_mesh_buffer = create_replicated_input_mesh_buffer(grad, device);
+
+    const auto& grad_buffer_distribution_spec =
+        std::get<BufferDistributionSpec>(grad_mesh_buffer->device_local_config().shard_parameters.value());
+
+    const auto grad_shard_view = grad_mesh_buffer->get_device_buffer(mesh_coordinate);
+
+    const auto grad_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+        *device, grad_buffer_distribution_spec, grad_shard_view->core_type(), crta_config);
+
+
+    std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(is_dram(param_in)),
         static_cast<uint32_t>(is_dram(grad)),
-        static_cast<uint32_t>(momentum_buffer_in.has_value() ? is_dram(momentum_buffer_in.value()) : 0)};
+        static_cast<uint32_t>(momentum_buffer_in.has_value() ? is_dram(momentum_buffer_in.value()) : 0),
+    };
+
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(),
+        input_sharded_accessor_args.compile_time_args.cbegin(),
+        input_sharded_accessor_args.compile_time_args.cend());
+        
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(),
+        grad_sharded_accessor_args.compile_time_args.cbegin(),
+        grad_sharded_accessor_args.compile_time_args.cend());
 
     std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(param_out))};
     if (has_momentum_buffer_out) {
@@ -222,6 +349,20 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
 
         tile_offset += num_tiles_per_core;
     }
+
+    std::vector<uint32_t> reader_crtas = {};
+
+    reader_crtas.insert(
+        reader_crtas.end(),
+        input_sharded_accessor_args.runtime_args.cbegin(),
+        input_sharded_accessor_args.runtime_args.cend());
+        
+    reader_crtas.insert(
+        reader_crtas.end(),
+        grad_sharded_accessor_args.runtime_args.cbegin(),
+        grad_sharded_accessor_args.runtime_args.cend());
+        
+    SetCommonRuntimeArgs(program, reader_kernel_id, reader_crtas);
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h, has_momentum_buffer_out}};
 }
