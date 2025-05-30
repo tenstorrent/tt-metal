@@ -207,41 +207,38 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 @pytest.mark.parametrize(
     "size, dim",
     [
-        # ([], 0),
-        # ([0], 0),
-        # ([1], 0),
-        # ([10], 0),
-        # ([2, 3], 0),
-        # ([2, 3], 1),
-        # ([2, 3], -1),
-        # ([2, 3], -2),
-        # ([2, 3, 4], 0),
-        # ([2, 3, 4], 2),
-        # ([2, 3, 4], -3),
-        # ([0, 0, 0], 0),
-        # ([0, 0, 0], 1),
-        # ([1, 32, 64], 1),
-        # ([1, 1024, 32], 0),
-        # ([1, 1024, 32], 1),
-        # ([260, 1, 1], 0),
-        # ([1024, 1, 32], 0),
-        # ([1, 1024, 32], 2),
-        # ([64, 1, 32], 1),
-        # ([64, 64, 1], 1),
-        # ([1, 32, 129], 1),
-        # ([33, 35, 37], 1),
-        ([2, 3, 33, 33], 0),
-        # ([2, 3, 33, 33], 1),
-        # ([7, 13, 129, 33], 1),
-        # ([7, 13, 129, 33], 0),
-        # ([4, 6, 128, 128], 0),
-        # ([2, 3, 2, 2], 1),
-        # ([2, 3, 2, 2], 0),
-        # ([2, 1, 33], 0),
-        # ([2, 3, 5, 33, 128], 0),
-        # ([2, 3, 5, 33, 128], 1),
-        # ([2, 3, 5, 33, 128], 2),
-        # ([1, 151936], -1),
+        ([], 0),
+        ([1], 0),
+        ([10], 0),
+        ([2, 3], 0),
+        ([2, 3], 1),
+        ([2, 3], -1),
+        ([2, 3], -2),
+        ([2, 3, 4], 0),
+        ([2, 3, 4], 2),
+        ([2, 3, 4], -3),
+        ([1, 32, 64], 1),
+        ([1, 1024, 32], 0),
+        ([1, 1024, 32], 1),
+        ([260, 1, 1], 0),
+        ([1024, 1, 32], 0),
+        ([1, 1024, 32], 2),
+        ([64, 1, 32], 1),
+        ([64, 64, 1], 1),
+        ([1, 32, 129], 1),
+        ([33, 35, 37], 1),
+        ([2, 1, 1, 1], 0),
+        ([2, 3, 33, 33], 1),
+        ([7, 13, 129, 33], 1),
+        ([7, 13, 129, 33], 0),
+        ([4, 6, 128, 128], 0),
+        ([2, 3, 2, 2], 1),
+        ([2, 3, 2, 2], 0),
+        ([2, 1, 33], 0),
+        ([2, 3, 5, 33, 128], 0),
+        ([2, 3, 5, 33, 128], 1),
+        ([2, 3, 5, 33, 128], 2),
+        ([2, 100], -2),
     ],
 )
 @pytest.mark.parametrize(
@@ -279,21 +276,23 @@ def test_cumsum_backward(size, dim, dtypes, device):
     torch_output.backward(torch_output_grad)
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_input_grad_cpu = (
-        ttnn.experimental.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(size)
-        .to_torch()
-    )
+    # tt_input_grad_cpu = (
+    #     ttnn.experimental.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
+    #     .cpu()
+    #     .to(cpu_layout)
+    #     .unpad_from_tile(size)
+    #     .to_torch()
+    # )
+
+    tt_input_grad_cpu = ttnn.to_torch(ttnn.experimental.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad))
 
     # Verify tensor shapes
+    print(f"tt output = \n{tt_output_grad}")
+    print(f"tt input grad = \n{tt_input_grad_cpu}, shape = {tt_input_grad_cpu.shape}")
+    print(f"tt input grad = \n{torch_input_tensor.grad}, shape = {torch_input_tensor.shape}")
 
     assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
     # assert tt_input_grad_cpu.dtype == torch_input_tensor.grad.dtype
-
-    print(f"tt input grad = {tt_input_grad_cpu}")
-    print(f"tt input grad = {torch_input_tensor}")
 
     # test for equivalance
     rtol = atol = 0.1
