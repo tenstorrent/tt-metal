@@ -464,19 +464,20 @@ DeviceComputeKernelConfig get_conv_default_compute_kernel_config(DeviceType* dev
 }
 
 template <typename DeviceType>
-MemoryConfig determine_input_memory_config(
+std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
     ttnn::Shape input_tensor_shape,
     ttnn::Shape output_tensor_shape,
     bool is_mm_conv,
     DeviceType* device,
-    Layout input_tensor_layout) {
+    Layout input_tensor_layout,
+    std::optional<ParallelConfig> input_tensor_parallel_config) {
     TT_FATAL(conv_config.shard_layout.has_value(), "Shard layout must be set in Conv2dConfig.");
     auto shard_layout = conv_config.shard_layout.value();
     auto block_shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-    ParallelConfig parallel_config = determine_parallel_config(
+    ParallelConfig parallel_config = input_tensor_parallel_config.value_or(determine_parallel_config(
         shard_layout,
         batch_size,
         input_tensor_shape[3],
@@ -488,7 +489,7 @@ MemoryConfig determine_input_memory_config(
         !is_mm_conv,
         true,
         true,
-        conv_config.act_block_h_override);
+        conv_config.act_block_h_override));
     uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t input_num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
 
@@ -513,12 +514,10 @@ MemoryConfig determine_input_memory_config(
          input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
                                                               // tt::tt_metal::LegacyShape issue to clean up next
                                                               // line
-    MemoryConfig input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape({input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
-        parallel_config,
-        round_up_size);
+    MemoryConfig input_tensor_sharded_memory_config =
+        create_sharded_memory_config_from_parallel_config(input_padded_shape, parallel_config, round_up_size);
 
-    return input_tensor_sharded_memory_config;
+    return {input_padded_shape, input_tensor_sharded_memory_config};
 };
 
 template <typename T>
@@ -632,35 +631,15 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
         }
     }
     if (needs_shard_or_reshard) {
-        uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-        uint32_t input_num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
-
-        // TT_ASSERT(input_tensor.get_padded_shape() == input_tensor.get_shape());
-        const auto& input_shape = input_tensor.get_logical_shape();
-        uint32_t tensor_height = input_shape[0] * input_shape[1] * input_shape[2];
-        uint32_t round_up_size = tt::constants::TILE_HEIGHT;
-        if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED && input_tensor_.layout() == Layout::ROW_MAJOR) {
-            round_up_size = 1;
-        }
-        uint32_t input_tensor_height_snapped_to_tile = tt::round_up(tensor_height, input_num_cores_nhw * round_up_size);
-        const uint32_t input_channels_alignment =
-            get_input_channels_alignment(shard_layout, input_tensor_.layout(), is_mm_conv, std::nullopt);
-        TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
-        uint32_t input_tensor_width_snapped_to_channels_alignment =
-            tt::round_up(input_shape[3], input_num_cores_c * input_channels_alignment);
-
-        auto input_padded_shape = ttnn::Shape(
-            {1,
-             1,
-             input_tensor_height_snapped_to_tile,
-             input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
-                                                                  // tt::tt_metal::LegacyShape issue to clean up next
-                                                                  // line
-        MemoryConfig input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
-            ttnn::Shape({input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
-            parallel_config,
-            round_up_size);
-
+        auto [input_padded_shape, input_tensor_sharded_memory_config] = determine_input_memory_config(
+            conv_config,
+            batch_size,
+            input_tensor.get_logical_shape(),
+            input_tensor.get_padded_shape(),
+            is_mm_conv,
+            device,
+            input_tensor.layout(),
+            parallel_config);
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard};
     } else {
         return {input_tensor.get_logical_shape(), input_tensor.memory_config(), needs_shard_or_reshard};
@@ -1480,23 +1459,25 @@ template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_resha
     bool is_mm_conv,
     bool auto_shard);
 
-template MemoryConfig determine_input_memory_config<IDevice>(
+template std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config<IDevice>(
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
     ttnn::Shape input_tensor_shape,
     ttnn::Shape output_tensor_shape,
     bool is_mm_conv,
     IDevice* device,
-    Layout input_tensor_layout);
+    Layout input_tensor_layout,
+    std::optional<ParallelConfig> input_tensor_parallel_config);
 
-template MemoryConfig determine_input_memory_config<MeshDevice>(
+template std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config<MeshDevice>(
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
     ttnn::Shape input_tensor_shape,
     ttnn::Shape output_tensor_shape,
     bool is_mm_conv,
     MeshDevice* device,
-    Layout input_tensor_layout);
+    Layout input_tensor_layout,
+    std::optional<ParallelConfig> input_tensor_parallel_config);
 
 template DeviceComputeKernelConfig get_conv_default_compute_kernel_config<tt::tt_metal::IDevice>(
     tt::tt_metal::IDevice* device);

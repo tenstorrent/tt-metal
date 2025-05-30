@@ -328,7 +328,7 @@ Result conv2d_DRAM(
                     1,
                 });
         } else {
-            auto sliced_input_tensor_memory_config = determine_input_memory_config(
+            auto sliced_input_tensor_memory_config = std::get<1>(determine_input_memory_config(
                 conv_config,
                 batch_size,
                 ttnn::Shape({batch_size, input_slice_height, input_slice_width, in_channels}),
@@ -337,7 +337,7 @@ Result conv2d_DRAM(
                 device,
                 // Setting layout to TILE forces input_channels_alignment to 32.
                 //  The padded_slice op needs aligned reads from L1.
-                Layout::TILE);
+                Layout::TILE));
 
             sliced_input_tensor = ttnn::experimental::padded_slice(
                 queue_id,
