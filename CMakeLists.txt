@@ -110,6 +110,7 @@ message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
 message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
+message(STATUS "Build with Multihost Distributed Compute: ${ENABLE_DISTRIBUTED}")
 
 ############################################################################################################################
 

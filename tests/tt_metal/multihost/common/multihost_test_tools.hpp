@@ -101,6 +101,19 @@ inline int multihost_main(int argc, char** argv) {
 
     ::testing::InitGoogleTest(&argc, argv);
 
+    auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+
+    // Skip all tests if lacking fault tolerance.
+    if (!ctx->supports_fault_tolerance()) {
+        fmt::println(
+            "Fault tolerance support is not available in this build. Skipping fault tolerance tests. "
+            "Fault tolerance support via ULFM is consistently available in builds of OpenMPI from version 5.0. "
+            "If your distribution does not have OpenMPI 5.0 packaged, you may be able to obtain a known-good build "
+            "by running install_dependencies.sh with --distributed passed and building with"
+            "build_metal.sh --enable-distributed.\n");
+        return 0;
+    }
+
     // Run tests on every rank
     int local_rc = RUN_ALL_TESTS();
 
