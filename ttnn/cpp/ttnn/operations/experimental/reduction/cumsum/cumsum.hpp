@@ -18,7 +18,8 @@ struct CumSumOperation {
         int64_t dim,
         std::optional<ttnn::DataType> dtype = std::nullopt,
         std::optional<Tensor> preallocated_output = std::nullopt,
-        std::optional<bool> flip = std::nullopt);
+        std::optional<bool> flip = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
 struct CumSumBackwardOperation {
@@ -27,7 +28,8 @@ struct CumSumBackwardOperation {
         const Tensor& input,
         int64_t dim,
         std::optional<ttnn::DataType> dtype = std::nullopt,
-        std::optional<Tensor> preallocated_output = std::nullopt);
+        std::optional<Tensor> preallocated_output = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::reduction
@@ -36,7 +38,7 @@ namespace ttnn::experimental {
 constexpr auto cumsum = decorators::
     register_operation<"ttnn::experimental::cumsum", ttnn::operations::experimental::reduction::CumSumOperation>();
 
-constexpr auto cumsum_bw = decorators::register_operation<
+constexpr auto cumsum_backward = decorators::register_operation<
     "ttnn::experimental::cumsum_backward",
     ttnn::operations::experimental::reduction::CumSumBackwardOperation>();
 

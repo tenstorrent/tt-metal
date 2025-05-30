@@ -25,8 +25,15 @@ Tensor CumSumOperation::invoke(
     const Tensor& input_tensor,
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
+<<<<<<< HEAD
     std::optional<Tensor> optional_output_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
+=======
+    std::optional<Tensor> optional_output_tensor,
+    std::optional<bool> flip,
+    const std::optional<MemoryConfig>& memory_config) {
+    const auto& input_shape = input_tensor.get_logical_shape();
+>>>>>>> 9bfbd61f09 (cumsum: add test for cumsum_backward and forward moreh_cumsum to ttnn.experimental.cumsum)
     int tensor_rank = input_shape.rank();
 
     Tensor adjusted_input_tensor = input_tensor;  // Tensor copy, but simplifies code (temporary solution)
@@ -129,8 +136,9 @@ Tensor CumSumBackwardOperation::invoke(
     const Tensor& input,
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
-    std::optional<Tensor> optional_output_tensor) {
-    return CumSumOperation::invoke(queue_id, input, dim, dtype, optional_output_tensor, true);
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<MemoryConfig>& memory_config) {
+    return CumSumOperation::invoke(queue_id, input, dim, dtype, optional_output_tensor, true, memory_config);
 }
 
 }  // namespace ttnn::operations::experimental::reduction
