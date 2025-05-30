@@ -24,7 +24,7 @@
 
 void kernel_launch(uint32_t kernel_base_addr) {
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
-    wait_for_go_message();
+    global_program_barrier();
 #ifdef KERNEL_RUN_TIME
     uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
     while (c_tensix_core::read_wall_clock() < end_time);
@@ -41,13 +41,22 @@ void kernel_launch(uint32_t kernel_base_addr) {
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
-    wait_for_go_message();
+
+// If OVERLAPPED_DISPATCH is defined, the kernel may start before the previous kernel finishes on all cores.
+#if !defined(OVERLAPPED_DISPATCH) || (defined(DEBUG_EARLY_RETURN_KERNELS) && !defined(DISPATCH_KERNEL))
+    global_program_barrier();
+#endif
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG
         WAYPOINT("K");
         kernel_main();
         WAYPOINT("KD");
+#ifdef OVERLAPPED_DISPATCH
+        // Ensure that the previous kernel has completed before reporting this kernel as complete, to avoid mixing up
+        // the done counter.
+        global_program_barrier();
+#endif
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
             // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the

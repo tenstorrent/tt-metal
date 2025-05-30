@@ -77,15 +77,6 @@ uint32_t firmware_config_init(
     return kernel_config_base[core_type_index];
 }
 
-FORCE_INLINE
-void wait_for_go_message() {
-    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
-
-    while (mailboxes->go_message.signal != RUN_MSG_GO) {
-        invalidate_l1_cache();
-    }
-}
-
 #if !defined(COMPILE_FOR_TRISC)
 FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) {
     go_msg_t go_message;

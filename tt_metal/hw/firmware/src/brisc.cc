@@ -474,7 +474,7 @@ int main() {
                     barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 }
                 start_ncrisc_kernel_run(enables);
-                wait_for_go_message();
+                global_program_barrier();
             }
             WAYPOINT("D");
 

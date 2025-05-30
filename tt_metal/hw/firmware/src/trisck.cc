@@ -39,7 +39,7 @@ volatile tt_reg_ptr uint * mailbox_base[4] = {
 
 void kernel_launch(uint32_t kernel_base_addr) {
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
-    wait_for_go_message();
+    global_program_barrier();
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
 #ifdef KERNEL_RUN_TIME
     ckernel::wait(KERNEL_RUN_TIME);
@@ -57,11 +57,17 @@ void kernel_launch(uint32_t kernel_base_addr) {
 #if !defined(UCK_CHLKC_MATH) and defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
-    wait_for_go_message();
+// If OVERLAPPED_DISPATCH is defined, the kernel may start before the previous kernel finishes on all cores.
+#if !defined(OVERLAPPED_DISPATCH) || (defined(DEBUG_EARLY_RETURN_KERNELS) && !defined(DISPATCH_KERNEL))
+    global_program_barrier();
+#endif
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
     run_kernel();
     WAYPOINT("KD");
+#ifdef OVERLAPPED_DISPATCH
+    // Ensure that the previous kernel has completed before reporting this kernel as complete, to avoid mixing up the done counter.
+    global_program_barrier();
 #endif
 }

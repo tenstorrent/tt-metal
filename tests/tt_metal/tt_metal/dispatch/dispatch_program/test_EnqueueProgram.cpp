@@ -1907,6 +1907,72 @@ TEST_F(CommandQueueSingleCardProgramFixture, DISABLED_TensixTestFillDispatchCore
     }
 }
 
+TEST_F(CommandQueueSingleCardTraceFixture, TestOverlappedDispatch) {
+    for (IDevice* device : devices_) {
+        CoreCoord check_worker{0, 0};
+        CoreCoord send_worker{0, 1};
+        Program first_program;
+        uint32_t cb_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        uint32_t result_addr = cb_addr + sizeof(uint32_t);
+
+        auto check_worker_virtual = device->worker_core_from_logical_core(check_worker);
+        // Cleanup kernel sets cb_addr to 0.
+        auto cleanup_kernel = CreateKernel(
+            first_program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/wait_and_check.cpp",
+            check_worker,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {cb_addr},
+                .defines = {{"CLEANUP", "1"}}});
+        // Send kernel sets cb_addr to 1 on check_worker after a 100ms delay.
+        auto send_kernel = CreateKernel(
+            first_program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/wait_and_check.cpp",
+            send_worker,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {cb_addr, check_worker_virtual.x, check_worker_virtual.y},
+                .defines = {{"WRITER", "1"}}});
+
+        EnqueueProgram(device->command_queue(), first_program, false);
+
+        Program second_program;
+        // Check kernel sets result_addr[0] to the value of cb_addr and result_addr[1] to the value of cb_addr after a
+        // 100ms delay.
+        auto check_kernel = CreateKernel(
+            second_program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/wait_and_check.cpp",
+            check_worker,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {cb_addr, result_addr},
+                .defines = {{"OVERLAPPED_DISPATCH", "1"}}});
+
+        EnqueueProgram(device->command_queue(), second_program, false);
+
+        // Actual test run uses trace to ensure second program can start quickly while first is still running.
+        uint32_t trace_id = BeginTraceCapture(device, 0);
+        EnqueueProgram(device->command_queue(), first_program, false);
+        EnqueueProgram(device->command_queue(), second_program, false);
+        EndTraceCapture(device, 0, trace_id);
+        Finish(device->command_queue());
+
+        ReplayTrace(device, 0, trace_id, true);
+        Finish(device->command_queue());
+        std::vector<uint32_t> result_values;
+        tt::tt_metal::detail::ReadFromDeviceL1(device, check_worker, result_addr, 2 * sizeof(uint32_t), result_values);
+
+        // Before the global_kernel_barrier, the write shouldn't have occurred.
+        EXPECT_EQ(result_values[0], 0);
+        // After the global_kernel_barrier, the write should have occurred.
+        EXPECT_EQ(result_values[1], 1);
+    }
+}
+
 TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_PROGRAMS = 100;
     uint32_t MAX_LOOP = 100;

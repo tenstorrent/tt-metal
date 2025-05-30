@@ -200,4 +200,16 @@ inline __attribute__((always_inline)) void flush_erisc_icache() {
 #endif
 }
 
+#if !defined(COMPILE_FOR_ERISC)
+// Wait for previous program ot complete on all cores on this device.
+FORCE_INLINE
+void global_program_barrier() {
+    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+
+    while (mailboxes->go_message.signal != RUN_MSG_GO) {
+        invalidate_l1_cache();
+    }
+}
+#endif
+
 #endif
