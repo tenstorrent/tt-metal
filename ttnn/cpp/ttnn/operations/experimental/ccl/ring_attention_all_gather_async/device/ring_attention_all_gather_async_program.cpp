@@ -415,7 +415,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         TT_ASSERT(!(output_tensor_shape[3] % TILE_WIDTH));
         uint32_t TILE_WIDTH = 32;
         uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
+        uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
         uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
+        uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
+        uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
 
         std::set<CoreRange> receiver_forward_semaphore_core_ranges;
         receiver_forward_semaphore_core_ranges.insert(CoreRange(receiver_worker_cores[1]));
@@ -435,8 +438,12 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         }
 
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor_Wt,                           // width in tiles of the output shard
+            input_tensor_Wt,                           // width in tiles of the input shard
+            input_tensor_Ht,                           // height in tiles of the input shard
             output_tensor_Wt,                          // width in tiles of the entire output
+            output_tensor_Ht,                          // height in tiles of the entire output
+            dim,                                       // dim to gather on
+            batch_head_size,                           // product of the first two dims
             input_tile_id_end,                         // slice_num_pages
             ring_size,                                 // ring_size
             semaphore.at(0).address(),                 // out_ready_semaphore_forward
@@ -459,8 +466,12 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         uint32_t out_ready_sem_wait_value = (dynamic_alternate ? (ring_size + 1) : ring_size) * num_links;
 
         std::vector<uint32_t> writer_rt_args = {
-            input_tensor_Wt,            // width in tiles of the output shard
+            input_tensor_Wt,            // width in tiles of the input shard
+            input_tensor_Ht,            // height in tiles of the input shard
             output_tensor_Wt,           // width in tiles of entire output
+            output_tensor_Ht,           // height in tiles of entire output
+            dim,                        // dim to gather on
+            batch_head_size,            // product of the first two dims
             input_tensor_num_pages,     // slice_num_pages
             drain_sync_core.x,          // out_ready_sem_noc0_x
             drain_sync_core.y,          // out_ready_sem_noc0_y
@@ -488,8 +499,12 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         // Set Receiver runtime args
         // Reader
         std::vector<uint32_t> forward_receiver_reader_rt_args = {
-            input_tensor_Wt,                          // width in tiles of the output shard
+            input_tensor_Wt,                          // width in tiles of the input shard
+            input_tensor_Ht,                          // height in tiles of the input shard
             output_tensor_Wt,                         // width in tiles of the entire output
+            output_tensor_Ht,                         // height in tiles of the entire output
+            dim,                                      // dim to gather on
+            batch_head_size,                          // product of the first two dims
             input_tile_id_end,                        // slice_num_pages
             ring_size,                                // ring_size
             sender_to_forward_receiver_semaphore_id,  // signal_receiver_sem_forward
@@ -504,8 +519,12 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             {receiver_worker_cores[1]},
             forward_receiver_reader_rt_args);
         std::vector<uint32_t> backward_receiver_reader_rt_args = {
-            input_tensor_Wt,                           // width in tiles of the output shard
+            input_tensor_Wt,                           // width in tiles of the input shard
+            input_tensor_Ht,                           // height in tiles of the input shard
             output_tensor_Wt,                          // width in tiles of the entire output
+            output_tensor_Ht,                          // height in tiles of the entire output
+            dim,                                       // dim to gather on
+            batch_head_size,                           // product of the first two dims
             input_tile_id_end,                         // slice_num_pages
             ring_size,                                 // ring_size
             sender_to_backward_receiver_semaphore_id,  // signal_receiver_sem_backward
@@ -521,8 +540,12 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 
         // Writer
         std::vector<uint32_t> forward_receiver_writer_rt_args = {
-            input_tensor_Wt,    // width in tiles of the output shard
-            output_tensor_Wt,   // width in tiles of entire output
+            input_tensor_Wt,    // width in tiles of the input shard
+            input_tensor_Ht,    // height in tiles of the input shard
+            output_tensor_Wt,   // width in tiles of the entire output
+            output_tensor_Ht,   // height in tiles of the entire output
+            dim,                // dim to gather on
+            batch_head_size,    // product of the first two dims
             input_tile_id_end,  // slice_num_pages
             ring_size,          // ring_size
         };
@@ -536,8 +559,12 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             {receiver_worker_cores[1]},
             forward_receiver_writer_rt_args);
         std::vector<uint32_t> backward_receiver_writer_rt_args = {
-            input_tensor_Wt,    // width in tiles of the output shard
-            output_tensor_Wt,   // width in tiles of entire output
+            input_tensor_Wt,    // width in tiles of the input shard
+            input_tensor_Ht,    // height in tiles of the input shard
+            output_tensor_Wt,   // width in tiles of the entire output
+            output_tensor_Ht,   // height in tiles of the entire output
+            dim,                // dim to gather on
+            batch_head_size,    // product of the first two dims
             input_tile_id_end,  // slice_num_pages
             ring_size,          // ring_size
         };
