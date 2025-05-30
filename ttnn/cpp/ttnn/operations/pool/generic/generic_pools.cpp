@@ -17,6 +17,9 @@
 namespace ttnn {
 namespace operations::pool {
 
+// Generic invoke function for both max and avg pool operations. Most of the arguments are shared excpet for the
+// dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
+// maxpool.
 static Tensor pool2d_invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
