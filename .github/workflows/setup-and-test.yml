@@ -16,6 +16,9 @@ on:
         required: true
         type: string
 
+permissions:
+  checks: write
+
 jobs:
   setup-and-test:
     runs-on: ${{ inputs.runs_on }}
@@ -47,16 +50,32 @@ jobs:
         env:
           TEST_GROUPS: ${{ inputs.test_group }}
         run: |
-          # Parse the JSON string into an array to get its length
+          CHIP_ARCH=unknown
+          if [[ "${{ inputs.runs_on }}" =~ n150 ]]; then
+            CHIP_ARCH=wormhole
+          elif [[ "${{ inputs.runs_on }}" =~ p150 ]]; then
+            CHIP_ARCH=blackhole
+          fi
+          echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
           SPLITS=$(echo "$TEST_GROUPS" | jq '. | length')
           cd tests/python_tests/
           pytest --splits $SPLITS --group ${{ matrix.test_group }} \
-                 --override-ini="addopts=-v" --timeout=60 .
+                --override-ini="addopts=-v" --timeout=60 \
+                --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}.xml .
 
-      # Step 4: Upload test log as an artifact
-      - name: Upload logs if tests fail
-        if: failure()  # Only upload the log if the previous step failed
+      # Step 4: Upload the JUnit report
+      - name: Upload JUnit report
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: test-log
-          path: tests/python_tests/pytest_errors_${{ matrix.test_group }}.log
+          name: junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          path: tests/python_tests/pytest-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.xml
+
+      # Step 5: Publish the test results
+      - name: Publish Test Results
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: tests/python_tests/pytest-report-*-${{ matrix.test_group }}.xml
+          include_passed: true
+          annotate_only: true

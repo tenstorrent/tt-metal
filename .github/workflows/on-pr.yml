@@ -9,9 +9,10 @@ on:
   merge_group:
 
 permissions:
-  contents: write
-  pull-requests: write
+  checks: write
+  contents: read
   packages: write
+  pull-requests: write
 
 concurrency:
   # Use github.run_id on main branch (or any protected branch)
@@ -56,6 +57,33 @@ jobs:
                 - 'tests/**'
               github:
                 - '.github/**'
+
+  label-pr:
+    name: "🏷️ Label PR"
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Add labels based on changes
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const labels = [];
+            if ("${{ needs.detect-changes.outputs.blackhole }}" === "true") labels.push("blackhole");
+            if ("${{ needs.detect-changes.outputs.wormhole }}" === "true") labels.push("wormhole");
+            if ("${{ needs.detect-changes.outputs.tests }}" === "true") labels.push("test-infra");
+            if ("${{ needs.detect-changes.outputs.github }}" === "true") labels.push("ci");
+            if (labels.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels
+              });
+            }
 
   build-images:
     name: "🐳️ Docker setup"
