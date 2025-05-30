@@ -209,7 +209,7 @@ void MAIN {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
             cb_reserve_back(cb_var, 1);
             cb_wait_front(post_cb_scaler_global, 1);
-            reduce_init_delta<false>(cb_stats, post_cb_scaler_global, cb_var);
+            reduce_init(cb_stats, post_cb_scaler_global, cb_var);
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_distributed_blocks; w++) {
                 reduce_tile(
@@ -224,7 +224,7 @@ void MAIN {
             tile_regs_wait();
             pack_tile(post_dst0, cb_var);
             tile_regs_release();
-            reduce_revert_delta(cb_var);
+            reduce_revert_delta();
             cb_push_back(cb_var, 1);
 
             // 1/[sqrt(Var + eps)],
