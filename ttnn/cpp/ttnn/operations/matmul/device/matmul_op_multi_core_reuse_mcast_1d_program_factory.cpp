@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -277,7 +277,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1];
 
     std::vector<uint32_t> in0_sender_compile_time_args;
     if (in0_is_sharded) {
@@ -287,8 +286,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
 
             (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
-            (std::uint32_t)in0_last_ktile_w,
-
             // in0/in1 common args
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
@@ -323,10 +320,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)in0_block_w,          // in0_block_w
             (std::uint32_t)in0_block_h,          // in0_block_h
             (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
-            (std::uint32_t)in0_last_ktile_w,
-            (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
-            (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
-            (std::uint32_t)0,      // shard_height_in_tiles (not used for interleaved)
+            (std::uint32_t)false,                // extract_shard_sub_blocks (not used for interleaved)
+            (std::uint32_t)0,                    // shard_width_in_tiles (not used for interleaved)
+            (std::uint32_t)0,                    // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
@@ -968,8 +964,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1006,6 +1000,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
     bool untilize_out) {
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+
+    tt_metal::Program program{};
 
     bool fuse_op = false;
 
@@ -1044,8 +1040,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
-
-    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1];
 
     bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;
@@ -1140,8 +1134,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)in0_block_w,                // in0_block_w
         (std::uint32_t)in0_block_h,                // in0_block_h
         (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
-        (std::uint32_t)in0_last_ktile_w,
-
         (std::uint32_t)extract_shard_sub_blocks,
         (std::uint32_t)in0_shard_width_in_tiles,
         (std::uint32_t)in0_shard_height_in_tiles,
@@ -2575,8 +2567,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             fused_op_signaler);
     } else {
         return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1(
-            program,
-            a,
             device,
             math_fidelity,
             fp32_dest_acc_en,
