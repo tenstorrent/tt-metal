@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "pad_tile.hpp"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lenghts for compat
@@ -24,7 +23,6 @@ void kernel_main() {
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(2);
 
     // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
     // DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
@@ -62,11 +60,6 @@ void kernel_main() {
                 uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
                 noc_async_read_tile(itileA, s0, l1_write_addr_in0);
                 noc_async_read_barrier();
-                if constexpr (in0_last_ktile_w > 0) {
-                    if (kt == Kt - 1) {
-                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
-                    }
-                }
                 cb_push_back(cb_id_in0, onetile);
             }
 
