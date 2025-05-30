@@ -16,7 +16,6 @@ struct InlineFileStorage {
 }
 
 table TensorShard {
-    tensor_spec: TensorSpec;
     buffer: TensorBuffer;
     mesh_coordinate: MeshCoordinate;
 }
@@ -27,7 +26,6 @@ union TensorType {
 }
 
 table ReplicatedTensor {
-    tensor_spec: TensorSpec;
     buffer: TensorBuffer;
 }
 
@@ -37,6 +35,7 @@ table ShardedTensor {
 }
 
 table Tensor {
+    tensor_spec: TensorSpec;
     tensor_type: TensorType;
 }
 
