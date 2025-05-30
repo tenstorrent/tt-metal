@@ -102,7 +102,7 @@ static uint32_t rd_block_idx;
 static uint32_t cb_fence;  // walks through cb page by page
 static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
-static uint32_t write_offset[3];  // added to write address on non-host writes
+static uint32_t write_offset[CQ_DISPATCH_MAX_WRITE_OFFSETS];  // added to write address on non-host writes
 
 static uint32_t upstream_total_acquired_page_count;
 
@@ -1171,17 +1171,23 @@ re_run_command:
 
         case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
 
-        case CQ_DISPATCH_CMD_SET_WRITE_OFFSET:
+        case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: {
             // DPRINT << "write offset: " << cmd->set_write_offset.offset0 << " " << cmd->set_write_offset.offset1 << "
             // "
             //        << cmd->set_write_offset.offset2 << " host id " << cmd->set_write_offset.program_host_id <<
             //        ENDL();
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
-            write_offset[0] = cmd->set_write_offset.offset0;
-            write_offset[1] = cmd->set_write_offset.offset1;
-            write_offset[2] = cmd->set_write_offset.offset2;
-            cmd_ptr += sizeof(CQDispatchCmd);
+            uint32_t offset_count = cmd->set_write_offset.offset_count;
+
+            ASSERT(offset_count <= std::size(write_offset));
+            uint32_t* cmd_write_offset = (uint32_t*)(cmd_ptr + sizeof(CQDispatchCmd));
+
+            for (uint32_t i = 0; i < offset_count; i++) {
+                write_offset[i] = cmd_write_offset[i];
+            }
+            cmd_ptr += sizeof(CQDispatchCmd) + sizeof(uint32_t) * offset_count;
             break;
+        }
 
         case CQ_DISPATCH_CMD_TERMINATE:
             // DPRINT << "dispatch terminate\n";
