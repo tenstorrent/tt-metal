@@ -81,19 +81,19 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
-  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/ttnn/unit_tests_ttnn
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/ttnn/unit_tests_ttnn
   ./build/test/ttnn/unit_tests_ttnn_ccl
-  # ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
-  # ./build/test/ttnn/unit_tests_ttnn_ccl_ops
-  # ./build/test/ttnn/test_ccl_multi_cq_multi_device
-  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
-  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_events.py ; fail+=$?
-  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
-  # pytest -n auto tests/ttnn/unit_tests/test_multi_device.py ; fail+=$?
-  # pytest -n auto tests/ttnn/unit_tests/test_multi_device_async.py ; fail+=$?
-  # pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
-  # pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
-  # pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
+  ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
+  ./build/test/ttnn/unit_tests_ttnn_ccl_ops
+  ./build/test/ttnn/test_ccl_multi_cq_multi_device
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_events.py ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_prefetcher.py::test_run_prefetcher_post_commit_multi_device ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/test_multi_device.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/test_multi_device_async.py ; fail+=$?
+  pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
+  pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
+  pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
@@ -442,49 +442,49 @@ run_t3000_unet_shallow_tests() {
 
 run_t3000_tests() {
   # Run ttmetal tests
-  # run_t3000_ttmetal_tests
+  run_t3000_ttmetal_tests
 
   # Run ttnn tests
   run_t3000_ttnn_tests
 
-  # Run falcon7b tests
-  # run_t3000_falcon7b_tests
+  Run falcon7b tests
+  run_t3000_falcon7b_tests
 
-  # # Run falcon40b tests
-  # run_t3000_falcon40b_tests
+  # Run falcon40b tests
+  run_t3000_falcon40b_tests
 
-  # # Run llama3-small (1B, 3B, 8B) tests
-  # run_t3000_llama3-small_tests
+  # Run llama3-small (1B, 3B, 8B) tests
+  run_t3000_llama3-small_tests
 
-  # # Run llama3.2-11B tests
-  # run_t3000_llama3.2-11b_tests
+  # Run llama3.2-11B tests
+  run_t3000_llama3.2-11b_tests
 
-  # # Run llama3.1-70B tests
-  # run_t3000_llama3.1-70b_tests
+  # Run llama3.1-70B tests
+  run_t3000_llama3.1-70b_tests
 
-  # # Run llama3.2-90B tests
-  # run_t3000_llama3.2-90b_tests
+  # Run llama3.2-90B tests
+  run_t3000_llama3.2-90b_tests
 
-  # # Run llama3.2-11B-vision tests
-  # run_t3000_llama3.2-11b-vision_unit_tests
+  # Run llama3.2-11B-vision tests
+  run_t3000_llama3.2-11b-vision_unit_tests
 
-  # # Run mistral tests
-  # run_t3000_mistral_tests
+  # Run mistral tests
+  run_t3000_mistral_tests
 
-  # # Run llama3.2-11B-vision tests on spoofed N300 mesh
-  # run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests
+  # Run llama3.2-11B-vision tests on spoofed N300 mesh
+  run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests
 
-  # # Run llama3.2-90B-vision tests
-  # run_t3000_llama3.2-90b-vision_unit_tests
+  # Run llama3.2-90B-vision tests
+  run_t3000_llama3.2-90b-vision_unit_tests
 
-  # # Run mixtral tests
-  # run_t3000_mixtral_tests
+  # Run mixtral tests
+  run_t3000_mixtral_tests
 
-  # # Run grok tests
-  # run_t3000_grok_tests
+  # Run grok tests
+  run_t3000_grok_tests
 
-  # # Run unet shallow tests
-  # run_t3000_unet_shallow_tests
+  # Run unet shallow tests
+  run_t3000_unet_shallow_tests
 }
 
 fail=0
