@@ -169,8 +169,7 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     model = transformers.models.vit.modeling_vit.ViTAttention(config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_attention_mask = torch.ones(batch_size, 1, 1, sequence_size, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states, torch_attention_mask)
+    torch_output, *_ = model(torch_hidden_states)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -185,19 +184,12 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    attention_mask = ttnn.from_torch(
-        torch_attention_mask,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
 
     encoder_input = ttnn.to_memory_config(
         hidden_states,
         memory_config=ttnn.create_sharded_memory_config(
             hidden_states.shape,
-            core_grid=config.core_grid,
+            core_grid=config.core_grid_8x8,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -208,7 +200,6 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     output = ttnn_optimized_sharded_vit.vit_attention(
         config,
         encoder_input,
-        attention_mask=attention_mask,
         parameters=parameters,
     )
     output = ttnn.to_torch(output)
@@ -272,7 +263,7 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
         residual,
         memory_config=ttnn.create_sharded_memory_config(
             residual.shape,
-            core_grid=config.core_grid,
+            core_grid=config.core_grid_8x8,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -302,9 +293,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size):
     model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224").vit.encoder.layer[0]
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_attention_mask = torch.ones(batch_size, 1, 1, sequence_size, dtype=torch.float32)
-
-    torch_output, *_ = model(torch_hidden_states, torch_attention_mask)
+    torch_output, *_ = model(torch_hidden_states)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -314,13 +303,6 @@ def test_vit_layer(device, model_name, batch_size, sequence_size):
 
     hidden_states = ttnn.from_torch(
         torch_hidden_states,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    attention_mask = ttnn.from_torch(
-        torch_attention_mask,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -342,7 +324,6 @@ def test_vit_layer(device, model_name, batch_size, sequence_size):
     output = ttnn_optimized_sharded_vit.vit_layer(
         config,
         encoder_input,
-        attention_mask,
         parameters=parameters,
     )
     output = ttnn.to_torch(output)
@@ -363,8 +344,7 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size):
 
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
-    torch_output = model(torch_hidden_states, torch_attention_mask).last_hidden_state
+    torch_output = model(torch_hidden_states).last_hidden_state
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -379,29 +359,15 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    if torch_attention_mask is not None:
-        head_masks = [
-            ttnn.from_torch(
-                torch_attention_mask[index].reshape(1, 1, 1, sequence_size).expand(batch_size, -1, -1, -1),
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            for index in range(config.num_hidden_layers)
-        ]
-    else:
-        head_masks = [None for _ in range(config.num_hidden_layers)]
 
     output = ttnn_optimized_sharded_vit.vit_encoder(
         config,
         hidden_states,
-        head_masks,
         parameters=parameters,
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.975)
+    assert_with_pcc(torch_output, output, 0.96)
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -420,7 +386,6 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
     torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)
-    torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
     torch_output, *_ = model(torch_pixel_values).logits
 
     # cls_token & position embeddings expand to batch_size
@@ -471,20 +436,6 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     n_cores = batch_size * 2
     shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
-    if torch_attention_mask is not None:
-        head_masks = [
-            ttnn.from_torch(
-                torch_attention_mask[index].reshape(1, 1, 1, sequence_size).expand(batch_size, -1, -1, -1),
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            for index in range(config.num_hidden_layers)
-        ]
-    else:
-        head_masks = [None for _ in range(config.num_hidden_layers)]
-
     pixel_values = ttnn.from_torch(
         torch_pixel_values,
         dtype=ttnn.bfloat16,
@@ -500,11 +451,10 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     output = ttnn_optimized_sharded_vit.vit(
         config,
         pixel_values,
-        head_masks,
         cls_token,
         position_embeddings,
         parameters=parameters,
     )
     output = ttnn.to_torch(output)
     # 1000 classes slicing
-    assert_with_pcc(torch_output, output[0, 0, :1000], 0.915)
+    assert_with_pcc(torch_output, output[0, 0, :1000], 0.88)

@@ -64,21 +64,6 @@ class VitTestInfra:
             torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-        torch_attention_mask = torch.ones(self.config.num_hidden_layers, sequence_size, dtype=torch.float32)
-        if torch_attention_mask is not None:
-            self.head_masks = [
-                ttnn.from_torch(
-                    torch_attention_mask[index].reshape(1, 1, 1, sequence_size).expand(batch_size, -1, -1, -1),
-                    dtype=ttnn.bfloat8_b,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                for index in range(self.config.num_hidden_layers)
-            ]
-        else:
-            self.head_masks = [None for _ in range(self.config.num_hidden_layers)]
-
         ## IMAGENET INFERENCE
         data_loader = get_data_loader("ImageNet_data", batch_size, 2)
         self.torch_pixel_values, labels = get_batch(data_loader, image_processor)
@@ -153,7 +138,6 @@ class VitTestInfra:
         self.output_tensor = ttnn_optimized_sharded_vit_wh.vit(
             self.config,
             self.input_tensor,
-            self.head_masks,
             self.cls_token,
             self.position_embeddings,
             parameters=self.parameters,

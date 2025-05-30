@@ -215,7 +215,6 @@ def vit_embeddings(
 def vit_attention(
     config,
     hidden_states,
-    attention_mask,
     parameters,
 ):
     num_heads = config.num_attention_heads  # num_heads = 12
@@ -263,9 +262,10 @@ def vit_attention(
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
+    scale = 1.0 / (head_size**0.5)
     attention_scores = ttnn.mul_(
         attention_scores,
-        1.0 / (head_size**0.5),
+        scale,
     )
 
     attention_probs = ttnn.softmax_in_place(
@@ -370,7 +370,6 @@ def vit_feedforward(
 def vit_layer(
     config,
     hidden_states,
-    attention_mask,
     parameters,
 ):
     layernorm_before_output = ttnn.layer_norm(
@@ -385,7 +384,6 @@ def vit_layer(
     multi_head_attention_output = vit_attention(
         config,
         layernorm_before_output,
-        attention_mask=attention_mask,
         parameters=parameters.attention,
     )
 
@@ -418,7 +416,6 @@ def vit_layer(
 def vit_encoder(
     config,
     embeddings,
-    head_masks,
     parameters,
 ):
     TILE_HEIGHT = 32
@@ -440,7 +437,6 @@ def vit_encoder(
         encoder_output = vit_layer(
             config,
             encoder_input,
-            head_masks[index],
             encoder_parameters,
         )
         encoder_input = encoder_output
@@ -451,7 +447,6 @@ def vit_encoder(
 def vit(
     config,
     pixel_values,
-    attention_mask,
     cls_token,
     position_embeddings,
     parameters,
@@ -461,7 +456,6 @@ def vit(
     hidden_states = vit_encoder(
         config,
         embeddings_output,
-        attention_mask,
         parameters=parameters.vit.encoder,
     )
 
@@ -510,7 +504,6 @@ def vit(
 def preprocess_inputs(
     input_ids,
     token_type_ids,
-    attention_mask,
     device,
 ):
     batch_size, _ = input_ids.shape
@@ -521,18 +514,7 @@ def preprocess_inputs(
         token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    if attention_mask is not None:
-        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
-        attention_mask = torch.nn.functional.pad(attention_mask, (0, 0, 0, 0, 0, 0, 0, batch_size - 1))
-        attention_mask = ttnn.from_torch(
-            attention_mask,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-    return input_ids, token_type_ids, attention_mask
+    return input_ids, token_type_ids
 
 
 def custom_preprocessor(torch_model, name):
