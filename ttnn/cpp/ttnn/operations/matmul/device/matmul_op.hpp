@@ -20,16 +20,17 @@ namespace operations {
 namespace matmul {
 
 // shared variables between override and program
-struct mcast_in0_shared_variables_t {
-    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id;
-    tt::tt_metal::KernelHandle mm_kernel_in1_sender_writer_id;
-    tt::tt_metal::CBHandle cb_src1;
-    tt::tt_metal::CBHandle cb_src2;
-    tt::tt_metal::CBHandle cb_src3;
-    tt::tt_metal::CBHandle cb_output;
+
+enum MATMUL_TYPE { mcast_in0, gather_in0, mcast_in1 };
+
+struct matmul_shared_variables_t {
+    std::vector<tt::tt_metal::KernelHandle> kernels;
+    std::vector<tt::tt_metal::CBHandle> cbs;
+    bool conditional;
     CoreCoord start_core;
     std::vector<CoreCoord> cores;
     uint32_t num_cores_with_work;
+    MATMUL_TYPE type;
 };
 
 // Define the buffering depth for input CBs (0 and 1) for mcast variants.

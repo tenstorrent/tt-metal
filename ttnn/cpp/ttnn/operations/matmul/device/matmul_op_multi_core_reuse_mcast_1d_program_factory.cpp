@@ -59,7 +59,7 @@ uint32_t get_preferred_noc(
     return use_dedicated_noc ? 1 : noc;
 }
 
-ttnn::operations::matmul::mcast_in0_shared_variables_t process_program_mcast_in0(
+ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in0(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
@@ -892,20 +892,18 @@ ttnn::operations::matmul::mcast_in0_shared_variables_t process_program_mcast_in0
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
         }
     }
-    return ttnn::operations::matmul::mcast_in0_shared_variables_t{
-        mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
-        mm_kernel_in1_sender_writer_id,
-        cb_src1,
-        cb_src2,
-        cb_src3,
-        cb_output,
+    return ttnn::operations::matmul::matmul_shared_variables_t{
+        {mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, mm_kernel_in1_sender_writer_id},
+        {cb_src1, cb_src2, cb_src3, cb_output},
+        false,
         start_core,
         cores,
-        num_cores_with_work};
+        num_cores_with_work,
+        ttnn::operations::matmul::mcast_in0};
 }
 
 void override_program_mcast_in0(
-    const ttnn::operations::matmul::mcast_in0_shared_variables_t& shared_variables,
+    const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
     const void* operation,
     tt::tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
@@ -931,25 +929,23 @@ void override_program_mcast_in0(
 
     // Manually unroll sender core
     if (src0_sharded) {
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src2, *src_buffer_a);
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cbs.at(1), *src_buffer_a);
     } else {
         // in0 sender
-        auto& reader_sender_runtime_args = GetRuntimeArgs(
-            program,
-            shared_variables.mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
-            shared_variables.start_core);
+        auto& reader_sender_runtime_args =
+            GetRuntimeArgs(program, shared_variables.kernels.at(0), shared_variables.start_core);
         reader_sender_runtime_args[0] = src_buffer_a->address();
     }
 
     if (src1_sharded) {
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src1, *src_buffer_b);
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cbs.at(0), *src_buffer_b);
     }
 
     if (bias_tensor.has_value() && bias_tensor.value().is_sharded()) {
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src3, *bias_buffer.value());
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cbs.at(2), *bias_buffer.value());
     }
 
-    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.mm_kernel_in1_sender_writer_id);
+    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.kernels.at(1));
 
     for (uint32_t i = 0; i < shared_variables.num_cores_with_work; ++i) {
         const auto& core = shared_variables.cores[i];
@@ -965,7 +961,7 @@ void override_program_mcast_in0(
     }
 
     if (out_sharded) {
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cbs.at(3), *dst_buffer);
     }
 }
 
@@ -1009,7 +1005,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
     bool output_is_sharded,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
-    ttnn::operations::matmul::mcast_in0_shared_variables_t shared_variables = process_program_mcast_in0(
+    ttnn::operations::matmul::matmul_shared_variables_t shared_variables = process_program_mcast_in0(
         program,
         a,
         device,
