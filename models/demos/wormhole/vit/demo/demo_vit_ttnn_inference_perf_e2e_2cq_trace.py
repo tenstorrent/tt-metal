@@ -21,9 +21,6 @@ except ModuleNotFoundError:
 
 def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations):
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
-    output_sharded_mem_config_DRAM = test_infra.setup_dram_sharded_output(
-        device,
-    )
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
     # Initialize the op event so we can write
@@ -38,7 +35,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     first_op_event = ttnn.record_event(device, 0)
     test_infra.run()
-    output_tensor_dram = ttnn.reshard(test_infra.output_tensor, output_sharded_mem_config_DRAM)
+    output_tensor_dram = ttnn.to_memory_config(test_infra.output_tensor, ttnn.DRAM_MEMORY_CONFIG)
     last_op_event = ttnn.record_event(device, 0)
 
     # Capture trace
@@ -57,7 +54,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     input_l1_tensor = ttnn.allocate_tensor_on_device(spec, device)
     assert input_trace_addr == input_l1_tensor.buffer_address()
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    output_tensor_dram = ttnn.reshard(test_infra.output_tensor, output_sharded_mem_config_DRAM, output_tensor_dram)
+    output_tensor_dram = ttnn.to_memory_config(test_infra.output_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
     # Warmup run
     outputs = []
@@ -72,7 +69,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
         ttnn.wait_for_event(0, read_event)
 
-        output_tensor_dram = ttnn.reshard(test_infra.output_tensor, output_sharded_mem_config_DRAM, output_tensor_dram)
+        output_tensor_dram = ttnn.to_memory_config(test_infra.output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         last_op_event = ttnn.record_event(device, 0)
 
         ttnn.wait_for_event(1, first_op_event)
@@ -99,7 +96,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
         ttnn.wait_for_event(0, read_event)
 
-        output_tensor_dram = ttnn.reshard(test_infra.output_tensor, output_sharded_mem_config_DRAM, output_tensor_dram)
+        output_tensor_dram = ttnn.to_memory_config(test_infra.output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         last_op_event = ttnn.record_event(device, 0)
 
         ttnn.wait_for_event(1, first_op_event)

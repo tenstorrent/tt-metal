@@ -25,10 +25,6 @@ class VitTrace2CQ:
         )
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
-        self.output_sharded_mem_config_DRAM = self.test_infra.setup_dram_sharded_output(
-            device,
-        )
-
         self.first_op_event = ttnn.record_event(device, 0)
         self.read_event = ttnn.record_event(device, 1)
 
@@ -40,7 +36,7 @@ class VitTrace2CQ:
         self.test_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
         self.first_op_event = ttnn.record_event(device, 0)
         self.test_infra.run()
-        self.output_tensor_dram = ttnn.reshard(self.test_infra.output_tensor, self.output_sharded_mem_config_DRAM)
+        self.output_tensor_dram = ttnn.to_memory_config(self.test_infra.output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         self.last_op_event = ttnn.record_event(device, 0)
 
         # Capture trace
@@ -59,9 +55,7 @@ class VitTrace2CQ:
 
         self.input_tensor = ttnn.allocate_tensor_on_device(spec, device)
         ttnn.end_trace_capture(device, self.trace_id, cq_id=0)
-        self.output_tensor_dram = ttnn.reshard(
-            output_tensor, self.output_sharded_mem_config_DRAM, self.output_tensor_dram
-        )
+        self.output_tensor_dram = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         assert input_trace_addr == self.input_tensor.buffer_address()
 
     def execute_vit_trace_2cqs_inference(self, tt_inputs_host=None, first_input=False):
@@ -75,9 +69,7 @@ class VitTrace2CQ:
         ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=False)
         ttnn.wait_for_event(0, self.read_event)
 
-        self.output_tensor_dram = ttnn.reshard(
-            self.test_infra.output_tensor, self.output_sharded_mem_config_DRAM, self.output_tensor_dram
-        )
+        self.output_tensor_dram = ttnn.to_memory_config(self.test_infra.output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         self.last_op_event = ttnn.record_event(self.device, 0)
 
         ttnn.wait_for_event(1, self.last_op_event)

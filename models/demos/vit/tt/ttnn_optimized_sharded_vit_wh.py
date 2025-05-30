@@ -469,7 +469,7 @@ def vit(
         program_config=config.program_configs["layernorm_before_program_config"],
     )
 
-    # reshard back to 48 cores
+    # reshard back to 48 cores as we are losing a bit of precision if this is 64 cores
     block_sharded_config_48_cores = ttnn.create_sharded_memory_config(
         output.padded_shape,
         core_grid=config.core_grid,  # 48
@@ -488,16 +488,6 @@ def vit(
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["classifer_matmul_program_config"],
     )
-
-    # Reshard to height sharded to be able tu use in e2e test. This is a temp workaround
-    height_shard_core_grid = ttnn.CoreGrid(y=8, x=7)
-    height_sharded_config_output = ttnn.create_sharded_memory_config(
-        classifier_output.padded_shape,
-        core_grid=height_shard_core_grid,  # 56
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    classifier_output = ttnn.reshard(classifier_output, height_sharded_config_output)
     return classifier_output
 
 
