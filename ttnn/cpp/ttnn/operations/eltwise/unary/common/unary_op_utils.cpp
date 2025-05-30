@@ -360,6 +360,8 @@ std::pair<string, string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
                 op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile_int32({});", idst)};
+            } else if (input_dtype.value() == DataType::UINT16) {
+                op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile_uint16({});", idst)};
             } else {
                 op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)};
             }
@@ -369,6 +371,8 @@ std::pair<string, string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile_int32({});", idst)};
+            } else if (input_dtype == DataType::UINT16) {
+                op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile_uint16({});", idst)};
             } else {
                 op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile({});", idst)};
             }
