@@ -78,7 +78,6 @@ void MAIN {
     copy_tile_to_dst_init_short(cb_true_values);
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        DPRINT << "block_index=" << block_index << ", per_core_block_cnt=" << per_core_block_cnt << ENDL();
         cb_wait_front(cb_cond, 1);
 
         sfpu_unary_op(cb_cond, cb_3, []() {
