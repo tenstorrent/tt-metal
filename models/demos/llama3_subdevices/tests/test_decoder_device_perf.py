@@ -576,9 +576,11 @@ def test_llama_TG_perf_device(
     benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
     benchmark_data.add_measurement(profiler, 0, step_name, "tsu_estimate", tsu_estimate)
 
+    run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+    # Save the results
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_demo_decode",
+        run_type=run_type,
         ml_model_name="llama70b-tg",
     )
 
@@ -701,9 +703,11 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             passing = False
             logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
 
+    run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+    # Save the results
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_demo_decode",
+        run_type=run_type,
         ml_model_name="llama70b-tg",
     )
 
