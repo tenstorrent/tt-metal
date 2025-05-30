@@ -125,7 +125,7 @@ Tensor aggregate_as_tensor(
         std::sort(coords.begin(), coords.end());
         auto duplicate =
             std::adjacent_find(coords.begin(), coords.end(), [](const auto& a, const auto& b) { return a == b; });
-        TT_FATAL(duplicate == coords.end(), "Found a tensor shard at duplicate coordiante {0}", *duplicate);
+        TT_FATAL(duplicate == coords.end(), "Found a tensor shard at duplicate coordinate {}", *duplicate);
         return Tensor(
             DeviceStorage(std::move(mesh_buffer), std::move(coords)),
             reference_shard.get_tensor_spec(),
