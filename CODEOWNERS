@@ -1,0 +1,17 @@
+# Order is important; the last matching pattern takes the most
+# precedence.
+
+# Top-level files
+/* @amahmudTT @nvelickovicTT @rtawfik01 @ttmtrajkovic
+
+# CI/CD
+.github/ @fvranicTT @nvelickovicTT
+
+# Tests
+tests/ @fvranicTT @ldjurovicTT @nvelickovicTT @skotaracTT
+
+# Blackhole
+tt_llk_blackhole/ @amahmudTT @nvelickovicTT @rdjogoTT @rtawfik01 @ttmtrajkovic
+
+# Wormhole
+tt_llk_wormhole_b0/ @amahmudTT @nvelickovicTT @rdjogoTT @rtawfik01 @ttmtrajkovic
