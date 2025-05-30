@@ -104,8 +104,8 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 300, "upper": 25000}, "bandwidth": 0.07},
         },
         1: {
-            "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
-            "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.29},
+            "riscv_1": {"latency": {"lower": 23000, "upper": 24000}, "bandwidth": 21},
+            "riscv_0": {"latency": {"lower": 24000, "upper": 25000}, "bandwidth": 21},
         },
         2: {
             "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
@@ -171,8 +171,8 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
         },
         1: {
-            "riscv_1": {"latency": {"lower": 300, "upper": 700}, "bandwidth": 0.17},
-            "riscv_0": {"latency": {"lower": 200, "upper": 500}, "bandwidth": 0.23},
+            "riscv_1": {"latency": {"lower": 30000, "upper": 33000}, "bandwidth": 32},
+            "riscv_0": {"latency": {"lower": 30000, "upper": 31000}, "bandwidth": 33},
         },
         2: {
             "riscv_1": {"latency": {"lower": 400, "upper": 600}, "bandwidth": 0.13},
