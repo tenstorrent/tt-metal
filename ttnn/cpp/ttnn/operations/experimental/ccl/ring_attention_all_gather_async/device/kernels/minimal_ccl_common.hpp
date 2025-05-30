@@ -12,6 +12,7 @@
 
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
+    uint64_t remote_noc0_dest_noc_addr,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection,
@@ -21,9 +22,9 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     const size_t payload_l1_address = l1_read_addr;
 
     pkt_hdr_forward->to_noc_unicast_write(
-        tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+        tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
     pkt_hdr_backward->to_noc_unicast_write(
-        tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+        tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
 
     noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
     if (fabric_connection.has_forward_connection()) {

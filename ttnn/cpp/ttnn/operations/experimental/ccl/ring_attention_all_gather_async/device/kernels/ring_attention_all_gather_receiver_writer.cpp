@@ -33,6 +33,17 @@ constexpr bool fuse_op = get_compile_time_arg_val(9);
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(10);
 constexpr uint32_t num_inputs = get_compile_time_arg_val(11);
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
@@ -120,15 +131,6 @@ void kernel_main() {
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t first_tile_id = tile_id_start + row_offset + pages_read_in_row;
                     noc_async_write_tile(first_tile_id, output_tensor_addrgens[input_idx], l1_read_addr);
-                    pages_read_in_row += 1;
-                    if (pages_read_in_row >= input_tensor_Wt) {
-                        row_offset += output_tensor_Wt;
-                        pages_read_in_row = 0;
-                    }
-
-                    uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
-                    noc_async_write_tile(
-                        second_tile_id, output_tensor_addrgens[input_idx], l1_read_addr + output_tensor_page_size);
                     pages_read_in_row += 1;
                     if (pages_read_in_row >= input_tensor_Wt) {
                         row_offset += output_tensor_Wt;

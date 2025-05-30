@@ -271,9 +271,7 @@ std::vector<Tensor> ring_attention_all_gather_async(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    std::vector<Tensor> output_tensors;
-    output_tensors.reserve(input_tensors.size());
-    return ring_attention_all_gather_async_impl(
+    std::vector<Tensor> full_output_tensors = ring_attention_all_gather_async_impl(
         input_tensors,
         persistent_intermediate_buffer,
         persistent_output_buffer,
@@ -285,6 +283,11 @@ std::vector<Tensor> ring_attention_all_gather_async(
         memory_config,
         topology,
         sub_device_id);
+    std::vector<Tensor> output_tensors;
+    for (uint32_t i = 0; i < input_tensors.size(); i++) {
+        output_tensors.push_back(full_output_tensors.at(2 * i + 1));
+    }
+    return output_tensors;
 }
 
 }  // namespace ccl

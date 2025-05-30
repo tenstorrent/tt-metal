@@ -188,7 +188,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
-    uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
+    uint32_t num_pages_per_packet = 2;                 // packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].get_dtype());
 
@@ -248,7 +248,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     const auto intermediate_tensor_buffer_type = intermediate_tensor[0].buffer()->buffer_type();
     const uint32_t num_inputs = input_tensor.size();
 
-    uint32_t tiles_to_write_per_packet = 2;
+    uint32_t tiles_to_write_per_packet = 1;
 
     // KERNEL CREATION
     // Reader
@@ -436,6 +436,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 
         std::vector<uint32_t> reader_rt_args = {
             input_tensor_Wt,                           // width in tiles of the output shard
+            output_tensor_Wt,                          // width in tiles of the entire output
             input_tile_id_end,                         // slice_num_pages
             ring_size,                                 // ring_size
             semaphore.at(0).address(),                 // out_ready_semaphore_forward
@@ -487,6 +488,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         // Set Receiver runtime args
         // Reader
         std::vector<uint32_t> forward_receiver_reader_rt_args = {
+            input_tensor_Wt,                          // width in tiles of the output shard
+            output_tensor_Wt,                         // width in tiles of the entire output
             input_tile_id_end,                        // slice_num_pages
             ring_size,                                // ring_size
             sender_to_forward_receiver_semaphore_id,  // signal_receiver_sem_forward
@@ -501,6 +504,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             {receiver_worker_cores[1]},
             forward_receiver_reader_rt_args);
         std::vector<uint32_t> backward_receiver_reader_rt_args = {
+            input_tensor_Wt,                           // width in tiles of the output shard
+            output_tensor_Wt,                          // width in tiles of the entire output
             input_tile_id_end,                         // slice_num_pages
             ring_size,                                 // ring_size
             sender_to_backward_receiver_semaphore_id,  // signal_receiver_sem_backward

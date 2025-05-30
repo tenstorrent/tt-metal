@@ -37,6 +37,8 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     uint32_t arg_idx = 0;
+    uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t slice_num_pages = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -98,29 +100,31 @@ void kernel_main() {
         }
 
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            uint32_t intermediate_tile_id_start = actual_sender_chip_id * input_tensor_Wt;
+            uint32_t pages_read_in_row = 0;
+            uint32_t row_offset = 0;
             uint32_t tiles_read = 0;
             uint32_t tiles_to_read = slice_num_pages;
+            uint32_t slice_Wt = input_tensor_Wt;
+            uint32_t stride_Wt = output_tensor_Wt;
 
-            uint32_t packet_id = 0;
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                 cb_reserve_back(cb_intermediate_id, num_pages_to_read);
                 size_t l1_write_addr = get_write_ptr(cb_intermediate_id);
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                    uint32_t intermediate_packet_id = actual_sender_chip_id + packet_id * ring_size;
-                    uint32_t intermediate_packet_first_tile_id =
-                        (intermediate_packet_id % N_DRAM_BANKS) +
-                        contig_pages_advanced * N_DRAM_BANKS * (intermediate_packet_id / N_DRAM_BANKS);
-                    uint64_t packet_addr = get_noc_addr(
-                        intermediate_packet_first_tile_id,
+                    noc_async_read_tile(
+                        intermediate_tile_id_start + row_offset + pages_read_in_row,
                         intermediate_tensor_addrgens[input_idx],
-                        0 /*offset*/,
-                        0 /*noc_id*/);
-
-                    noc_async_read(packet_addr, l1_write_addr, payload_size_bytes);
+                        l1_write_addr);
                     l1_write_addr += payload_size_bytes;
                     tiles_read += contig_pages_advanced;
-                    packet_id++;
+
+                    pages_read_in_row++;
+                    if (pages_read_in_row >= slice_Wt) {
+                        row_offset += stride_Wt;
+                        pages_read_in_row = 0;
+                    }
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_intermediate_id, num_pages_to_read);
