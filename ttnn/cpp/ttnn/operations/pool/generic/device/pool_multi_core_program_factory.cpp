@@ -11,6 +11,7 @@
 #include <vector>
 #include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/hal.hpp>
+#include <algorithm>
 
 namespace ttnn::operations::pool {
 /**
@@ -32,22 +33,15 @@ static Tensor create_scalar_config_tensor(
     uint32_t channel = 0;
     uint32_t batch = 0;
 
+    uint32_t max_scalars_cnt = 0;
+    std::vector<std::vector<ScalarInfo>> scalars_per_core = {};
+
     for (const auto& range : ranges) {
         for (auto it = range.begin(); it != range.end(); ++it) {
             std::vector<ScalarInfo> scalars = get_bf16_avg_pool_config_scalars(config, output_stick_x, output_stick_y);
 
-            for (const auto& scalar : scalars) {
-                config_vector.push_back(scalar.start);
-                config_vector.push_back(scalar.value);
-                config_vector.push_back(scalar.end);
-            }
-
-            // Fill with 0 values when the scalars count is less than out_nhw_per_core
-            for (uint32_t j = scalars.size(); j < config.out_nhw_per_core; j++) {
-                config_vector.push_back(0);
-                config_vector.push_back(0);
-                config_vector.push_back(0);
-            }
+            max_scalars_cnt = std::max(max_scalars_cnt, (uint32_t)scalars.size());
+            scalars_per_core.push_back(scalars);
 
             // Advance core and tensor location tracking
             channel = (channel + 1) % num_shards_c;
@@ -66,7 +60,22 @@ static Tensor create_scalar_config_tensor(
     }
 
     const uint32_t entry_size = 3;
-    const uint32_t entries_per_core = entry_size * config.out_nhw_per_core;
+    const uint32_t entries_per_core = entry_size * max_scalars_cnt;
+
+    // Fill with 0 values when the scalars count is less than max_scalars_cnt
+    for (uint32_t i = 0; i < scalars_per_core.size(); i++) {
+        for (uint32_t j = 0; j < max_scalars_cnt; j++) {
+            if (j < scalars_per_core[i].size()) {
+                config_vector.push_back(scalars_per_core[i][j].start);
+                config_vector.push_back(scalars_per_core[i][j].value);
+                config_vector.push_back(scalars_per_core[i][j].end);
+            } else {
+                config_vector.push_back(0);
+                config_vector.push_back(0);
+                config_vector.push_back(0);
+            }
+        }
+    }
 
     TT_FATAL(
         config_vector.size() % entries_per_core == 0,
