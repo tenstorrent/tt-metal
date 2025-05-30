@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2024 Tenstorrent, Inc. All rights reserved.
 
-set -ex
+set -e
 
 usage()
 {
@@ -12,6 +12,7 @@ usage()
     echo "[--help, -h]                List this help"
     echo "[--validate, -v]            Validate that required packages are installed"
     echo "[--docker, -d]              Specialize execution for docker"
+    echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
     echo "[--mode, -m <mode>]         Select installation mode: runtime, build, baremetal"
     exit 1
 }
@@ -36,6 +37,7 @@ fi
 
 validate=0
 docker=0
+distributed=1
 mode="baremetal"
 
 while [ $# -gt 0 ]; do
@@ -49,6 +51,10 @@ while [ $# -gt 0 ]; do
             ;;
         --docker|-d)
             docker=1
+            shift
+            ;;
+        --no-distributed)
+            distributed=0
             shift
             ;;
 	--mode|-m)
@@ -85,8 +91,11 @@ ub_runtime_packages()
      libc++-17-dev \
      libc++abi-17-dev \
      libstdc++6 \
-     openmpi-bin \
     )
+
+    if [ "$distributed" -eq 1 ]; then
+        UB_RUNTIME_LIST+=(openmpi-bin)
+    fi
 }
 
 ub_buildtime_packages()
@@ -104,8 +113,11 @@ ub_buildtime_packages()
      libc++abi-17-dev \
      build-essential \
      xz-utils \
-     libopenmpi-dev \
     )
+
+    if [ "$distributed" -eq 1 ]; then
+        UB_BUILDTIME_LIST+=(libopenmpi-dev)
+    fi
 }
 
 # Packages needed to setup a baremetal machine to build from source and run
@@ -247,6 +259,20 @@ install_sfpi() {
 }
 
 install_mpi_ulfm(){
+    # Only install if distributed flag is set
+    if [ "$distributed" -ne 1 ]; then
+        echo "→ Skipping MPI ULFM installation (distributed mode not enabled)"
+        return
+    fi
+
+    # Only install MPI ULFM for Ubuntu 24.04 or older
+    local VERSION_NUM=$(echo "$VERSION" | sed 's/\.//')
+
+    if [ "$VERSION_NUM" -gt "2404" ]; then
+        echo "→ Skipping MPI ULFM installation for Ubuntu $VERSION (only needed for 24.04 or older)"
+        return
+    fi
+
     DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
     DEB_FILE="$(basename "$DEB_URL")"
 
