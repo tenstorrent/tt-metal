@@ -39,7 +39,14 @@ jobs:
             runner-label: config-tg,
             mesh-device: TG,
             tt-llama-text-ver: llama3_subdevices,
-            override-tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D"}',
+            override-tt-config: >-
+              {
+                "dispatch_core_axis": "col",
+                "sample_on_device_mode": "all",
+                "fabric_config": "FABRIC_1D",
+                "worker_l1_size": 1344544,
+                "trace_region_size": 95693824,
+              },
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -103,8 +110,12 @@ jobs:
           fi
 
           if [ -n "${{ matrix.test-group.override-tt-config }}" ]; then
-            OVERRIDE_TT_CONFIG=(--override-tt-config ${{ matrix.test-group.override-tt-config }})
+            export OVERRIDE_TT_CONFIG=(--override-tt-config "$(printf "%s" '${{ matrix.test-group.override-tt-config }}')")
+          else
+            export OVERRIDE_TT_CONFIG=()
           fi
+
+          echo "Override config: ${OVERRIDE_TT_CONFIG[@]}"
 
           export MESH_DEVICE=${{ matrix.test-group.mesh-device }}
           export TT_LLAMA_TEXT_VER=${{ matrix.test-group.tt-llama-text-ver }}
