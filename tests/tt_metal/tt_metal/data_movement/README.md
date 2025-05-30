@@ -13,6 +13,7 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 | One to all Multicast | 9-14       | Writes transaction from one core to all cores using multicast.                       |
 | One From All         | 15         | Read transactions between one gatherer Tensix core and multiple sender Tensix cores. |
 | Loopback             | 16         | Does a loopback operation where one cores writes to itself.                          |
+| Reshard Hardcoded    | 17-19      | Uses existing reshard tests to analyse their bandwidth and latency.                  |
 
 ## Running Tests
 ### C++ Gtests

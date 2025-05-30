@@ -37,6 +37,9 @@ test_id_to_name = {
     50: "One to One Directed Ideal",
     51: "One from One Directed Ideal",
     52: "One to All Directed Ideal",
+    17: "Reshard Hardcoded Small",
+    18: "Reshard Hardcoded Medium",
+    19: "Reshard Hardcoded Many Cores",
 }
 
 # Comments for each test explaining why we get the perf that we do
@@ -92,6 +95,12 @@ test_id_to_comment = {
         increases, the bandwidth approaches 64 B/cycle. Similar to the one from one test.",
     16: "Loopback will have similar characteristics to the one to one test, however it uses two \n\
         ports to send and receive data, as such it is more likely to cause contention.",
+    17: "This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions \n\
+        and transactions size.",
+    18: "This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions \n\
+        and transactions size.",
+    19: "This is a 8 reader reshard. It seems to be getting expected perf based on number of transactions \n\
+        and transactions size.",
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
@@ -164,6 +173,15 @@ test_bounds = {
         52: {  # One to All Directed Ideal
             "riscv_0": {"latency": {"lower": 24000, "upper": 28000}, "bandwidth": 19},  # 26966, 19.4
         },
+        17: {
+            "riscv_0": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 3},
+        },
+        18: {
+            "riscv_0": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 15},
+        },
+        19: {
+            "riscv_0": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 10},
+        },
     },
     "blackhole": {
         0: {
@@ -230,6 +248,15 @@ test_bounds = {
         },
         52: {  # One to All Directed Ideal
             "riscv_0": {"latency": {"lower": 10000, "upper": 17000}, "bandwidth": 30},  # 15322, 34.2
+        },
+        17: {
+            "riscv_0": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 7},
+        },
+        18: {
+            "riscv_0": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 30},
+        },
+        19: {
+            "riscv_0": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 25},
         },
     },
 }
