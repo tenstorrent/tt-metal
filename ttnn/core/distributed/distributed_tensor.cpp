@@ -4,11 +4,13 @@
 
 #include "tensor/host_buffer/functions.hpp"
 #include "tt-metalium/shape.hpp"
+#include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/small_vector.hpp"
 #include "tt_stl/overloaded.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include <tt-metalium/assert.hpp>
+#include <type_traits>
 #include <xtensor/containers/xadapt.hpp>
 #include <xtensor/containers/xarray.hpp>
 #include <xtensor/core/xstrides.hpp>
@@ -51,79 +53,79 @@ public:
 private:
     template <typename T>
     Tensor shard_tensor_typed(const tt::tt_metal::Tensor& tensor) const {
-        // Spelling out specific types of shapes / strides to make templated logic easier to interpret.
-        xt::svector<size_t> shape_vec(tensor.logical_shape().cbegin(), tensor.logical_shape().cend());
-
-        auto strides = tt::tt_metal::compute_strides(tensor.logical_shape());
-        xt::svector<long> strides_vec(strides.cbegin(), strides.cend());
-
+        std::vector<size_t> shape_vec(tensor.logical_shape().cbegin(), tensor.logical_shape().cend());
         std::vector<T> logical_data;
         auto input_xtensor = [&]() {
             const bool data_viewable = tensor.tensor_spec().layout() == tt::tt_metal::Layout::ROW_MAJOR &&
                                        tensor.tensor_spec().physical_shape() == tensor.tensor_spec().logical_2d_shape();
             if (data_viewable) {
                 tt::tt_metal::HostBuffer buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor);
-                auto span = buffer.view_as<const T>();
-                return xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vec, strides_vec);
+                auto span = buffer.view_as<T>();
+                return xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vec);
             } else {
                 logical_data = tensor.to_vector<T>();
-                auto span = tt::stl::make_const_span(logical_data);
-                return xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vec, strides_vec);
+                auto span = tt::stl::make_span(logical_data);
+                return xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vec);
             }
         }();
 
-        using XTensorView = decltype(input_xtensor);
+        // Perform sharding, followed by replication.
+        tt::stl::SmallVector<size_t> shard_dims;
+        tt::stl::SmallVector<size_t> replicate_dims;
+        for (size_t mesh_dim_idx = 0; mesh_dim_idx < shape_.dims(); ++mesh_dim_idx) {
+            const auto& placement = config_.placements[mesh_dim_idx];
+            if (std::holds_alternative<MeshMapperConfig::Shard>(placement)) {
+                shard_dims.push_back(mesh_dim_idx);
+            } else {
+                replicate_dims.push_back(mesh_dim_idx);
+            }
+        }
+
+        tt::stl::SmallVector<int> chunk_sizes;
+        tt::stl::SmallVector<int> tensor_dims;
+        size_t sharded_mesh_size = 1;
+        for (size_t shard_mesh_dim : shard_dims) {
+            const auto& shard_placement = std::get<MeshMapperConfig::Shard>(config_.placements[shard_mesh_dim]);
+            chunk_sizes.push_back(static_cast<int>(shape_[shard_mesh_dim]));
+            tensor_dims.push_back(shard_placement.dim);
+            sharded_mesh_size *= shape_[shard_mesh_dim];
+        }
+
+        auto chunks = experimental::xtensor::chunk_ndim(input_xtensor, chunk_sizes, tensor_dims);
+        TT_FATAL(
+            shape_.dims() == 1 || chunks.size() == sharded_mesh_size,
+            "ND sharding requires the number of chunks {} to match the mesh dimension size {}",
+            chunks.size(),
+            sharded_mesh_size);
+
+        using XTensorView = std::reference_wrapper<std::decay_t<decltype(chunks.front())>>;
         MeshContainer<std::optional<XTensorView>> sharded_xtensor_views(shape_, std::nullopt);
 
-        // Place an unsharded tensor at the origin; progressively split the tensor across the entire mesh.
-        const auto origin = MeshCoordinate::zero_coordinate(shape_.dims());
-        sharded_xtensor_views.at(origin) = input_xtensor;
-        std::vector<MeshCoordinate> to_process = {origin};
-
-        for (size_t mesh_dim_idx = 0; mesh_dim_idx < shape_.dims(); ++mesh_dim_idx) {
-            const size_t mesh_dim_size = shape_[mesh_dim_idx];
-            const auto& placement = config_.placements[mesh_dim_idx];
-            std::vector<MeshCoordinate> to_process_next;
-            for (const auto& to_process_cord : to_process) {
-                const auto xtensor_to_process = sharded_xtensor_views.at(to_process_cord);
-                TT_FATAL(xtensor_to_process.has_value(), "Tensor to process is not set");
-                std::visit(
-                    tt::stl::overloaded{
-                        [&](const MeshMapperConfig::Replicate&) {
-                            tt::stl::SmallVector<uint32_t> next_dims(
-                                to_process_cord.coords().begin(), to_process_cord.coords().end());
-                            for (size_t i = 0; i < mesh_dim_size; ++i) {
-                                next_dims[mesh_dim_idx] = i;
-                                MeshCoordinate next_coord(next_dims);
-                                sharded_xtensor_views.at(next_coord) = xtensor_to_process;
-                                to_process_next.push_back(next_coord);
-                            }
-                        },
-                        [&](const MeshMapperConfig::Shard& shard) {
-                            auto chunks = experimental::xtensor::chunk(*xtensor_to_process, mesh_dim_size, shard.dim);
-                            TT_FATAL(
-                                shape_.dims() == 1 || chunks.size() == mesh_dim_size,
-                                "ND sharding requires the number of chunks {} to match the mesh dimension size {}",
-                                chunks.size(),
-                                mesh_dim_size);
-                            tt::stl::SmallVector<uint32_t> next_dims(
-                                to_process_cord.coords().begin(), to_process_cord.coords().end());
-                            for (int i = 0; i < chunks.size(); ++i) {
-                                next_dims[mesh_dim_idx] = i;
-                                MeshCoordinate next_coord(next_dims);
-                                sharded_xtensor_views.at(next_coord) = xt::adapt(
-                                    chunks[i].data(),
-                                    chunks[i].size(),
-                                    xt::no_ownership(),
-                                    chunks[i].shape(),
-                                    chunks[i].strides());
-                                to_process_next.push_back(next_coord);
-                            }
-                        },
-                    },
-                    placement);
+        // Distribute chunks to appropriate mesh coordinates.
+        size_t chunk_idx = 0;
+        tt::stl::SmallVector<size_t> shard_indices(shard_dims.size(), 0);
+        do {
+            tt::stl::SmallVector<uint32_t> mesh_coords(shape_.dims(), 0);
+            for (size_t i = 0; i < shard_dims.size(); ++i) {
+                mesh_coords[shard_dims[i]] = shard_indices[i];
             }
-            std::swap(to_process, to_process_next);
+            MeshCoordinate coord(mesh_coords);
+            if (chunk_idx < chunks.size()) {
+                sharded_xtensor_views.at(coord) = chunks[chunk_idx];
+            }
+            chunk_idx++;
+        } while (increment_indices(shard_indices, chunk_sizes));
+
+        for (size_t replicate_mesh_dim : replicate_dims) {
+            for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
+                if (xtensor_view.has_value() && coord[replicate_mesh_dim] == 0) {
+                    for (size_t i = 1; i < shape_[replicate_mesh_dim]; ++i) {
+                        tt::stl::SmallVector<uint32_t> new_coords(coord.coords().begin(), coord.coords().end());
+                        new_coords[replicate_mesh_dim] = i;
+                        sharded_xtensor_views.at(MeshCoordinate(new_coords)) = *xtensor_view;
+                    }
+                }
+            }
         }
 
         auto shard_shape = [&]() {
@@ -132,7 +134,7 @@ private:
                 if (!xtensor_view.has_value()) {
                     continue;
                 }
-                auto xtensor_shard_shape = experimental::xtensor::get_shape_from_xarray(*xtensor_view);
+                auto xtensor_shard_shape = experimental::xtensor::get_shape_from_xarray(xtensor_view->get());
                 if (shard_shape.has_value()) {
                     TT_FATAL(
                         shard_shape.value() == xtensor_shard_shape,
@@ -146,15 +148,16 @@ private:
             TT_FATAL(shard_shape.has_value(), "No shards were produced");
             return *shard_shape;
         }();
-        TensorSpec shard_spec(shard_shape, tensor.tensor_spec().tensor_layout());
+        const TensorSpec shard_spec(shard_shape, tensor.tensor_spec().tensor_layout());
 
+        // TODO: provide a global/local dims here.
         auto distributed_buffer =
             tt::tt_metal::DistributedHostBuffer::create(shape_, shape_, MeshCoordinate::zero_coordinate(shape_.dims()));
         for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
             if (xtensor_view.has_value()) {
                 distributed_buffer.emplace_shard(coord, [&xtensor_view, &shard_spec]() {
-                    auto shard_tensor =
-                        Tensor::from_vector(std::vector<T>(xtensor_view->begin(), xtensor_view->end()), shard_spec);
+                    xt::xarray<T> data(xtensor_view->get());
+                    auto shard_tensor = experimental::xtensor::from_xtensor<T>(data, shard_spec);
                     return tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);
                 });
             }
@@ -162,7 +165,10 @@ private:
 
         // TODO: provide a direct way to create a multi-host distributed tensor from distributed host buffer.
         std::vector<Tensor> tensors;
-        for (const auto& coord : distributed_buffer.shard_coords()) {
+        const auto shard_coords = distributed_buffer.shard_coords();
+        std::vector<MeshCoordinate> shard_coords_vec(shard_coords.begin(), shard_coords.end());
+        std::sort(shard_coords_vec.begin(), shard_coords_vec.end());
+        for (const auto& coord : shard_coords_vec) {
             auto shard = distributed_buffer.get_shard(coord);
             if (shard.has_value()) {
                 tensors.push_back(Tensor(std::move(*shard), shard_spec));
@@ -170,6 +176,16 @@ private:
         }
 
         return aggregate_as_tensor(tensors, config());
+    }
+
+    static bool increment_indices(tt::stl::SmallVector<size_t>& indices, const tt::stl::SmallVector<int>& limits) {
+        for (int i = indices.size() - 1; i >= 0; --i) {
+            if (++indices[i] < static_cast<size_t>(limits[i])) {
+                return true;
+            }
+            indices[i] = 0;
+        }
+        return false;
     }
 
     ttnn::MeshShape shape_;
