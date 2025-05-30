@@ -507,13 +507,9 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     uint32_t input_tensor_width_snapped_to_channels_alignment =
         tt::round_up(input_tensor_shape[3], input_num_cores_c * input_channels_alignment);
 
-    auto input_padded_shape = ttnn::Shape(
-        {1,
-         1,
-         input_tensor_height_snapped_to_tile,
-         input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
-                                                              // tt::tt_metal::LegacyShape issue to clean up next
-                                                              // line
+    auto input_padded_shape =
+        ttnn::Shape({1, 1, input_tensor_height_snapped_to_tile, input_tensor_width_snapped_to_channels_alignment});
+
     MemoryConfig input_tensor_sharded_memory_config =
         create_sharded_memory_config_from_parallel_config(input_padded_shape, parallel_config, round_up_size);
 
