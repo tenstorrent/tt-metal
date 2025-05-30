@@ -41,19 +41,11 @@ inline void calculate_unary_max_min(uint value) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_unary_max_int32(int value) {
-    vInt s = value;
-    vInt zero = 0;
-
+inline void calculate_unary_max_int32(uint value) {
+    vInt s = reinterpret<vInt>(value);
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        // vInt v = dst_reg[0];
-        // v_if(v < zero && s >= zero) {
-        //     v = s;
-        // }  // Negative value comparison is not happening properly. Hence need to add this condition
-        // v_elseif(v < s) { v = s; }
-        // v_endif;
-        dst_reg[0] = s;
+        dst_reg[0] = scalar;
         dst_reg++;
     }
 }

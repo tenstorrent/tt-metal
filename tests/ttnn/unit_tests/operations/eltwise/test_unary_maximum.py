@@ -15,8 +15,8 @@ from models.utility_functions import torch_random, is_wormhole_b0
 #     return (result < -(2**31) + 1) | (result > 2**31 - 1)
 
 
-@pytest.mark.parametrize("scalar", [0, 1, 100, 10, 5, 21474836])  # passing cases
-# @pytest.mark.parametrize("scalar", [-2147483647]) # overflow
+# @pytest.mark.parametrize("scalar", [0, 1, 100, 10, 5, 21474836])  # passing cases
+@pytest.mark.parametrize("scalar", [-1, -2147483647])  # overflow
 # @pytest.mark.parametrize("scalar", [-1,  -5, -2147483]) # Negative scalar issue - Failing case
 # @pytest.mark.parametrize("scalar", [2147483647]) # Failing case
 # @pytest.mark.parametrize("scalar", [-21474836]) # Unhandled overflow
@@ -39,7 +39,7 @@ def test_unary_max_int32_test(scalar, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_result = ttnn.maximum(tt_in, scalar)
-    print(tt_result, golden)
+    print(tt_result)
     comp_pass = compare_equal([tt_result], [golden])
     assert comp_pass
 

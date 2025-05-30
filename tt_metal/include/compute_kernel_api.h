@@ -994,7 +994,7 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void unary_max_int32_tile(uint32_t idst, int32_t param0) {
+ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_max_int32<APPROX>(idst, param0)));
 }
 
