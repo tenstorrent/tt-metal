@@ -49,7 +49,7 @@ def update_check_result(check_result, messages):
     new_message = message
     for msg in messages:
         new_message += " " + msg
-    return (status, new_message)
+    return (status, "PCC " + new_message)
 
 
 def get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf, flop_counts=None):
@@ -62,6 +62,8 @@ def get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2
 
 
 def get_updated_message(message, perf_result):
+    if perf_result is None:
+        return message
     key = "DEVICE FW DURATION [ns]"
     if key in perf_result:
         value = float(perf_result[key])

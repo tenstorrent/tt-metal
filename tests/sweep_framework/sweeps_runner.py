@@ -62,22 +62,19 @@ def gather_single_test_perf(device, test_passed):
         logger.error("No profiling data available. Ensure you are running with the profiler build.")
         return None
     elif len(opPerfData) > 1:
-        logger.info("Composite op detected in device perf measurement. Composite op perf is not supported. Failing.")
-        if ADD_PERF_MESSAGE:
-            try:
-                for key in opPerfData[0].keys():
-                    value = opPerfData[0][key]
-                    for i in range(1, len(opPerfData)):
-                        if key in opPerfData[i]:
-                            if type(value) == str:
-                                opPerfData[0][key] = str(float(value) + float(opPerfData[i][key]))
-                            else:
-                                opPerfData[0][key] = value + opPerfData[i][key]
-                return opPerfData[0]
-            except Exception as e:
-                logger.info(e)
-                return None
-        else:
+        logger.info("Composite op detected in device perf measurement. Will aggregate results.")
+        try:
+            for key in opPerfData[0].keys():
+                value = opPerfData[0][key]
+                for i in range(1, len(opPerfData)):
+                    if key in opPerfData[i]:
+                        if type(value) == str:
+                            opPerfData[0][key] = str(float(value) + float(opPerfData[i][key]))
+                        else:
+                            opPerfData[0][key] = value + opPerfData[i][key]
+            return opPerfData[0]
+        except Exception as e:
+            logger.info(e)
             return None
     else:
         return opPerfData[0]
@@ -108,8 +105,7 @@ def run(test_module, input_queue, output_queue):
                 e2e_perf = None
             if MEASURE_DEVICE_PERF:
                 perf_result = gather_single_test_perf(device, status)
-                if ADD_PERF_MESSAGE:
-                    message = get_updated_message(message, perf_result)
+                message = get_updated_message(message, perf_result)
                 output_queue.put([status, message, e2e_perf, perf_result])
             else:
                 output_queue.put([status, message, e2e_perf, None])
@@ -510,13 +506,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--add-perf-message",
-        required=False,
-        action="store_true",
-        help="Add perf information to message. Requires --device-perf",
-    )
-
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         required=False,
@@ -558,9 +547,6 @@ if __name__ == "__main__":
 
     global MEASURE_DEVICE_PERF
     MEASURE_DEVICE_PERF = args.device_perf
-
-    global ADD_PERF_MESSAGE
-    ADD_PERF_MESSAGE = args.add_perf_message
 
     global DRY_RUN
     DRY_RUN = args.dry_run
