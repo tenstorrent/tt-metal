@@ -276,6 +276,11 @@ INSTANTIATE_TEST_SUITE_P(
                 .layout = Layout::ROW_MAJOR,
             },
             NDShardingParams{
+                .shape = Shape({3, 4, 5}),
+                .shard_shape = Shape({1, 1, 1}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
                 .shape = Shape({35, 40, 50}),
                 .shard_shape = Shape({10, 40, 50}),
                 .layout = Layout::ROW_MAJOR,
@@ -308,6 +313,11 @@ INSTANTIATE_TEST_SUITE_P(
             NDShardingParams{
                 .shape = Shape({35, 45, 55}),
                 .shard_shape = Shape({10, 10, 10}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({3, 5, 7}),
+                .shard_shape = Shape({2, 2, 2}),
                 .layout = Layout::ROW_MAJOR,
             }),
         ::testing::Values(BufferType::L1, BufferType::DRAM),
