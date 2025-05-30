@@ -940,8 +940,9 @@ std::array<Shape2D, 2> get_logical_and_physical_shard_shapes(const TensorSpec& t
 
     // TODO: get_logical_shard_shape always returns shard shape from shard spec, which is not correct in physical mode
     // if there is padding
-    if (tensor_spec.memory_config().is_sharded() and
-        (tensor_spec.memory_config().shard_spec().value().mode == ShardMode::LOGICAL or
+    if (tensor_spec.memory_config().is_sharded() &&
+        ((tensor_spec.memory_config().shard_spec().has_value() &&
+          tensor_spec.memory_config().shard_spec().value().mode == ShardMode::LOGICAL) ||
          logical_shape == padded_shape)) {
         return {
             tensor_spec.tensor_layout().get_logical_shard_shape(),
