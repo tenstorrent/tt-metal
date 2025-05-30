@@ -65,6 +65,11 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
         Class defining the specs required for sharding.
     )doc");
 
+    tt_serializable_class<tt::tt_metal::NdShardSpec>(m_tensor, "NdShardSpec", R"doc(
+        Class defining the specs required for ND sharding.
+        Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
+    )doc");
+
     tt_serializable_class<tt::tt_metal::CoreRange>(m_tensor, "CoreRange", R"doc(
         Class defining a range of cores)doc");
 
@@ -149,6 +154,23 @@ void tensor_mem_config_module(py::module& m_tensor) {
                     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.SINGLE_BANK)
             )doc")
         .def(
+            py::init<>([](BufferType buffer_type, NdShardSpec nd_shard_spec) {
+                return MemoryConfig{buffer_type, std::move(nd_shard_spec)};
+            }),
+            py::arg("buffer_type"),
+            py::arg("nd_shard_spec"),
+            R"doc(
+                Create MemoryConfig class.
+                This constructor is used to create MemoryConfig for ND sharded tensors.
+                Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
+
+                Example of creating MemoryConfig for ND sharded tensors.
+
+                .. code-block:: python
+
+                    mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(ttnn.Shape([1, 1, 1, 1]), ttnn.CoreRangeSet([ttnn.CoreCoord(0, 0)])))
+            )doc")
+        .def(
             "__hash__",
             [](const MemoryConfig& memory_config) -> tt::stl::hash::hash_t {
                 return tt::stl::hash::detail::hash_object(memory_config);
@@ -168,6 +190,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
             "buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
         .def_property_readonly("memory_layout", &MemoryConfig::memory_layout, "Memory layout of tensor data.")
         .def_property_readonly("shard_spec", &MemoryConfig::shard_spec, "Memory layout of tensor data.")
+        .def_property_readonly("nd_shard_spec", &MemoryConfig::nd_shard_spec, "ND shard spec of tensor data.")
         .def(py::self == py::self)
         .def(py::self != py::self);
 
@@ -232,6 +255,23 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def_readwrite("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
         .def_readwrite("mode", &ShardSpec::mode, "Treat shard shape as physical (default) or logical")
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
+        .def(py::self == py::self)
+        .def(py::self != py::self);
+
+    auto pyNdShardSpec = static_cast<py::class_<NdShardSpec>>(m_tensor.attr("NdShardSpec"));
+    pyNdShardSpec
+        .def(
+            py::init<>([](const ttnn::Shape& shard_shape,
+                          const CoreRangeSet& grid,
+                          const ShardOrientation& orientation) { return NdShardSpec(shard_shape, grid, orientation); }),
+            py::arg("shard_shape"),
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR)
+        .def_readwrite("shard_shape", &NdShardSpec::shard_shape, "Shape of shard.")
+        .def_readwrite("grid", &NdShardSpec::grid, "Grid to layout shards.")
+        .def_readwrite("orientation", &NdShardSpec::orientation, "Orientation of cores to distribute shards")
+        .def(
+            "num_cores", [](const NdShardSpec& self) { return self.grid.num_cores(); }, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self);
 
