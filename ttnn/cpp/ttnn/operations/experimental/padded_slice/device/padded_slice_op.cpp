@@ -17,7 +17,6 @@ void PaddedSliceDeviceOperation::validate_with_output_tensors(
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Input to padded_slice must be in row major layout");
     TT_FATAL(input_tensor_a.get_padded_shape().rank() == 4, "Only 4D tensors are supported for padded_slice");
     TT_FATAL(
         input_tensor_a.get_padded_shape().rank() == this->padded_slice_start.rank() &&
