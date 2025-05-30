@@ -188,9 +188,9 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
     uint32_t profile_buffer_idx = 0;
     const int num_dram_channels = device->num_dram_channels();
     for (int dram_channel = 0; dram_channel < num_dram_channels; ++dram_channel) {
-        std::vector<uint32_t> profile_buffer_bank_data;
+        std::vector<uint32_t> profile_buffer_bank_data(profile_buffer_bank_size_bytes / sizeof(uint32_t), 0);
         tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-            profile_buffer_bank_data,
+            profile_buffer_bank_data.data(),
             profile_buffer_bank_size_bytes,
             device->id(),
             dram_channel,
