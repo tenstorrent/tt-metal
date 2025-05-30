@@ -26,55 +26,78 @@ tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-
 tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
 tt_stl/**/CMakeLists.txt @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt @tenstorrent/metalium-developers-infra
 
-# metal - base
-tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT
-tt_metal/**/CMakeLists.txt @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT @tenstorrent/metalium-developers-infra
-tt_metal/impl/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT
-tt_metal/impl/**/CMakeLists.txt @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT @tenstorrent/metalium-developers-infra
-tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT
-tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
-
-# Metalium - public API
+# metal runtime
+tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra
+tt_metal/ @tenstorrent/metalium-developers-infra # nothing should be caught by this, if so, someone added a path somewhere
 tt_metal/api/ @tenstorrent/metalium-api-owners
-
-# fabric
-tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
-tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-developers-infra
-tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
-
-# metal - dispatch
-tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT
-
-# Metalium - Distributed
+tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal
+tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema
+tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal # this should go away
 tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @omilyutin-tt
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @omilyutin-tt @tenstorrent/metalium-developers-infra
-tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
-tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @omilyutin-tt @tenstorrent/metalium-developers-infra
-
-# metal - fw, llks
+tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
+tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-developers-infra
+tt_metal/graph/ @dmakoviichuk-tt @sminakov-tt
+tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @tt-dma # this should go away
+tt_metal/hw @abhullar-tt @jbaumanTT @pgkeller @nathan-TT
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
+tt_metal/hw/firmware/ @abhullar-tt @jbaumanTT @pgkeller @nathan-TT
+tt_metal/hw/toolchain/ @jbaumanTT @pgkeller @nathan-TT
+tt_metal/impl/allocator/ @abhullar-tt
+tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT
+tt_metal/impl/context/ @tt-dma @jbaumanTT @aliuTT
+tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
+tt_metal/impl/debug/ @tt-dma @pgkeller
+tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @tt-dma
+tt_metal/impl/dispatch/ @pgkeller @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
+tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
+tt_metal/impl/event @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
+tt_metal/impl/flatbuffer/ @kmabeeTT @nsmithtt @omilyutin-tt
+tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
+tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT
+tt_metal/impl/profiler/ @mo-tenstorrent
+tt_metal/impl/program/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
+tt_metal/impl/sub_device/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
+tt_metal/impl/trace/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
 tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
-tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT
-tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
-tests/didt/ @rdjogoTT @ttmtrajkovic
+tt_metal/jit_build/ @pgkeller @abhullar-tt @nathan-TT @jbaumanTT
+tt_metal/kernels/ @abhullar-tt # these should go away or get moved to tests
+tt_metal/llrt/ @abhullar-tt @jbaumanTT @pgkeller @asaigal @tt-aho
+tt_metal/programming_examples/ @asaigal @fuller-TT @mo-tenstorrent
+tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema
+tt_metal/test @tenstorrent/metalium-developers-infra
+tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @tt-dma @ihamerTT
+tt_metal/tools/lightmetal_runner @kmabeeTT
+tt_metal/tools/mem_bench @nhuang-tt # should be moved to tests micro benchmark?
+tt_metal/tools/profiler/ @mo-tenstorrent
+tt_metal/tools/tt_gdb/ @tt-dma # I think this is dead code, can we delete it?
+tt_metal/tools/watcher_dump/ @tt-dma
 
-# metal - sfpi
+# metal misc
 tt_metal/sfpi-version.sh @nathan-TT
+tt_metal/tt_metal.cpp @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @pgkeller @aliuTT
+tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @tenstorrent/metalium-developers-infra
+tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
+
+tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT #does this actually do anything?
+
+# metal tests
+tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
+tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @omilyutin-tt @tenstorrent/metalium-developers-infra
+tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
+tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho
+tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT
 tests/tt_metal/tt_metal/sfpi/ @nathan-TT
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT
-
-# metal - profiler
-tt_metal/**/profiler/ @mo-tenstorrent
-tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @tenstorrent/metalium-developers-infra
+tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
 tests/tt_metal/tools/profiler/ @mo-tenstorrent
 
-# Metalium - flatbuffer schemas
-tt_metal/impl/flatbuffer/ @kmabeeTT @nsmithtt @omilyutin-tt
+# misc tests
+tests/didt/ @rdjogoTT @ttmtrajkovic
 
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core
