@@ -15,11 +15,7 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, assert_with_pc
         ([3, 4, 5], [3, 4, 5], ttnn.ROW_MAJOR_LAYOUT),  # All data on a single core
         ([3, 4, 5], [3, 4, 1], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full batch and height dimension
         ([3, 4, 5], [3, 1, 5], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full batch and width dimension
-        (
-            [3, 4, 5],
-            [1, 4, 5],
-            ttnn.ROW_MAJOR_LAYOUT,
-        ),  # Each core gets full height and width dimension, aka 1 batch per core
+        ([3, 4, 5], [1, 4, 5], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full height and width dimension
         ([3, 4, 5], [3, 1, 1], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full batch dimension
         ([3, 4, 5], [1, 4, 1], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full height dimension
         ([3, 4, 5], [1, 1, 5], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full width dimension
@@ -28,11 +24,7 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, assert_with_pc
         ([3, 128, 160], [3, 128, 160], ttnn.TILE_LAYOUT),  # All data on a single core
         ([3, 128, 160], [3, 128, 32], ttnn.TILE_LAYOUT),  # Each core gets full batch and height dimension
         ([3, 128, 160], [3, 32, 160], ttnn.TILE_LAYOUT),  # Each core gets full batch and width dimension
-        (
-            [3, 128, 160],
-            [1, 128, 160],
-            ttnn.TILE_LAYOUT,
-        ),  # Each core gets full height and width dimension, aka 1 batch per core
+        ([3, 128, 160], [1, 128, 160], ttnn.TILE_LAYOUT),  # Each core gets full height and width dimension
         ([3, 128, 160], [3, 32, 32], ttnn.TILE_LAYOUT),  # Each core gets full batch dimension
         ([3, 128, 160], [1, 128, 32], ttnn.TILE_LAYOUT),  # Each core gets full height dimension
         ([3, 128, 160], [1, 32, 160], ttnn.TILE_LAYOUT),  # Each core gets full width dimension
