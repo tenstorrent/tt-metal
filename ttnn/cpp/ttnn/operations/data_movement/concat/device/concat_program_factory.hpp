@@ -8,7 +8,6 @@
 #include <tt-metalium/util.hpp>
 #include "ttnn/operation.hpp"
 
-#include "ttnn/operation.hpp"
 namespace ttnn::operations::data_movement::detail {
 
 // start is inclusive, end is exclusive
