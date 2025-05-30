@@ -57,6 +57,7 @@ inline std::string get_soc_description_file(
     const tt::ARCH& arch, tt::TargetDevice target_device, [[maybe_unused]] const std::string& output_dir = "") {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
     std::string path;
+    std::string base_file;
     if (auto *home = getenv("TT_METAL_HOME")) {
         path = home;
     } else {
@@ -67,13 +68,18 @@ inline std::string get_soc_description_file(
     }
     path += "tt_metal/soc_descriptors/";
     bool is_sim = target_device == tt::TargetDevice::Simulator;
-    char const *file = nullptr;
+    std::string file;
     switch (arch) {
     case tt::ARCH::WORMHOLE_B0:
         file = is_sim ? "wormhole_b0_versim.yaml" : "wormhole_b0_80_arch.yaml";
         break;
     case tt::ARCH::BLACKHOLE:
-        file = is_sim ? "blackhole_simulation_1x2_arch.yaml" : "blackhole_140_arch.yaml";
+        base_file = "blackhole_140_arch.yaml";
+        if (auto* env = getenv("TT_METAL_SIMULATE_BOS")) {
+            log_info(tt::LogDevice, "using simulated BOS SoC descriptor");
+            base_file = "blackhole_24_BOS_arch.yaml";
+        }
+        file = is_sim ? "blackhole_simulation_1x2_arch.yaml" : base_file;
         break;
     default:
         throw std::runtime_error("Unsupported device arch");
