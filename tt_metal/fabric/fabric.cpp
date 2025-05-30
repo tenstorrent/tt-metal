@@ -29,6 +29,30 @@ class Program;
 }  // namespace tt_metal
 }  // namespace tt
 
+namespace {
+
+// checks if the connection b/w src and dst is a connection b/w TG gateway and a remote chip
+bool is_TG_gateway_connection(const chip_id_t src_chip_id, const chip_id_t dst_chip_id) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::TG) {
+        return false;
+    }
+
+    const auto mmio_chip_id1 =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(src_chip_id);
+    const auto mmio_chip_id2 =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dst_chip_id);
+
+    // both of the chips should have the same associated mmio device and
+    // one of the chips should be the mmio device itself
+    if (mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id)) {
+        return true;
+    }
+
+    return false;
+}
+
+}  // namespace
+
 namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes() {
@@ -59,7 +83,9 @@ void append_fabric_connection_rt_args(
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_2d_fabric = topology == Topology::Mesh;
 
-    if (!is_2d_fabric) {
+    // Make an exception for TG gateway connections. TG gateways are on a different mesh compared to remote chips
+    // but the routing is simple and doesnt need any special inter-mesh handling
+    if (!is_2d_fabric && !is_TG_gateway_connection(src_chip_id, dst_chip_id)) {
         TT_FATAL(
             src_fabric_node_id.mesh_id == dst_fabric_node_id.mesh_id,
             "Currently only the chips on the same mesh are supported for 1D fabric. Src mesh id: {}, Dst mesh id: {}",
@@ -80,7 +106,10 @@ void append_fabric_connection_rt_args(
             auto neighbors = control_plane->get_chip_neighbors(src_fabric_node_id, direction);
             auto neighbor_mesh_chips = neighbors.find(dst_fabric_node_id.mesh_id);
             if (neighbor_mesh_chips == neighbors.end() ||
-                neighbor_mesh_chips->second[0] != dst_fabric_node_id.chip_id) {
+                (std::find(
+                     neighbor_mesh_chips->second.begin(),
+                     neighbor_mesh_chips->second.end(),
+                     dst_fabric_node_id.chip_id) == neighbor_mesh_chips->second.end())) {
                 continue;
             }
 
@@ -93,18 +122,6 @@ void append_fabric_connection_rt_args(
         "Could not find any forwarding direction from src {} to dst {}",
         src_chip_id,
         dst_chip_id);
-
-    if (!is_2d_fabric) {
-        // for 1D fabric we need to check if src and dst are on the same line
-        // remove this once control plane has row/col info/view
-        auto neighbors = control_plane->get_chip_neighbors(src_fabric_node_id, forwarding_direction.value());
-        auto neighbor_mesh_chips = neighbors.find(dst_fabric_node_id.mesh_id);
-        TT_FATAL(
-            neighbor_mesh_chips != neighbors.end() && neighbor_mesh_chips->second[0] == dst_fabric_node_id.chip_id,
-            "dst chip {} is not an immediate neighbor of src chip {}",
-            dst_chip_id,
-            src_chip_id);
-    }
 
     const auto candidate_eth_chans =
         control_plane->get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());

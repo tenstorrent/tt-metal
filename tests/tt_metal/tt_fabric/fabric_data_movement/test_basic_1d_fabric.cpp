@@ -588,10 +588,10 @@ void run_unicast_test_bw_chips(
         num_hops};
 
     // append the EDM connection rt args
-    uint32_t link_idx = 0;
-    if (is_2d_fabric) {
-        link_idx = get_forwarding_link_indices(src_physical_device_id, dst_physical_device_id)[0];
-    }
+    const auto& available_links = get_forwarding_link_indices(src_physical_device_id, dst_physical_device_id);
+    EXPECT_EQ(available_links.size() > 0, true);
+
+    uint32_t link_idx = available_links[0];
     append_fabric_connection_rt_args(
         src_physical_device_id,
         dst_physical_device_id,
@@ -701,6 +701,35 @@ void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
 
     run_unicast_test_bw_chips(
         fixture, src_physical_device_id, dst_physical_device_id, 0 /* num_hops, not needed for 2d */);
+}
+
+void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
+    // TODO: remove this restriction once tunneling is disabled
+    if (!fixture->slow_dispatch_) {
+        tt::log_info(tt::LogTest, "This test can only be run with TT_METAL_SLOW_DISPATCH_MODE currently");
+        GTEST_SKIP();
+    }
+
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::TG) {
+        tt::log_info(tt::LogTest, "This test is only for TG");
+        GTEST_SKIP();
+    }
+
+    // run tests b/w all pairs of TG gateways <> remote chip connections
+    // this only tests connections with the immediate remote chip in the tunnel since other connections
+    // are 'normal' and covered in other tests
+    const std::vector<chip_id_t> mmio_chip_ids = {0, 1, 2, 3};
+    for (const auto& mmio_chip_id : mmio_chip_ids) {
+        const auto& tunnels_from_mmio =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_chip_id);
+        for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+            // idx 0 in the tunnel is the mmio chip itself
+            const auto remote_chip_id = tunnels_from_mmio[t][1];
+            tt::log_info(tt::LogTest, "Running tests for chips: {} and {}", mmio_chip_id, remote_chip_id);
+            run_unicast_test_bw_chips(fixture, mmio_chip_id, remote_chip_id, 1);
+            run_unicast_test_bw_chips(fixture, remote_chip_id, mmio_chip_id, 1);
+        }
+    }
 }
 
 void RunTestMCastConnAPI(
@@ -948,6 +977,7 @@ void RunTestMCastConnAPI(
 
 TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
+TEST_F(Fabric1DFixture, TestUnicastTGGateways) { RunTestUnicastTGGateways(this); }
 TEST_F(Fabric1DFixture, TestMCastConnAPI) { RunTestMCastConnAPI(this); }
 
 TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
