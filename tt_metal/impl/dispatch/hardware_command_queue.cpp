@@ -38,7 +38,6 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include <umd/device/tt_xy_pair.h>
-#include "work_executor.hpp"
 #include "data_collection.hpp"
 
 namespace tt {
@@ -56,6 +55,20 @@ Buffer& get_buffer_object(const std::variant<std::reference_wrapper<Buffer>, std
             [](const std::shared_ptr<Buffer>& b) -> Buffer& { return *b; },
             [](const std::reference_wrapper<Buffer>& b) -> Buffer& { return b.get(); }},
         buffer);
+}
+
+// Binds a device worker/reader thread to a CPU core, determined using round-robin.
+void set_device_thread_affinity(std::thread& thread_, int cpu_core_for_worker) {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(cpu_core_for_worker, &cpuset);
+    int rc = pthread_setaffinity_np(thread_.native_handle(), sizeof(cpu_set_t), &cpuset);
+    if (rc) {
+        log_warning(
+            tt::LogMetal,
+            "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}",
+            rc);
+    }
 }
 
 }  // namespace

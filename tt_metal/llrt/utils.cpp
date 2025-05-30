@@ -55,14 +55,6 @@ const std::string& get_reports_dir() {
     return outpath;
 }
 
-size_t DefinesHash::operator()(const std::map<std::string, std::string>& c_defines) const {
-    size_t hash_value = 0;
-    for (auto it = c_defines.begin(); it != c_defines.end(); ++it) {
-        hash_combine(hash_value, std::hash<std::string>{}(it->first + it->second));
-    }
-    return hash_value;
-}
-
 }  // namespace utils
 
 }  // namespace tt
