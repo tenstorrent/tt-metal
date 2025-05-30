@@ -74,7 +74,15 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state) :
     MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool),
     reader_thread_pool_(reader_thread_pool),
-    worker_launch_message_buffer_state_(worker_launch_message_buffer_state)  //
+    worker_launch_message_buffer_state_(worker_launch_message_buffer_state),
+    dispatch_core_type_(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
+    prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
+    prefetcher_cache_sizeB_(MetalContext::instance().dispatch_mem_map(this->dispatch_core_type_).ringbuffer_size()),
+    prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
+    prefetcher_cache_manager_size_(
+        1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
+    prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
+        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_))  //
 {
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         config_buffer_mgr_,
@@ -138,17 +146,10 @@ void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
 }
 
 void FDMeshCommandQueue::populate_dispatch_core_type() {
-    uint32_t device_idx = 0;
     for (auto device : this->mesh_device_->get_devices()) {
-        if (device_idx) {
-            TT_FATAL(
-                this->dispatch_core_type_ ==
-                    MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
-                "Expected the Dispatch Core Type to match across device in a Mesh");
-        } else {
-            this->dispatch_core_type_ = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-        }
-        device_idx++;
+        TT_FATAL(
+            this->dispatch_core_type_ == MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
+            "Expected the Dispatch Core Type to match across device in a Mesh");
     }
 }
 
@@ -239,11 +240,37 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     std::unordered_set<uint32_t> chip_ids_in_workload = {};
     std::vector<MeshCoordinateRange> active_sub_grids = {};
+
+    bool use_prefetcher_cache =
+        this->max_program_kernels_sizeB_ and this->max_program_kernels_sizeB_ <= this->prefetcher_cache_sizeB_;
+    if (use_prefetcher_cache) {
+        bool is_cached;
+        uint32_t cache_offset;
+        std::tie(is_cached, cache_offset) =
+            this->query_prefetcher_cache(mesh_workload.impl().get_id(), this->max_program_kernels_sizeB_);
+        TT_ASSERT(
+            cache_offset + this->max_program_kernels_sizeB_ <= this->prefetcher_cache_sizeB_,
+            "Prefetcher cache offset: {}, max_program_kernels_sizeB_: {}, prefetcher_cache_sizeB_: {}",
+            cache_offset,
+            this->max_program_kernels_sizeB_,
+            this->prefetcher_cache_sizeB_);
+        dispatch_metadata.prefetcher_cache_info.is_cached = is_cached;
+        dispatch_metadata.prefetcher_cache_info.offset = cache_offset;
+        dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB = this->max_program_kernels_sizeB_;
+    } else {
+        // prefetcher cache will be overwritten, reset for next workload
+        this->reset_prefetcher_cache_manager();
+    }
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
         auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
+        TT_ASSERT(
+            use_prefetcher_cache == program_cmd_seq.prefetcher_cache_used,
+            "use_prefetcher_cache: {}, program_cmd_seq.prefetcher_cache_used: {}",
+            use_prefetcher_cache,
+            program_cmd_seq.prefetcher_cache_used);
         program_dispatch::update_program_dispatch_commands(
             program.impl(),
             program_cmd_seq,
@@ -278,7 +305,12 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Send go signals to devices not running a program to ensure consistent global state
     if (not sysmem_manager.get_bypass_mode()) {
         this->write_go_signal_to_unused_sub_grids(
-            chip_ids_in_workload, sub_device_id, expected_num_workers_completed, mcast_go_signals, unicast_go_signals);
+            chip_ids_in_workload,
+            sub_device_id,
+            expected_num_workers_completed,
+            mcast_go_signals,
+            unicast_go_signals,
+            dispatch_metadata);
     } else {
         MeshCoordinateRangeSet active_sub_grids_set;
         for (const auto& sub_grid : active_sub_grids) {
@@ -290,7 +322,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             sub_device_id,
             expected_num_workers_completed,
             mcast_go_signals,
-            unicast_go_signals);
+            unicast_go_signals,
+            dispatch_metadata);
     }
     // Increment Launch Message Buffer Write Pointers
     if (mcast_go_signals) {
@@ -450,6 +483,8 @@ void FDMeshCommandQueue::read_shard_from_device(
 
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    // Reading from device would clobber prefetcher cache, so reset it now
+    this->reset_prefetcher_cache_manager();
 
     if (shard_view->is_nd_sharded()) {
         const auto& [banks, bank_mapping_in_bytes] = shard_view->get_bank_data_mapping();
@@ -753,7 +788,8 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
-    bool unicast_go_signals) {
+    bool unicast_go_signals,
+    const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     for (auto& device : this->mesh_device_->get_devices()) {
         if (chip_ids_in_workload.find(device->id()) == chip_ids_in_workload.end()) {
             write_go_signal(
@@ -764,7 +800,8 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
                 expected_num_workers_completed,
                 this->virtual_program_dispatch_core(),
                 mcast_go_signals,
-                unicast_go_signals);
+                unicast_go_signals,
+                dispatch_md);
         }
     }
 }
@@ -819,7 +856,8 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
-    bool unicast_go_signals) {
+    bool unicast_go_signals,
+    const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     MeshCoordinateRange full_grid(mesh_device_->shape());
     MeshCoordinateRangeSet unused_grids = subtract(full_grid, active_grid);
     for (const auto& unused_grid : unused_grids.ranges()) {
@@ -833,7 +871,8 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
             expected_num_workers_completed,
             this->virtual_program_dispatch_core(),
             mcast_go_signals,
-            unicast_go_signals);
+            unicast_go_signals,
+            dispatch_md);
         auto mesh_trace_md = MeshTraceStagingMetadata{
             unused_grid,
             unused_grid.start_coord(),
@@ -890,6 +929,8 @@ void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::sh
     for (auto device : mesh_device_->get_devices()) {
         device->sysmem_manager().set_bypass_mode(/*enable*/ true, /*clear*/ true);
     }
+    // reset prefetcher cache manager, since trace capture modifies the state on host
+    this->reset_prefetcher_cache_manager();
 }
 
 void FDMeshCommandQueue::record_end() {
@@ -924,6 +965,22 @@ void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
             tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());
     }
 #endif
+}
+
+std::pair<bool, size_t> FDMeshCommandQueue::query_prefetcher_cache(uint64_t workload_id, uint32_t lengthB) {
+    auto result = prefetcher_cache_manager_->get_cache_offset(workload_id, lengthB);
+    TT_FATAL(
+        result.has_value(),
+        "Prefetcher cache query failed. Cache size: {}, requested: {}",
+        this->prefetcher_cache_manager_->get_cache_sizeB(),
+        lengthB);
+    return std::make_pair(result.value().is_cached, result.value().offset * this->prefetcher_dram_aligned_block_size_);
+}
+
+void FDMeshCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_manager_->reset(); }
+
+int FDMeshCommandQueue::get_prefetcher_cache_sizeB() const {
+    return this->prefetcher_cache_manager_->get_cache_sizeB();
 }
 
 }  // namespace tt::tt_metal::distributed

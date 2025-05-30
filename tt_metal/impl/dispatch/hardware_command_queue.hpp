@@ -32,6 +32,7 @@
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
+#include "ringbuffer_cache.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -165,6 +166,12 @@ private:
     CoreCoord completion_queue_writer_core_;
     NOC noc_index_;
 
+    const uint32_t prefetcher_dram_aligned_block_size_;
+    const uint64_t prefetcher_cache_sizeB_;
+    const uint32_t prefetcher_dram_aligned_num_blocks_;
+    const uint32_t prefetcher_cache_manager_size_;
+    std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
+
     void read_completion_queue();
 
     // sub_device_ids only needs to be passed when blocking and there are specific sub_devices to wait on
@@ -173,6 +180,12 @@ private:
 
     void increment_num_entries_in_completion_q();
     void set_exit_condition();
+
+    std::pair<bool, size_t> query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB);
+
+    void reset_prefetcher_cache_manager();
+
+    int get_prefetcher_cache_sizeB() const;
 };
 
 }  // namespace tt::tt_metal

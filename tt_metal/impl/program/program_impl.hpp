@@ -54,8 +54,8 @@ void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence,
     detail::ProgramImpl& program,
     IDevice* device,
-    SubDeviceId sub_device_id);
-
+    SubDeviceId sub_device_id,
+    bool use_prefetcher_cache);
 }
 
 using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
@@ -196,6 +196,7 @@ public:
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     void set_last_used_command_queue_for_testing(CommandQueue* queue);
     CommandQueue* get_last_used_command_queue() const;
+    CommandQueue* get_last_used_command_queue();
     void populate_dispatch_data(IDevice* device);
 
     void finalize_offsets(IDevice* device);
@@ -284,6 +285,8 @@ private:
     // Counts how much space is needed for each core + each launch buffer msg queue.
     std::vector<uint32_t> program_config_sizes_;
 
+    uint32_t program_kernel_bins_sizeB = 0;
+
     // The rta_updates from one cached command sequence may reference data in another cached command sequence.
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
     std::unordered_map<uint64_t, ProgramCommandSequence> trace_cached_program_command_sequences_;
@@ -330,11 +333,14 @@ private:
     const ProgramTransferInfo& get_program_transfer_info() const noexcept;
     std::shared_ptr<Buffer> get_kernels_buffer(IDevice* device) const noexcept;
 
+    uint32_t get_program_kernel_bins_sizeB(IDevice* device);
+
     friend void program_dispatch::assemble_device_commands(
         ProgramCommandSequence& program_command_sequence,
         ProgramImpl& program,
         IDevice* device,
-        SubDeviceId sub_device_id);
+        SubDeviceId sub_device_id,
+        bool use_prefetcher_cache);
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;

@@ -30,6 +30,7 @@ struct ProgramCommandSequence {
     HostMemDeviceCommand stall_command_sequences[2];
     std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
     HostMemDeviceCommand program_config_buffer_command_sequence;
+    HostMemDeviceCommand program_binary_setup_prefetcher_cache_command;
     HostMemDeviceCommand program_binary_command_sequence;
     HostMemDeviceCommand launch_msg_command_sequence;
     HostMemDeviceCommand go_msg_command_sequence;
@@ -42,6 +43,10 @@ struct ProgramCommandSequence {
     std::vector<CQDispatchWritePackedCmd*> launch_msg_write_packed_cmd_ptrs;
     std::vector<CQDispatchWritePackedCmd*> unicast_launch_msg_write_packed_cmd_ptrs;
     CQDispatchGoSignalMcastCmd* mcast_go_signal_cmd_ptr;
+
+    bool prefetcher_cache_used = false;
+    uint32_t kernel_bins_sizeB = 0;
+    uint32_t kernel_bins_base_addr;
 
     uint32_t get_rt_args_size() const {
         return std::accumulate(
@@ -56,6 +61,7 @@ struct ProgramCommandSequence {
             ((stall_before_program || stall_first) ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
             preamble_command_sequence.size_bytes() + program_config_buffer_command_sequence.size_bytes() +
             get_rt_args_size() + program_binary_command_sequence.size_bytes() +
+            program_binary_setup_prefetcher_cache_command.size_bytes() + 
             launch_msg_command_sequence.size_bytes() + go_msg_command_sequence.size_bytes();
         return one_shot_fetch_size;
     }
