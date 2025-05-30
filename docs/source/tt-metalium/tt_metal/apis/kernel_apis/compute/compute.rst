@@ -32,6 +32,7 @@ Compute APIs
   erfinv_tile
   gelu_tile
   heaviside_tile
+  compute_kernel_hw_startup
   isinf_tile
   isnan_tile
   i0_tile

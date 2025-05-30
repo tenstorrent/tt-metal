@@ -48,7 +48,7 @@ void reduce_c(uint32_t out_cb) {
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
 
-    reduce_init_delta<false, pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+    reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
 
     constexpr uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
@@ -69,7 +69,7 @@ void reduce_c(uint32_t out_cb) {
         release_dst();
     }
 
-    reduce_revert_delta<reduce_dim>(out_cb);
+    reduce_revert_delta();
 }
 
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
