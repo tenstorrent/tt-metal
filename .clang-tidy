@@ -138,7 +138,6 @@ Checks: >
   -misc-const-correctness,
   -misc-definitions-in-headers,
   -misc-include-cleaner,
-  -misc-misplaced-const,
   -misc-no-recursion,
   -misc-non-private-member-variables-in-classes,
   -misc-redundant-expression,
