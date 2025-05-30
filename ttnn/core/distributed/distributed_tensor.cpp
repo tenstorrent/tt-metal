@@ -2,16 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tensor/host_buffer/functions.hpp"
+#include "tt-metalium/shape.hpp"
+#include "tt-metalium/small_vector.hpp"
 #include "tt_stl/overloaded.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include <tt-metalium/assert.hpp>
+#include <xtensor/containers/xadapt.hpp>
+#include <xtensor/containers/xarray.hpp>
+#include <xtensor/core/xstrides.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"
 
 namespace ttnn::distributed {
 namespace {
+
+using ::tt::tt_metal::DistributedHostBuffer;
+using ::tt::tt_metal::distributed::MeshContainer;
 
 class NdTensorToMesh : public TensorToMesh {
 public:
@@ -21,54 +31,147 @@ public:
         const tt::tt_metal::DistributedTensorConfig& distributed_tensor_config) :
         shape_(shape), config_(config), distributed_tensor_config_(distributed_tensor_config) {}
 
-    std::vector<Tensor> map(const Tensor& tensor) const override {
-        std::vector<Tensor> current_tensors = {tensor};
-
-        for (size_t mesh_dim_idx = 0; mesh_dim_idx < shape_.dims(); ++mesh_dim_idx) {
-            std::vector<Tensor> next_tensors;
-            const size_t mesh_dim_size = shape_[mesh_dim_idx];
-            const auto& placement = config_.placements[mesh_dim_idx];
-            next_tensors.reserve(current_tensors.size() * mesh_dim_size);
-
-            for (const auto& current_tensor : current_tensors) {
-                std::visit(
-                    tt::stl::overloaded{
-                        [&](const MeshMapperConfig::Replicate&) {
-                            for (size_t i = 0; i < mesh_dim_size; ++i) {
-                                next_tensors.push_back(current_tensor);
-                            }
-                        },
-                        [&](const MeshMapperConfig::Shard& shard) {
-                            auto chunks = experimental::xtensor::chunk(current_tensor, mesh_dim_size, shard.dim);
-                            TT_FATAL(
-                                shape_.dims() == 1 || chunks.size() == mesh_dim_size,
-                                "ND sharding requires the number of chunks {} to match the mesh dimension size {}",
-                                chunks.size(),
-                                mesh_dim_size);
-                            next_tensors.insert(
-                                next_tensors.end(),
-                                std::make_move_iterator(chunks.begin()),
-                                std::make_move_iterator(chunks.end()));
-                        },
-                    },
-                    placement);
-            }
-            current_tensors = std::move(next_tensors);
+    Tensor operator()(const Tensor& tensor) const override {
+        switch (tensor.tensor_spec().data_type()) {
+            case tt::tt_metal::DataType::BFLOAT8_B:
+            case tt::tt_metal::DataType::BFLOAT4_B:
+            case tt::tt_metal::DataType::FLOAT32: return shard_tensor_typed<float>(tensor);
+            case tt::tt_metal::DataType::BFLOAT16: return shard_tensor_typed<bfloat16>(tensor);
+            case tt::tt_metal::DataType::UINT32: return shard_tensor_typed<uint32_t>(tensor);
+            case tt::tt_metal::DataType::UINT8: return shard_tensor_typed<uint8_t>(tensor);
+            case tt::tt_metal::DataType::UINT16: return shard_tensor_typed<uint16_t>(tensor);
+            case tt::tt_metal::DataType::INT32: return shard_tensor_typed<int32_t>(tensor);
+            case tt::tt_metal::DataType::INVALID: TT_THROW("Invalid data type: {}", tensor.tensor_spec().data_type());
         }
-
-        TT_FATAL(
-            current_tensors.size() <= shape_.mesh_size(),
-            "NdTensorToMesh: Mapping failed. Expected at most {} tensors for mesh shape {}, but got {}.",
-            shape_.mesh_size(),
-            shape_,
-            current_tensors.size());
-
-        return current_tensors;
+        TT_THROW("Unreachable");
     }
 
     tt::tt_metal::DistributedTensorConfig config() const override { return distributed_tensor_config_; }
 
 private:
+    template <typename T>
+    Tensor shard_tensor_typed(const tt::tt_metal::Tensor& tensor) const {
+        // Spelling out specific types of shapes / strides to make templated logic easier to interpret.
+        xt::svector<size_t> shape_vec(tensor.logical_shape().cbegin(), tensor.logical_shape().cend());
+
+        auto strides = tt::tt_metal::compute_strides(tensor.logical_shape());
+        xt::svector<long> strides_vec(strides.cbegin(), strides.cend());
+
+        std::vector<T> logical_data;
+        auto input_xtensor = [&]() {
+            const bool data_viewable = tensor.tensor_spec().layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                                       tensor.tensor_spec().physical_shape() == tensor.tensor_spec().logical_2d_shape();
+            if (data_viewable) {
+                tt::tt_metal::HostBuffer buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor);
+                auto span = buffer.view_as<const T>();
+                return xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vec, strides_vec);
+            } else {
+                logical_data = tensor.to_vector<T>();
+                auto span = tt::stl::make_const_span(logical_data);
+                return xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vec, strides_vec);
+            }
+        }();
+
+        using XTensorView = decltype(input_xtensor);
+        MeshContainer<std::optional<XTensorView>> sharded_xtensor_views(shape_, std::nullopt);
+
+        // Place an unsharded tensor at the origin; progressively split the tensor across the entire mesh.
+        const auto origin = MeshCoordinate::zero_coordinate(shape_.dims());
+        sharded_xtensor_views.at(origin) = input_xtensor;
+        std::vector<MeshCoordinate> to_process = {origin};
+
+        for (size_t mesh_dim_idx = 0; mesh_dim_idx < shape_.dims(); ++mesh_dim_idx) {
+            const size_t mesh_dim_size = shape_[mesh_dim_idx];
+            const auto& placement = config_.placements[mesh_dim_idx];
+            std::vector<MeshCoordinate> to_process_next;
+            for (const auto& to_process_cord : to_process) {
+                const auto xtensor_to_process = sharded_xtensor_views.at(to_process_cord);
+                TT_FATAL(xtensor_to_process.has_value(), "Tensor to process is not set");
+                std::visit(
+                    tt::stl::overloaded{
+                        [&](const MeshMapperConfig::Replicate&) {
+                            tt::stl::SmallVector<uint32_t> next_dims(
+                                to_process_cord.coords().begin(), to_process_cord.coords().end());
+                            for (size_t i = 0; i < mesh_dim_size; ++i) {
+                                next_dims[mesh_dim_idx] = i;
+                                MeshCoordinate next_coord(next_dims);
+                                sharded_xtensor_views.at(next_coord) = xtensor_to_process;
+                                to_process_next.push_back(next_coord);
+                            }
+                        },
+                        [&](const MeshMapperConfig::Shard& shard) {
+                            auto chunks = experimental::xtensor::chunk(*xtensor_to_process, mesh_dim_size, shard.dim);
+                            TT_FATAL(
+                                shape_.dims() == 1 || chunks.size() == mesh_dim_size,
+                                "ND sharding requires the number of chunks {} to match the mesh dimension size {}",
+                                chunks.size(),
+                                mesh_dim_size);
+                            tt::stl::SmallVector<uint32_t> next_dims(
+                                to_process_cord.coords().begin(), to_process_cord.coords().end());
+                            for (int i = 0; i < chunks.size(); ++i) {
+                                next_dims[mesh_dim_idx] = i;
+                                MeshCoordinate next_coord(next_dims);
+                                sharded_xtensor_views.at(next_coord) = xt::adapt(
+                                    chunks[i].data(),
+                                    chunks[i].size(),
+                                    xt::no_ownership(),
+                                    chunks[i].shape(),
+                                    chunks[i].strides());
+                                to_process_next.push_back(next_coord);
+                            }
+                        },
+                    },
+                    placement);
+            }
+            std::swap(to_process, to_process_next);
+        }
+
+        auto shard_shape = [&]() {
+            std::optional<ttnn::Shape> shard_shape;
+            for (const auto& [_, xtensor_view] : sharded_xtensor_views) {
+                if (!xtensor_view.has_value()) {
+                    continue;
+                }
+                auto xtensor_shard_shape = experimental::xtensor::get_shape_from_xarray(*xtensor_view);
+                if (shard_shape.has_value()) {
+                    TT_FATAL(
+                        shard_shape.value() == xtensor_shard_shape,
+                        "Shard shape mismatch: expected {} but got {}",
+                        shard_shape.value(),
+                        xtensor_shard_shape);
+                } else {
+                    shard_shape = xtensor_shard_shape;
+                }
+            }
+            TT_FATAL(shard_shape.has_value(), "No shards were produced");
+            return *shard_shape;
+        }();
+        TensorSpec shard_spec(shard_shape, tensor.tensor_spec().tensor_layout());
+
+        auto distributed_buffer =
+            tt::tt_metal::DistributedHostBuffer::create(shape_, shape_, MeshCoordinate::zero_coordinate(shape_.dims()));
+        for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
+            if (xtensor_view.has_value()) {
+                distributed_buffer.emplace_shard(coord, [&xtensor_view, &shard_spec]() {
+                    auto shard_tensor =
+                        Tensor::from_vector(std::vector<T>(xtensor_view->begin(), xtensor_view->end()), shard_spec);
+                    return tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);
+                });
+            }
+        }
+
+        // TODO: provide a direct way to create a multi-host distributed tensor from distributed host buffer.
+        std::vector<Tensor> tensors;
+        for (const auto& coord : distributed_buffer.shard_coords()) {
+            auto shard = distributed_buffer.get_shard(coord);
+            if (shard.has_value()) {
+                tensors.push_back(Tensor(std::move(*shard), shard_spec));
+            }
+        }
+
+        return aggregate_as_tensor(tensors, config());
+    }
+
     ttnn::MeshShape shape_;
     MeshMapperConfig config_;
     tt::tt_metal::DistributedTensorConfig distributed_tensor_config_;
@@ -204,8 +307,7 @@ Tensor distribute_tensor(
         tensor.storage_type() == tt::tt_metal::StorageType::HOST,
         "TensorToMesh only supports host tensors; got storage type: {}",
         tensor.storage_type());
-    std::vector<Tensor> tensors = mapper.map(tensor);
-    Tensor output = aggregate_as_tensor(tensors, mapper.config());
+    Tensor output = mapper(tensor);
     if (mesh_device.has_value()) {
         return output.to_device(&(mesh_device->get()), output.memory_config());
     }

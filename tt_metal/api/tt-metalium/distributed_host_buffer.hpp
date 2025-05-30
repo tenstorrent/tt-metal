@@ -42,7 +42,7 @@ public:
     // Emplaces the shard at the specified `coord`.
     // No-op if the index is out of local bounds.
     // Throws if the index is out of global bounds.
-    void emplace_shard(const distributed::MeshCoordinate& coord, HostBuffer buffer);
+    void emplace_shard(const distributed::MeshCoordinate& coord, const std::function<HostBuffer()>& buffer_fn);
 
     // `transform` and `apply` functions abstract away the details of the underlying data storage.
     // `linear_index` will be supplied by `DistributedHostBuffer` to indicate the position of the buffer.

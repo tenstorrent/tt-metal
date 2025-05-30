@@ -25,7 +25,7 @@
 #include <setjmp.h>
 
 #include "ttnn/tensor/xtensor/partition.hpp"
-
+#include "ttnn/tensor/xtensor/conversion_utils.hpp"
 namespace tt {
 namespace tt_metal {
 class Tensor;
@@ -178,35 +178,16 @@ TEST(PartitionTest, EmptyInput) {
     EXPECT_TRUE(xt::allclose(concat(input, 0), xt::xarray<int>{}));
 }
 
-TEST(PartitionTest, ShardSpans) {
-    constexpr size_t kNumChunks = 64;
-    constexpr size_t kChunkSize = 4 << 10;
-    std::vector<float> test_data;
-    for (int i = 0; i < kNumChunks * kChunkSize; i++) {
-        test_data.push_back(i);
-    }
-
-    auto chunks = chunk(tt::stl::Span(test_data), ttnn::Shape{kNumChunks, kChunkSize}, kNumChunks);
-
-    EXPECT_THAT(chunks, SizeIs(kNumChunks));
-    for (int i = 0; i < kNumChunks; i++) {
-        const auto& [chunk_span, shape] = chunks[i];
-        EXPECT_THAT(chunk_span, SizeIs(kChunkSize));
-        EXPECT_EQ(shape, ttnn::Shape({1, kChunkSize}));
-        for (int j = 0; j < kChunkSize; j++) {
-            EXPECT_EQ(chunk_span[j], i * kChunkSize + j);
-        }
-    }
-}
-
 TEST(PartitionTest, ChunkDoesNotAccessData) {
     //  Create a read-protected memory region, and point `tt::stl::Span` to it.
     //  `chunk` should not access the data, and should only calculate offsets and shapes.
     const long page_size = sysconf(_SC_PAGESIZE);
     ASSERT_NE(page_size, -1);
 
-    const size_t total_size = 10 * page_size;
-    const int num_chunks = 10;
+    constexpr int kDim0Size = 10;
+    constexpr int kDim1Size = 17;
+    const ttnn::Shape shape({kDim0Size, kDim1Size, page_size});
+    const size_t total_size = shape.volume();
 
     // With `PROT_NONE`, the mapped memory cannot be accessed.
     void* mapped_mem = mmap(
@@ -227,6 +208,8 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     ASSERT_EQ(sigaction(SIGSEGV, &new_action, &old_action), 0);
 
     tt::stl::Span<const uint8_t> protected_span(static_cast<uint8_t*>(mapped_mem), total_size);
+    auto xexpr = xt::adapt(
+        protected_span.data(), total_size, xt::no_ownership(), xt::svector<long>(shape.cbegin(), shape.cend()));
 
     // Verify that our set up actually works by attempting to read the protected memory region, and catching a segfault.
     bool segfault_occurred = false;
@@ -239,12 +222,13 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     EXPECT_TRUE(segfault_occurred);
 
     if (sigsetjmp(jmp_env, /*savemask=*/1) == 0) {
-        auto chunks = chunk(protected_span, ttnn::Shape({total_size}), num_chunks);
+        auto chunks = chunk(xexpr, /*num_chunks=*/kDim1Size, /*dim=*/1);
 
-        EXPECT_THAT(chunks, SizeIs(num_chunks));
-        for (const auto& [chunk_span, chunk_shape] : chunks) {
-            EXPECT_THAT(chunk_span, SizeIs(page_size));
-            EXPECT_EQ(chunk_shape, ttnn::Shape({page_size}));
+        EXPECT_THAT(chunks, SizeIs(kDim1Size));
+        for (const auto& chunked_xexpr : chunks) {
+            EXPECT_THAT(chunked_xexpr, SizeIs(kDim0Size * page_size));
+            EXPECT_EQ(
+                experimental::xtensor::get_shape_from_xarray(chunked_xexpr), ttnn::Shape({kDim0Size, 1, page_size}));
         }
     } else {
         FAIL() << "segfault occurred when calling `chunk`";
