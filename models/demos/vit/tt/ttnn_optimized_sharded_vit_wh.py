@@ -31,6 +31,7 @@ def update_model_config(config, batch_size):
     seqL_t = seqL_padded // TILE_HEIGHT  # 224 / 32 = 7
     dim_t = config.hidden_size // TILE_HEIGHT  # 768 / 32 = 24
     dim_t__x = dim_t // core_grid.x  # 4
+    dim_t__x_full_grid = dim_t // core_grid_8x8.x  # 3
     head_num = config.num_attention_heads  # 12
     head_seqL_t__x = (head_num * seqL_t) // core_grid.x  # 14
     head_size_t = dim_t // head_num  # 2
@@ -49,19 +50,21 @@ def update_model_config(config, batch_size):
     program_configs = {
         "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
-            subblock_w=3,  # 96 == 3 tiles,
+            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
+            subblock_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             block_h=seqL_t,  # 7,
-            block_w=3,  # 96 == 3 tiles,
+            block_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             inplace=False,
         ),
         # shard_spec = [224, 96]
         "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
-            in0_block_w=3,  # shard shape is [224, 96],
+            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
+            in0_block_w=dim_t__x_full_grid,  # 3
             out_subblock_h=1,
-            out_subblock_w=3,  # 6,
+            out_subblock_w=dim_t__x_full_grid,  # 3,
             per_core_M=seqL_t,  # 7,
-            per_core_N=3 * 3,  #
+            per_core_N=3 * dim_t__x_full_grid,  # 9
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -89,38 +92,42 @@ def update_model_config(config, batch_size):
         ),
         "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
-            in0_block_w=3,  # shard shape is [224, 96]
-            out_subblock_h=1,  # per_core_N is 7
-            out_subblock_w=3,  # per_core_M is 3
+            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
+            in0_block_w=dim_t__x_full_grid,  # 3
+            out_subblock_h=1,
+            out_subblock_w=dim_t__x_full_grid,  # 3
             per_core_M=seqL_t,  # 7,
-            per_core_N=3,  # 96 == 3 tiles,
+            per_core_N=dim_t__x_full_grid,  # 3,
             transpose_mcast=False,
             fused_activation=None,
         ),
         "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
-            subblock_w=3,  # 96 == 3 tiles,
+            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
+            subblock_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             block_h=seqL_t,  # 7,
-            block_w=3,  # 96 == 3 tiles,
+            block_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             inplace=False,
         ),
         "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=dim_t // 8,  # 24 // 8 == 3,
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
+            in0_block_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             out_subblock_h=1,
-            out_subblock_w=6,
+            out_subblock_w=(dim_t__x_full_grid * 4) // 2,  # 6,
             per_core_M=seqL_t,  # 7,
-            per_core_N=(dim_t // 8) * 4,  # 12,
+            per_core_N=dim_t__x_full_grid * 4,  # 12,
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=(dim_t // 8) * 4,  # 12
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            # shard shape is [seqL_t, dim_t__x_full_grid * 4], in tiles
+            in0_block_w=dim_t__x_full_grid * 4,  # 12
             out_subblock_h=1,
-            out_subblock_w=3,
+            out_subblock_w=dim_t__x_full_grid,
             per_core_M=seqL_t,  # 7,
-            per_core_N=dim_t // 8,  # 3
+            per_core_N=dim_t__x_full_grid,  # 3
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -134,7 +141,7 @@ def update_model_config(config, batch_size):
             transpose_mcast=False,
             fused_activation=None,
         ),
-        "ln_conmpute_config": ttnn.WormholeComputeKernelConfig(
+        "ln_compute_config": ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
@@ -292,7 +299,6 @@ def vit_attention(
     # cant use reshard as it's not working here, so use s2i followed by i2s
     context_layer = ttnn.to_memory_config(context_layer, ttnn.DRAM_MEMORY_CONFIG)
     context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cores)
-    # hidden_states = ttnn.to_memory_config(hidden_states, memory_config_ff)
 
     self_output = ttnn.linear(
         context_layer,
@@ -313,7 +319,6 @@ def vit_intermediate(
     *,
     parameters,
 ):
-    # print("In vit intermediate, hidden_states mem_config is: ", hidden_states.memory_config())
     output = ttnn.linear(
         hidden_states,
         parameters.dense.weight,
@@ -344,13 +349,6 @@ def vit_output(
     )
     ttnn.deallocate(hidden_states)
 
-    # output = ttnn.to_memory_config(
-    #     output, ttnn.DRAM_MEMORY_CONFIG)
-    # output = ttnn.to_memory_config(
-    #     output, residual.memory_config())
-
-    # output = ttnn.reshard(output, residual.memory_config())
-
     output = ttnn.add(output, residual, memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(residual)
 
@@ -364,31 +362,6 @@ def vit_feedforward(
     *,
     parameters,
 ):
-    # print("hidden states shape: ", hidden_states.shape, "attention output shape: ", attention_output.shape)
-    # print(
-    #     "hidden states shard spec: ",
-    #     hidden_states.memory_config(),
-    #     "attention output shard spec: ",
-    #     attention_output.memory_config(),
-    # )
-
-    # print("In vit feedforward, hidden_states_mem_config is: ", hidden_states.memory_config())
-    # print("In vit feedforward, hidden_states shape is: ", hidden_states.shape, "hidden states padded_shape_is: ", hidden_states.padded_shape, " hidden_states_dtype is: ", hidden_states.dtype)
-
-    # memory_config_ff = ttnn.create_sharded_memory_config(
-    #     hidden_states.padded_shape,
-    #     core_grid=config.core_grid_8x8,
-    #     strategy=ttnn.ShardStrategy.BLOCK,
-    #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    # )
-
-    # print("Memory config for feedforward: ", memory_config_ff)
-
-    # this reshard isn't working at the moment, so we do i2s -> s2i manually
-    # hidden_states = ttnn.reshard(hidden_states, memory_config_ff)
-    # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-    # hidden_states = ttnn.to_memory_config(hidden_states, memory_config_ff)
-
     intermediate = vit_intermediate(config, hidden_states, parameters=parameters.intermediate)
     hidden_states = vit_output(config, intermediate, attention_output, parameters=parameters.output)
     return hidden_states
@@ -406,7 +379,7 @@ def vit_layer(
         bias=parameters.layernorm_before.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         program_config=config.program_configs["layernorm_before_program_config"],
-        compute_kernel_config=config.program_configs["ln_conmpute_config"],
+        compute_kernel_config=config.program_configs["ln_compute_config"],
     )
 
     multi_head_attention_output = vit_attention(
@@ -429,7 +402,7 @@ def vit_layer(
         bias=parameters.layernorm_after.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         program_config=config.program_configs["layernorm_after_output_program_config"],
-        compute_kernel_config=config.program_configs["ln_conmpute_config"],
+        compute_kernel_config=config.program_configs["ln_compute_config"],
     )
 
     feedforward_output = vit_feedforward(
