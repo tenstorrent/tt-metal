@@ -37,7 +37,7 @@ constexpr auto cumsum = decorators::
     register_operation<"ttnn::experimental::cumsum", ttnn::operations::experimental::reduction::CumSumOperation>();
 
 constexpr auto cumsum_bw = decorators::register_operation<
-    "ttnn::experimental::cumsum_bw",
+    "ttnn::experimental::cumsum_backward",
     ttnn::operations::experimental::reduction::CumSumBackwardOperation>();
 
 }  // namespace ttnn::experimental
