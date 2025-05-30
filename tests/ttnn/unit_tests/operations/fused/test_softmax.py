@@ -48,6 +48,11 @@ def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_e
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.softmax(input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
     output_tensor = ttnn.to_torch(output_tensor)
+    torch.set_printoptions(profile="full")
+    with open("tensor_output.txt", "w") as f:
+        print(output_tensor, file=f)
+    with open("torch_tensor_output.txt", "w") as f:
+        print(torch_output_tensor, file=f)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
@@ -277,9 +282,13 @@ def test_large_softmax(device, batch_size, h, w, dim):
 
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.softmax(input_tensor, dim=dim)
+    print("hi")
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    print("hi")
     output_tensor = ttnn.from_device(output_tensor)
+    print("hi")
     output_tensor = ttnn.to_torch(output_tensor)
+    print("hi before assert")
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
