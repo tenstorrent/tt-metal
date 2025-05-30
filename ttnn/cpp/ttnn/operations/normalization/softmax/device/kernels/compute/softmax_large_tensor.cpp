@@ -114,6 +114,7 @@ void MAIN {
          */
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
+            binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
             apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk);
@@ -123,8 +124,8 @@ void MAIN {
                 // pad
                 pad_input(cb_in0, cb_x, cb_length_t, blk);
                 cb_processed_input = cb_x;
-                DPRINT << "PM" << ENDL();
             } else {
+                DPRINT << "PM" << ENDL();
                 // no Pad
                 cb_processed_input = cb_in0;
             }
@@ -150,6 +151,7 @@ void MAIN {
          * --------------------------------------------------------
          */
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
+            binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
@@ -219,6 +221,7 @@ void MAIN {
         length_left_t = Wt;
         cur_cb_length_t = cb_length_t;
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
+            binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
@@ -327,20 +330,24 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
     copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
         tile_regs_acquire();
-        tile_regs_wait();
         cb_wait_front(cb_in, blk);
         cb_reserve_back(cb_out, blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
-            copy_tile(cb_in, cur_dst, cur_dst);
-            dprint_tensix_dest_reg(0);
             if (cur_dst == blk - 1 && cur_blk == cb_length_t - blk) {
-                reconfig_data_format_srca(cb_mask_padded_bcast);
-                binary_dest_reuse_tiles_init(cb_mask_padded_bcast);
+                // // reconfig_data_format_srca(cb_mask_padded_bcast);
+                // binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD,
+                // EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_mask_padded_bcast);
+                add_tiles_init(cb_in, cb_mask_padded_bcast);
                 cb_wait_front(cb_mask_padded_bcast, 1);
-                binary_dest_reuse_tiles(cb_mask_padded_bcast, 0, cur_dst);
-                dprint_tensix_dest_reg(0);
+                add_tiles(cb_in, cb_mask_padded_bcast, cur_dst, 0, cur_dst);
+                // binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD,
+                // EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_mask_padded_bcast, 0, cur_dst);
+            } else {
+                copy_tile(cb_in, cur_dst, cur_dst);
             }
+            dprint_tensix_dest_reg(cur_dst);
         }
+        tile_regs_wait();
         tile_regs_commit();
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             pack_tile(cur_dst, cb_out);
@@ -410,12 +417,13 @@ void reduce_cb(
 
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_out);
-    reduce_init<false, reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, cb_out);
+    reduce_init_delta<false, reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, cb_out);
     tile_regs_acquire();
     cb_reserve_back(cb_out, 1);
     for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
         cb_wait_front(cb_in, 1);
         reduce_tile<reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, 0, 0, 0);
+        dprint_tensix_dest_reg(0);
         cb_pop_front(cb_in, 1);
     }
     reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_out);
