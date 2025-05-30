@@ -78,25 +78,21 @@ jobs:
         # the images and run them.
         image-config:
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
-            image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-base-image-name }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
-            image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-profiler-base-image-name }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
             build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
-            image-base-name: ${{ needs.get-image-tags.outputs.bh-base-image-name }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh blackhole
             build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
-            image-base-name: ${{ needs.get-image-tags.outputs.bh-profiler-base-image-name }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: tests/scripts/single_card/run_bh_upstream_profiler_tests.sh
             build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
@@ -215,13 +211,9 @@ jobs:
       matrix:
         image-config:
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
-            image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-base-image-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
-            image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-profiler-base-image-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
-            image-base-name: ${{ needs.get-image-tags.outputs.bh-base-image-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
-            image-base-name: ${{ needs.get-image-tags.outputs.bh-profiler-base-image-name }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
