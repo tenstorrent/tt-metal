@@ -26,11 +26,36 @@ test_suite_bh_single_pcie_small_ml_model_tests() {
     pytest models/demos/blackhole/resnet50/tests/upstream_pipeline
 }
 
+test_suite_bh_single_pcie_llama_demo_tests() {
+    if [ -z "${LLAMA_DIR}" ]; then
+      echo "Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
+      exit 1
+    fi
+
+    if [ -d "$LLAMA_DIR" ] && [ "$(ls -A $LLAMA_DIR)" ]; then
+      echo "[upstream-tests] Llama weights exist, continuing"
+    else
+      echo "[upstream-tests] Error: Llama weights do not seem to exist in $LLAMA_DIR, exiting" >&2
+      exit 1
+    fi
+
+    echo "[upstream-tests] Running BH upstream Llama demo model tests"
+    # TODO: remove me , just testing this out
+    pip3 install -r models/tt_transformers/requirements.txt
+    pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
+}
+
 # Define test suite mappings for different hardware topologies
 declare -A hw_topology_test_suites
 
-hw_topology_test_suites["blackhole"]="test_suite_bh_single_pcie_python_unit_tests test_suite_bh_single_pcie_metal_unit_tests test_suite_bh_single_pcie_small_ml_model_tests"
-hw_topology_test_suites["blackhole_no_models"]="test_suite_bh_single_pcie_python_unit_tests test_suite_bh_single_pcie_metal_unit_tests"
+# Store test suites as newline-separated lists
+hw_topology_test_suites["blackhole"]="test_suite_bh_single_pcie_python_unit_tests
+test_suite_bh_single_pcie_metal_unit_tests
+test_suite_bh_single_pcie_small_ml_model_tests
+test_suite_bh_single_pcie_llama_demo_tests" # NOTE: This test MUST be last because of the requirements install currently in the llama tests
+
+hw_topology_test_suites["blackhole_no_models"]="test_suite_bh_single_pcie_python_unit_tests
+test_suite_bh_single_pcie_metal_unit_tests"
 
 # Function to display help
 show_help() {
@@ -83,7 +108,6 @@ if [[ -z "$hw_topology" ]]; then
     exit 1
 fi
 
-
 # Check if the test suite is part of the specified hardware topology
 if [[ -z "${hw_topology_test_suites[$hw_topology]:-}" ]]; then
     echo "Error: Unsupported hw/topology: $hw_topology"
@@ -101,16 +125,17 @@ if [[ -n "$test_suite" ]]; then
     fi
 
     # Check if the test suite is in the list of test suites for this topology
-    if ! echo "${hw_topology_test_suites[$hw_topology]}" | grep -q "\b$test_suite\b"; then
+    if ! echo "${hw_topology_test_suites[$hw_topology]}" | grep -q "^$test_suite$"; then
         echo "Error: Test suite '$test_suite' is not part of the '$hw_topology' hw/topology"
-        echo "Available test suites for $hw_topology: ${hw_topology_test_suites[$hw_topology]}"
+        echo "Available test suites for $hw_topology:"
+        echo "${hw_topology_test_suites[$hw_topology]}" | sed 's/^/  - /'
         exit 1
     fi
 
     $test_suite
 else
-    # Run all test suites for the specified hardware topology as opposed to just one
-    for test_func in ${hw_topology_test_suites[$hw_topology]}; do
-        $test_func
-    done
+    # Run all test suites for the specified hardware topology
+    while IFS= read -r test_func; do
+        [[ -n "$test_func" ]] && $test_func
+    done <<< "${hw_topology_test_suites[$hw_topology]}"
 fi
