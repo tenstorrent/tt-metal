@@ -155,17 +155,17 @@ TEST(Cluster, TestMeshFullConnectivity) {
     }
 
     std::optional<FabricType> target_system_topology = std::nullopt;
-    std::optional<std::string> target_system_topology_str = std::nullopt;
+    std::string target_system_topology_str = "";
     std::tie(target_system_topology_str, input_args) =
-        test_args::get_command_option_and_remaining_args(input_args, "--system-topology", std::nullopt);
-    if (target_system_topology_str.has_value()) {
+        test_args::get_command_option_and_remaining_args(input_args, "--system-topology", "");
+    if (not target_system_topology_str.empty()) {
         target_system_topology =
-            magic_enum::enum_cast<FabricType>(target_system_topology_str.value(), magic_enum::case_insensitive);
+            magic_enum::enum_cast<FabricType>(target_system_topology_str, magic_enum::case_insensitive);
         if (*target_system_topology != FabricType::TORUS_2D) {
             log_warning(
                 tt::LogTest,
                 "System topology {} not supported for mesh check, skipping topology verification",
-                *target_system_topology_str);
+                target_system_topology_str);
             target_system_topology = std::nullopt;
         }
     }
