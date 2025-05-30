@@ -231,11 +231,16 @@ std::string ComputeKernel::config_hash() const {
 }
 
 std::string Kernel::compute_hash() const {
+    size_t hash_value = 0;
+    for (const auto& [define, value] : this->defines_) {
+        tt::utils::hash_combine(hash_value, std::hash<std::string>{}(define + value));
+    }
+
     return fmt::format(
         "{}_{}_{}_{}",
         std::hash<std::string>{}(this->kernel_src_.source_),
         fmt::join(this->compile_time_args_, "_"),
-        tt::utils::DefinesHash{}(this->defines_),
+        hash_value,
         this->config_hash());
 }
 

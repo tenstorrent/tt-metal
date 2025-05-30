@@ -1971,7 +1971,14 @@ void py_module(py::module& module) {
         ttnn::alt_complex_rotate90,
         R"doc((\mathrm{{output\_tensor}}_{2i}, \mathrm{{output\_tensor}}_{2i+1}) = (-\mathrm{{input\_tensor}}_{2i+1}, \mathrm{{input\_tensor}}_{2i}))doc",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
+        "",
         R"doc(The last dimension of the input tensor must be even.)doc");
+    bind_unary_operation(
+        module,
+        ttnn::tanhshrink,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|tanhshrink|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     //  Unaries with fast_and_approximate_mode
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -2099,12 +2106,6 @@ void py_module(py::module& module) {
         module,
         ttnn::rad2deg,
         R"doc(Performs rad2deg function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite(
-        module,
-        ttnn::tanhshrink,
-        R"doc(Performs tanhshrink function on :attr:`input_tensor`.)doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite(
