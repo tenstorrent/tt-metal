@@ -25,8 +25,8 @@ def create_persistent_buffers(
     ag_output_shape, num_inputs, mesh_device, ag_input_dtype, mem_config_ag, rp_dim, rp_axis, rp_factor, up_factor
 ):
     dims = [None, None]
-    up_axis = 1 - rp_axis
-    dims[up_axis] = up_factor
+    # up_axis = 1 - rp_axis
+    # dims[up_axis] = up_factor
     persistent_buffers = [
         ttnn.from_torch(
             torch.zeros(ag_output_shape),
@@ -130,8 +130,8 @@ def run_ring_attention_all_gather_impl(
     _, _, _, hidden_dim = ag_output_shape
 
     input_dims = [None, None]
-    input_dims[rp_axis] = rp_axis + 2 if rp_factor > 1 else None
-    input_dims[1 - rp_axis] = (1 - rp_axis) + 2 if up_factor > 1 else None
+    input_dims[rp_axis] = rp_dim if rp_factor > 1 else None
+    input_dims[1 - rp_axis] = (3 - rp_dim) + 2 + 2 if up_factor > 1 else None
     for i in range(num_iters):
         ag_output_tensor_list_per_iteration = []
         ag_input_tensor_mesh_list_per_iteration = []
@@ -201,14 +201,13 @@ def run_ring_attention_all_gather_impl(
             logger.info(f"Done iteration {i}")
 
     output_dims = [None, None]
-    output_dims[rp_axis] = rp_axis + 2
-    output_dims[1 - rp_axis] = (1 - rp_axis) + 2
+    output_dims[rp_axis] = rp_dim
+    output_dims[1 - rp_axis] = (3 - rp_dim) + 2
     for i in range(num_iters):
         tt_ag_out_tensors = tt_all_gather_out_tensor_list[i]
         torch_ag_out_tensors = ag_output_tensor_list[i]
 
         for j in range(ag_num_inputs):
-            breakpoint()
             tt_ag_out = ttnn.to_torch(
                 tt_ag_out_tensors[j],
                 mesh_composer=ConcatMesh2dToTensor(
@@ -243,9 +242,22 @@ def run_ring_attention_all_gather_impl(
     "num_devices, num_links, ag_output_shape, ag_num_inputs, rp_dim, rp_axis, rp_factor, up_factor, layout, ag_input_dtype",
     [
         (8, 1, [1, 1, 4096, 2560], 1, 3, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 1, [1, 1, 4096, 2560], 2, 3, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 1, [1, 1, 4096, 2560], 1, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 1, [1, 5, 4096, 2560], 1, 3, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 1, [1, 5, 4096, 64], 1, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 1, [1, 5, 4096, 64], 2, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (8, 1, [1, 5, 4096, 64], 2, 2, 0, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
-    ids=["dim3_1input", "dim2_2input"],
+    ids=[
+        "dim3_1input",
+        "dim3_2input",
+        "dim2_1input",
+        "dim3_1input_batches",
+        "dim2_1input_batches",
+        "dim2_2input_batches",
+        "dim2_2input_batches_yaxis",
+    ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
