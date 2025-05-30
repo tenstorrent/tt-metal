@@ -3,6 +3,12 @@ add_library(TT::NN::Ops::Moreh ALIAS ttnn_op_moreh)
 
 target_precompile_headers(ttnn_op_moreh REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_moreh)
+set_target_properties(
+    ttnn_op_moreh
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
 target_sources(
     ttnn_op_moreh
@@ -136,6 +142,20 @@ target_sources(
         moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_program_factory.cpp
         moreh_clip_grad_norm/moreh_clip_grad_norm.cpp
 )
+target_sources(
+    ttnn_op_moreh
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            moreh_dot/device/kernels/moreh_dot.cpp
+            moreh_dot/device/kernels/reader_moreh_dot.cpp
+            moreh_dot/device/kernels/writer_moreh_dot.cpp
+            moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp
+            moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp
+            moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_sum_w.cpp
+)
 
 target_include_directories(ttnn_op_moreh PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
@@ -143,6 +163,15 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TT::NN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_moreh
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/moreh
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_moreh LIBRARY COMPONENT tar)

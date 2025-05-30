@@ -3,6 +3,12 @@ add_library(TT::NN::Ops::Eltwise::Binary ALIAS ttnn_op_eltwise_binary)
 
 target_precompile_headers(ttnn_op_eltwise_binary REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary)
+set_target_properties(
+    ttnn_op_eltwise_binary
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
 target_sources(
     ttnn_op_eltwise_binary
@@ -19,6 +25,18 @@ target_sources(
         device/broadcast_height_multi_core_sharded_optimized_program_factory.cpp
         device/broadcast_height_multi_core_sharded_program_factory.cpp
 )
+target_sources(
+    ttnn_op_eltwise_binary
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            device/kernels/compute/bcast_hw.cpp
+            device/kernels/compute/eltwise_binary_kernel.cpp
+            device/kernels/dataflow/reader_bcast_scalar_interleaved_partitioned.cpp
+            device/kernels/dataflow/reader_binary_interleaved_start_id.cpp
+)
 
 target_include_directories(ttnn_op_eltwise_binary PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
@@ -26,6 +44,15 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TT::NN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_eltwise_binary
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/eltwise/binary
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_eltwise_binary LIBRARY COMPONENT tar)

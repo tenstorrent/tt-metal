@@ -10,6 +10,8 @@ set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_SECTION "libs")
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SECTION "libs")
 set(CPACK_DEBIAN_METALIUM-EXAMPLES_PACKAGE_SECTION "doc")
 set(CPACK_DEBIAN_METALIUM-VALIDATION_PACKAGE_SECTION "utils")
+set(CPACK_DEBIAN_NN_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_NN-VALIDATION_PACKAGE_SECTION "utils")
 
 set(CPACK_DEB_COMPONENT_INSTALL YES)
 set(CPACK_DEBIAN_PACKAGE_VERSION "${VERSION_DEB}")
@@ -107,5 +109,13 @@ cpack_add_component(
     DESCRIPTION "TT-Metalium validation tools"
 )
 cpack_add_component(gtest GROUP metalium-validation)
+
+cpack_add_component_group(nn)
+cpack_add_component(nn GROUP nn DESCRIPTION "TT-NN runtime library")
+cpack_add_component(ttnn-runtime GROUP nn)
+
+cpack_add_component_group(nn-validation)
+cpack_add_component(nn-validation DEPENDS nn GROUP nn-validation DESCRIPTION "TT-NN validation tools")
+cpack_add_component(ttnn-validation GROUP nn-validation)
 
 include(CPack)

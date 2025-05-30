@@ -2,6 +2,12 @@ add_library(ttnn_op_eltwise_unary ${LIB_TYPE})
 add_library(TT::NN::Ops::Eltwise::Unary ALIAS ttnn_op_eltwise_unary)
 
 target_precompile_headers(ttnn_op_eltwise_unary REUSE_FROM TT::CommonPCH)
+set_target_properties(
+    ttnn_op_eltwise_unary
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
 target_sources(
     ttnn_op_eltwise_unary
@@ -17,6 +23,18 @@ target_sources(
         tanh_accurate/tanh_accurate.cpp
         unary.cpp
 )
+target_sources(
+    ttnn_op_eltwise_unary
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            device/kernels/compute/eltwise_sfpu.cpp
+            device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
+            device/kernels/dataflow/reader_unary_sharded.cpp
+            device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+)
 
 target_include_directories(ttnn_op_eltwise_unary PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
@@ -24,6 +42,15 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TT::NN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_eltwise_unary
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/eltwise/unary
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_eltwise_unary LIBRARY COMPONENT tar)

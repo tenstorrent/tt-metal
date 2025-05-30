@@ -3,6 +3,12 @@ add_library(TT::NN::Ops::Conv ALIAS ttnn_op_conv)
 
 target_precompile_headers(ttnn_op_conv REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_conv)
+set_target_properties(
+    ttnn_op_conv
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
 target_sources(
     ttnn_op_conv
@@ -18,6 +24,19 @@ target_sources(
         conv2d/prepare_conv2d_weights.cpp
         conv1d/conv1d.cpp
 )
+target_sources(
+    ttnn_op_conv
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp
+            conv2d/device/kernels/height_sharded_reader_common.hpp
+            conv2d/device/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp
+            conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp
+            conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp
+)
 
 target_include_directories(ttnn_op_conv PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
@@ -27,4 +46,12 @@ target_link_libraries(
         TT::NN::Core
 )
 
+install(
+    TARGETS
+        ttnn_op_conv
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/conv
+        COMPONENT ttnn-runtime
+)
 install(TARGETS ttnn_op_conv LIBRARY COMPONENT tar)
