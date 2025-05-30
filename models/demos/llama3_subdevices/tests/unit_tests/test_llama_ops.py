@@ -29,6 +29,10 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
     run_test_row_major_rotary_embedding_llama,
 )
 
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import (
+    run_embeddings_tests,
+)
+
 
 @pytest.mark.parametrize(
     "device_params",
@@ -465,4 +469,45 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
 ):
     run_test_row_major_rotary_embedding_llama(
         mesh_device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+@pytest.mark.parametrize(
+    "num_embeddings",
+    (128256,),
+)
+@pytest.mark.parametrize(
+    "embedding_dim",
+    (2048,),
+)
+@pytest.mark.parametrize(
+    "num_rows",
+    (32,),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16,),
+)
+@pytest.mark.parametrize(
+    "in0_mem_config",
+    (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),),
+)
+@pytest.mark.parametrize(
+    "out_mem_config",
+    (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),),
+)
+@pytest.mark.parametrize(
+    "tilized",
+    (True,),
+)
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_llama_tg_Embeddings(
+    batch_size, num_embeddings, embedding_dim, num_rows, dtype, in0_mem_config, out_mem_config, tilized, device
+):
+    run_embeddings_tests(
+        batch_size, num_embeddings, embedding_dim, num_rows, dtype, in0_mem_config, out_mem_config, device, tilized
     )
