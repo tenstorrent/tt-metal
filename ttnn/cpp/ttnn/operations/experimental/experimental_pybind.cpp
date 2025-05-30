@@ -49,7 +49,7 @@
 #include "ttnn/operations/experimental/gather/gather_pybind.hpp"
 #include "ttnn/operations/experimental/gather/tosa/gather_tosa_pybind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
-
+#include "ttnn/operations/experimental/test/hang_operation_pybind.hpp"
 namespace py = pybind11;
 
 namespace ttnn::operations::experimental {
@@ -112,6 +112,7 @@ void py_module(py::module& module) {
 
     tosa::gather::detail::bind_gather_tosa_operation(module);
 
+    test::bind_test_hang_operation(module);
     // CCL ops
     auto m_experimental_ccl =
         module.def_submodule("ccl_experimental", "experimental collective communication operations");
