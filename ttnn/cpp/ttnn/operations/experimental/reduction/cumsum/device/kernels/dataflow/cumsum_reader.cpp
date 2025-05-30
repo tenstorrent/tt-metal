@@ -63,7 +63,8 @@ void kernel_main() {
             }
 
             uint32_t tileid = get_tile_id(i0, i1, tile_j, tiles_per_row, product_low_dims, product_high_dims, HtWt);
-            DPRINT << "[Cumsum Reader] tile = " << tileid << " (" << i0 << ", " << i1 << ") " << ENDL();
+            DPRINT << "[Cumsum Reader] tile = " << tileid << " (" << i0 << ", " << i1 << "), tile_j = " << tile_j
+                   << ", flip = " << flip << ENDL();
 
             cb_reserve_back(cb_out, 1);
 
