@@ -243,7 +243,7 @@ inline __attribute__((always_inline)) void acquire_dst() {
     ;
 }
 ```
-* The UNPACK kernel waits for the end of MATH kernel:
+* The PACK kernel waits for the end of MATH kernel:
 ```
 inline __attribute__((always_inline)) void acquire_dst() {
     ;
