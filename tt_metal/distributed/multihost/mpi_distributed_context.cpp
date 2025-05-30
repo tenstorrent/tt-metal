@@ -2,15 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "mpi_distributed_context.hpp"
 #include <mpi.h>
 #include <mpi-ext.h>
+
 #include <algorithm>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include "assert.hpp"
+
+// Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
+// ULFM extensions.
+#if (defined(OPEN_MPI) && OPEN_MPI && defined(MPIX_ERR_PROC_FAILED))
+#define OMPI_HAS_ULFM 1
+#else
+#define OMPI_HAS_ULFM 0
+#endif
 
 namespace tt::tt_metal::distributed::multihost {
 
@@ -18,16 +26,16 @@ namespace tt::tt_metal::distributed::multihost {
 
 constexpr MPI_Op reduce_to_mpi(ReduceOp op) {
     switch (op) {
-        case ReduceOp::SUM:  return MPI_SUM;
-        case ReduceOp::MAX:  return MPI_MAX;
-        case ReduceOp::MIN:  return MPI_MIN;
+        case ReduceOp::SUM: return MPI_SUM;
+        case ReduceOp::MAX: return MPI_MAX;
+        case ReduceOp::MIN: return MPI_MIN;
         case ReduceOp::PROD: return MPI_PROD;
         case ReduceOp::LAND: return MPI_LAND;
         case ReduceOp::LOR: return MPI_LOR;
         case ReduceOp::BAND: return MPI_BAND;
         case ReduceOp::BOR: return MPI_BOR;
     }
-    return MPI_SUM; // default
+    return MPI_SUM;  // default
 }
 
 constexpr MPI_Datatype dtype_to_mpi(DType dt) noexcept {
@@ -129,7 +137,9 @@ std::optional<Status> MPIRequest::test() {
     MPI_Status status{};
     int flag = 0;
     MPI_CHECK(MPI_Test(&req_, &flag, &status));
-    if (!flag) return std::nullopt;
+    if (!flag) {
+        return std::nullopt;
+    }
 
     done_ = true;
     int count = 0;
@@ -138,7 +148,9 @@ std::optional<Status> MPIRequest::test() {
 }
 
 void MPIRequest::cancel() {
-    if (done_) return;
+    if (done_) {
+        return;
+    }
     MPI_CHECK(MPI_Cancel(&req_));
     MPI_CHECK(MPI_Request_free(&req_));
     done_ = true;
@@ -177,7 +189,7 @@ const ContextPtr& MPIContext::get_current_world() {
 void MPIContext::set_current_world(const ContextPtr& ctx) {
     TT_FATAL(
         ctx != nullptr && std::dynamic_pointer_cast<MPIContext>(ctx) != nullptr,
-        "set_current_world: context is not a MPIContext or a nullptr");
+        "MPIContext::set_current_world: context is not a MPIContext or a nullptr");
     MPIContext::current_world_ = ctx;
 }
 
@@ -194,26 +206,24 @@ MPIContext::MPIContext(MPI_Comm comm, MPI_Group group) : comm_(comm), group_(gro
     MPI_CHECK(MPI_Comm_size(comm_, &size_));
 }
 
-Rank  MPIContext::rank()  const { return Rank(rank_); }
-Size  MPIContext::size()  const { return Size(size_); }
+Rank MPIContext::rank() const { return Rank(rank_); }
+Size MPIContext::size() const { return Size(size_); }
+bool MPIContext::supports_fault_tolerance() const { return OMPI_HAS_ULFM; }
 void MPIContext::barrier() const { MPI_CHECK(MPI_Barrier(comm_)); }
 
 /* ---- point‑to‑point ---------------------------------------------------- */
 
-void MPIContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const
-{
+void MPIContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Send(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
 }
 
-void MPIContext::recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const
-{
+void MPIContext::recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Recv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, MPI_STATUS_IGNORE));
 }
 
-RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const
-{
+RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
     MPI_CHECK(MPI_Isend(
@@ -221,8 +231,7 @@ RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) c
     return std::make_shared<MPIRequest>(req);
 }
 
-RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const
-{
+RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
     MPI_CHECK(MPI_Irecv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, &req));
@@ -231,8 +240,7 @@ RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) co
 
 /* ---- collectives ------------------------------------------------------- */
 
-void MPIContext::broadcast(tt::stl::Span<std::byte> buf, Rank root) const
-{
+void MPIContext::broadcast(tt::stl::Span<std::byte> buf, Rank root) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Bcast(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *root, comm_));
 }
@@ -463,14 +471,11 @@ void MPIContext::translate_ranks_to_other_ctx(
 
 void MPIContext::abort(int error_code) const { MPI_Abort(comm_, error_code); }
 
-/* -------------------- factory for generic interface --------------------- */
-void DistributedContext::create(int argc, char** argv) { MPIContext::create(argc, argv); }
-
-const ContextPtr& DistributedContext::get_current_world() { return MPIContext::get_current_world(); }
-
-void DistributedContext::set_current_world(const ContextPtr& ctx) { MPIContext::set_current_world(ctx); }
-
 void MPIContext::revoke_and_shrink() {
+#if (!OMPI_HAS_ULFM)
+    TT_THROW("revoke_and_shrink() requires MPI ULFM support which is not available in this build");
+#endif
+
     int rc = MPIX_Comm_revoke(comm_);
     if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
         abort(rc);
@@ -504,6 +509,9 @@ void MPIContext::revoke_and_shrink() {
 }
 
 bool MPIContext::is_revoked() {
+#if (!OMPI_HAS_ULFM)
+    TT_THROW("is_revoked() requires MPI ULFM support which is not available in this build");
+#endif
     int flag = 0;
     // MPI_Comm_test_inter is safe to call even if the communicator is revoked
     // don't need to check error code

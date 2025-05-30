@@ -76,8 +76,20 @@ Scripts in `fault_tolerance_tests/run_all.sh` automate the sequence and consolid
 
 ---
 
+## MPI Wrapper Script
+
+All test scripts use `mpirun_wrapper.sh` to automatically locate the correct MPI executable. The wrapper:
+- First checks if `mpirun-ulfm` is available in PATH
+- Then checks `/usr/local/bin/mpirun-ulfm`
+- Falls back to `mpirun` with a warning if ULFM version is not found
+
+You can also use the wrapper directly:
+```bash
+./mpirun_wrapper.sh --with-ft ulfm -np 4 ./your_test_binary
+```
+
 ## Troubleshooting
-1. If you run it manually please make sure to never use system mpi. Use  mpirun-ulfm --with-ft ulfm.
+1. If you run it manually please make sure to never use system mpi. Use  mpirun-ulfm --with-ft ulfm or the wrapper script.
 2. Don't forget to turn on ULFM (`--with-ft ulfm`)
 
 Questions or patches: open an issue or ping `@dmakoviichuk-tt`
