@@ -4,7 +4,6 @@
 
 #include "where.hpp"
 
-#include <functional>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -14,6 +13,8 @@
 
 #include "ttnn/operations/experimental/where/device/where_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn {
 namespace operations::experimental::where {
@@ -35,8 +36,12 @@ Tensor where_impl(
     // TODO: missing const dtype
     auto dtype = ttnn::DataType::BFLOAT16;
     if constexpr (std::is_same_v<T, Tensor> and std::is_same_v<U, Tensor>) {
-        return ttnn::prim::where_impl(
-            queue_id, predicate, value_true, value_false, dtype, output_mem_config, std::move(output_tensor));
+        // no need to have invoke name anymore
+        auto [operation_attributes, tensor_args] = WhereDeviceOperation::invoke(
+            predicate, value_true, value_false, dtype, output_mem_config, std::move(output_tensor));
+        return ttnn::device_operation::detail::invoke<WhereDeviceOperation>(
+            queue_id, operation_attributes, tensor_args);
+
     } else {
         TT_FATAL((!std::is_same_v<T, Tensor> || !std::is_same_v<U, Tensor>), "Scalar values are not supported!");
         return Tensor();

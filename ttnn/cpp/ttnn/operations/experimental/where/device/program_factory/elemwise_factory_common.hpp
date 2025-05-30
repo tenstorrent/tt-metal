@@ -11,7 +11,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <type_traits>
 
 #include "ttnn/tensor/tensor.hpp"
 
