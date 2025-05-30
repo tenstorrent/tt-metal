@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tt_stl/span.hpp>
+
 #include "tensor_generated.h"
 
 #include "ttnn/tensor/types.hpp"
@@ -12,12 +14,12 @@
 
 namespace ttnn {
 
-// Converts FlatBuffer tensor to Tensor object, using `data_region` as the source of tensor data.
+// Converts FlatBuffer tensor to Tensor object, using inline file storage to offset into `tensor_data`.
 // Only inline file storage (data stored in same file) is currently supported.
-Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, const std::byte* data_region);
+Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, tt::stl::Span<std::byte> tensor_data);
 
 // Converts Tensor object to FlatBuffer representation.
-// Only inline file storage (data stored in same file) is currently supported.
+// Only inline file storage (data stored in the same file) is currently supported.
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder);
 
