@@ -33,11 +33,6 @@ struct matmul_shared_variables_t {
     MATMUL_TYPE type;
 };
 
-struct process_program_return_t {
-    tt::tt_metal::Program program;
-    matmul_shared_variables_t shared_variables;
-};
-
 // Define the buffering depth for input CBs (0 and 1) for mcast variants.
 // 2 = double buffer, 3 = triple buffer, etc.
 // Allows easily changing buffering strategy in one place for relevant factories.

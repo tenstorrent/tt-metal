@@ -59,7 +59,7 @@ uint32_t get_preferred_noc(
     return use_dedicated_noc ? 1 : noc;
 }
 
-ttnn::operations::matmul::process_program_return_t process_program_mcast_in0(
+ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in0(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
@@ -892,19 +892,17 @@ ttnn::operations::matmul::process_program_return_t process_program_mcast_in0(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
         }
     }
-    return ttnn::operations::matmul::process_program_return_t{
-        std::move(program),
-        ttnn::operations::matmul::matmul_shared_variables_t{
-            {mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, mm_kernel_in1_sender_writer_id},
-            {cb_src1, cb_src2, cb_src3, cb_output},
-            false,
-            start_core,
-            cores,
-            num_cores_with_work,
-            ttnn::operations::matmul::mcast_in0}};
+    return ttnn::operations::matmul::matmul_shared_variables_t{
+        {mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, mm_kernel_in1_sender_writer_id},
+        {cb_src1, cb_src2, cb_src3, cb_output},
+        false,
+        start_core,
+        cores,
+        num_cores_with_work,
+        ttnn::operations::matmul::mcast_in0};
 }
 
-ttnn::operations::matmul::process_program_return_t process_program_mcast_in1(
+ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in1(
     tt::tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
@@ -1578,21 +1576,19 @@ ttnn::operations::matmul::process_program_return_t process_program_mcast_in1(
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_1_default
     }
-    return ttnn::operations::matmul::process_program_return_t{
-        std::move(program),
-        ttnn::operations::matmul::matmul_shared_variables_t{
-            {mm_kernel_in0_sender_id, mm_kernel_in1_sender_writer_id, mm_kernel_in1_receiver_writer_id},
-            {cb_src0, cb_src2, cb_output},
-            extract_shard_sub_blocks,
-            start_core,
-            cores,
-            0,
-            ttnn::operations::matmul::mcast_in1}};
+    return ttnn::operations::matmul::matmul_shared_variables_t{
+        {mm_kernel_in0_sender_id, mm_kernel_in1_sender_writer_id, mm_kernel_in1_receiver_writer_id},
+        {cb_src0, cb_src2, cb_output},
+        extract_shard_sub_blocks,
+        start_core,
+        cores,
+        0,
+        ttnn::operations::matmul::mcast_in1};
 }
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
-ttnn::operations::matmul::process_program_return_t process_program_gather_in0(
+ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     const std::vector<tt::tt_metal::Tensor>& b_tensors,
@@ -2173,16 +2169,14 @@ ttnn::operations::matmul::process_program_return_t process_program_gather_in0(
     std::vector<tt::tt_metal::CBHandle> shared_cbs = {cb_src0, cb_src1};
     shared_cbs.insert(shared_cbs.end(), cb_outputs.begin(), cb_outputs.end());
 
-    return ttnn::operations::matmul::process_program_return_t{
-        std::move(program),
-        ttnn::operations::matmul::matmul_shared_variables_t{
-            {mm_kernel_in1_sender_writer_id},
-            shared_cbs,
-            false,
-            CoreCoord{0, 0},
-            all_cores_vec,
-            0,
-            ttnn::operations::matmul::gather_in0}};
+    return ttnn::operations::matmul::matmul_shared_variables_t{
+        {mm_kernel_in1_sender_writer_id},
+        shared_cbs,
+        false,
+        CoreCoord{0, 0},
+        all_cores_vec,
+        0,
+        ttnn::operations::matmul::gather_in0};
 }
 
 inline void override_program_mcast_in1(
@@ -2403,7 +2397,7 @@ namespace operations {
 
 namespace matmul {
 
-ttnn::operations::matmul::process_program_return_t matmul_multi_core_reuse_mcast_1d_optimized_(
+ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -2680,7 +2674,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
 
-    auto shared_variables = matmul_multi_core_reuse_mcast_1d_optimized_(
+    ttnn::operations::matmul::matmul_shared_variables_t shared_vars = matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
         a,
         b_tensors,
@@ -2706,7 +2700,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         global_cb,
         num_global_cb_receivers,
         sub_device_id);
-    const ttnn::operations::matmul::matmul_shared_variables_t shared_vars = shared_variables.shared_variables;
     auto override_runtime_arguments_callback =
         [shared_vars](
             const void* operation,
@@ -2718,12 +2711,10 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
                 shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
         };
 
-    return {
-        .program = std::move(shared_variables.program),
-        .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-ttnn::operations::matmul::process_program_return_t matmul_multi_core_reuse_mcast_1d_optimized_expander(
+ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_expander(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
@@ -2780,7 +2771,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    ttnn::operations::matmul::process_program_return_t shared_variables =
+    ttnn::operations::matmul::matmul_shared_variables_t shared_vars =
         matmul_multi_core_reuse_mcast_1d_optimized_expander(
             program,
             a,
@@ -2794,7 +2785,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             fused_op_signaler,
             global_cb,
             sub_device_id);
-    const ttnn::operations::matmul::matmul_shared_variables_t shared_vars = shared_variables.shared_variables;
     auto override_runtime_arguments_callback =
         [shared_vars](
             const void* operation,
@@ -2806,9 +2796,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
                 shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
         };
 
-    return {
-        .program = std::move(shared_variables.program),
-        .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace matmul
