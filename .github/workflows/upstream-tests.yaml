@@ -193,7 +193,7 @@ jobs:
         timeout-minutes: 30
         env:
           # For different environments, yyz BH VLAN vs. cloud
-          LLAMA_DIR: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/huggingface' }}/meta-llama/Llama-3.1-8B-Instruct
+          LLAMA_DIR: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
