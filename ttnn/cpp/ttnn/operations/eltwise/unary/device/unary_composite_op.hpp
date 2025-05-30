@@ -28,7 +28,6 @@ enum class UnaryCompositeOpType {
     SINH,
     SOFTSIGN,
     SWISH,
-    TANHSHRINK,
     VAR_HW,
     STD_HW,
     NORMALIZE_HW,
@@ -53,7 +52,6 @@ enum class UnaryCompositeOpType {
     NORMALIZE_GLOBAL,
     FRAC,
 };
-Tensor _tanhshrink(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _acosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _asinh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _atanh(const Tensor&, const std::optional<MemoryConfig>&);
@@ -121,13 +119,6 @@ struct OpHandler<UnaryCompositeOpType::DEG2RAD> {
 template <>
 struct OpHandler<UnaryCompositeOpType::RAD2DEG> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _rad2deg(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::TANHSHRINK> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) {
-        return _tanhshrink(t1, mem_cfg);
-    }
 };
 
 template <>
