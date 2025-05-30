@@ -17,7 +17,8 @@ void kernel_main() {
     uint32_t product_high_dims = get_arg_val<uint32_t>(4);
     uint32_t product_low_dims = get_arg_val<uint32_t>(5);
     uint32_t HtWt = get_arg_val<uint32_t>(6);
-    uint32_t flip = get_arg_val<uint32_t>(7);
+
+    uint32_t flip = get_compile_time_arg_val(0);
 
     constexpr uint32_t cb_in = tt::CBIndex::c_1;
 

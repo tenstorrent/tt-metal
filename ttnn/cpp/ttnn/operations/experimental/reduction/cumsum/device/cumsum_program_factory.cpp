@@ -150,18 +150,27 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
         in_df,
         {{tt::CBIndex::c_0, 1}, {tt::CBIndex::c_1, 1}, {tt::CBIndex::c_2, 1}, {tt::CBIndex::c_3, 1}});
 
+    std::vector<uint32_t> reader_kernel_compile_args = {flip};
+    std::vector<uint32_t> writer_kernel_compile_args = {flip};
+
     // Create kernels
     KernelHandle cumsum_reader_handle_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/dataflow/cumsum_reader.cpp",
         all_cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_kernel_compile_args});
 
     KernelHandle cumsum_writer_handle_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/dataflow/cumsum_writer.cpp",
         all_cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_kernel_compile_args});
 
     std::vector<uint32_t> compute_kernel_args = {};
     std::map<std::string, std::string> defines_kernel_args = {};
@@ -209,7 +218,6 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
                 product_high_dims,
                 product_low_dims,
                 HtWt,
-                flip,
             });
 
         SetRuntimeArgs(
@@ -224,7 +232,6 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
                 product_high_dims,
                 product_low_dims,
                 HtWt,
-                flip,
             });
 
         SetRuntimeArgs(
@@ -238,7 +245,7 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
 
         start_row += rows_per_core;
     }
-    return {std::move(program), {cumsum_reader_handle_id, cumsum_writer_handle_id, num_cores}};
+    return {std::move(program), {cumsum_reader_handle_id, cumsum_writer_handle_id, grid}};
 }
 
 void CumSumDeviceOperation::ProgramFactory::override_runtime_arguments(
@@ -251,25 +258,22 @@ void CumSumDeviceOperation::ProgramFactory::override_runtime_arguments(
 
     const auto& input_dtype = input_tensor.dtype();
 
-    auto& cumsum_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& cumsum_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& cumsum_reader_kernel_id = cached_program.shared_variables.cumsum_reader_kernel_id;
+    auto& cumsum_writer_kernel_id = cached_program.shared_variables.cumsum_writer_kernel_id;
 
-    auto& num_cores = cached_program.shared_variables.num_cores;
+    auto& grid = cached_program.shared_variables.compute_grid;
+    auto num_cores = grid.x * grid.y;
 
     auto& program = cached_program.program;
-
-    int num_cores_x = 1;
-    int num_cores_y = 1;
 
     uint32_t input_buffer_addr = 0;
     uint32_t output_buffer_addr = 0;
 
     // Note: do not use full grid => we can't override program if we are not running
-    // the program on the specified core
-    // This is why we must specify where the progrma is running
-
+    // program on the specified core
+    // This is why we must specify where the program is running
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_x, i % num_cores_x};
+        CoreCoord core = {i / grid.x, i % grid.x};
 
         {
             auto& runtime_args = GetRuntimeArgs(program, cumsum_reader_kernel_id, core);
@@ -281,9 +285,6 @@ void CumSumDeviceOperation::ProgramFactory::override_runtime_arguments(
             runtime_args[0] = output_buffer_addr;
         }
     }
-
-    // Support for override_runtime_arguments() will be added in resolution of issue #21097
-    TT_THROW("override_runtime_arguments() not yet supported");
 }
 
 }  // namespace ttnn::operations::experimental::reduction
