@@ -22,8 +22,8 @@ except ModuleNotFoundError:
 def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations):
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     output_sharded_mem_config_DRAM = test_infra.setup_dram_sharded_output(
-        device, (1, 8, 224, 1152, None, None)
-    )  # scandalous
+        device,
+    )
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
     # Initialize the op event so we can write

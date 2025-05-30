@@ -30,8 +30,8 @@ def test_vit_device_ops(
 
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     sharded_output_mem_config_DRAM = test_infra.setup_dram_sharded_output(
-        device, (1, 8, 224, 1152, None, None)
-    )  # this is scandalous
+        device,
+    )
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)

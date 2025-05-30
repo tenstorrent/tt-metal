@@ -26,8 +26,8 @@ class VitTrace2CQ:
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
         self.output_sharded_mem_config_DRAM = self.test_infra.setup_dram_sharded_output(
-            device, (1, 8, 224, 1152, None, None)
-        )  # scandalous
+            device,
+        )
 
         self.first_op_event = ttnn.record_event(device, 0)
         self.read_event = ttnn.record_event(device, 1)

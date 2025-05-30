@@ -35,6 +35,8 @@ class VitTestInfra:
         model_name = "google/vit-base-patch16-224"
         sequence_size = 224
 
+        self.output_padded_shape = (1, batch_size, sequence_size, 1152)
+
         config = transformers.ViTConfig.from_pretrained(model_name)
         model = transformers.ViTForImageClassification.from_pretrained(model_name, config=config)
         self.config = ttnn_optimized_sharded_vit_wh.update_model_config(config, batch_size)
@@ -114,7 +116,7 @@ class VitTestInfra:
 
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 
-    def setup_dram_sharded_output(self, device, output_tensor_shape):
+    def setup_dram_sharded_output(self, device):
         dram_grid_size = device.dram_grid_size()
         dram_shard_spec = ttnn.ShardSpec(
             ttnn.CoreRangeSet(
@@ -122,9 +124,12 @@ class VitTestInfra:
             ),
             [
                 nearest_32(
-                    divup(output_tensor_shape[0] * output_tensor_shape[1] * output_tensor_shape[2], dram_grid_size.x)
+                    divup(
+                        self.output_padded_shape[0] * self.output_padded_shape[1] * self.output_padded_shape[2],
+                        dram_grid_size.x,
+                    )
                 ),
-                output_tensor_shape[3],
+                self.output_padded_shape[3],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
         )
