@@ -40,10 +40,26 @@ AllGatherRS::Matmul_RS_PF::create_at(
     const tensor_args_t& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::Program program{};
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
+
     return {
         std::move(program),
-        shared_variables_t{LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_processing(
-            operation_attributes.rs_op, mesh_coordinate, tensor_args.rs, tensor_return_value.at(1), program)}};
+        shared_variables_t{
+            LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_processing(
+                operation_attributes.rs_op, mesh_coordinate, tensor_args.rs, tensor_return_value.at(1), program),
+            matmul::matmul_multi_core_reuse_mcast_1d_optimized_expander(
+                program,
+                tensor_args.matmul.input_tensor,
+                {tensor_args.matmul.weight_tensor},
+                std::nullopt,
+                {tensor_return_value.at(0)},
+                operation_attributes.matmul.bcast_batch.value(),
+                operation_attributes.matmul.compute_kernel_config.value(),
+                operation_attributes.matmul.program_config.value(),
+                operation_attributes.matmul.untilize_out,
+                empty_fused_op_signaler,
+                std::nullopt,
+                std::nullopt)}};
 }
 
 void AllGatherRS::Matmul_RS_PF::override_runtime_arguments(
@@ -59,6 +75,13 @@ void AllGatherRS::Matmul_RS_PF::override_runtime_arguments(
             operation_attributes.rs_op,
             tensor_args.rs,
             tensor_return_value.at(1));
+        reuse_mcast_1d_optimized_helpers::override_program(
+            shared_variables.matmul_shared_vars,
+            &operation_attributes.matmul,
+            program,
+            {tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor},
+            {},
+            {tensor_return_value.at(0)});
     }
 }
 }  // namespace ttnn::operations::experimental::ccl

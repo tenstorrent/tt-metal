@@ -12,7 +12,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
-
 namespace ttnn {
 
 namespace operations {
@@ -242,6 +241,20 @@ Matmul create_matmul_struct(
     const struct Matmul& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
 
+matmul_shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_expander(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor_a,
+    const std::vector<Tensor>& input_tensors_b,
+    const std::optional<const Tensor>& bias,
+    const std::vector<Tensor>& output_tensors,
+    bool bcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
@@ -299,3 +312,13 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     const bool fp32_dest_acc_en);
 
 }  // namespace bmm_op_utils
+
+namespace reuse_mcast_1d_optimized_helpers {
+void override_program(
+    const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
+    const void* operation,
+    tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::Tensor>& input_tensors,
+    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+    const std::vector<tt::tt_metal::Tensor>& output_tensors);
+}  // namespace reuse_mcast_1d_optimized_helpers

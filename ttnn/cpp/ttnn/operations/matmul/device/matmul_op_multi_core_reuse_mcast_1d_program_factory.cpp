@@ -2366,7 +2366,7 @@ inline void override_program_gather_in0(
     }
 }
 
-inline void override_program(
+void override_program(
     const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
     const void* operation,
     tt::tt_metal::Program& program,
