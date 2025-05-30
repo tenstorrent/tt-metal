@@ -214,11 +214,14 @@ jobs:
     strategy:
       matrix:
         image-config:
-          # TODO: REVERT ME HERE
-          - image-tag: ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:v0.59.0-rc31-12-gc8ae5d6295
-          - image-tag: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-wh-6u:v0.59.0-rc31-12-gc8ae5d6295
-          - image-tag: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:v0.59.0-rc31-12-gc8ae5d6295
-          - image-tag: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-bh:v0.59.0-rc31-12-gc8ae5d6295
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-base-image-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.wh-6u-profiler-base-image-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.bh-base-image-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+            image-base-name: ${{ needs.get-image-tags.outputs.bh-profiler-base-image-name }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
