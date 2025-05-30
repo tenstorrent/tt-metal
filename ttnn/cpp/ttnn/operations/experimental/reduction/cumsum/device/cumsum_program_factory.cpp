@@ -122,9 +122,9 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     auto [num_cores, all_cores, busy_cores, lazy_cores, busy_work_units, lazy_work_units] =
         tt_metal::split_work_to_cores(grid, num_rows);
 
-    std::cout << "all cores = " << all_cores.num_cores() << ", busy cores = " << busy_cores.num_cores() << " ["
-              << busy_work_units << "]"
-              << ", lazy cores = " << lazy_cores.num_cores() << " [" << lazy_work_units << "]" << std::endl;
+    // std::cout << "all cores = " << all_cores.num_cores() << ", busy cores = " << busy_cores.num_cores() << " ["
+    //           << busy_work_units << "]"
+    //           << ", lazy cores = " << lazy_cores.num_cores() << " [" << lazy_work_units << "]" << std::endl;
 
     // Device operation does not handle on-the-fly type conversion yet and we ensured that input_dtype == ouptut_dtype
     DataFormat in_df = datatype_to_dataformat_converter(output_dtype);
@@ -191,6 +191,7 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
             .compile_args = compute_kernel_args,
             .defines = defines_kernel_args});
 
+    std::cout << "flip = " << flip << std::endl;
     std::cout << "num cores = " << num_cores << std::endl;
     uint32_t start_row = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
@@ -204,7 +205,8 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
         } else {
             TT_THROW("Core outside specified core ranges");
         }
-        std::cout << "core #" << i << "- total rows = " << num_rows << ", rows/core = " << rows_per_core << std::endl;
+        // std::cout << "core #" << i << "- total rows = " << num_rows << ", rows/core = " << rows_per_core <<
+        // std::endl;
 
         SetRuntimeArgs(
             program,

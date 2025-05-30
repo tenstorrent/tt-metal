@@ -57,12 +57,6 @@ Tensor CumSumOperation::invoke(
 
     if (tensor_rank == 0 || adjusted_input_tensor.logical_volume() == 0) {  // empty input tensor => nothing to do
 
-        if (optional_output_tensor.has_value()) {
-            auto& out_tensor = optional_output_tensor.value();
-            out_tensor.tensor_attributes->get_storage() =
-                optional_output_tensor.value().tensor_attributes->get_storage();
-        }
-
         return adjusted_input_tensor;
     }
 
@@ -128,7 +122,7 @@ Tensor CumSumOperation::invoke(
     }
 
     // For other dimensions, proceed with original cumsum
-    return ttnn::prim::cumsum(queue_id, adjusted_input_tensor, dim, dtype, optional_output_tensor, false);
+    return ttnn::prim::cumsum(queue_id, adjusted_input_tensor, dim, dtype, optional_output_tensor, flip);
 }
 
 Tensor CumSumBackwardOperation::invoke(
