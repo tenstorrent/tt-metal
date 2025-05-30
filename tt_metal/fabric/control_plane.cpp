@@ -205,7 +205,9 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     std::uint32_t num_ports_per_side =
         routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
 
-    const auto user_chips = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    const auto user_chips = cluster.user_exposed_chip_ids();
     std::set<chip_id_t> corner_chips;
     std::set<chip_id_t> edge_chips;
     // Check if user provided chip is on corner or edge of mesh
@@ -245,10 +247,10 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
         q.pop();
 
         auto eth_links = get_ethernet_cores_grouped_by_connected_chips(current_chip_id);
+        bool is_ubb = cluster.get_board_type(current_chip_id) == BoardType::UBB;
         for (const auto& [connected_chip_id, eth_ports] : eth_links) {
             // Do not include any corner to corner links on UBB
-            if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(connected_chip_id) ==
-                BoardType::UBB) {
+            if (is_ubb) {
                 if (is_external_ubb_cable(current_chip_id, eth_ports[0])) {
                     continue;
                 }
@@ -317,8 +319,9 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
             auto eth_links_grouped_by_connected_chips =
                 get_ethernet_cores_grouped_by_connected_chips(physical_chip_id_from_north);
             bool found_chip = false;
+            bool is_ubb = cluster.get_board_type(physical_chip_id_from_north) == BoardType::UBB;
             for (const auto& [connected_chip_id, eth_ports] : eth_links_grouped_by_connected_chips) {
-                if (is_external_ubb_cable(physical_chip_id_from_north, eth_ports[0])) {
+                if (is_ubb and is_external_ubb_cable(physical_chip_id_from_north, eth_ports[0])) {
                     continue;
                 }
                 if (visited_physical_chips.find(connected_chip_id) == visited_physical_chips.end() and
