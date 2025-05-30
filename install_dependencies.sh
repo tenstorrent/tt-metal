@@ -113,7 +113,6 @@ ub_buildtime_packages()
      libc++abi-17-dev \
      build-essential \
      xz-utils \
-     libopenmpi-dev \
      pandoc \
      libtbb-dev \
      libcapstone-dev \
