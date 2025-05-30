@@ -644,21 +644,12 @@ inline void set_ttsync_enables()
 template <bool add_nops = true>
 inline void disable_gathering()
 {
+    asm("csrrs zero, 0x7c0, %0" : : "r"(1 << 1));
+    asm("fence");
     // Disable gathering: set bit 18
-    asm(R"ASM(
-        .option push
-        li   t1, 0x2
-        csrrs zero, 0x7c0, t1
-        li   t1, 0x1
-        slli t1, t1, 18
-        fence
-        csrrs zero, 0x7c0, t1
-        li   t1, 0x2
-        csrrc zero, 0x7c0, t1
-        fence
-        .option pop
-         )ASM" ::
-            : "t1");
+    asm("csrrs zero, 0x7c0, %0" : : "r"(1 << 18));
+    asm("csrrc zero, 0x7c0, %0" : : "r"(1 << 1));
+    asm("fence");
 
     // Gathering is done early in the pipeline, so we need to make sure
     // the above csrrw gets processed before the load-replay instructions
@@ -673,14 +664,7 @@ inline void disable_gathering()
 inline void enable_gathering()
 {
     // Enable gathering: clear bit 18
-    asm(R"ASM(
-        .option push
-        li   t1, 0x1
-        slli t1, t1, 18
-        csrrc zero, 0x7c0, t1
-        .option pop
-         )ASM" ::
-            : "t1");
+    asm("csrrc zero, 0x7c0, %0" : : "r"(1 << 18));
 }
 
 // Pass a lambda function (or a regular function pointer) that takes void,
