@@ -28,7 +28,8 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --g
 ```
 
 ### Pytest
-For performance checks and more extensive testing, our Python test can be run as follows:
+Before running any tests, build the repo with profiler and tests: ```./build_metal.sh --enable-profiler --build-tests```
+Then, for performance checks and more extensive testing, our Python test can be run as follows:
 ```
 pytest tests/tt_metal/tt_metal/data_movement <options>
 ```
