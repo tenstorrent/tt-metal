@@ -1,11 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <sys/types.h>
 
 #include <cstdint>
-
 #include "dataflow_api.h"
 
 #define ENABLE_DEBUG_PRINT 0
@@ -49,8 +47,6 @@ void kernel_main() {
     constexpr uint32_t split_reader = get_compile_time_arg_val(7);
     constexpr uint32_t reader_id = get_compile_time_arg_val(8);
 
-    // compile time args
-    // BF16 value packed in UINT32. For maxpool, value is 1.
     constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(10);
     constexpr uint32_t bf16_init_value = get_compile_time_arg_val(11);
@@ -66,28 +62,41 @@ void kernel_main() {
     constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
     constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(20);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(21);
+    constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(23);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(27);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(28);
+    constexpr uint32_t in_scalar_cb_id =
+        split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
 
-    if (reader_id == 0) {
-        cb_reserve_back(in_scalar_cb_id, 1);
+    uint32_t scalar_index = 0;
+    uint32_t scalar_start = 0;
+    uint32_t scalar_end = 1;
+    uint32_t scalar_value = 0;
 
+    if constexpr (reader_id == 0) {
         constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
         // fill interm buffer with init_value
         fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, bf16_init_value);
-        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
-        if (bf16_scalar != bf16_one_u32) {
+        if constexpr (one_scalar_per_core) {
+            cb_reserve_back(in_scalar_cb_id_0, 1);
+            fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
+            cb_push_back(in_scalar_cb_id_0, 1);
+        }
+        if (bf16_scalar != bf16_one_u32 || !one_scalar_per_core) {
             // Pool operation is not maxpool
             fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
         }
-        cb_push_back(in_scalar_cb_id, 1);
     }
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
+    uint32_t config_l1_addr;
+    volatile tt_l1_ptr uint32_t* config_ptr;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
@@ -97,7 +106,32 @@ void kernel_main() {
     constexpr bool wide_reduction = in_nblocks_c > 1;
     constexpr uint32_t read_bytes =
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
+
+    if constexpr (!one_scalar_per_core) {
+        config_l1_addr = get_read_ptr(config_cb_id);
+        config_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
+        scalar_start = config_ptr[3 * scalar_index];
+        scalar_value = config_ptr[3 * scalar_index + 1];
+        scalar_end = config_ptr[3 * scalar_index + 2];
+        scalar_index++;
+    }
+
     while (counter < reader_nindices) {
+        if constexpr (!one_scalar_per_core) {
+            cb_reserve_back(in_scalar_cb_id, 1);
+            while ((counter >= scalar_end) && scalar_end != reader_nindices) {
+                scalar_start = scalar_end;
+                scalar_value = config_ptr[3 * scalar_index + 1];
+                scalar_end = config_ptr[3 * scalar_index + 2];
+                scalar_index++;
+            }
+            if (counter == scalar_start || (counter == scalar_start + 1 && counter < scalar_end)) {
+                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value >> 16);
+            }
+
+            cb_push_back(in_scalar_cb_id, 1);
+        }
+
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const uint16_t top_left_local_index = reader_indices_ptr[counter];
             uint32_t processed_rows = 0;
@@ -129,7 +163,7 @@ void kernel_main() {
             }
         }
         counter++;
-        if (split_reader) {
+        if constexpr (split_reader) {
             counter++;  // interleave the indices
         }
     }
