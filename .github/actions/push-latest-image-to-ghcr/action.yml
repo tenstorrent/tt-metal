@@ -8,7 +8,7 @@ inputs:
     type: string
   github-token:
     description: 'GH Token for registry login'
-    required: false
+    required: true
     type: string
 
 outputs:
