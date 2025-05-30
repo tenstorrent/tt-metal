@@ -526,7 +526,7 @@ class TT_CCL:
         persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
             self.reduce_scatter_buffer_idx[cluster_axis]
         ]
-        _, ttnn_tensor_out = ttnn.experimental.rs_matmul(
+        w3_out, ttnn_tensor_out = ttnn.experimental.rs_matmul(
             matmul_input,
             matmul_weight,
             input_tensor_mesh,
@@ -543,16 +543,7 @@ class TT_CCL:
             memory_config_mm=memory_config,
             global_cb=global_cb,
             sub_device_id=sub_device_id,
-        )
-        w3_out = ttnn.linear(
-            matmul_input,
-            matmul_weight,
-            compute_kernel_config=compute_kernel_config,
-            dtype=dtype,
-            program_config=program_config,
-            memory_config=memory_config,
-            global_cb=global_cb,
-            sub_device_id=sub_device_id,
+            rs_sub_device_id=self.worker_sub_device_id,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
