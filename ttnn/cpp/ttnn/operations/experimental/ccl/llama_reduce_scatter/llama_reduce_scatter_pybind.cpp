@@ -10,8 +10,6 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "llama_reduce_scatter.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-
 
 namespace py = pybind11;
 
@@ -69,7 +67,6 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                const MeshDevice& mesh_device,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               tt::tt_fabric::Topology topology,
                QueueId queue_id) {
                 return self(
                     queue_id,
@@ -81,8 +78,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                     cluster_axis,
                     mesh_device,
                     num_links,
-                    memory_config,
-                    topology);
+                    memory_config);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("intermediate_packet_buffer").noconvert(),
@@ -94,9 +90,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
             py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
-            py::arg("topology") = tt::tt_fabric::Topology::Linear,
             py::arg("queue_id") = DefaultQueueId,
-
         });
 }
 
