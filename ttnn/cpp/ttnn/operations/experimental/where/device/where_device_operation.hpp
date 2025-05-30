@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -57,7 +57,7 @@ struct WhereDeviceOperation {
 
 static_assert(
     ttnn::device_operation::DeviceOperationConcept<WhereDeviceOperation>,
-    "WhereDeviceOperation must satisfy PrimitiveOperationConcept");
+    "WhereDeviceOperation must satisfy DeviceOperationConcept");
 
 static_assert(
     ttnn::decorators::PrimitiveOperationConcept<WhereDeviceOperation>,
