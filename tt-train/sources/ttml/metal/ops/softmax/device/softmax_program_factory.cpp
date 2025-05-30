@@ -243,6 +243,11 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
     const uint32_t num_output_tiles = twice_block_size;
 
+    fmt::print("Input tiles: {}\n", num_input_tiles);
+    fmt::print("available L1 memory: {} bytes\n", available_L1_in_bytes);
+    fmt::print("required L1 memory: {} bytes\n", required_L1_in_bytes);
+    fmt::print("Is everything fits in L1: {}\n", everything_fits_in_l1);
+
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
     auto target_indexes_data_format = tt::DataFormat::UInt32;

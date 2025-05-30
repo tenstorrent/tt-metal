@@ -29,9 +29,9 @@ protected:
 };
 
 xt::xarray<float> xt_softmax(const xt::xarray<float>& input, uint32_t dim = 3U) {
-    xt::xarray<float> exp_shifted_input = xt::exp(input - xt::amax(input, -1, xt::keep_dims));
+    xt::xarray<float> max_value = xt::amax(input, dim, xt::keep_dims);
+    xt::xarray<float> exp_shifted_input = xt::exp(input - max_value);
     xt::xarray<float> exp_sum = xt::sum(exp_shifted_input, -1, xt::keep_dims);
-    fmt::print("Exp sum: {}\n", exp_sum(0, 0, 0, 0));  // Debugging line to print the exp_sum value
     xt::xarray<float> result = exp_shifted_input / exp_sum;
     return result;
 }
@@ -83,5 +83,38 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
         }
     }
 
+    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
+}
+
+TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
+    using namespace ttml;
+
+    const uint32_t N = 1U, C = 1U, H = 32U, W = 128007U;
+    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    int32_t dim = 3U;
+
+    std::random_device rd;
+    std::mt19937 gen(42);
+    xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
+
+    auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
+    std::cout << "Input Logits:\n";
+    input.print();
+
+    auto result = ttml::metal::softmax(input, dim);
+    std::cout << "CrossEntropyBackward_Test:\nResult:\n";
+    result.print();
+
+    // auto ttnn_softmax = ttnn_fixed::softmax(input, dim); // crash with big batch ???
+    // auto ttnn_softmax_xtensor = core::to_xtensor(ttnn_softmax);
+
+    auto expected_result = xt_softmax(input_tensor, dim);
+    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
+    std::cout << "Expected Result:\n";
+    expected_result_print.print();
+
+    // Check if the result is close to the expected result
+    auto result_xtensor = core::to_xtensor(result);
+    assert((result_xtensor.shape() == expected_result.shape()));
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
