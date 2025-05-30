@@ -33,6 +33,7 @@ class TtConv:
         reshard_if_not_optimal=True,
         cache={},
         batch_size=1,
+        halo=False,
     ):
         self.device = device
         self.parameters = parameters
@@ -57,6 +58,7 @@ class TtConv:
         self.cache = cache
         self.batch_size = batch_size
         self.reshape_tensor = reshape_tensor
+        self.halo = halo
 
         self.conv_config = self._initialize_conv_config()
         self.compute_config = self._initialize_compute_config()
@@ -99,6 +101,9 @@ class TtConv:
 
         if self.bfloat8:
             conv_config.weights_dtype = ttnn.bfloat8_b
+
+        if self.halo:
+            conv_config.reallocate_halo_output = True
 
         return conv_config
 

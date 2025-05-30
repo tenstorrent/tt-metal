@@ -212,10 +212,10 @@ def test_ttnn_mvx_faster_rcnn(device, use_pretrained_weight, reset_seeds):
     print("reference_output_final", reference_output_final[0]["labels_3d"].shape)
     print("ttnn_output_final", ttnn_output_final[0]["labels_3d"].shape)
 
-    # for i in range(len(ttnn_output)):
-    #     for j in range(len(ttnn_output[i])):
-    #         output_temp=ttnn_output[i][j]
-    #         output_temp=ttnn.to_torch(output_temp)
-    #         output_temp=output_temp.permute(0,3,1,2)
-    #         passing, pcc = assert_with_pcc(reference_output[i][j], output_temp,0.97)
-    #         logger.info(f"Passing: {passing}, PCC: {pcc}")
+    for i in range(len(ttnn_output)):
+        for j in range(len(ttnn_output[i])):
+            output_temp = ttnn_output[i][j]
+            # output_temp=ttnn.to_torch(output_temp)
+            # output_temp=output_temp.permute(0,3,1,2)
+            passing, pcc = assert_with_pcc(reference_output[i][j], output_temp, 0.97)
+            logger.info(f"Passing: {passing}, PCC: {pcc}")
