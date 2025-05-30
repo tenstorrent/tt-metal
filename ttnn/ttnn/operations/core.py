@@ -274,7 +274,7 @@ def from_torch(
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
     if memory_config is not None and memory_config.is_sharded():
-        if memory_config.shard_spec is None:
+        if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
 
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
@@ -353,10 +353,14 @@ def to_torch(
         raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
 
     memory_config = tensor.memory_config()
-    if memory_config.is_sharded() and memory_config.shard_spec is None:
+    if memory_config.is_sharded() and memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
         raise RuntimeError("ttnn.to_torch: Shard spec must not be None for sharded tensors")
 
-    if memory_config.is_sharded() and memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
+    if (
+        memory_config.is_sharded()
+        and memory_config.shard_spec is not None
+        and memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL
+    ):
         tensor = tensor.to_torch()
     else:
         if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
