@@ -143,7 +143,7 @@ void MAIN {
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         // tilize input
-        tilize_init_short(cb_in, Wt, cb_tilize);
+        tilize_init(cb_in, Wt, cb_tilize);
         for (uint32_t h = 0; h < Ht; ++h) {
             cb_wait_front(cb_in, Wt);
             cb_reserve_back(cb_tilize, Wt);
