@@ -595,3 +595,37 @@ def test_graph_capture_without_dtype_json_output(device):
     assert mem_config_item3["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
     assert mem_config_item3["buffer_type"] == "BufferType::DRAM"
     assert mem_config_item3["shard_spec"] == "std::nullopt"
+
+
+# this test is meaningless unless you compile with --ttnn-enable-operation-timeout
+def test_graph_capture_with_hang(device):
+    # Create input tensor
+    tt_input = ttnn.empty(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+
+    failed = False
+    try:
+        output = ttnn.test.test_hang_operation(tt_input)
+        failed = False
+    except RuntimeError as e:
+        captured_graph = ttnn.graph.end_graph_capture()
+        failed = True
+        assert "TIMEOUT" in str(e)
+
+    # this is the normal case for CI
+    if not failed:
+        assert output == tt_input
+    else:
+        # this is the case for --ttnn-enable-operation-timeout
+        # the graph should have captured the arguments to the hang operation
+        assert (
+            captured_graph[1]["arguments"][0]
+            == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 2048, 512]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([1]))))"
+        )

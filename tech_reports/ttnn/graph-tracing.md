@@ -343,6 +343,57 @@ https://gist.github.com/dgomezTT/ad5af9cf42f245a9a220458f431919c4
 
 Please note that we have over 300.000 lines in the json file, so we just included a few in the gist.
 
+### How to trace a hanging operation?
+Sometimes there might be cases where an operation hangs and the arguments can be quite handy to troubleshoot the issue or even adding extra coverage.
+We have added the following configuration
+
+./build_metal.sh --build-all --debug --enable-operation-timeout --operation-timeout-seconds=10
+
+enable-operation-timeout will enable a timeout mechanism for operations, with a default timeout of 30 seconds
+operation-timeout-seconds is optional and can be set to different values in seconds.
+
+We have included an example case in the test_graph_capture.py file, you can check it here:
+
+```
+def test_graph_capture_with_hang(device):
+    # Create input tensor
+    tt_input = ttnn.empty(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+
+    failed = False
+    try:
+        output = ttnn.test.test_hang_operation(tt_input)
+        failed = False
+    except RuntimeError as e:
+        captured_graph = ttnn.graph.end_graph_capture()
+        failed = True
+        assert "TIMEOUT" in str(e)
+
+    # this is the normal case for CI
+    if not failed:
+        assert output == tt_input
+    else:
+        # this is the case for --ttnn-enable-operation-timeout
+        # the graph should have captured the arguments to the hang operation
+        assert (
+            captured_graph[1]["arguments"][0]
+            == .... # the arguments to the hang operation
+        )
+
+```
+
+In this case, we are using a ttnn.test.test_hang_operation, which is a test operation that runs a while(true) loop.
+The idea behind it is to simulate an unresponsive operation, so we can test the graph capture and the arguments that generated the hang.
+If metal is not compiled with the flags previously mentioned, it will just return the input tensor.
+
+
 
 ### What is next for this tool?
 - Supporting more operations
