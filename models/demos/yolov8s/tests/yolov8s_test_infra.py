@@ -6,8 +6,8 @@ from loguru import logger
 from ultralytics import YOLO
 
 import ttnn
-from models.experimental.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
-from models.experimental.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
+from models.demos.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
+from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

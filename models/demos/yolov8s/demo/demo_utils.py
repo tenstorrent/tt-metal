@@ -130,7 +130,7 @@ def preprocess(im, res):
 
     im = im.half() if device != "cpu" else im.float()
     if not_tensor:
-        im /= 255
+        im /= 255  # Normalize pixel values from [0, 255] to [0.0, 1.0] for model compatibility
     return im
 
 

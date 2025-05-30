@@ -8,8 +8,8 @@ from loguru import logger
 from ultralytics import YOLO
 
 import ttnn
-from models.experimental.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
-from models.experimental.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
+from models.demos.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
+from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import disable_persistent_kernel_cache, profiler

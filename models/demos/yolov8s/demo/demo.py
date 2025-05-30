@@ -12,9 +12,9 @@ from loguru import logger
 from ultralytics import YOLO
 
 import ttnn
-from models.experimental.yolov8s.demo.demo_utils import LoadImages, postprocess, preprocess
-from models.experimental.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
-from models.experimental.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
+from models.demos.yolov8s.demo.demo_utils import LoadImages, postprocess, preprocess
+from models.demos.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
+from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
 from models.utility_functions import disable_persistent_kernel_cache
 
 
@@ -56,8 +56,8 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
 @pytest.mark.parametrize(
     "source, model_type",
     [
-        ("models/experimental/yolov8s/demo/images/bus.jpg", "torch_model"),
-        ("models/experimental/yolov8s/demo/images/bus.jpg", "tt_model"),
+        ("models/demos/yolov8s/demo/images/bus.jpg", "torch_model"),
+        ("models/demos/yolov8s/demo/images/bus.jpg", "tt_model"),
     ],
 )
 @pytest.mark.parametrize(
@@ -79,7 +79,7 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics):
         model = TtYolov8sModel(device=device, parameters=parameters, res=(res[0], res[1]))
         logger.info("Inferencing using ttnn Model")
 
-    save_dir = "models/experimental/yolov8s/demo/runs"
+    save_dir = "models/demos/yolov8s/demo/runs"
 
     dataset = LoadImages(path=source)
 

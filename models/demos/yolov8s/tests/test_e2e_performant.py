@@ -3,11 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
+
 import pytest
 import torch
 from loguru import logger
+
 import ttnn
-from models.experimental.yolov8s.tests.yolov8s_e2e_performant import Yolov8sTrace2CQ
+from models.demos.yolov8s.tests.yolov8s_e2e_performant import Yolov8sTrace2CQ
 from models.utility_functions import run_for_wormhole_b0
 
 

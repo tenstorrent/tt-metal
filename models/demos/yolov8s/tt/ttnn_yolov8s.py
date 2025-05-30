@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-import ttnn
-from models.experimental.yolov8s.tt.tt_yolov8s_utils import ttnn_decode_bboxes
-from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 import json
+import math
+
+import ttnn
+from models.demos.yolov8s.tt.tt_yolov8s_utils import ttnn_decode_bboxes
+from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
 try:
     from tracy import signpost
@@ -15,7 +16,7 @@ try:
 except ModuleNotFoundError:
     use_signpost = False
 
-with open("models/experimental/yolov8s/tt/configs.json", "r") as file:
+with open("models/demos/yolov8s/tt/configs.json", "r") as file:
     configs = json.load(file)
 
 conv_config = configs["conv_config"]
