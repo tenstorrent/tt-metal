@@ -32,7 +32,7 @@ jobs:
       matrix:
         test-group: [
             { model: whisper, owner_id: U05RWH3QUPM , cmd: pytest tests/nightly/single_card/whisper },  #Salar Hosseini
-            { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: LLAMA_DIR=/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659/original pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
+            { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
           ]
     name: Nightly ${{ inputs.runner-label }} ${{ matrix.test-group.model }}
     runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"]
