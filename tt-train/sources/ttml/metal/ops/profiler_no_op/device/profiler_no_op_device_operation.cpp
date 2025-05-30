@@ -26,13 +26,13 @@ void ProfilerNoopOperation::validate_on_program_cache_miss(
                            const tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
             tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
-            "CrossEntropyBackward operation is only supported on Wormhole. Device arch: {}. Tensor name: {}",
+            "ProfilerNoop operation is only supported on Wormhole. Device arch: {}. Tensor name: {}",
             magic_enum::enum_name(tensor.device()->arch()),
             name);
 
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-            "CrossEntropyBackward operation requires '{}' to be on DEVICE. Got storage type: '{}'",
+            "ProfilerNoop operation requires '{}' to be on DEVICE. Got storage type: '{}'",
             name,
             magic_enum::enum_name(tensor.storage_type()));
 

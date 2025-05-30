@@ -4,8 +4,7 @@
 
 #include "profiler_no_op_program_factory.hpp"
 
-#include <cstdint>
-#include <tt-metalium/buffer.hpp>
+#include <core/ttnn_all_includes.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
 #include "profiler_no_op_device_operation_types.hpp"
@@ -191,12 +190,6 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
 
     // configure defines
     std::map<std::string, std::string> defines;
-
-    // // setup defines for reduce
-    // // Compute kernel does not compile without these defines
-    // // LLK reduction uses define values as default template parameters
-    // defines["REDUCE_OP"] = "PoolType::SUM";
-    // defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     CrossEntropyBackwardKernels kernels;
     kernels.reader = create_reader_kernel(
