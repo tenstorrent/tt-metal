@@ -182,19 +182,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             .defines = kernel_defines});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
-    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-        if (auto mesh_device = device->get_mesh_device()) {
-            auto device_coord = mesh_device->get_view().find_device(device_id);
-            distributed::MeshWorkload workload;
-            workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(sync_program));
-            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-        } else {
-            EnqueueProgram(device->command_queue(), sync_program, false);
-        }
-    } else {
-        tt_metal::detail::LaunchProgram(
-            device, sync_program, false /* wait_until_cores_done */, /* force_slow_dispatch */ true);
-    }
+    tt_metal::detail::LaunchProgram(
+        device, sync_program, false /* wait_until_cores_done */, /* force_slow_dispatch */ true);
 
     std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
@@ -221,15 +210,10 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             &sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
-    if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-        if (auto mesh_device = device->get_mesh_device()) {
-            mesh_device->mesh_command_queue().finish();
-        } else {
-            Finish(device->command_queue());
-        }
-    } else {
-        tt_metal::detail::WaitProgramDone(device, sync_program, false);
-    }
+    tt_metal::detail::WaitProgramDone(device, sync_program, false);
+    std::vector<CoreCoord> cores = {core};
+    tt_metal_device_profiler_map.at(device_id).dumpResults(
+        device, cores, ProfilerDumpState::FORCE_UMD_READ, ProfilerDataBufferSource::L1);
 
     log_info("SYNC PROGRAM FINISH IS DONE ON {}", device_id);
     if ((smallestHostime[device_id] == 0) || (smallestHostime[device_id] > hostStartTime)) {
@@ -377,7 +361,8 @@ void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
     ZoneName(zoneName.c_str(), zoneName.size());
     if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
         tt_metal_device_profiler_map.at(device_id).device_sync_new_events.clear();
-        tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, ProfilerDumpState::FORCE_UMD_READ);
+        tt_metal_device_profiler_map.at(device_id).dumpResults(
+            device, worker_cores, ProfilerDumpState::FORCE_UMD_READ, ProfilerDataBufferSource::L1);
         for (auto& event : tt_metal_device_profiler_map.at(device_id).device_events) {
             if (event.zone_name.find("SYNC-ZONE") != std::string::npos) {
                 ZoneScopedN("Adding_device_sync_event");
@@ -410,12 +395,6 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
     }
 
     if (device_sender != nullptr and device_receiver != nullptr) {
-        FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-        TT_FATAL(
-            fabric_config != FabricConfig::DISABLED,
-            "Cannot support device to device synchronization when TT-Fabric is disabled.");
-        log_info("Calling {} when TT-Fabric is enabled. This may take a while", __FUNCTION__);
-
         constexpr std::uint16_t sample_count = 240;
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;
@@ -674,7 +653,11 @@ void ProfilerSync(ProfilerSyncState state) {
 
     if (state == ProfilerSyncState::CLOSE_DEVICE and do_sync_on_close) {
         do_sync_on_close = false;
-        // If at least one sender reciever pair has been found
+        for (const auto& synced_with_host_device : deviceHostTimePair) {
+            auto deviceToSync = tt::DevicePool::instance().get_active_device(synced_with_host_device.first);
+            syncDeviceHost(deviceToSync, SYNC_CORE, false);
+        }
+        //  If at least one sender reciever pair has been found
         if (first_connected_device_id != -1) {
             syncAllDevices(first_connected_device_id);
         }
@@ -689,7 +672,7 @@ void ClearProfilerControlBuffer(IDevice* device) {
 #endif
 }
 
-void InitDeviceProfiler(IDevice* device) {
+void AllocateProfilerDramBuffer(IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     auto device_id = device->id();
@@ -697,18 +680,6 @@ void InitDeviceProfiler(IDevice* device) {
     TracySetCpuTime(TracyGetCpuTime());
 
     if (getDeviceProfilerState()) {
-        static std::atomic<bool> firstInit = true;
-
-        auto device_id = device->id();
-
-        if (tt_metal_device_profiler_map.find(device_id) == tt_metal_device_profiler_map.end()) {
-            if (firstInit.exchange(false)) {
-                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, true));
-            } else {
-                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, false));
-            }
-        }
-
         uint32_t dramBankCount =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_num_dram_views();
         uint32_t coreCountPerDram = tt::tt_metal::MetalContext::instance()
@@ -748,6 +719,28 @@ void InitDeviceProfiler(IDevice* device) {
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer_ptr->address();
         setControlBuffer(device, control_buffer);
+    }
+#endif
+}
+void InitDeviceProfiler(IDevice* device) {
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+    auto device_id = device->id();
+    CoreCoord logical_grid_size = device->logical_grid_size();
+    TracySetCpuTime(TracyGetCpuTime());
+
+    if (getDeviceProfilerState()) {
+        static std::atomic<bool> firstInit = true;
+
+        auto device_id = device->id();
+
+        if (tt_metal_device_profiler_map.find(device_id) == tt_metal_device_profiler_map.end()) {
+            if (firstInit.exchange(false)) {
+                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, true));
+            } else {
+                tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, false));
+            }
+        }
     }
 #endif
 }
@@ -872,13 +865,9 @@ void DumpDeviceProfileResults(
         auto device_id = device->id();
 
         if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
-            if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                if (deviceHostTimePair.find(device_id) != deviceHostTimePair.end()) {
-                    syncDeviceHost(device, SYNC_CORE, false);
-                }
-            }
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
-            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, state, metadata);
+            tt_metal_device_profiler_map.at(device_id).dumpResults(
+                device, worker_cores, state, ProfilerDataBufferSource::DRAM, metadata);
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the
                 // last owner. Sync program also contains a buffer so it is safter to release it here

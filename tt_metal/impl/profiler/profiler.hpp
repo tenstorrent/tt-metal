@@ -202,6 +202,8 @@ private:
         IDevice* device,
         const CoreCoord& worker_core,
         const ProfilerDumpState state,
+        const std::vector<uint32_t>& data_buffer,
+        const ProfilerDataBufferSource data_source,
         const std::optional<ProfilerOptionalMetadata>& metadata,
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log);
@@ -258,7 +260,8 @@ public:
     void dumpResults(
         IDevice* device,
         const std::vector<CoreCoord>& worker_cores,
-        ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        const ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        const ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
     // Push device results to tracy

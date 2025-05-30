@@ -219,6 +219,20 @@ void ClearProfilerControlBuffer(IDevice* device);
 void InitDeviceProfiler(IDevice* device);
 
 /**
+ * Allocate profiling DRAM buffers. This call can only come when buffer allocation is allowed. mesh_device for example
+ * should be initialized before calling this function.
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                       | Type            | Valid Range               |
+ * Required |
+ * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+ * | device        | The device holding the program being profiled.    | IDevice*        |                           |
+ * True     |
+ * */
+void AllocateProfilerDramBuffer(IDevice* device);
+
+/**
  * Sync TT devices with host
  *
  * Return value: void

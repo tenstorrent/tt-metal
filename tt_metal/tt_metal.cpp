@@ -772,7 +772,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
         if (!force_slow_dispatch) {
             detail::DispatchStateCheck(false);
+        } else {
+            TT_ASSERT(!tt::DevicePool::instance().is_dispatch_firmware_active());
         }
+
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
             program.finalize_offsets(device);
@@ -804,6 +807,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
+                if (force_slow_dispatch) {
+                    tt::llrt::send_reset_go_signal(device->id(), physical_core);
+                }
+
                 tt::llrt::write_launch_msg_to_core(
                     device->id(),
                     physical_core,
