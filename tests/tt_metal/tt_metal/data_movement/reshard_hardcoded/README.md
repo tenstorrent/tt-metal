@@ -4,7 +4,7 @@ This test suite implements tests that measure the functionality and performance 
 
 ## Test Flow
 
-This test creates a buffer for various sharding patterns as gotten from `pytest tests/ttnn/unit_tests/operations/test_core.py -k test_reshard`. It plots the bandwidth of each core.
+This test creates a buffer for various sharding patterns as gotten from `pytest test_core.py -k test_reshard`. It plots the bandwidth of each core.
 
 It does not check pcc as the afformentioned test does this.
 
