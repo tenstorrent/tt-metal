@@ -125,72 +125,58 @@ static void push_back_scalar_info_or_zero(
 // is filled with out_nhw_per_core number of ScalarInfos for each core and then sharded across the cores.
 // Since we don't usually have that many different scalars, we fill the rest of the config tensor with 0s.
 static Tensor create_scalar_config_tensor(
-    const AvgPoolConfig& config,
-    TensorMemoryLayout in_memory_layout,
-    uint32_t n_dim,
-    uint32_t num_shards_c,
-    uint32_t num_cores) {
-    std::vector<uint16_t> config_vector;
+    AvgPoolConfig config, uint32_t in_n, uint32_t num_shards_c, CoreRangeSet all_cores) {
+    auto ranges = all_cores.ranges();
 
-    size_t max_scalars_cnt = 0;
+    std::vector<uint32_t> config_vector;
+
+    uint32_t output_stick_x = 0;
+    uint32_t output_stick_y = 0;
+    uint32_t channel = 0;
+    uint32_t batch = 0;
+
+    uint32_t max_scalars_cnt = 0;
     std::vector<std::vector<ScalarInfo>> scalars_per_core = {};
-    uint32_t num_iterations = 0;
 
-    switch (in_memory_layout) {
-        case TensorMemoryLayout::HEIGHT_SHARDED: num_iterations = num_cores; break;
-        case TensorMemoryLayout::BLOCK_SHARDED: num_iterations = num_cores / num_shards_c; break;
-        case TensorMemoryLayout::WIDTH_SHARDED: num_iterations = 1; break;
-        default: break;
-    }
+    for (const auto& range : ranges) {
+        for (auto it = range.begin(); it != range.end(); ++it) {
+            std::vector<ScalarInfo> scalars = get_bf16_avg_pool_config_scalars(config, output_stick_x, output_stick_y);
 
-    {
-        uint32_t nhw_linear = 0;
-        uint32_t output_stick_n = 0;
-        uint32_t output_stick_h = 0;
-        uint32_t output_stick_w = 0;
-        for (uint32_t i = 0; i < num_iterations; ++i) {
-            scalars_per_core.emplace_back(get_bf16_avg_pool_config_scalars(config, output_stick_h, output_stick_w));
-            max_scalars_cnt = std::max(max_scalars_cnt, scalars_per_core.back().size());
+            max_scalars_cnt = std::max(max_scalars_cnt, (uint32_t)scalars.size());
+            scalars_per_core.push_back(scalars);
 
-            // Width sharded layout requires only one iteration, so we can break here
-            if (in_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-                in_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-                nhw_linear += config.out_nhw_per_core;
-                output_stick_w = nhw_linear % config.out_w;
-                output_stick_h = (nhw_linear / config.out_w) % config.out_h;
-                output_stick_n = nhw_linear / (config.out_w * config.out_h);
-
-                if (output_stick_n == n_dim) {
-                    nhw_linear -= output_stick_n * config.out_w * config.out_h;
-                    output_stick_n = 0;
-                    output_stick_h = 0;
-                    output_stick_w = 0;
+            // Advance core and tensor location tracking
+            channel = (channel + 1) % num_shards_c;
+            if (channel == 0) {
+                uint32_t delta_y = output_stick_y + config.out_nhw_per_core;
+                output_stick_y = delta_y % config.out_w;
+                uint32_t delta_x = output_stick_x + delta_y / config.out_w;
+                output_stick_x = delta_x % config.out_h;
+                batch += delta_x / config.out_h;
+                if (batch == in_n) {
+                    batch = 0;
+                    output_stick_x = output_stick_y = 0;
                 }
             }
         }
     }
 
-    constexpr uint32_t entry_size = 3;
+    const uint32_t entry_size = 3;
     const uint32_t entries_per_core = entry_size * max_scalars_cnt;
 
-    switch (in_memory_layout) {
-        case TensorMemoryLayout::HEIGHT_SHARDED:
-        // With height sharded layout each scalar is unique and needs to be calculated
-        case TensorMemoryLayout::BLOCK_SHARDED:
-            // With block sharded layout scalars across sequential channels shard repeat, so we use repeats variable not
-            // to recalculate scalars that we can reuse
-            for (const std::vector<ScalarInfo>& scalars : scalars_per_core) {
-                uint32_t repeats = (in_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) ? num_shards_c : 1;
-                push_back_scalar_info_or_zero(config_vector, scalars, max_scalars_cnt, repeats);
+    // Fill with 0 values when the scalars count is less than max_scalars_cnt
+    for (uint32_t i = 0; i < scalars_per_core.size(); i++) {
+        for (uint32_t j = 0; j < max_scalars_cnt; j++) {
+            if (j < scalars_per_core[i].size()) {
+                config_vector.push_back(scalars_per_core[i][j].start);
+                config_vector.push_back(scalars_per_core[i][j].value);
+                config_vector.push_back(scalars_per_core[i][j].end);
+            } else {
+                config_vector.push_back(0);
+                config_vector.push_back(0);
+                config_vector.push_back(0);
             }
-            break;
-        case TensorMemoryLayout::WIDTH_SHARDED:
-            // With width sharded layout scalars should be calulated only once, so we push them back num_shards_c times
-            // but have only one array of scalars
-            push_back_scalar_info_or_zero(config_vector, scalars_per_core[0], max_scalars_cnt, num_shards_c);
-            break;
-
-        default: break;
+        }
     }
 
     TT_FATAL(
