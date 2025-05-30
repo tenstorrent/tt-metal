@@ -545,4 +545,61 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked11x10PacketSizes)
     }
 }
 
+/* ========== Test case for one to all multicast data movement; ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneToAllDirectedIdeal) {
+    uint32_t test_id = 52;  // Arbitrary test id
+
+    // Parameters
+    /*
+        L1 Capacity: 1.5 MB (I think, might be wrong)
+        - Max transaction size
+            = 4 * 32 pages
+            = 128 pages * 32 (or 64) bytes/page
+            = 4096 bytes for WH; 8192 bytes for BH
+        - Max total transaction size
+            = 128 transactions * 4096 bytes
+            = 524,288 Bytes
+            < 1.25 MB ~= L1 buffer capacity (.25 MB is allocated for the kernel code and other overheads)
+    */
+    uint32_t page_size_bytes, num_of_transactions;
+    uint32_t transaction_size_pages = 4 * 32;
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes = 64;  // (=flit size): 64 bytes for BH
+        num_of_transactions = 64;
+    } else {
+        page_size_bytes = 32;  // (=flit size): 32 bytes for WH
+        num_of_transactions = 128;
+    }
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    NOC noc_id = NOC::NOC_0;
+    bool is_linked = true;  // True or False?
+
+    // Limit the grid size to 100 cores because the max allowed kernel args is 256
+    if (grid_size.x * grid_size.y > 100) {
+        uint32_t smaller_dim = grid_size.x > grid_size.y ? grid_size.y : grid_size.x;
+        grid_size = {smaller_dim, smaller_dim};
+    }
+
+    unit_tests::dm::core_to_all::OneToAllConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .grid_size = grid_size,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+        .loopback = true,
+        .noc_id = noc_id,
+        .is_multicast = true,
+        .is_linked = is_linked,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
 }  // namespace tt::tt_metal

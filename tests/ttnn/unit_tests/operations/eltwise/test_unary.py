@@ -13,6 +13,26 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
 from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 
+def create_full_range_tensor(input_shapes, dtype):
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+
+    large_negatives = torch.linspace(-3.3e38, -1e30, steps=num_elements // 5, dtype=dtype)
+    medium_negatives = torch.linspace(-1e5, -1e-3, steps=num_elements // 5, dtype=dtype)
+    near_zero = torch.linspace(-1e-5, 1e-5, steps=num_elements // 5, dtype=dtype)
+    medium_positives = torch.linspace(1e-3, 1e5, steps=num_elements // 5, dtype=dtype)
+    large_positives = torch.linspace(1e30, 3.3e38, steps=num_elements // 5, dtype=dtype)
+
+    in_data = torch.cat([large_negatives, medium_negatives, near_zero, medium_positives, large_positives])
+
+    corner_cases = torch.tensor([0.0], dtype=dtype)
+    in_data = torch.cat([in_data, corner_cases])
+
+    in_data = in_data[:num_elements]
+    in_data = in_data.reshape(input_shapes)
+
+    return in_data
+
+
 def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     torch.manual_seed(0)
 
@@ -649,3 +669,43 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_tanhshrink_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    cq_id = 0
+
+    ttnn.tanhshrink(input_tensor1, queue_id=cq_id, output_tensor=output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
+    golden_tensor = golden_function(in_data1)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 5, 512, 1024])),),
+)
+def test_unary_tanhshrink_edge_case_ttnn(input_shapes, device):
+    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    cq_id = 0
+
+    ttnn.tanhshrink(input_tensor, queue_id=cq_id, output_tensor=output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
+    golden_tensor = golden_function(in_data)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass

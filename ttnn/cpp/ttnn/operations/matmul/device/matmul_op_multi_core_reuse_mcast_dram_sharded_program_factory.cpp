@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -66,7 +66,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t N,
     uint32_t K,
     uint32_t in0_block_w,
-    uint32_t in0_last_ktile_w,
     uint32_t per_core_M,
     uint32_t per_core_N_storage,
     std::optional<UnaryWithParam> fused_activation,
@@ -304,7 +303,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     std::vector<uint32_t> in0_sender_compile_time_args = {
         (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
         (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
-        (std::uint32_t)in0_last_ktile_w,                            // in0_last_ktile_w
         // in0 mcast args
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
@@ -600,8 +598,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 
         mm_in0_sender_args.push_back((std::uint32_t)worker_core_type);
         mm_in0_sender_args.push_back((std::uint32_t)sender_id);
-        mm_in0_sender_args.push_back(
-            (std::uint32_t)((core == all_storage_cores_vec.back()) and (in0_last_ktile_w > 0)));
         mm_in0_sender_args.insert(
             mm_in0_sender_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
         mm_in0_sender_args.insert(
@@ -623,7 +619,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         uint32_t worker_core_type = 3;
         mm_in0_receiver_args.push_back((std::uint32_t)worker_core_type);
         mm_in0_receiver_args.push_back((std::uint32_t)0);
-        mm_in0_receiver_args.push_back((std::uint32_t)0);  // in0_last_ktile_w
         mm_in0_receiver_args.insert(
             mm_in0_receiver_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
         mm_in0_receiver_args.insert(
@@ -968,7 +963,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
     uint32_t Mt = get_batch_size(ashape) * ashape[-2] / in0_tile_shape[0];
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
-    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile_shape[1];
 
     TT_FATAL(Kt % in0_block_w == 0, "Error");
 
@@ -993,7 +987,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
         Nt,
         Kt,
         in0_block_w,
-        in0_last_ktile_w,
         per_core_M,
         per_core_N,
         std::move(fused_activation),
