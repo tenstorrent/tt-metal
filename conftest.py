@@ -298,7 +298,8 @@ def device_params(request):
 def device(request, device_params):
     import ttnn
 
-    device_id = request.config.getoption("device_id")
+    # device_id = request.config.getoption("device_id")
+    device_id = 1
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
 
     # When initializing a single device on a TG system, we want to
