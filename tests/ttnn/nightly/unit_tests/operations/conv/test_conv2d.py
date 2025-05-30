@@ -101,6 +101,8 @@ def run_conv(
     fast_compare=False,
     slice_config=None,
     enable_kernel_stride_folding=False,
+    enable_act_double_buffer=False,
+    enable_weights_double_buffer=False,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -197,7 +199,8 @@ def run_conv(
         weights_dtype=weights_dtype,
         shard_layout=shard_layout if not auto_shard else None,
         deallocate_activation=deallocate_activation,
-        enable_act_double_buffer=False,
+        enable_act_double_buffer=enable_act_double_buffer,
+        enable_weights_double_buffer=enable_weights_double_buffer,
         enable_split_reader=enable_split_reader,
         enable_subblock_padding=False,
         output_layout=output_layout,
@@ -566,6 +569,7 @@ def test_conv_features_multi_device(
         (256, 256, 8, 8, WS, None),
         (128, 128, 32, 32, BS, None),
         (32, 32, 256, 256, HS, {"act_block_h": 32}),
+        (32, 32, 256, 256, HS, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -593,6 +597,8 @@ def test_conv_features_multi_device(
         [3, 1],
     ],
 )
+@pytest.mark.parametrize("enable_act_double_buffer", [True, False])
+@pytest.mark.parametrize("enable_weights_double_buffer", [True, False])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
 @pytest.mark.parametrize("activation", ["", "relu", "silu", "sigmoid", "sigmoid_approx", "tanh", "sqrt", "gelu"])
 def test_conv_activation(
@@ -616,6 +622,8 @@ def test_conv_activation(
     fp32_accum,
     has_bias,
     activation,
+    enable_act_double_buffer,
+    enable_weights_double_buffer,
 ):
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
@@ -649,6 +657,8 @@ def test_conv_activation(
         packer_l1_acc=False,
         activation=activation,
         input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
+        enable_act_double_buffer=enable_act_double_buffer,
+        enable_weights_double_buffer=enable_weights_double_buffer,
     )
 
 
