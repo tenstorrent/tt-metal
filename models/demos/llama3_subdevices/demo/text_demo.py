@@ -221,6 +221,12 @@ def create_tt_model(
         "repeat2",  # latency with 5 repeat batches
         "long-context",  # max-length
     ],
+    # ids=[
+    #     "batch-32",  # throughput
+    #     "batch-1",  # latency
+    #     "repeat2",  # latency with 5 repeat batches
+    #     "long-context",  # max-length
+    # ],
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -505,9 +511,9 @@ def test_demo_text(
         for user in range(batch_size):
             user_tok = int(prefilled_token[user].item())
             all_outputs[user].append(user_tok)
-        # print("Prefill outputs:", [tokenizer.decode(output) for output in all_outputs])
-        # model.tt_ccl.close()
-        # return True
+        print("Prefill outputs:", [tokenizer.decode(output) for output in all_outputs])
+        model.tt_ccl.close()
+        return True
         user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
         # TODO Argmax on device is only supported for batch_size=1

@@ -29,6 +29,7 @@ def run_all_gather_matmul_on_t3000_impl(
     matmul_config,
     matmul_weights_dtype,
     max_in0_block_w,
+    use_bias,
     # Memory configs
     mem_config_input,
     mem_config_ag,
@@ -62,9 +63,14 @@ def run_all_gather_matmul_on_t3000_impl(
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(t3k_mesh_device, mem_config_input)
 
     ##### Create the weight matrix for the matmul #####
-    weights_tensor = torch.randn([1, 1, hidden_dim, matmul_output_dim * num_devices]).float()
+    if use_bias:
+        weights_tensor = torch.randn([hidden_dim, matmul_output_dim * num_devices]).float()
+        weights_tensor_padded = weights_tensor.unsqueeze(0).unsqueeze(0)
+    else:
+        weights_tensor = torch.randn([1, 1, hidden_dim, matmul_output_dim * num_devices]).float()
+        weights_tensor_padded = weights_tensor
     weight_tt = ttnn.from_torch(
-        weights_tensor,
+        weights_tensor_padded,
         dtype=matmul_weights_dtype,
         layout=layout,
         device=t3k_mesh_device,
@@ -72,6 +78,21 @@ def run_all_gather_matmul_on_t3000_impl(
         mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim),
         tile=ttnn.Tile(tile),
     )
+
+    if use_bias:
+        bias_tensor = torch.randn([1, matmul_output_dim * num_devices]).float()
+        bias_tensor_padded = bias_tensor.unsqueeze(0).unsqueeze(0)
+        bias_tt = ttnn.from_torch(
+            bias_tensor_padded,
+            dtype=matmul_weights_dtype,
+            layout=layout,
+            device=t3k_mesh_device,
+            memory_config=mem_config_weights,
+            mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim),
+            tile=ttnn.Tile(tile),
+        )
+    else:
+        bias_tt = None
 
     ##### Configs for ttnn.matmul #####
     if matmul_config == "matmul_1d":
@@ -113,7 +134,10 @@ def run_all_gather_matmul_on_t3000_impl(
     )
 
     ##### Perform the torch ops #####
-    matmul_output = torch.matmul(input_tensor, weights_tensor)
+    if use_bias:
+        matmul_output = torch.nn.functional.linear(input_tensor, weights_tensor.T.contiguous(), bias_tensor)
+    else:
+        matmul_output = torch.matmul(input_tensor, weights_tensor)
 
     ##### Perform the TT ops #####
     def run_op():
@@ -127,6 +151,7 @@ def run_all_gather_matmul_on_t3000_impl(
             tt_matmul_out_tensor = ttnn.matmul(
                 tt_all_gather_out_tensor,
                 weight_tt,
+                bias_tt,
                 memory_config=mem_config_mm,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
@@ -138,6 +163,7 @@ def run_all_gather_matmul_on_t3000_impl(
                 weight_tt,
                 dim,
                 (0, 4),
+                bias=bias_tt,
                 num_links=num_links,
                 memory_config_ag=mem_config_ag,
                 memory_config_mm=mem_config_mm,
@@ -287,6 +313,13 @@ def run_all_gather_matmul_on_t3000_impl(
     ],
 )
 @pytest.mark.parametrize(
+    "use_bias",
+    [
+        True,
+        False,
+    ],
+)
+@pytest.mark.parametrize(
     "mem_config_input, mem_config_ag, mem_config_mm",
     [
         (
@@ -308,6 +341,7 @@ def test_all_gather_matmul_on_t3000_post_commit(
     matmul_config,
     matmul_weights_dtype,
     max_in0_block_w,
+    use_bias,
     mem_config_input,
     mem_config_ag,
     mem_config_mm,
@@ -326,6 +360,7 @@ def test_all_gather_matmul_on_t3000_post_commit(
         matmul_config,
         matmul_weights_dtype,
         max_in0_block_w,
+        use_bias,
         mem_config_input,
         mem_config_ag,
         mem_config_mm,

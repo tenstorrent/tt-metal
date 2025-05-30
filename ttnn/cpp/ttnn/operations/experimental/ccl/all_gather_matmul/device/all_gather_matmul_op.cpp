@@ -136,7 +136,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program_at
         this->all_gather_core_grid_offset,
 
         /* Matmul Params */
-        {},  // Bias
+        optional_input_tensors[0],  // Bias
         this->matmul_struct.bcast_batch.value(),
         this->matmul_struct.compute_kernel_config.value(),
         this->matmul_struct.program_config.value(),
@@ -154,6 +154,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_impl(
     const ttnn::Tensor& weight_tensor,
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
+    const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_ag,
     std::optional<size_t> user_defined_num_workers,
@@ -170,7 +171,12 @@ std::vector<ttnn::Tensor> all_gather_matmul_impl(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "AllGatherMatmul is only supported for Fast Dispatch");
 
-    std::vector<std::optional<const ttnn::Tensor>> optional_input_tensors = {std::nullopt};
+    std::vector<std::optional<const Tensor>> optional_input_tensors = {};
+    if (bias.has_value()) {
+        optional_input_tensors.push_back(bias.value());
+    } else {
+        optional_input_tensors.push_back(std::nullopt);
+    }
 
     /* AllGather setup */
     ttnn::AllGather all_gather_struct{
@@ -232,6 +238,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
     const ttnn::Tensor& weight_tensor,
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
+    const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_ag,
     std::optional<size_t> user_defined_num_workers,
@@ -250,6 +257,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
         weight_tensor,
         dim,
         all_gather_core_grid_offset,
+        bias,
         num_links,
         memory_config_ag,
         user_defined_num_workers,
@@ -270,6 +278,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
     const std::vector<ttnn::Tensor>& weight_tensors,
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
+    const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_ag,
     std::optional<size_t> user_defined_num_workers,
@@ -294,6 +303,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
             weight_tensors.at(i),
             dim,
             all_gather_core_grid_offset,
+            bias,
             num_links,
             memory_config_ag,
             user_defined_num_workers,
