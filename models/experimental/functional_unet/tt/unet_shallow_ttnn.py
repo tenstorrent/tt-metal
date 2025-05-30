@@ -179,6 +179,7 @@ class UNetConv2D:
             output_layout=output_layout,
             reshard_if_not_optimal=reshard_if_not_optimal,
             reallocate_halo_output=reallocate_halo_output,
+            enable_weights_double_buffer=True,
         )
 
         if override_core_grid is not None:
