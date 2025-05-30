@@ -603,7 +603,7 @@ def test_graph_capture_with_hang(device):
     tt_input = ttnn.empty(
         shape=(1, 1, 2048, 512),
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
