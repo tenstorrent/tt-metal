@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/run_operation.hpp"
@@ -8,10 +7,11 @@ namespace ttnn::operations::reduction::detail {
 
 tt::tt_metal::operation::ProgramWithCallbacks topk_single_core_interleaved(
     const Tensor& input_tensor,
-    uint32_t k,
-    int8_t dim,
-    bool largest,
-    bool sorted,
+    const uint32_t k,
+    const int8_t dim,
+    const bool largest,
+    const bool sorted,
+    const bool uint16_output,
     const CoreRangeSet& sub_core_grids,
     Tensor& value_tensor,
     Tensor& index_tensor);
