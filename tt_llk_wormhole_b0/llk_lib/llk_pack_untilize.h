@@ -43,6 +43,11 @@ inline void _llk_pack_untilize_configure_addrmod_()
         .y_src = {.incr = 0, .clr = 1, .cr = 0},
     }
         .set(ADDR_MOD_2);
+
+    addr_mod_pack_t {
+        .y_src = {.incr = 0, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_3);
 }
 
 template <
@@ -102,7 +107,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
         {
             const std::uint32_t replay_buf_len = 10;
             TT_REPLAY(ckernel::packer::replay_buf_offset, replay_buf_len, 0, 1);
-            TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 1); // close block
+            TTI_PACR(ADDR_MOD_3, 0, 0xf, 0, 0, 1, 1); // close block
             // update l1 address
             TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
             TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR + 1, p_gpr_pack::OUTPUT_ADDR + 1, p_gpr_pack::OUTPUT_ADDR_OFFSET);
