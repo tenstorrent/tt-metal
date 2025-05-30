@@ -8,8 +8,6 @@
 #include <cstring>
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
 
 constexpr uint32_t TILE_WIDTH = 32U;
 constexpr uint32_t TILE_HEIGHT = 32U;
