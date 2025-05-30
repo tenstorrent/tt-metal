@@ -103,38 +103,74 @@ ttnn::Tensor prepare_conv_bias(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
+// Unified parameter struct for conv2d weight and bias preparation
+struct Conv2dWeightsBiasPrepConfig {
+    // Constructor to ensure all required parameters are initialized
+    Conv2dWeightsBiasPrepConfig(
+        uint32_t input_channels_alignment_,
+        std::optional<DataType> weights_bias_dtype_,
+        uint32_t weight_block_h_ntiles_,
+        uint32_t weight_block_w_ntiles_,
+        const sliding_window::ParallelConfig& input_parallel_config_,
+        const sliding_window::ParallelConfig& output_parallel_config_,
+        uint32_t groups_,
+        uint32_t act_block_h_ntiles_,
+        uint32_t input_width_,
+        bool has_bias_ = false,
+        bool parameters_on_device_ = true,
+        bool enable_kernel_stride_folding_ = false,
+        std::array<uint32_t, 2> kernel_size_ = {1, 1},
+        std::array<uint32_t, 2> stride_ = {1, 1},
+        std::array<uint32_t, 4> padding_n4_ = {0, 0, 0, 0}) :
+        input_channels_alignment(input_channels_alignment_),
+        weights_bias_dtype(weights_bias_dtype_),
+        weight_block_h_ntiles(weight_block_h_ntiles_),
+        weight_block_w_ntiles(weight_block_w_ntiles_),
+        input_parallel_config(input_parallel_config_),
+        output_parallel_config(output_parallel_config_),
+        groups(groups_),
+        act_block_h_ntiles(act_block_h_ntiles_),
+        input_width(input_width_),
+        has_bias(has_bias_),
+        parameters_on_device(parameters_on_device_),
+        enable_kernel_stride_folding(enable_kernel_stride_folding_),
+        kernel_size(kernel_size_),
+        stride(stride_),
+        padding_n4(padding_n4_) {}
+
+    // Common parameters
+    const uint32_t input_channels_alignment;
+    const std::optional<DataType> weights_bias_dtype;
+    uint32_t weight_block_h_ntiles;
+    const uint32_t weight_block_w_ntiles;
+    const sliding_window::ParallelConfig& input_parallel_config;
+    const sliding_window::ParallelConfig& output_parallel_config;
+    const uint32_t groups;
+    const uint32_t act_block_h_ntiles;
+    const uint32_t input_width;
+    const bool has_bias;
+    const bool parameters_on_device;
+
+    // Kernel stride folding parameters
+    const bool enable_kernel_stride_folding;
+    const std::array<uint32_t, 2> kernel_size;
+    const std::array<uint32_t, 2> stride;
+    const std::array<uint32_t, 4> padding_n4;
+};
+
 template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device(
     const ttnn::Tensor& weight_tensor,
     const std::optional<const ttnn::Tensor>& bias_tensor,
-    uint32_t input_channels_alignment,
-    std::optional<DataType> weights_bias_dtype,
-    uint32_t weight_block_h_ntiles,
-    uint32_t weight_block_w_ntiles,
-    const sliding_window::ParallelConfig& input_parallel_config,
-    const sliding_window::ParallelConfig& output_parallel_config,
-    T* device,
-    uint32_t groups,
-    uint32_t act_block_h_ntiles,
-    uint32_t input_width,
-    const bool has_bias);
+    Conv2dWeightsBiasPrepConfig& params,
+    T* device);
 
 template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(
     const ttnn::Tensor& weight_tensor,
     const std::optional<const ttnn::Tensor>& bias_tensor,
-    uint32_t input_channels_alignment,
-    std::optional<DataType> weights_bias_dtype,
-    uint32_t weight_block_h_ntiles,
-    uint32_t weight_block_w_ntiles,
-    const sliding_window::ParallelConfig& input_parallel_config,
-    const sliding_window::ParallelConfig& output_parallel_config,
-    T* device,
-    uint32_t groups,
-    uint32_t act_block_h_ntiles,
-    uint32_t input_width,
-    const bool has_bias,
-    const bool parameters_on_device = true);
+    Conv2dWeightsBiasPrepConfig& params,
+    T* device);
 
 }  // namespace conv2d
 }  // namespace operations::conv

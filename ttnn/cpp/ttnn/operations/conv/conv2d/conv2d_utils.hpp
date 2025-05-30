@@ -182,9 +182,6 @@ ttnn::Tensor fold_tensor(
     bool is_weight_tensor = false);
 
 struct KernelStrideFoldingResult {
-    ttnn::Tensor input_tensor;
-    ttnn::Tensor weight_tensor;
-    std::optional<ttnn::Tensor> bias_tensor;
     uint32_t input_height;
     uint32_t input_width;
     uint32_t in_channels;
@@ -193,12 +190,7 @@ struct KernelStrideFoldingResult {
     bool mm_conv;
 };
 
-template <typename T>
-KernelStrideFoldingResult apply_kernel_stride_folding(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    T* device,
+KernelStrideFoldingResult compute_kernel_stride_folding_params(
     uint32_t input_height,
     uint32_t input_width,
     uint32_t in_channels,

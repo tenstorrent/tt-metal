@@ -1313,19 +1313,13 @@ ttnn::Tensor fold_tensor(
     tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1]);
 
     if (is_weight_tensor) {
-        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({1, 2, 3, 0}));
-        tensor_on_device = ttnn::to_layout(tensor_on_device, Layout::TILE, std::nullopt, std::nullopt, device);
+        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({0, 3, 2, 1}));
     }
 
     return tensor_on_device;
 }
 
-template <typename T>
-KernelStrideFoldingResult apply_kernel_stride_folding(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    T* device,
+KernelStrideFoldingResult compute_kernel_stride_folding_params(
     uint32_t input_height,
     uint32_t input_width,
     uint32_t in_channels,
@@ -1336,32 +1330,12 @@ KernelStrideFoldingResult apply_kernel_stride_folding(
     TT_FATAL(input_height % stride[0] == 0, "Input height must be divisible by stride for kernel stride folding.");
     TT_FATAL(input_width % stride[1] == 0, "Input width must be divisible by stride for kernel stride folding.");
 
-    // Fold the input tensor to reduce spatial dimensions by stride factors
-    auto folded_input = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);
-
-    // If the weight is not preprocessed on device, fold it
-    auto folded_weight = weight_tensor;
-    if (!tt::tt_metal::is_device_tensor(weight_tensor) || conv_config.always_preprocess_weights) {
-        folded_weight =
-            fold_tensor(weight_tensor, device, stride, kernel_size, padding_n4, conv_config.weights_dtype, true);
-    }
-
-    // If the bias is not on device, move it to device
-    std::optional<ttnn::Tensor> folded_bias = bias_tensor;
-    if (bias_tensor.has_value()) {
-        folded_bias = ttnn::to_device(bias_tensor.value(), device, ttnn::DRAM_MEMORY_CONFIG);
-        folded_bias = ttnn::to_layout(folded_bias.value(), Layout::TILE, std::nullopt, std::nullopt, device);
-    }
-
     // Update dimensions for folded operation
     input_height = input_height / stride[0];
     input_width = input_width / stride[1];
     in_channels = in_channels * stride[0] * stride[1];
 
     return KernelStrideFoldingResult{
-        .input_tensor = folded_input,
-        .weight_tensor = folded_weight,
-        .bias_tensor = folded_bias,
         .input_height = input_height,
         .input_width = input_width,
         .in_channels = in_channels,
@@ -1438,32 +1412,6 @@ template ttnn::Tensor fold_tensor<MeshDevice>(
     std::array<uint32_t, 4> padding_n4,
     std::optional<DataType> dtype,
     bool is_weight_tensor);
-
-template KernelStrideFoldingResult apply_kernel_stride_folding<IDevice>(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    tt::tt_metal::IDevice* device,
-    uint32_t input_height,
-    uint32_t input_width,
-    uint32_t in_channels,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 4> padding_n4,
-    const Conv2dConfig& conv_config);
-
-template KernelStrideFoldingResult apply_kernel_stride_folding<MeshDevice>(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    tt::tt_metal::distributed::MeshDevice* device,
-    uint32_t input_height,
-    uint32_t input_width,
-    uint32_t in_channels,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 4> padding_n4,
-    const Conv2dConfig& conv_config);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
     tt::stl::reflection::operator<<(os, config);
