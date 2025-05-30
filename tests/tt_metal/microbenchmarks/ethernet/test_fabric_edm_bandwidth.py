@@ -117,7 +117,7 @@ def read_golden_results(
     """Print a summary table of all test results by packet size"""
     csv_path = os.path.join(
         os.environ["TT_METAL_HOME"],
-        f"tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden_6u.csv",
+        f"tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden{'_' + machine_type_suffix if machine_type_suffix is not None else ''}.csv",
     )
 
     if not os.path.exists(csv_path):
