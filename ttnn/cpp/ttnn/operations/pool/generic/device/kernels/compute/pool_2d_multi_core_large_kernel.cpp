@@ -36,7 +36,7 @@ inline void reduce_h_fused_interm(
     const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
     cb_wait_front(curr_in_cb_id, 1);
     tile_regs_acquire();
-    unpack_tilizeA_B_block(
+    unpack_tilizeA_B_block<false, true, false, true>(
         curr_in_cb_id,
         in_scalar_cb_id,
         num_output_tiles,
