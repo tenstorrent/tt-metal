@@ -62,6 +62,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
+# CMake 3.19: "smartly dropping dependencies of static and object libraries"
+set(CMAKE_OPTIMIZE_DEPENDENCIES TRUE)
+
 if(NOT ENABLE_LIBCXX)
     # required when linking with libstdc++ with clang and gcc
     add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-fsized-deallocation>)
@@ -107,6 +110,7 @@ message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
 message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
+message(STATUS "Build with Multihost Distributed Compute: ${ENABLE_DISTRIBUTED}")
 
 ############################################################################################################################
 
@@ -122,14 +126,6 @@ endif()
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-include(CPM)
-if(CMAKE_VERSION VERSION_LESS 3.25)
-    # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
-    add_subdirectory(third_party)
-else()
-    add_subdirectory(third_party SYSTEM)
-endif()
-
 if(WITH_PYTHON_BINDINGS)
     set(Python3_FIND_STRATEGY LOCATION)
     find_package(
@@ -146,8 +142,15 @@ if(NOT NUMA_LIBRARY)
     message(FATAL_ERROR "NUMA library not found")
 endif()
 
-# Bring in UMD and all it's dependencies
-add_subdirectory(tt_metal/third_party/umd)
+include(CPM)
+if(CMAKE_VERSION VERSION_LESS 3.25)
+    # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
+    add_subdirectory(third_party)
+    add_subdirectory(tt_metal/third_party)
+else()
+    add_subdirectory(third_party SYSTEM)
+    add_subdirectory(tt_metal/third_party SYSTEM)
+endif()
 
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
@@ -185,12 +188,13 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-for-loop-analysis>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-mismatched-tags>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-missing-braces>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-local-typedef>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-private-field>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-unknown-pragmas>"
+    "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
+    "$<$<CXX_COMPILER_ID:GNU>:-fpch-preprocess>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-array-bounds>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-int-in-bool-context>"
@@ -225,6 +229,36 @@ if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
 include(tracy)
+
+add_library(metal_common_pch STATIC)
+add_library(TT::CommonPCH ALIAS metal_common_pch)
+file(GENERATE OUTPUT metal_common_pch.cpp CONTENT "/*dummy pch file*/\n")
+target_sources(metal_common_pch PRIVATE metal_common_pch.cpp)
+
+target_precompile_headers(
+    metal_common_pch
+    PUBLIC
+        <fmt/core.h>
+        <fmt/format.h>
+        <nlohmann/json.hpp>
+        <algorithm>
+        <cstddef>
+        <cstdint>
+        <functional>
+        <map>
+        <memory>
+        <tuple>
+        <unordered_map>
+        <variant>
+        <vector>
+)
+
+target_link_libraries(
+    metal_common_pch
+    PRIVATE
+        nlohmann_json::nlohmann_json
+        fmt::fmt-header-only
+)
 
 ############################################################################################################################
 # Build subdirectories

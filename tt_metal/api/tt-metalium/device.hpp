@@ -132,6 +132,7 @@ public:
 
     virtual CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const = 0;
     virtual uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const = 0;
+    virtual uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const = 0;
 
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const = 0;
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const = 0;
@@ -214,7 +215,6 @@ public:
     virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;
     virtual uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) = 0;
-    virtual bool dispatch_firmware_active() const = 0;
 
     // TODO #15944: Temporary api until migration to actual fabric is complete
     virtual std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(

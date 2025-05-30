@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "pad_tile.hpp"
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -35,23 +36,25 @@ void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(5);
     constexpr uint32_t in0_block_h = get_compile_time_arg_val(6);
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(7);
-    constexpr bool extract_shard_sub_blocks = (bool)get_compile_time_arg_val(8);
-    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(9);
-    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(10);
-    // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(11);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(12);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(13);
-    // in0 mcast args
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(16);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(17);
-    // batch args
-    constexpr uint32_t MtKt = get_compile_time_arg_val(18);  // if 0
-    constexpr uint32_t batch = get_compile_time_arg_val(19);
+    constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(8);
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(20);
+    constexpr bool extract_shard_sub_blocks = (bool)get_compile_time_arg_val(9);
+    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(11);
+    // in0/in1 common args
+    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(12);
+    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(13);
+    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(14);
+    // in0 mcast args
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(17);
+    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(18);
+    // batch args
+    constexpr uint32_t MtKt = get_compile_time_arg_val(19);  // if 0
+    constexpr uint32_t batch = get_compile_time_arg_val(20);
+
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(21);
 
     MatmulOpReceiver fused_op_receiver;
     if constexpr (fuse_op) {
@@ -149,6 +152,15 @@ void kernel_main() {
                             if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
                                 noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
                             }
+
+                            // Zero out padded regions for the very last tile
+                            if constexpr (in0_last_ktile_w > 0) {
+                                if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
+                                    noc_async_read_barrier();
+                                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
+                                }
+                            }
+
                             l1_write_addr_in0 += in0_single_tile_size_bytes;
                             in0_tensor_tile_id += in0_tensor_stride_w;
                         }
@@ -194,12 +206,7 @@ void kernel_main() {
 
                     // num_dests must not include source, since we are NOT really doing a local copy!
                     noc_async_write_multicast(
-                        in0_start_address,
-                        in0_multicast_data_addr,
-                        in0_block_size_bytes,
-                        in0_mcast_num_cores,
-                        true,
-                        true);
+                        in0_start_address, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc,
                     // same cmd_buf Also, this only works because we are setting VCs statically (using

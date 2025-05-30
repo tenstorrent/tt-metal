@@ -19,7 +19,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -53,16 +53,12 @@ def load_and_cache_context(context_url, cache_dir, max_length=None):
 
 
 # load input prompts from json, return as a list
-def load_inputs(user_input, batch, instruct):
+def load_inputs(user_input, len_per_batch, instruct):
     if isinstance(user_input, str):
         with open(user_input, "r") as f:
             user_input = json.load(f)
-
-    if len(user_input) < batch:
-        logger.warning(
-            f"Number of users in the file is less than the provided batch={batch}. Repeating the prompts to match the batch size."
-        )
-        user_input = user_input * batch
+    batch = len(len_per_batch)
+    user_input = user_input * batch
 
     in_prompt = []
     cache_dir = Path("models/tt_transformers/demo/context_cache")
@@ -74,9 +70,7 @@ def load_inputs(user_input, batch, instruct):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
             if "max_length" in user_input[i]:  # Clip the context to the max length provided
-                context_text = load_and_cache_context(
-                    user_input[i]["context"], cache_dir, max_length=user_input[i]["max_length"]
-                )
+                context_text = load_and_cache_context(user_input[i]["context"], cache_dir, max_length=len_per_batch[i])
             else:
                 context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
             if instruct:
@@ -208,7 +202,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -238,7 +232,7 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 62000000,
+            "trace_region_size": 92000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
@@ -285,6 +279,15 @@ def test_demo_text(
     prefill_enable_trace = True  # repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
+    # Creat batch output file
+    benchmark_data = BenchmarkData()
+    profiler_step_name = "tg-llama-demo-prefill-e2e"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    output_directory = "models/demos/llama3_subdevices/demo/output"
+    os.makedirs(output_directory, exist_ok=True)
+    os.chmod(output_directory, 0o755)
+    output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
+
     # Override parameters from command line if they are provided
     # input_prompts = request.config.getoption("--input_prompts") or input_prompts
     # if request.config.getoption("--instruct") in [
@@ -326,8 +329,67 @@ def test_demo_text(
     if len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * batch_size
     else:  # Inputs from file
-        input_prompts = load_inputs(input_prompts, batch_size, input_prompts)
+        input_prompts = load_inputs(
+            input_prompts,
+            [
+                2,
+                111,
+                534,
+                1008,
+                1111 * 4,
+                3333 * 4,
+                4444 * 4,
+                5555 * 4,
+                6666 * 4,
+                7777 * 4,
+                8888 * 2,
+                9999 * 2,
+                10000 * 2,
+                11111 * 2,
+                12222 * 2,
+                15384 * 2,
+            ]
+            * 2,
+            input_prompts,
+        )
     profiler.end("loading_inputs")
+
+    # Load expected outputs for comparison
+    expected_outputs_data = []
+    # Always use this specific path for the expected outputs.
+    expected_outputs_file_path_to_load = "models/demos/llama3_subdevices/demo/outputs_batch_1.json"
+
+    if os.path.exists(expected_outputs_file_path_to_load):
+        logger.info(f"Attempting to load expected outputs from: {expected_outputs_file_path_to_load}")
+        try:
+            with open(expected_outputs_file_path_to_load, "r") as f:
+                first_char = f.read(1)
+                if not first_char:
+                    logger.warning(
+                        f"Expected outputs file {expected_outputs_file_path_to_load} is empty. Disabling comparison."
+                    )
+                else:
+                    f.seek(0)
+                    loaded_json = json.load(f)
+                    if isinstance(loaded_json, list) and all(isinstance(item, str) for item in loaded_json):
+                        expected_outputs_data = loaded_json
+                        logger.info(
+                            f"Successfully loaded {len(expected_outputs_data)} expected string outputs from {expected_outputs_file_path_to_load}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Expected {expected_outputs_file_path_to_load} to contain a JSON list of strings. Got {type(loaded_json)}. Disabling comparison."
+                        )
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON from {expected_outputs_file_path_to_load}: {e}. Disabling comparison.")
+        except Exception as e:
+            logger.error(
+                f"Unexpected error loading or parsing {expected_outputs_file_path_to_load}: {str(e)}. Disabling comparison."
+            )
+    else:
+        logger.warning(
+            f"Expected outputs file not found: {expected_outputs_file_path_to_load}. Output comparison will be skipped."
+        )
 
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
@@ -574,6 +636,57 @@ def test_demo_text(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
+            if not users_decoding and batch_size == 1:
+                # Compare to text in outputs_batch_1.json for the first user of the first batch
+                if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
+                    if i == 0:  # Only for the first user of the batch (i.e., user 0)
+                        if len(expected_outputs_data) > 0:
+                            expected_text = expected_outputs_data[0]  # Compare with the first entry in the JSON list
+                            actual_text_clean = text_after_prompt.strip()
+                            expected_text_clean = expected_text.strip()
+
+                            if actual_text_clean != expected_text_clean:
+                                logger.warning(
+                                    f"Output for user {i} in batch {batch_idx} DOES NOT MATCH expected output from {expected_outputs_file_path_to_load}."
+                                )
+                                logger.info(f"Expected: {repr(expected_text_clean)}")
+                                logger.info(f"Actual  : {repr(actual_text_clean)}")
+                                mismatches_found = 0
+                                # Iterate based on the longer of the two strings to catch all differences
+                                for char_idx in range(min(len(actual_text_clean), len(expected_text_clean))):
+                                    actual_char = (
+                                        actual_text_clean[char_idx]
+                                        if char_idx < len(actual_text_clean)
+                                        else "<END_OF_ACTUAL>"
+                                    )
+                                    expected_char = (
+                                        expected_text_clean[char_idx]
+                                        if char_idx < len(expected_text_clean)
+                                        else "<END_OF_EXPECTED>"
+                                    )
+                                    if actual_char != expected_char:
+                                        logger.info(
+                                            f"Mismatch at position {char_idx}: Actual: '{repr(actual_char)}', Expected: '{repr(expected_char)}'"
+                                        )
+                                        mismatches_found += 1
+                                    if mismatches_found >= 20:  # Limit number of logged mismatches
+                                        logger.info(
+                                            "More mismatches exist but will not be logged for this comparison (limit reached)."
+                                        )
+                                        assert (
+                                            False
+                                        ), "More mismatches exist but will not be logged for this comparison (limit reached)."
+                                        break
+                        else:
+                            logger.info(
+                                f"Output for user {i} in batch {batch_idx} matches expected output from {expected_outputs_file_path_to_load}."
+                            )
+                    else:  # expected_outputs_data is not empty list, but i==0 and len(expected_outputs_data) == 0 (should be caught by outer if)
+                        logger.warning(
+                            f"Expected outputs data was loaded from {expected_outputs_file_path_to_load} but is an empty list. Cannot compare for user {i}, batch {batch_idx}."
+                        )
+                elif batch_idx == 0 and not expected_outputs_data and i == 0:  # Only log once per batch if no data
+                    logger.warning("Expected outputs data is empty or not loaded, cannot compare.")
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
@@ -685,44 +798,17 @@ def test_demo_text(
         assert avg_time_to_first_token * 1000 < 122, f"TTFT {avg_time_to_first_token} ms is too high, should be < 121."
 
     # Save benchmark data for CI dashboard
-    # if is_ci_env:
-    #     # Instead of running warmup iterations, the demo profiles the initial compile iteration
-    #     bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
-    #     benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
+    if is_ci_env and repeat_batches > 1:
+        benchmark_data.add_measurement(
+            profiler,
+            1,  # grab the second repeat batch of prefill
+            "inference_prefill",
+            "ttft_e2e",
+            round(avg_time_to_first_token * 1000, 2),
+        )  # average TTFT in ms
 
-    #     # Save the decode performance of every iteration for plotting in superset
-    #     for i in range(1, iteration):
-    #         benchmark_data.add_measurement(
-    #             profiler,
-    #             0,
-    #             "inference_decode",
-    #             f"time_to_token_{i}",
-    #             profiler.get_duration(f"inference_decode_time_{i}") * 1000,
-    #             step_warm_up_num_iterations=None,
-    #             target=None,
-    #         )
-
-    #     # Also save the avg decode performance for the 128 iterations (excluding the compile time)
-    #     inference_decode_time_first_128 = sum(
-    #         profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
-    #     )
-    #     benchmark_data.add_measurement(
-    #         profiler,
-    #         0,
-    #         "inference_decode",
-    #         "avg_decode_time_first_128",
-    #         inference_decode_time_first_128 * 1000 / 127,
-    #         step_warm_up_num_iterations=None,
-    #         target=None,
-    #     )
-
-    #     benchmark_data.save_partial_run_json(
-    #         profiler,
-    #         run_type=f"{tt_device_name}-demo",
-    #         ml_model_name=model_args.base_model_name,
-    #         ml_model_type="llm",
-    #         num_layers=model_args.n_layers,
-    #         batch_size=batch_size,
-    #         input_sequence_length=max(prefill_lens),
-    #         output_sequence_length=num_tokens_generated_decode[0],
-    #     )
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"tg_llama_text_demo_prefill",
+            ml_model_name="llama70b-tg",
+        )

@@ -34,7 +34,7 @@
 #include "shape2d.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
-#include "trace_buffer.hpp"
+#include "trace/trace_buffer.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
@@ -325,7 +325,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 }
 
 void FDMeshCommandQueue::enqueue_write_shard_to_core(
-    const DeviceMemoryAddress& address,
+    DeviceMemoryAddress address,
     const void* src,
     uint32_t size_bytes,
     bool blocking,
@@ -334,6 +334,8 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
     IDevice* device = mesh_device_->get_device(address.device_coord);
+    address.address = device_dispatch::add_bank_offset_to_address(device, address.virtual_core_coord, address.address);
+
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     device_dispatch::write_to_core(
@@ -352,7 +354,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
 }
 
 void FDMeshCommandQueue::enqueue_read_shard_from_core(
-    const DeviceMemoryAddress& address,
+    DeviceMemoryAddress address,
     void* dst,
     uint32_t size_bytes,
     bool blocking,
@@ -360,7 +362,11 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
-    IDevice* device = this->mesh_device_->get_device(address.device_coord);
+    IDevice* device = mesh_device_->get_device(address.device_coord);
+    address.address = device_dispatch::add_bank_offset_to_address(device, address.virtual_core_coord, address.address);
+
+    device_dispatch::validate_core_read_write_bounds(device, address.virtual_core_coord, address.address, size_bytes);
+
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     if (size_bytes > 0) {
@@ -400,9 +406,6 @@ void FDMeshCommandQueue::write_shard_to_device(
     const auto region_value = region.value_or(BufferRegion(0, shard_view->size()));
 
     if (shard_view->is_nd_sharded()) {
-        TT_FATAL(
-            shard_view->is_l1(),
-            "Local device shard with BufferDistributionSpec must be L1 for write_shard_to_device!");
         const auto& [banks, bank_mapping_in_bytes] = shard_view->get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
@@ -449,9 +452,6 @@ void FDMeshCommandQueue::read_shard_from_device(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     if (shard_view->is_nd_sharded()) {
-        TT_FATAL(
-            shard_view->is_l1(),
-            "Local device shard with BufferDistributionSpec must be L1 for read_shard_from_device!");
         const auto& [banks, bank_mapping_in_bytes] = shard_view->get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =

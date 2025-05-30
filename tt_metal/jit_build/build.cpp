@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -240,6 +240,10 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_relaxed_memory_ordering_disabled()) {
         this->defines_ += "-DDISABLE_RELAXED_MEMORY_ORDERING ";
+    }
+
+    if (rtoptions.get_gathering_enabled()) {
+        this->defines_ += "-DENABLE_GATHERING ";
     }
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
@@ -755,7 +759,8 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
-        lflags += "-Wl,-Map=" + out_dir + "linker.map ";
+        lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
+        lflags += "-save-temps ";
     }
 
     // Append user args

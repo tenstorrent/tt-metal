@@ -355,8 +355,9 @@ def test_all_gather_only(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("use_new_version", [True])
-@pytest.mark.parametrize("num_iters, warmup_iters", [[100, 10]])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
 @pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("fused_add", [True])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -381,6 +382,7 @@ def test_tg_trace_rms_fuse(
     output_shard_grid,
     trace_mode,
     use_new_version,
+    fused_add,
 ):
     profiler = BenchmarkProfiler()
     run_rms_trace(
@@ -393,10 +395,12 @@ def test_tg_trace_rms_fuse(
         input_shard_grid,
         output_shard_grid,
         ttnn.Topology.Linear,
+        fused_add,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         profiler=profiler,
         use_new_version=use_new_version,
+        trace_mode=trace_mode,
     )
 
 
@@ -430,12 +434,17 @@ def test_tg_trace_rms_fuse(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("fused_add", [True, False])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 def test_rms_fuse(
     mesh_device,
     num_devices,
@@ -446,6 +455,11 @@ def test_rms_fuse(
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
+    fused_add,
+    input_dtype,
+    residual_dtype,
+    output_dtype,
+    topology,
 ):
     run_rms_fuse_impl(
         mesh_device,
@@ -456,8 +470,12 @@ def test_rms_fuse(
         function_level_defaults,
         input_shard_grid,
         output_shard_grid,
-        ttnn.Topology.Linear,
+        topology,
+        fused_add,
+        output_dtype=output_dtype,
         num_iters=num_iters,
+        input_dtype=input_dtype,
+        residual_dtype=residual_dtype,
     )
 
 

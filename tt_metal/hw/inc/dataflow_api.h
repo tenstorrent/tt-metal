@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -772,8 +772,8 @@ void noc_async_write_multicast_one_packet(
     std::uint32_t size,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    constexpr bool multicast_path_reserve = true;
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST,dst_noc_addr_multicast,size, NOC_MULTICAST_WRITE_VC);
 
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -884,7 +884,7 @@ FORCE_INLINE void noc_async_read_page(
     */
     RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size, -1);
 
-    s.noc_async_read_page(id, dst_local_l1_addr, offset, noc);
+    noc_async_read(s.get_noc_addr(id, offset), dst_local_l1_addr, s.page_size, noc);
 }
 
 template <bool DRAM, uint32_t tile_hw>
@@ -900,7 +900,188 @@ FORCE_INLINE void noc_async_read_tile(
     */
     RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, s.page_size, -1);
 
-    s.noc_async_read_tile(id, dst_local_l1_addr, offset, noc);
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
+    uint32_t src_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
+    uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
+
+    WAYPOINT("NRTW");
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, get_noc_addr_helper(src_noc_xy, src_addr), dst_local_l1_addr, s.page_size);
+    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
+    WAYPOINT("NRTD");
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, s.page_size);            // len_bytes
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+
+template <bool DRAM, uint32_t tile_hw>
+FORCE_INLINE void noc_async_write_tile(
+    const uint32_t id,
+    const InterleavedAddrGenFast<DRAM, tile_hw>& s,
+    std::uint32_t src_local_l1_addr,
+    uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, s.page_size, NOC_UNICAST_WRITE_VC);
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+    }
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
+    uint32_t dest_addr = s.get_addr(id, bank_offset_index, bank_index);
+    uint32_t dest_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
+
+    WAYPOINT("NWTW");
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
+        noc, get_noc_addr_helper(dest_noc_xy, dest_addr), src_local_l1_addr, s.page_size);
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    WAYPOINT("NWTD");
+
+    constexpr uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
+                                       NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+                                       0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
+                                       0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
+                                       NOC_CMD_RESP_MARKED;
+
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dest_addr);            // (uint32_t)dest_addr
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_COORDINATE, dest_noc_xy);  // dest_addr >> 32
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, s.page_size);            // len_bytes
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_nonposted_writes_num_issued[noc] += 1;
+        noc_nonposted_writes_acked[noc] += 1;  // num_dests
+    }
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_read_page(
+    const uint32_t id,
+    const InterleavedPow2AddrGenFast<DRAM>& s,
+    std::uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
+    uint32_t src_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
+    uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
+
+    WAYPOINT("NRPW");
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION(
+        noc, get_noc_addr_helper(src_noc_xy, src_addr), dst_local_l1_addr, 1 << s.aligned_log_base_2_of_page_size);
+    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
+    WAYPOINT("NRPD");
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, 1 << s.aligned_log_base_2_of_page_size);  // len_bytes
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_read_partial_page(
+    const uint32_t id,
+    const InterleavedPow2AddrGenFast<DRAM>& s,
+    std::uint32_t dst_local_l1_addr,
+    const uint32_t size,
+    const uint32_t offset,
+    uint8_t noc = noc_index) {
+    // Note: This is not used anywhere in tt-metal
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
+    uint32_t src_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
+    uint32_t src_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
+
+    WAYPOINT("RP1W");
+    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
+    WAYPOINT("RP1D");
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, get_noc_addr_helper(src_noc_xy, src_addr), dst_local_l1_addr, size);
+
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);                   // len_bytes
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+
+template <bool DRAM>
+FORCE_INLINE void noc_async_write_page(
+    const uint32_t id,
+    const InterleavedPow2AddrGenFast<DRAM>& s,
+    std::uint32_t src_local_l1_addr,
+    const uint32_t write_size_bytes,
+    const uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    // Note: This is not used anywhere in tt-metal
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+        inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+    }
+    uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
+    uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
+    uint32_t dest_addr = s.get_addr(id, bank_offset_index, bank_index, offset);
+    uint32_t dest_noc_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_index, noc);
+
+    WAYPOINT("NWPW");
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
+        noc, get_noc_addr_helper(dest_noc_xy, dest_addr), src_local_l1_addr, write_size_bytes);
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    WAYPOINT("NWPD");
+
+    constexpr uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
+                                       NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+                                       0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
+                                       0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
+                                       NOC_CMD_RESP_MARKED;
+
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dest_addr);            // (uint32_t)dest_addr
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_COORDINATE, dest_noc_xy);  // dest_addr >> 32
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, write_size_bytes);       // len_bytes
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_nonposted_writes_num_issued[noc] += 1;
+        noc_nonposted_writes_acked[noc] += 1;  // num_dests
+    }
 }
 
 // clang-format off
@@ -939,17 +1120,6 @@ inline void noc_async_write(
             noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
         WAYPOINT("NAWD");
     }
-}
-
-template <bool DRAM, uint32_t tile_hw>
-FORCE_INLINE void noc_async_write_tile(
-    const uint32_t id,
-    const InterleavedAddrGenFast<DRAM, tile_hw>& s,
-    std::uint32_t src_local_l1_addr,
-    uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, s.page_size, NOC_UNICAST_WRITE_VC);
-
-    s.noc_async_write_tile(id, src_local_l1_addr, noc);
 }
 
 template <ProgrammableCoreType type = ProgrammableCoreType::TENSIX>
@@ -1016,11 +1186,10 @@ inline void noc_async_write_multicast(
     std::uint32_t size,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    constexpr bool multicast_path_reserve = true;
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_multicast_one_packet(
-            src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, multicast_path_reserve);
+        noc_async_write_multicast_one_packet(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
     } else {
         WAYPOINT("NMWW");
         DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
@@ -1071,8 +1240,8 @@ inline void noc_semaphore_set_multicast(
     std::uint64_t dst_noc_addr_multicast,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    constexpr bool multicast_path_reserve = true;
     WAYPOINT("NSNW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
     ncrisc_noc_fast_write_any_len<noc_mode>(
@@ -1119,8 +1288,8 @@ inline void noc_semaphore_set_multicast_loopback_src(
     std::uint64_t dst_noc_addr_multicast,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    constexpr bool multicast_path_reserve = true;
     WAYPOINT("NSLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, 4);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
@@ -1143,8 +1312,8 @@ inline void noc_async_write_multicast_loopback_src(
     std::uint32_t size,
     std::uint32_t num_dests,
     bool linked = false,
-    bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
+    constexpr bool multicast_path_reserve = true;
     WAYPOINT("NMLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(

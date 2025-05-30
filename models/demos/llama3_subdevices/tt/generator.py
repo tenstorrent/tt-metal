@@ -27,7 +27,7 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.generator import SamplingParams
 
 
-def get_padded_prefill_len(seq_len):
+def get_padded_prefill_len(seq_len: int) -> int:
     """
     Get the padded prefill length for a given sequence length.
     This is used to pad the sequence length to the nearest power of 2.
@@ -91,7 +91,7 @@ class Generator:
 
         for user_id in range(batch):
             logger.info(f"Prefilling User {user_id + 1}")
-            seq_len = prompt_lens[user_id]
+            seq_len = int(prompt_lens[user_id])
             last_token_idx = seq_len - 1
 
             prefill_seq_len = get_padded_prefill_len(seq_len)
@@ -310,8 +310,8 @@ class Generator:
         assert (
             sampling_params is None or sampling_params.temperature == 0
         ), "Currently only supporting greedy decoding (temperature=0) on device"
-        argmax_on_device = (
-            False if -1 not in start_pos else (sampling_params is not None and sampling_params.temperature == 0)
+        argmax_on_device = torch.all(start_pos[1:] == -1).item() and (
+            sampling_params is not None and sampling_params.temperature == 0
         )
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
@@ -507,9 +507,21 @@ class Generator:
 
     def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
+
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
-        return page_table[:, :num_blocks]
+        page_table = page_table[:, :num_blocks]
+        if page_table.shape[1] < num_blocks:
+            # If page table is too short, pad it with -1
+            padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+            page_table = torch.cat([page_table, padding], dim=1)
+        # Pad page table to 32 users
+        b = page_table.shape[0]
+        padded_b = 32 - b
+        padded_page_table = torch.cat(
+            [page_table, torch.ones(padded_b, page_table.shape[1], dtype=torch.int32) * -1], dim=0
+        )
+        return padded_page_table
 
     ## Destructor (used to delete ttnn trace if exists)
 

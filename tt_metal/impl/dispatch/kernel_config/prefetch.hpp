@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,9 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
+
+namespace tt {
+namespace tt_metal {
 
 struct prefetch_static_config_t {
     std::optional<uint32_t> my_downstream_cb_sem_id;
@@ -31,6 +34,7 @@ struct prefetch_static_config_t {
     std::optional<uint32_t> scratch_db_base;
     std::optional<uint32_t> scratch_db_size;
     std::optional<uint32_t> downstream_sync_sem_id;
+    std::optional<uint32_t> ringbuffer_size;
 
     // Used for prefetch_d
     std::optional<uint32_t> cmddat_q_pages;
@@ -100,6 +104,7 @@ public:
         } else if (d_variant) {
             this->logical_core_ = core_manager.prefetcher_d_core(device_id, channel, cq_id);
         }
+        this->kernel_type_ = FDKernelType::DISPATCH;
     }
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
@@ -118,3 +123,6 @@ private:
     prefetch_static_config_t static_config_;
     prefetch_dependent_config_t dependent_config_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt

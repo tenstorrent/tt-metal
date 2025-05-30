@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -99,6 +99,7 @@ def run_conv(
     run_twice=False,
     fast_compare=False,
     slice_config=None,
+    enable_kernel_stride_folding=False,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -169,14 +170,14 @@ def run_conv(
 
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor,
-        weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
+        ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
         mesh_mapper=weight_mesh_mapper,
     )
     tt_bias_tensor = None
     if has_bias:
         tt_bias_tensor = ttnn.from_torch(
             torch_bias_tensor,
-            weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
+            ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
             mesh_mapper=weight_mesh_mapper,
         )
 
@@ -202,6 +203,7 @@ def run_conv(
         preprocess_weights_on_device=preprocess_weights_on_device,
         always_preprocess_weights=False,
         in_place=in_place,
+        enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -291,9 +293,13 @@ def run_conv(
 
     torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
-        passing, pcc_msg = check_with_fast_pcc_without_tensor_printout(out, ref, pcc=pcc)
-        logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
-        assert passing, pcc_msg
+        if fp32_accum:
+            threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
+        else:
+            threshold = 3e-1 + 1e-1 * math.log(input_channels * filter_height * filter_width, 2)
+        logger.info(f"Threshold: {threshold}")
+        diff = torch.abs(ref - out) / ref.abs().mean()
+        assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
     else:
         passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
         logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
@@ -662,7 +668,7 @@ SliceWidth = ttnn.Conv2dSliceWidth
         (56,    64,  1008,   256,   SliceWidth,   2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
         (64,   128,   992,   992,   SliceWidth,   50,  ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
         (128,  128,  1024,  1024,  SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (128,  16,   1024,  1024,  SliceWidth,     7,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
+        (128,  3,   1024,  1024,  SliceWidth,     7,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
         (16,   512,  128,    128,   SliceWidth,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
         (256,  128,  1024,  1024,  SliceWidth,   31,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi  ),
         (256,  256,  1024,  1024,  SliceWidth,   37,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi  ),
@@ -3219,7 +3225,7 @@ def test_conv2d_sdxl(
         (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8),
 
         # output_channels 3
-        # (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16), #  pcc: 0.0
+        (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16),
 
         # input_channels 4
         (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, None, 1),
@@ -3548,3 +3554,47 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 
     _, pcc_message = assert_with_pcc(torch_output_tensor, ttnn_output_tensor[0], pcc=0.99)
     print(pcc_message)
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("input_channels", [3, 320])
+@pytest.mark.parametrize("output_channels", [32])
+@pytest.mark.parametrize("input_height,input_width", [(224, 224), (512, 672)])
+@pytest.mark.parametrize("kernel_height,kernel_width", [(16, 16), (32, 32)])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("has_bias", [True, False])
+def test_conv2d_with_fold(
+    device,
+    torch_tensor_map,
+    batch_size,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    kernel_height,
+    kernel_width,
+    input_layout,
+    has_bias,
+):
+    run_conv(
+        device=device,
+        torch_tensor_map=torch_tensor_map,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        packer_l1_acc = True,
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=kernel_height,
+        filter_width=kernel_width,
+        stride_h=kernel_height,
+        stride_w=kernel_width,
+        padding=(0, 0),
+        config_override=None,
+        input_layout=input_layout,
+        has_bias=has_bias,
+        enable_kernel_stride_folding=True,
+    )

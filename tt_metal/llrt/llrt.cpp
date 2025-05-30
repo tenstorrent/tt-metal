@@ -77,11 +77,11 @@ const ll_api::memory& get_risc_binary(std::string_view path, ll_api::memory::Loa
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, tt::stl::Span<const uint8_t> hex_vec, uint64_t addr, bool small_access) {
+void write_hex_vec_to_core(chip_id_t chip, const CoreCoord& core, tt::stl::Span<const uint8_t> hex_vec, uint64_t addr) {
     // the API is named "write_core", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size(), tt_cxy_pair(chip, core), addr, small_access);
+        hex_vec.data(), hex_vec.size(), tt_cxy_pair(chip, core), addr);
 }
 
 std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
@@ -246,7 +246,8 @@ void wait_until_cores_done(
 
         // Print not-done cores
         if (loop_count % 1000 == 0) {
-            log_debug(tt::LogMetal, "Not done phys cores: {}", fmt::join(not_done_phys_cores, " "));
+            log_debug(
+                tt::LogMetal, "Device {}: Not done phys cores: {}", device_id, fmt::join(not_done_phys_cores, " "));
             usleep(100000);
         }
 
@@ -256,7 +257,7 @@ void wait_until_cores_done(
             bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
 
             if (is_done) {
-                log_debug(tt::LogMetal, "Phys cores just done: {}", phys_core.str());
+                log_debug(tt::LogMetal, "Device {}: Phys cores just done: {}", device_id, phys_core.str());
                 it = not_done_phys_cores.erase(it);
             } else {
                 ++it;

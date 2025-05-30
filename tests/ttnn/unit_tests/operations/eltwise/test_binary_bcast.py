@@ -9,7 +9,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_pcc,
 )
-from models.utility_functions import skip_for_grayskull, torch_random
+from models.utility_functions import torch_random
 from itertools import product as parameters
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -106,7 +106,6 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
     return pt, tt
 
 
-@skip_for_grayskull("Possible accuracy issues with grayskull")
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     (
@@ -496,7 +495,6 @@ def test_binary_sharded_core_grid(device, a_shape, b_shape, sharded_core_grid, m
     assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -564,7 +562,6 @@ def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -640,7 +637,6 @@ def test_binary_sfpu_opt_out(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -695,7 +691,6 @@ def test_binary_sfpu_bitwise_ops(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -811,7 +806,6 @@ binary_inplace_fns = {
         parameters({"mul_"}, {log_lhs_sqrt_abs_post}),
     ),
 )
-@skip_for_grayskull("Possible accuracy issues with grayskull")
 def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, device):
     torch.manual_seed(0)
 
@@ -930,7 +924,6 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= pcc
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -1032,7 +1025,6 @@ def test_inplace_binary_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
         torch.Size([920, 1, 256]),
     ),
 )
-@skip_for_grayskull("Possible accuracy issues with grayskull")
 @pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
 def test_inplace_binary_with_scalar(a_shape, scalar, ttnn_fn, device):
     torch.manual_seed(0)
@@ -1083,7 +1075,6 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
         ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
@@ -2021,3 +2012,94 @@ def test_bcast(input_shape_a, device, bcast_dim, math_op):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor], 0.9999)
     assert comp_pass
+
+
+height_sharded_memory_config_1 = ttnn.create_sharded_memory_config(
+    [1024, 256],
+    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 7))}),
+    strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
+
+height_sharded_memory_config_2 = ttnn.create_sharded_memory_config(
+    [1024, 128],
+    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 7))}),
+    strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
+height_sharded_memory_config_3 = ttnn.create_sharded_memory_config(
+    [4096, 64],
+    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 7))}),
+    strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
+height_sharded_memory_config_4 = ttnn.create_sharded_memory_config(
+    [4096, 32],
+    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 7))}),
+    strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    ([torch.bfloat16, ttnn.bfloat16],),
+)
+def test_binary_sharded_decoder_program_cache(dtype_pt, dtype_tt, device, use_program_cache):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.x < 8 or compute_grid_size.y < 8:
+        pytest.skip("Test is skipped because the device does not have full coregrid 8x8")
+
+    torch.manual_seed(0)
+    # device.disable_and_clear_program_cache()
+
+    input_tensors = (
+        (torch.Size([1, 1, 65536, 256]), torch.Size([1, 1, 65536, 256]), height_sharded_memory_config_1),
+        (torch.Size([1, 1, 65536, 128]), torch.Size([1, 1, 65536, 128]), height_sharded_memory_config_2),
+        (torch.Size([1, 1, 262144, 64]), torch.Size([1, 1, 262144, 64]), height_sharded_memory_config_3),
+        (torch.Size([1, 1, 262144, 3]), torch.Size([1, 1, 262144, 3]), height_sharded_memory_config_4),
+    )
+    for _i in range(2):
+        for a_shape, b_shape, sharded_config in input_tensors:
+            input_combinations = (
+                (ttnn.DRAM_MEMORY_CONFIG, sharded_config),
+                (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+            )
+            for src_a_config, src_b_config in input_combinations:
+                a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(
+                    a_shape
+                )
+                b_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(
+                    b_shape
+                )
+
+                a_tt = ttnn.from_torch(
+                    a_pt,
+                    dtype=dtype_tt,
+                    device=device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=src_a_config,
+                )
+                b_tt = ttnn.from_torch(
+                    b_pt,
+                    dtype=dtype_tt,
+                    device=device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=src_b_config,
+                )
+
+                out_pt = torch.add(a_pt, b_pt)
+                ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=a_tt, use_legacy=False)
+                out_tt_interleaved = ttnn.to_torch(a_tt)
+
+                pcc = ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt)
+                # print(f"Pearson correlation coefficient: {pcc}")
+                print(f"device.num_program_cache_entries(): {device.num_program_cache_entries()}")
+                assert pcc >= 0.99988
+    assert (
+        device.num_program_cache_entries() == 5
+    ), f"device.num_program_cache_entries(): {device.num_program_cache_entries()}"
