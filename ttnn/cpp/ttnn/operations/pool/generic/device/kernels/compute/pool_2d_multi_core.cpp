@@ -67,7 +67,6 @@ void MAIN {
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(11);
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(12);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
-    constexpr uint32_t is_blackhole = (bool)get_compile_time_arg_val(16);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -90,8 +89,7 @@ void MAIN {
     // In case #sticks > 16 we need bottom two faces as well, and we need to configure reduce to
     // process all rows per face. In the case we rely on reader kernel to put "clear value"
     // in datums which are not used.
-    constexpr bool avg_pool_blackhole = REDUCE_OP == PoolType::SUM && is_blackhole;
-    constexpr uint32_t face_r_dim = (window_size_hw > 16 || avg_pool_blackhole) ? 16 : window_size_hw;
+    constexpr uint32_t face_r_dim = window_size_hw > 16 ? 16 : window_size_hw;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, face_r_dim);
     pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
