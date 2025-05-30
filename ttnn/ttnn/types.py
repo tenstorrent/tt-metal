@@ -70,6 +70,7 @@ MeshCoordinateRangeSet = ttnn._ttnn.multi_device.MeshCoordinateRangeSet
 ShardOrientation = ttnn._ttnn.tensor.ShardOrientation
 ShardMode = ttnn._ttnn.tensor.ShardMode
 ShardSpec = ttnn._ttnn.tensor.ShardSpec
+NdShardSpec = ttnn._ttnn.tensor.NdShardSpec
 CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
