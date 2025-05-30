@@ -1092,7 +1092,7 @@ def test_ttnn_slice_whisper(
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, orientation):
     core_grid = device.compute_with_storage_grid_size()
