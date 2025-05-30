@@ -156,7 +156,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     }
 }
 
-Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, const std::byte* data_region) {
+Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, tt::stl::Span<std::byte> tensor_data) {
     switch (fb_tensor->tensor_type_type()) {
         case ttnn::flatbuffer::TensorType::NONE: TT_THROW("Invalid TensorType");
         case ttnn::flatbuffer::TensorType::ReplicatedTensor: {
@@ -171,7 +171,8 @@ Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, const std::byt
             const uint64_t size = inline_storage->size();
 
             tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(size, spec);
-            std::memcpy(host_buffer.view_bytes().data(), data_region + offset, size);
+            TT_FATAL(offset + size <= tensor_data.size(), "Tensor data out of bounds");
+            std::memcpy(host_buffer.view_bytes().data(), tensor_data.data() + offset, size);
 
             return Tensor(std::move(host_buffer), spec);
         }
@@ -206,7 +207,8 @@ Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, const std::byt
                 const uint64_t size = inline_storage->size();
 
                 tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(size, spec);
-                std::memcpy(static_cast<void*>(host_buffer.view_bytes().data()), data_region + offset, size);
+                TT_FATAL(offset + size <= tensor_data.size(), "Tensor data out of bounds for shard {}", i);
+                std::memcpy(static_cast<void*>(host_buffer.view_bytes().data()), tensor_data.data() + offset, size);
                 buffers.push_back(std::move(host_buffer));
             }
 

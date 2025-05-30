@@ -422,7 +422,7 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) 
     std::vector<std::byte> data_buffer(data_size);
     safe_fread(data_buffer.data(), data_size, 1, input_file);
 
-    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, data_buffer.data());
+    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, data_buffer);
     if (device != nullptr) {
         tensor = tensor.to_device(device);
     }
