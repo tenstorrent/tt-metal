@@ -68,6 +68,8 @@ class TtAutoencoderKL(nn.Module):
         C = self.conv_params["output_channels"]
         ttnn.deallocate(pre_conv_hidden_states)
 
+        self.conv_config.always_preprocess_weights = False
+
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         hidden_states = self.decoder(hidden_states, [B, C, H, W])
 

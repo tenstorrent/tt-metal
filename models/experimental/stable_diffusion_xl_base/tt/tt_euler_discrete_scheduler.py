@@ -77,6 +77,9 @@ class TtEulerDiscreteScheduler(nn.Module):
 
         # self.update_device_tensor("sigmas")
 
+    def set_step_index(self, step_index: int):
+        self.step_index = step_index
+
     def update_device_tensor(self, tensor_name):
         array = getattr(self, tensor_name)
         setattr(self, "tt_" + tensor_name, [])

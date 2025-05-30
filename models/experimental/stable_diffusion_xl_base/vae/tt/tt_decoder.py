@@ -130,6 +130,7 @@ class TtDecoder(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv_in_params["output_channels"]
+        self.conv_in_config.always_preprocess_weights = False
 
         if self.conv_in_slice_config is not None:
             hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
