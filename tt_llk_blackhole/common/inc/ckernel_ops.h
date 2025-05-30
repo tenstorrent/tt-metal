@@ -497,13 +497,13 @@
 #define TT_SETADCXY(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask)  ckernel::instrn_buffer[0] = TT_OP_SETADCXY(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask)
 #define TTI_SETADCXY(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask) INSTRUCTION_WORD(TT_OP_SETADCXY(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask))
 
-#define TT_OP_SETADCZW(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask) \
-    TT_OP(0x54, (((CntSetMask) << 21) + ((Ch1_Y) << 15) + ((Ch1_X) << 12) + ((Ch0_Y) << 9) + ((Ch0_X) << 6) + ((BitMask) << 0)))
-#define TT_SETADCZW_VALID(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask)                                                            \
-    (ckernel::is_valid(CntSetMask, 3) && ckernel::is_valid(Ch1_Y, 6) && ckernel::is_valid(Ch1_X, 3) && ckernel::is_valid(Ch0_Y, 3) && \
-     ckernel::is_valid(Ch0_X, 3) && ckernel::is_valid(BitMask, 6))
-#define TT_SETADCZW(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask)  ckernel::instrn_buffer[0] = TT_OP_SETADCZW(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask)
-#define TTI_SETADCZW(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask) INSTRUCTION_WORD(TT_OP_SETADCZW(CntSetMask, Ch1_Y, Ch1_X, Ch0_Y, Ch0_X, BitMask))
+#define TT_OP_SETADCZW(CntSetMask, Ch1_W, Ch1_Z, Ch0_W, Ch0_Z, BitMask) \
+    TT_OP(0x54, (((CntSetMask) << 21) + ((Ch1_W) << 15) + ((Ch1_Z) << 12) + ((Ch0_W) << 9) + ((Ch0_Z) << 6) + ((BitMask) << 0)))
+#define TT_SETADCZW_VALID(CntSetMask, Ch1_W, Ch1_Z, Ch0_W, Ch0_Z, BitMask)                                                            \
+    (ckernel::is_valid(CntSetMask, 3) && ckernel::is_valid(Ch1_W, 6) && ckernel::is_valid(Ch1_Z, 3) && ckernel::is_valid(Ch0_W, 3) && \
+     ckernel::is_valid(Ch0_Z, 3) && ckernel::is_valid(BitMask, 6))
+#define TT_SETADCZW(CntSetMask, Ch1_W, Ch1_Z, Ch0_W, Ch0_Z, BitMask)  ckernel::instrn_buffer[0] = TT_OP_SETADCZW(CntSetMask, Ch1_W, Ch1_Z, Ch0_W, Ch0_Z, BitMask)
+#define TTI_SETADCZW(CntSetMask, Ch1_W, Ch1_Z, Ch0_W, Ch0_Z, BitMask) INSTRUCTION_WORD(TT_OP_SETADCZW(CntSetMask, Ch1_W, Ch1_Z, Ch0_W, Ch0_Z, BitMask))
 
 #define TT_OP_SETASHRMH(reg_mask, halo_mask)    TT_OP(0x1e, (((reg_mask) << 1) + ((halo_mask) << 0)))
 #define TT_SETASHRMH_VALID(reg_mask, halo_mask) (ckernel::is_valid(reg_mask, 23) && ckernel::is_valid(halo_mask, 1))
