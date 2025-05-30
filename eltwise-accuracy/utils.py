@@ -62,6 +62,17 @@ def setexp_bf16_(input_tensor, exponent):
     return input_tensor
 
 
+def ulp(input_tensor):
+    torch_max = torch.full(input_tensor.size(), torch.finfo(input_tensor.dtype).max, dtype=input_tensor.dtype)
+    return torch.abs(input_tensor - torch.nextafter(input_tensor, torch_max))
+
+
+def ulp_diff(output, golden):
+    ulp_tensor = ulp(golden)
+    diff = torch.abs(output - golden)
+    return diff / ulp_tensor
+
+
 # For each element, returns the ULP distance to the nearest representable number
 # Does not work with infinite values
 def ulp_bf16(input_tensor):
