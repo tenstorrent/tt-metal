@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_elu.h"
+#include "ckernel_sfpu_elu.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -30,11 +32,14 @@ namespace ckernel {
  * | slope          | slope used in elu calculation                                              | uint32_t | Greater than 0                                        | True     |
  */
  // clang-format on
-ALWI void elu_tile(uint32_t idst, uint32_t param0) { MATH((llk_math_eltwise_unary_sfpu_elu<APPROX>(idst, param0))); }
+ALWI void elu_tile(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_elu<APPROX>, idst, (int)VectorMode::RC, param0)));
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void elu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_elu_init<APPROX>())); }
+ALWI void elu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::elu, APPROX>(sfpu::elu_init<APPROX>))); }
 
 }  // namespace ckernel

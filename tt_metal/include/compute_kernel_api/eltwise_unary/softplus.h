@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_softplus.h"
+#include "ckernel_sfpu_softplus.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -33,12 +35,13 @@ namespace ckernel {
  */
  // clang-format on
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    MATH((llk_math_eltwise_unary_sfpu_softplus<APPROX>(idst, beta, beta_reciprocal, threshold)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_softplus<APPROX>, idst, (int)VectorMode::RC, beta, beta_reciprocal, threshold)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softplus_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softplus_init<APPROX>())); }
+ALWI void softplus_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::softplus, APPROX>())); }
 
 }  // namespace ckernel

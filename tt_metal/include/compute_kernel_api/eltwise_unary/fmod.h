@@ -6,7 +6,9 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_fmod.h"
+#include "ckernel_sfpu_fmod.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -32,14 +34,15 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void fmod_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_fmod<APPROX>(idst, param0, param1)));
+    MATH((llk_math_eltwise_unary_sfpu_params<APPROX>(
+        ckernel::sfpu::calculate_fmod<APPROX>, idst, (int)VectorMode::RC, param0, param1)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void fmod_tile_init(uint32_t param0, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_fmod_init<APPROX>(param0, param1)));
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::fmod, APPROX>(sfpu::init_fmod<APPROX>, param0, param1)));
 }
 
 }  // namespace ckernel
