@@ -1884,9 +1884,11 @@ void kernel_main() {
 
             *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
 
+            // 1. master receives notification from host and exits from this wait
             wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
             if constexpr (is_local_handshake_master) {
+                // 2. master notifies all subordinate routers that it is ready for traffic
                 notify_subordinate_routers(
                     edm_channels_mask,
                     local_handshake_master_eth_chan,
