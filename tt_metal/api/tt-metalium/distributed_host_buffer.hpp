@@ -59,7 +59,7 @@ public:
     distributed::MeshShape shape() const;
 
     // Returns the coordinates of populated shards in the buffer.
-    std::unordered_set<distributed::MeshCoordinate> shard_coords() const;
+    const std::unordered_set<distributed::MeshCoordinate>& shard_coords() const;
 
 private:
     std::optional<distributed::MeshCoordinate> global_to_local(const distributed::MeshCoordinate& coord) const;

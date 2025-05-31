@@ -101,7 +101,7 @@ void DistributedHostBuffer::apply(const ApplyFn& fn) const {
 
 distributed::MeshShape DistributedHostBuffer::shape() const { return global_shape_; }
 
-std::unordered_set<distributed::MeshCoordinate> DistributedHostBuffer::shard_coords() const {
+const std::unordered_set<distributed::MeshCoordinate>& DistributedHostBuffer::shard_coords() const {
     return populated_shards_;
 }
 
