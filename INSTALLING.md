@@ -160,11 +160,6 @@ source python_env/bin/activate
 ```
 
 - (optional) Software dependencies for profiling use:
-  - Install dependencies:
-  ```sh
-  sudo apt install pandoc libtbb-dev libcapstone-dev pkg-config
-  ```
-
   - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
 
 - Continue to [You Are All Set!](#you-are-all-set)
