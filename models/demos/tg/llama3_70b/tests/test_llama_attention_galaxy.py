@@ -19,8 +19,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     UNIT_TEST_LAYER_NUM,
     UNIT_TEST_N_LAYER,
     UNIT_TEST_START_POS,
-    ConcatMesh2DToTensor,
-    ShardTensor2dMesh,
     check_kv_cache,
     check_mesh_device,
     comp_pcc,
@@ -126,8 +124,10 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             layout=ttnn.TILE_LAYOUT,
             memory_config=ACT_MEMCFG,
             device=llama_attention_model.mesh_device,
-            mesh_mapper=ShardTensor2dMesh(
-                llama_attention_model.mesh_device, dims=(3, None), cluster_shape=llama_attention_model.cluster_shape
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                llama_attention_model.mesh_device,
+                mesh_shape=tuple(reversed(llama_attention_model.cluster_shape)),
+                dims=(None, 3),
             ),
         )
 
@@ -179,8 +179,10 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_attention_model.mesh_device,
-            mesh_mapper=ShardTensor2dMesh(
-                llama_attention_model.mesh_device, dims=(3, None), cluster_shape=llama_attention_model.cluster_shape
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                llama_attention_model.mesh_device,
+                mesh_shape=tuple(reversed(llama_attention_model.cluster_shape)),
+                dims=(None, 3),
             ),
         )
 
@@ -340,7 +342,10 @@ def run_test_LlamaAttention_inference(
         # tt_out = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tt_out.cpu())]
 
         tt_out = ttnn.to_torch(
-            tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, mesh_shape=tuple(reversed(cluster_shape)), dims=(1, 3)
+            ),
         )
         tt_out = tt_out[:, 0:1, :, :]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
@@ -376,9 +381,12 @@ def run_test_LlamaAttention_inference(
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaAttention_model.layer_past]
 
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(0, 1), cluster_shape=cluster_shape))[
-            :batch, ...
-        ]
+        ttnn.to_torch(
+            lp,
+            mesh_composer=ttnn.ConcatMesh2DToTensor(
+                mesh_device, mesh_shape=tuple(reversed(cluster_shape)), dims=(1, 0)
+            ),
+        )[:batch, ...]
         for lp in tt_layer_present_all
     ]
 
