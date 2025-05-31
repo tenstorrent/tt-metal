@@ -45,18 +45,18 @@ public:
 
     template <reflect::fixed_string name>
         requires requires { reflect::get<name>(std::declval<attributes_t>()); }
-    const auto get() const {
+    auto get() const {
         return reflect::get<name>(this->attributes);
     }
 
     template <std::size_t index>
-    const auto get() const {
+    auto get() const {
         return reflect::get<index>(this->attributes);
     }
 
     template <reflect::fixed_string name>
         requires(name == reflect::fixed_string{"report_path"})
-    const std::optional<std::filesystem::path> get() const {
+    std::optional<std::filesystem::path> get() const {
         if (this->attributes.report_name.has_value()) {
             auto hash = std::hash<std::string>{}(this->attributes.report_name.value());
             return this->attributes.root_report_path / std::to_string(hash);

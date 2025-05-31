@@ -108,7 +108,7 @@ inline int GetNumRiscs(chip_id_t device_id, const CoreDescriptor& core) {
     }
 }
 
-inline const std::string_view get_core_type_name(CoreType ct) {
+inline std::string_view get_core_type_name(CoreType ct) {
     switch (ct) {
         case CoreType::ARC: return "ARC";
         case CoreType::DRAM: return "DRAM";

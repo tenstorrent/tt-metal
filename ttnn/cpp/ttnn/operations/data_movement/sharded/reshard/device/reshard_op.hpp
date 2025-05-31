@@ -23,7 +23,7 @@ struct ReshardDeviceOperation {
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 
     static constexpr auto attribute_names = std::make_tuple("output_mem_config");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->output_mem_config)); }
+    auto attribute_values() const { return std::make_tuple(std::cref(this->output_mem_config)); }
 };
 
 }  // namespace ttnn::operations::data_movement
