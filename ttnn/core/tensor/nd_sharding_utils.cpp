@@ -8,8 +8,11 @@
 
 namespace tt::tt_metal {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
 template <typename T, typename U, bool pack>
-void process_sharded_data_impl(
+void pack_unpack_sharded_data_impl(
     tt::stl::Span<T> data, tt::stl::Span<U> sharded_data, const TensorSpec& tensor_spec, size_t element_size_bytes) {
     if (tensor_spec.padded_shape().volume() == 0) {
         return;
@@ -89,6 +92,9 @@ void process_sharded_data_impl(
     }
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 std::vector<uint8_t> pack_sharded_data(
     tt::stl::Span<uint8_t> data, const TensorSpec& tensor_spec, size_t element_size_bytes) {
     const auto& memory_config = tensor_spec.memory_config();
@@ -105,16 +111,16 @@ std::vector<uint8_t> pack_sharded_data(
     size_t num_shards_per_core = (num_shards + num_cores - 1) / num_cores;
 
     std::vector<uint8_t> sharded_data(num_shards_per_core * num_cores * shard_size * element_size_bytes);
-
-    process_sharded_data_impl<const uint8_t, uint8_t, true>(data, sharded_data, tensor_spec, element_size_bytes);
-
+    CMAKE_UNIQUE_NAMESPACE::pack_unpack_sharded_data_impl<const uint8_t, uint8_t, true>(
+        data, sharded_data, tensor_spec, element_size_bytes);
     return sharded_data;
 }
 
 std::vector<uint8_t> unpack_sharded_data(
     tt::stl::Span<uint8_t> sharded_data, const TensorSpec& tensor_spec, size_t element_size_bytes) {
     std::vector<uint8_t> data(tensor_spec.padded_shape().volume() * element_size_bytes);
-    process_sharded_data_impl<uint8_t, const uint8_t, false>(data, sharded_data, tensor_spec, element_size_bytes);
+    CMAKE_UNIQUE_NAMESPACE::pack_unpack_sharded_data_impl<uint8_t, const uint8_t, false>(
+        data, sharded_data, tensor_spec, element_size_bytes);
     return data;
 }
 
