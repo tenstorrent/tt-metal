@@ -3,6 +3,7 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dram_unary/test_unary_dram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/one_to_all/test_one_to_all.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/loopback/test_loopback.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/reshard_hardcoded/test_reshard_hardcoded.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/one_to_one/test_one_to_one.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/one_from_one/test_one_from_one.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/one_from_all/test_one_from_all.cpp
