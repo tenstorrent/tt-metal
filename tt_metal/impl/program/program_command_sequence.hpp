@@ -39,6 +39,11 @@ struct ProgramCommandSequence {
     std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
     HostMemDeviceCommand program_config_buffer_command_sequence;
     HostMemDeviceCommand program_binary_command_sequence;
+    // When the program_binary_command_sequuence is skippped, this command sequence is used to wait for the writes for
+    // the runtime_args_command_sequences and program_config_buffer_command_sequence to complete, to ensure that all
+    // writes have landed before the launch message is sent and the worker starts loading data. This isn't needed when
+    // writing program binaries, because writing binaries always barriers (as a workaround for an mcast hang).
+    HostMemDeviceCommand wait_barrier_command_sequence;
     HostMemDeviceCommand launch_msg_command_sequence;
     HostMemDeviceCommand go_msg_command_sequence;
     std::vector<uint32_t*> cb_configs_payloads;
@@ -63,7 +68,8 @@ struct ProgramCommandSequence {
         uint32_t one_shot_fetch_size =
             ((stall_before_program || stall_first) ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
             preamble_command_sequence.size_bytes() + program_config_buffer_command_sequence.size_bytes() +
-            get_rt_args_size() + (send_binary ? program_binary_command_sequence.size_bytes() : 0) +
+            get_rt_args_size() +
+            (send_binary ? program_binary_command_sequence.size_bytes() : wait_barrier_command_sequence.size_bytes()) +
             launch_msg_command_sequence.size_bytes() + go_msg_command_sequence.size_bytes();
         return one_shot_fetch_size;
     }
