@@ -15,7 +15,6 @@ BufferType from_flatbuffer(flatbuffer::BufferType type);
 CircularBufferConfig from_flatbuffer(
     const flatbuffer::CircularBufferConfig* config_fb, const Buffer* shadow_global_buffer);
 
-BufferType from_flatbuffer(flatbuffer::BufferType type);
 TensorMemoryLayout from_flatbuffer(flatbuffer::TensorMemoryLayout layout);
 
 ShardOrientation from_flatbuffer(flatbuffer::ShardOrientation orientation);

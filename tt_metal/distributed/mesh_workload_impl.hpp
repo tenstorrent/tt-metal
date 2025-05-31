@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -14,7 +15,6 @@ using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
 
 class MeshCommandQueue;
 class FDMeshCommandQueue;
-void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
 
 class MeshWorkloadImpl {
     // A MeshWorkload can be fully described using a set of programs mapped to different Logical Device Regions
