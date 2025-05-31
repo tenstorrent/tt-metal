@@ -6,6 +6,7 @@
 #include "tt-metalium/shape.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/small_vector.hpp"
+#include "tt-metalium/tilize_utils.hpp"
 #include "tt_stl/overloaded.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -24,6 +25,41 @@ namespace {
 
 using ::tt::tt_metal::DistributedHostBuffer;
 using ::tt::tt_metal::distributed::MeshContainer;
+
+// Increments `indices` in-place given `limits`, to support row-major order iteration.
+bool increment_indices(const tt::stl::SmallVector<int>& limits, tt::stl::SmallVector<int>& indices) {
+    for (int i = static_cast<int>(indices.size()) - 1; i >= 0; --i) {
+        if (++indices[i] < limits[i]) {
+            return true;
+        }
+        indices[i] = 0;
+    }
+    return false;
+}
+
+// Computes tensor spec for shards supplied in `xtensor_shards_views`.
+// Note the shapes of all shards must be the same; resulting in a uniform tensor spec.
+TensorSpec compute_tensor_spec_for_shards(
+    const auto& xtensor_shards_views, const tt::tt_metal::TensorLayout& global_layout) {
+    std::optional<ttnn::Shape> shard_shape;
+    for (const auto& [_, xtensor_view] : xtensor_shards_views) {
+        if (!xtensor_view.has_value()) {
+            continue;
+        }
+        auto xtensor_shard_shape = experimental::xtensor::get_shape_from_xarray(xtensor_view->get());
+        if (shard_shape.has_value()) {
+            TT_FATAL(
+                shard_shape.value() == xtensor_shard_shape,
+                "Shard shape mismatch: expected {} but got {}",
+                shard_shape.value(),
+                xtensor_shard_shape);
+        } else {
+            shard_shape = xtensor_shard_shape;
+        }
+    }
+    TT_FATAL(shard_shape.has_value(), "No shards were produced");
+    return TensorSpec(*shard_shape, global_layout);
+}
 
 class NdTensorToMesh : public TensorToMesh {
 public:
@@ -71,39 +107,36 @@ private:
 
         // Perform sharding, followed by replication.
         tt::stl::SmallVector<size_t> shard_dims;
+        tt::stl::SmallVector<int> num_chunks_per_dim;
+        tt::stl::SmallVector<int> tensor_dims;
         tt::stl::SmallVector<size_t> replicate_dims;
+        size_t sharded_mesh_size = 1;
         for (size_t mesh_dim_idx = 0; mesh_dim_idx < shape_.dims(); ++mesh_dim_idx) {
             const auto& placement = config_.placements[mesh_dim_idx];
-            if (std::holds_alternative<MeshMapperConfig::Shard>(placement)) {
+            if (const auto* shard_placement = std::get_if<MeshMapperConfig::Shard>(&placement)) {
                 shard_dims.push_back(mesh_dim_idx);
+                num_chunks_per_dim.push_back(shape_[mesh_dim_idx]);
+                tensor_dims.push_back(shard_placement->dim);
+                sharded_mesh_size *= shape_[mesh_dim_idx];
             } else {
                 replicate_dims.push_back(mesh_dim_idx);
             }
         }
 
-        tt::stl::SmallVector<int> num_chunks_per_dim;
-        tt::stl::SmallVector<int> tensor_dims;
-        size_t sharded_mesh_size = 1;
-        for (size_t shard_mesh_dim : shard_dims) {
-            const auto& shard_placement = std::get<MeshMapperConfig::Shard>(config_.placements[shard_mesh_dim]);
-            num_chunks_per_dim.push_back(static_cast<int>(shape_[shard_mesh_dim]));
-            tensor_dims.push_back(shard_placement.dim);
-            sharded_mesh_size *= shape_[shard_mesh_dim];
-        }
-
         auto chunks = experimental::xtensor::chunk_ndim(input_xtensor, num_chunks_per_dim, tensor_dims);
+        TT_FATAL(chunks.size() >= 1, "No chunks were produced");
         TT_FATAL(
             shape_.dims() == 1 || chunks.size() == sharded_mesh_size,
             "ND sharding requires the number of chunks {} to match the mesh dimension size {}",
             chunks.size(),
             sharded_mesh_size);
 
-        using XTensorView = std::reference_wrapper<std::decay_t<decltype(chunks.front())>>;
-        MeshContainer<std::optional<XTensorView>> sharded_xtensor_views(shape_, std::nullopt);
+        using StridedViewRef = std::reference_wrapper<experimental::xtensor::StridedView<decltype(input_xtensor)>>;
+        MeshContainer<std::optional<StridedViewRef>> sharded_xtensor_views(shape_, std::nullopt);
 
         // Distribute chunks to appropriate mesh coordinates.
         size_t chunk_idx = 0;
-        tt::stl::SmallVector<size_t> shard_indices(shard_dims.size(), 0);
+        tt::stl::SmallVector<int> shard_indices(shard_dims.size(), 0);
         do {
             tt::stl::SmallVector<uint32_t> mesh_coords(shape_.dims(), 0);
             for (size_t i = 0; i < shard_dims.size(); ++i) {
@@ -114,7 +147,7 @@ private:
                 sharded_xtensor_views.at(coord) = chunks[chunk_idx];
             }
             chunk_idx++;
-        } while (increment_indices(shard_indices, num_chunks_per_dim));
+        } while (increment_indices(num_chunks_per_dim, shard_indices));
 
         tt::stl::SmallVector<int> replicate_sizes;
         for (size_t replicate_mesh_dim : replicate_dims) {
@@ -131,40 +164,20 @@ private:
                         return coord[replicate_mesh_dim] == 0;
                     });
                 if (xtensor_view.has_value() && replication_source) {
-                    tt::stl::SmallVector<size_t> replicate_indices(replicate_dims.size(), 0);
+                    tt::stl::SmallVector<int> replicate_indices(replicate_dims.size(), 0);
                     do {
                         tt::stl::SmallVector<uint32_t> mesh_coords(coord.coords().begin(), coord.coords().end());
                         for (size_t i = 0; i < replicate_dims.size(); ++i) {
                             mesh_coords[replicate_dims[i]] = replicate_indices[i];
                         }
                         sharded_xtensor_views.at(MeshCoordinate(mesh_coords)) = *xtensor_view;
-                    } while (increment_indices(replicate_indices, replicate_sizes));
+                    } while (increment_indices(replicate_sizes, replicate_indices));
                 }
             }
         }
 
-        // Compute shard shape and validate that all shards are uniform.
-        auto shard_shape = [&]() {
-            std::optional<ttnn::Shape> shard_shape;
-            for (const auto& [_, xtensor_view] : sharded_xtensor_views) {
-                if (!xtensor_view.has_value()) {
-                    continue;
-                }
-                auto xtensor_shard_shape = experimental::xtensor::get_shape_from_xarray(xtensor_view->get());
-                if (shard_shape.has_value()) {
-                    TT_FATAL(
-                        shard_shape.value() == xtensor_shard_shape,
-                        "Shard shape mismatch: expected {} but got {}",
-                        shard_shape.value(),
-                        xtensor_shard_shape);
-                } else {
-                    shard_shape = xtensor_shard_shape;
-                }
-            }
-            TT_FATAL(shard_shape.has_value(), "No shards were produced");
-            return *shard_shape;
-        }();
-        const TensorSpec shard_spec(shard_shape, tensor.tensor_spec().tensor_layout());
+        const TensorSpec shard_spec =
+            compute_tensor_spec_for_shards(sharded_xtensor_views, tensor.tensor_spec().tensor_layout());
 
         // TODO: #22169 - For multi-host, supply mesh device global/local shape, along with local offset.
         auto distributed_buffer =
@@ -189,16 +202,6 @@ private:
         }
 
         return aggregate_as_tensor(tensors, config());
-    }
-
-    static bool increment_indices(tt::stl::SmallVector<size_t>& indices, const tt::stl::SmallVector<int>& limits) {
-        for (int i = static_cast<int>(indices.size()) - 1; i >= 0; --i) {
-            if (++indices[i] < static_cast<size_t>(limits[i])) {
-                return true;
-            }
-            indices[i] = 0;
-        }
-        return false;
     }
 
     ttnn::MeshShape shape_;
