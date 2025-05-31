@@ -35,6 +35,7 @@ def test_copy(shape, layout, dtype, device):
 
 # Test for block sharding
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 @pytest.mark.parametrize("shape", [[128, 64]])
 @pytest.mark.parametrize(
     "shard_scheme",
@@ -42,15 +43,15 @@ def test_copy(shape, layout, dtype, device):
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-def test_copy_block_sharded(device, shape, shard_scheme, dtype):
+def test_copy_block_sharded(device, layout, shape, shard_scheme, dtype):
     torch.manual_seed(1234)
     if dtype == ttnn.uint32:
         input_torch = torch.randint(1, 100, shape, dtype=torch.int32)
     else:
         input_torch = torch.randn(shape)
     output_torch = torch.zeros(shape)
-    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=ttnn.Layout.TILE)
-    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=ttnn.Layout.TILE)
+    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=layout)
+    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=layout)
 
     num_cores_x = 2
     num_cores_y = 2
@@ -89,6 +90,7 @@ def test_copy_block_sharded(device, shape, shard_scheme, dtype):
 
 # Test for width sharding
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 @pytest.mark.parametrize("shape", [[1, 2, 96, 128]])
 @pytest.mark.parametrize(
     "shard_scheme",
@@ -96,15 +98,15 @@ def test_copy_block_sharded(device, shape, shard_scheme, dtype):
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
     ],
 )
-def test_copy_width_sharded(device, shape, shard_scheme, dtype):
+def test_copy_width_sharded(device, layout, shape, shard_scheme, dtype):
     torch.manual_seed(1234)
     if dtype == ttnn.uint32:
         input_torch = torch.randint(1, 100, shape, dtype=torch.int32)
     else:
         input_torch = torch.randn(shape)
     output_torch = torch.zeros(shape)
-    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=ttnn.Layout.TILE)
-    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=ttnn.Layout.TILE)
+    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=layout)
+    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=layout)
 
     num_cores = 2
     shard_grid = ttnn.CoreRangeSet(
@@ -147,6 +149,7 @@ def test_copy_width_sharded(device, shape, shard_scheme, dtype):
 
 # Test for height sharding
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 @pytest.mark.parametrize("shape", [[512, 64]])
 @pytest.mark.parametrize(
     "shard_scheme",
@@ -154,15 +157,15 @@ def test_copy_width_sharded(device, shape, shard_scheme, dtype):
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ],
 )
-def test_copy_height_sharded(device, shape, shard_scheme, dtype):
+def test_copy_height_sharded(device, layout, shape, shard_scheme, dtype):
     torch.manual_seed(1234)
     if dtype == ttnn.uint32:
         input_torch = torch.randint(1, 100, shape, dtype=torch.int32)
     else:
         input_torch = torch.randn(shape)
     output_torch = torch.zeros(shape)
-    ttnn_input = ttnn.from_torch(input_torch, dtype=dtype, layout=ttnn.Layout.TILE)
-    ttnn_output = ttnn.from_torch(output_torch, dtype=dtype, layout=ttnn.Layout.TILE)
+    ttnn_input = ttnn.from_torch(input_torch, dtype=dtype, layout=layout)
+    ttnn_output = ttnn.from_torch(output_torch, dtype=dtype, layout=layout)
 
     num_cores = 8
     shard_grid = ttnn.CoreRangeSet(
