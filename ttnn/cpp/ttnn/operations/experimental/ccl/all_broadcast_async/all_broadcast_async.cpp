@@ -21,4 +21,26 @@ ttnn::Tensor ExecuteAllBroadcastAsync::invoke(
         input_tensor, multi_device_global_semaphore, num_links, memory_config, topology, subdevice_id);
 }
 
+ttnn::Tensor ExecuteAllBroadcastAsync::invoke(
+    const ttnn::Tensor& input_tensor,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    return ttnn::operations::experimental::ccl::all_broadcast_async(
+        input_tensor,
+        cluster_axis,
+        mesh_device,
+        topology,
+        multi_device_global_semaphore,
+        persistent_output_tensor,
+        memory_config,
+        num_preferred_links,
+        subdevice_id);
+}
+
 }  // namespace ttnn::operations::experimental::ccl

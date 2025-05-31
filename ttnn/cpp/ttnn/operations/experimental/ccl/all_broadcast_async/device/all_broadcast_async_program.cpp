@@ -35,56 +35,6 @@ namespace ttnn {
 
 using namespace ccl;
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links,
-    size_t num_workers_per_link,
-    bool persistent_fabric_mode,
-    IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
-    CoreRangeSet sender_worker_core_range;
-    if (persistent_fabric_mode) {
-        const size_t num_workers_preferred = num_workers_per_link * num_links;
-        const auto available_cores = device->worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX,
-            sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
-        if (available_cores.num_cores() < num_workers_preferred) {
-            log_warning(
-                tt::LogOp,
-                "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
-                "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
-                "performance loss.",
-                num_workers_preferred,
-                num_workers_per_link,
-                num_links,
-                available_cores.num_cores());
-        }
-        for (const auto& cr : available_cores.ranges()) {
-            auto start = cr.start_coord;
-            auto end = cr.end_coord;
-            for (size_t y = start.y; y <= end.y; y++) {
-                for (size_t x = start.x; x <= end.x; x++) {
-                    sender_worker_core_range =
-                        sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
-                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                        break;
-                    }
-                }
-                if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                    break;
-                }
-            }
-            if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                break;
-            }
-        }
-    } else {
-        sender_worker_core_range =
-            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_workers_per_link - 1, num_links - 1)));
-    }
-    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
-}
-
 tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const Tensor& input_tensor,
     IDevice* sender_device,

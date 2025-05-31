@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,10 +18,10 @@ void AllBroadcastAsync::validate_with_output_tensors(
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
-    TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Broadcast currently requires aligned pages");
+    TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_broadcast need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_broadcast need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
     TT_FATAL(
         this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
@@ -35,57 +35,53 @@ void AllBroadcastAsync::validate_with_output_tensors(
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
 
-    for (uint32_t k = 0; k < output_tensors.size() > 0; k++) {
-        if (output_tensors[k].has_value()) {
-            auto output_tensor = output_tensors[k];
-            TT_FATAL(
-                output_tensor.value().storage_type() == StorageType::DEVICE,
-                "Operands to all_broadcast need to be on device!");
-            TT_FATAL(
-                output_tensor.value().get_layout() == layout,
-                "Error, Output tensor layout should be same as input tensor layout but has {}",
-                output_tensor.value().get_layout());
-            TT_FATAL(
-                output_tensor.value().get_dtype() == dtype,
-                "Error, Output tensor dtype should be same as input tensor dtype but has {}",
-                output_tensor.value().get_dtype());
-            TT_FATAL(
-                output_tensor.value().get_tensor_spec().page_config() == input_tensor.get_tensor_spec().page_config(),
-                "Error, Output tensor page config should be same as input tensor page config but has {}",
-                output_tensor.value().get_tensor_spec().page_config());
-            TT_FATAL(
-                output_tensor.value().memory_config() == this->output_mem_config,
-                "Error, Output tensor memory config should be same as output_mem_config but has {}",
-                output_tensor.value().memory_config());
+    if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
+        TT_FATAL(
+            output_tensors.size() == 1,
+            "Error, Number of output tensors should be 1 but has {}",
+            output_tensors.size());
 
-            // check the output tensor size
-            auto output_shape = output_tensor.value().get_padded_shape();
-            auto input_shape = input_tensor.get_padded_shape();
-            TT_FATAL(
-                output_shape.size() == input_shape.size(),
-                "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
-                output_shape.size());
-            for (size_t i = 0; i < input_shape.size(); ++i) {
-                TT_FATAL(
-                    output_shape[i] == input_shape[i],
-                    "Error, Output tensor shape at dimension {} should be {} but has {}",
-                    i,
-                    input_shape[i],
-                    output_shape[i]);
-            }
-            // check memory layout
-            TT_FATAL(
-                output_tensor.value().memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
-                "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
-                output_tensor.value().memory_config().memory_layout());
-        }
+        const auto& output_tensor = output_tensors[0];
+        TT_FATAL(
+            output_tensor.value().storage_type() == StorageType::DEVICE,
+            "Operands to all_gather need to be on device!");
+        TT_FATAL(
+            output_tensor.value().get_layout() == layout,
+            "Error, Output tensor layout should be same as input tensor layout but has {}",
+            output_tensor.value().get_layout());
+        TT_FATAL(
+            output_tensor.value().get_dtype() == dtype,
+            "Error, Output tensor dtype should be same as input tensor dtype but has {}",
+            output_tensor.value().get_dtype());
+        TT_FATAL(
+            output_tensor.value().get_tensor_spec().page_config() == input_tensor.get_tensor_spec().page_config(),
+            "Error, Output tensor page config should be same as input tensor page config but has {}",
+            output_tensor.value().get_tensor_spec().page_config());
+        TT_FATAL(
+            output_tensor.value().memory_config() == this->output_mem_config,
+            "Error, Output tensor memory config should be same as output_mem_config but has {}",
+            output_tensor.value().memory_config());
+
+        // check the output tensor size
+        auto output_shape = output_tensor.value().get_padded_shape();
+        auto input_shape = input_tensor.get_padded_shape();
+        TT_FATAL(
+            output_shape.size() == input_shape.size(),
+            "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
+            output_shape.size());
+
+        // check memory layout
+        TT_FATAL(
+            output_tensor.value().memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
+            "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
+            output_tensor.value().memory_config().memory_layout());
     }
 }
 
 std::vector<ttnn::TensorSpec> AllBroadcastAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
-    shape[3] *= this->ring_size;                   // HERE DELETE THIS
+    shape[3] *= this->ring_size;
     return {TensorSpec(
         shape,
         TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
@@ -107,7 +103,15 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
     auto mesh_device = input_tensors[0].mesh_device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
-    devices_to_use = devices;
+    if (this->cluster_axis.has_value()) {
+        // User specified the cluster-axis. Derive devices based on the current coordinate
+        // and the cluster-axis.
+        const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+        devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
+                                                           : mesh_view.get_devices_on_row(coord[0]);
+    } else {
+        devices_to_use = devices;
+    }
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
@@ -127,12 +131,13 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
             }
         }
     }
+
     return all_broadcast_async_multicore(
         input_tensors[0],
         target_device,
         forward_device,
         backward_device,
-        output_tensors[0],  // HERE REMOVE [0]
+        output_tensors[0],
         this->num_links,
         this->ring_size,
         device_index,
@@ -152,6 +157,7 @@ tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std:
         this->ring_size,
         this->output_mem_config,
         this->topology,
+        this->cluster_axis,
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -197,9 +203,48 @@ Tensor all_broadcast_async_impl(
                    memory_config.value_or(input_tensor.memory_config()),
                    ccl_topology,
                    multi_device_global_semaphore,
-                   sub_device_id),
+                   sub_device_id,
+                   /*cluster_axis=*/std::nullopt),
                {input_tensor})
-        .at(0);  // HERE REMOVE THIS
+        .at(0);
+}
+
+Tensor all_broadcast_async_impl(
+    const Tensor& input_tensor,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    const auto mesh_view = mesh_device.get_view();
+    TT_FATAL(
+        mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+
+    int32_t rank = input_tensor.get_logical_shape().rank();
+
+    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
+
+    CoreCoord grid_size = mesh_device.compute_with_storage_grid_size();
+    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+
+    return tt::tt_metal::operation::run(
+               ttnn::AllBroadcastAsync{
+                   {},
+                   num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+                   num_devices,
+                   memory_config.value_or(input_tensor.memory_config()),
+                   topology,
+                   multi_device_global_semaphore,
+                   sub_device_id,
+                   cluster_axis},
+               {input_tensor},
+               {},
+               optional_output_tensors)
+        .at(0);
 }
 }  // namespace
 
@@ -216,6 +261,28 @@ Tensor all_broadcast_async(
     }
     return all_broadcast_async_impl(
         input_tensor, multi_device_global_semaphore, num_links, memory_config, topology, sub_device_id, devices);
+}
+
+Tensor all_broadcast_async(
+    const Tensor& input_tensor,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    return all_broadcast_async_impl(
+        input_tensor,
+        cluster_axis,
+        mesh_device,
+        topology,
+        multi_device_global_semaphore,
+        persistent_output_tensor,
+        memory_config,
+        num_preferred_links,
+        sub_device_id);
 }
 
 }  // namespace ccl

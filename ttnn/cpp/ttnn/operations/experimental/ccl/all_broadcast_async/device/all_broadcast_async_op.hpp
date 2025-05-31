@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,7 @@ struct AllBroadcastAsync {
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    std::optional<uint32_t> cluster_axis;
 
     AllBroadcastAsync(
         std::vector<IDevice*> devices,
@@ -41,14 +42,16 @@ struct AllBroadcastAsync {
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         GlobalSemaphore semaphore,
-        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) :
+        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+        std::optional<uint32_t> cluster_axis) :
         devices(std::move(devices)),
         num_links(num_links),
         ring_size(ring_size),
         output_mem_config(output_mem_config),
         topology(topology),
         semaphore(semaphore),
-        sub_device_id(sub_device_id) {}
+        sub_device_id(sub_device_id),
+        cluster_axis(cluster_axis) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -60,6 +63,7 @@ struct AllBroadcastAsync {
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
+        attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
     }
 
@@ -77,7 +81,7 @@ struct AllBroadcastAsync {
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
-// All Broadcast Variants
+// All Gather Variants
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
@@ -94,7 +98,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore semaphore,
+    const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
 namespace operations {
@@ -107,6 +111,17 @@ Tensor all_broadcast_async(
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+
+Tensor all_broadcast_async(
+    const Tensor& input_tensor,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 }  // namespace ccl
