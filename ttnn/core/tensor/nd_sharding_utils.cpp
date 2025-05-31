@@ -8,10 +8,11 @@
 
 namespace tt::tt_metal {
 
-std::vector<uint8_t> prepare_sharded_data(
-    tt::stl::Span<uint8_t> data, const TensorSpec& tensor_spec, size_t element_size_bytes) {
+template <typename T, typename U, bool pack>
+void process_sharded_data_impl(
+    tt::stl::Span<T> data, tt::stl::Span<U> sharded_data, const TensorSpec& tensor_spec, size_t element_size_bytes) {
     if (tensor_spec.padded_shape().volume() == 0) {
-        return {};
+        return;
     }
 
     const auto& memory_config = tensor_spec.memory_config();
@@ -44,8 +45,6 @@ std::vector<uint8_t> prepare_sharded_data(
         shard_index_strides[i] = shard_index_strides[i + 1] * num_shards_per_dim[i + 1];
     }
 
-    std::vector<uint8_t> sharded_data(num_shards_per_core * num_cores * shard_size * element_size_bytes);
-
     for (size_t row_idx = 0; row_idx < physical_shape.height(); row_idx++) {
         for (size_t col_block_idx = 0; col_block_idx < num_shards_per_dim.back(); col_block_idx++) {
             size_t element_idx = row_idx * physical_shape.width() + col_block_idx * shard_width;
@@ -75,14 +74,48 @@ std::vector<uint8_t> prepare_sharded_data(
                 num_bytes_to_copy = (shape[-1] % shard_width) * element_size_bytes;
             }
 
-            std::memcpy(
-                sharded_data.data() + dst_offset * element_size_bytes,
-                data.data() + src_offset * element_size_bytes,
-                num_bytes_to_copy);
+            if constexpr (pack) {
+                std::memcpy(
+                    sharded_data.data() + dst_offset * element_size_bytes,
+                    data.data() + src_offset * element_size_bytes,
+                    num_bytes_to_copy);
+            } else {
+                std::memcpy(
+                    data.data() + src_offset * element_size_bytes,
+                    sharded_data.data() + dst_offset * element_size_bytes,
+                    num_bytes_to_copy);
+            }
         }
     }
+}
+
+std::vector<uint8_t> pack_sharded_data(
+    tt::stl::Span<uint8_t> data, const TensorSpec& tensor_spec, size_t element_size_bytes) {
+    const auto& memory_config = tensor_spec.memory_config();
+    const auto& shape = tensor_spec.padded_shape();
+    const auto& shard_spec = memory_config.nd_shard_spec().value();
+    const auto& shard_shape = shard_spec.shard_shape;
+    auto shard_size = shard_shape.volume();
+
+    size_t num_shards = 1;
+    for (size_t i = 0; i < shape.rank(); i++) {
+        num_shards *= (shape[i] + shard_shape[i] - 1) / shard_shape[i];
+    }
+    size_t num_cores = shard_spec.grid.num_cores();
+    size_t num_shards_per_core = (num_shards + num_cores - 1) / num_cores;
+
+    std::vector<uint8_t> sharded_data(num_shards_per_core * num_cores * shard_size * element_size_bytes);
+
+    process_sharded_data_impl<const uint8_t, uint8_t, true>(data, sharded_data, tensor_spec, element_size_bytes);
 
     return sharded_data;
+}
+
+std::vector<uint8_t> unpack_sharded_data(
+    tt::stl::Span<uint8_t> sharded_data, const TensorSpec& tensor_spec, size_t element_size_bytes) {
+    std::vector<uint8_t> data(tensor_spec.padded_shape().volume() * element_size_bytes);
+    process_sharded_data_impl<uint8_t, const uint8_t, false>(data, sharded_data, tensor_spec, element_size_bytes);
+    return data;
 }
 
 }  // namespace tt::tt_metal
