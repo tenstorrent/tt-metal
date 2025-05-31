@@ -750,20 +750,21 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t tile_width = tile_shape[1];
     uint32_t tile_volume = tile_height * tile_width;
 
-    bool input_is_sharded = a.is_sharded();
-    bool output_is_sharded = output.is_sharded();
-
-    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / tile_width;
-    uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / tile_height;
-
     uint32_t num_tiles = a.volume() / tile_volume;
-    uint32_t num_tiles_per_block = a.get_padded_shape()[-1] / tile_width;
-    uint32_t num_blocks = std::ceil((float)num_tiles / num_tiles_per_block);
-    uint32_t block_size_nbytes = a.get_padded_shape()[-1] * output.element_size();
+    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / tile_width;
+    uint32_t num_tiles_per_col = num_tiles / num_tiles_per_row;
 
     auto grid_size = device->compute_with_storage_grid_size();
-    auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(grid_size, num_blocks);
+    auto
+        [num_compute_cores,
+         compute_core_range,
+         full_compute_core_range,
+         cliff_compute_core_range,
+         num_rows_per_full_core,
+         num_rows_per_cliff_core] = ttnn::split_blocks_for_tilize(grid_size, num_tiles_per_col);
+
+    bool input_is_sharded = a.is_sharded();
+    bool output_is_sharded = output.is_sharded();
 
     constexpr uint32_t threshold_row_block = 32;
     if (!input_is_sharded and !output_is_sharded) {
@@ -788,7 +789,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                      full_cores_per_col] =
                         ttnn::split_blocks_for_tilize_wh(
                             grid_size, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
-                if (ncores < ncores_block) {
+                if (num_compute_cores < ncores_block) {
                     return untilize_multi_core_block(a, output, use_pack_untilize, fp32_dest_acc_en);
                 }
             }
@@ -805,9 +806,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     // TODO : currently multi_core parallelization on column only works for single tile height tensors.
     // Need to debug this to work on wide tensors that are higher than a single tile
-    if (num_tiles_per_block > max_tiles_per_cb) {
-        if (!input_is_sharded and !output_is_sharded) {
-            uint32_t ntiles_height = num_tiles / num_tiles_per_block;
+    if (!input_is_sharded and !output_is_sharded) {
+        if (num_tiles_per_row > max_tiles_per_cb) {
+            uint32_t ntiles_height = num_tiles / num_tiles_per_row;
             if (ntiles_height == 1) {
                 return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
 
@@ -817,60 +818,84 @@ operation::ProgramWithCallbacks untilize_multi_core(
         }
     }
 
-    uint32_t ncores_x = grid_size.x;
-    uint32_t ncores_y = std::ceil(static_cast<float>(ncores) / ncores_x);
-
+    // Old stuff for input block sharded
     bool row_major = true;
     bool src_block_sharded = false;
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
     CoreCoord end_core;
+    // Old stuff for input block sharded
 
+    // Default values are for interleaved input
+    uint32_t num_tiles_per_block = num_tiles_per_row;
+    uint32_t num_blocks_per_full_core = num_rows_per_full_core;
+    uint32_t num_blocks_per_cliff_core = num_rows_per_cliff_core;
     if (input_is_sharded) {
-        auto shard_spec = a.shard_spec().value();
-        src_block_sharded = a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
-        row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-        ncores_y = device->compute_with_storage_grid_size().y;
-        all_cores = shard_spec.grid;
-        uint32_t num_cores = all_cores.num_cores();
-        ncores = num_cores;
-        core_range = all_cores;
-        core_range_cliff = CoreRangeSet();
-        num_tiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
-        nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
-        nblocks_per_core_cliff = 0;
+        ShardSpec input_shard_spec = a.shard_spec().value();
+        uint32_t input_shard_height = input_shard_spec.shape[0];
+        uint32_t input_shard_width = input_shard_spec.shape[1];
 
-        num_rows_block = shard_spec.shape[0];
-        block_row_size = shard_spec.shape[1] * output.element_size();  // in0_block_w * TILE_WIDTH * dtype_nbytes
-        output_row_size = output.padded_shape()[-1] * output.element_size();  // output row size bytes
-        last_block_row_size_unpadded = block_row_size - (tt::round_up(output.padded_shape()[-1], shard_spec.shape[1]) -
-                                                         output.padded_shape()[-1]) *
-                                                            output.element_size();
-        uint32_t num_output_rows = output.physical_volume() / output.padded_shape()[-1];
+        num_compute_cores = input_shard_spec.grid.num_cores();
+        compute_core_range = input_shard_spec.grid;
+        full_compute_core_range = input_shard_spec.grid;
+        cliff_compute_core_range = CoreRangeSet();
+
+        num_tiles_per_block = input_shard_width / tile_width;
+        num_blocks_per_full_core = input_shard_height / tile_height;
+        num_blocks_per_cliff_core = 0;
+
+        // Old stuff for input block sharded
+        row_major = input_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+        src_block_sharded = a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+
+        num_rows_block = input_shard_spec.shape[0];
+        block_row_size = input_shard_spec.shape[1] * output.element_size();  // in0_block_w * TILE_WIDTH * dtype_nbytes
+        output_row_size = output.get_padded_shape()[-1] * output.element_size();  // output row size bytes
+        last_block_row_size_unpadded =
+            block_row_size -
+            (tt::round_up(output.get_padded_shape()[-1], input_shard_spec.shape[1]) - output.get_padded_shape()[-1]) *
+                output.element_size();
+        uint32_t num_output_rows = output.volume() / output.get_padded_shape()[-1];
         num_output_rows_unpadded =
-            num_rows_block - (tt::round_up(num_output_rows, shard_spec.shape[0]) - num_output_rows);
-        end_core = (*shard_spec.grid.ranges().begin()).end_coord;
+            num_rows_block - (tt::round_up(num_output_rows, input_shard_spec.shape[0]) - num_output_rows);
+        end_core = (*input_shard_spec.grid.ranges().begin()).end_coord;
+        // Old stuff for input block sharded
     }
 
-    uint32_t num_input_tiles = input_is_sharded ? num_tiles_per_block * nblocks_per_core : num_tiles_per_block * 2;
+    // Input CB
+    uint32_t input_cb_num_tiles;
+    if (input_is_sharded) {
+        // Have compute cores untilize the entire shard at once
+        input_cb_num_tiles = num_tiles_per_block * num_blocks_per_full_core;
+    } else {
+        if (num_blocks_per_full_core == 1) {
+            // No need to double buffer if the core is only processing a single block
+            input_cb_num_tiles = num_tiles_per_block;
+        } else {
+            // Double buffer if the core is processing 2+ blocks
+            input_cb_num_tiles = num_tiles_per_block * 2;
+        }
+    }
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
-        all_cores,
+        compute_core_range,
         input_single_tile_size,
-        num_input_tiles,
+        input_cb_num_tiles,
         input_cb_data_format,
         input_is_sharded ? a.buffer() : nullptr);
 
-    uint32_t num_output_tiles = output_is_sharded ? num_tiles_per_block * nblocks_per_core : num_tiles_per_block * 2;
+    // Output CB
+    // Process a single input block at a time (while double buffering)
+    // Each input block will map to a different set of output rows
+    uint32_t output_cb_num_tiles = num_tiles_per_block * 2;
     auto [output_cb_index, cb_output] = create_cb(
         tt::CBIndex::c_16,
         program,
-        all_cores,
+        compute_core_range,
         output_single_tile_size,
-        num_output_tiles,
-        output_cb_data_format,
-        output_is_sharded ? output.buffer() : nullptr);
+        output_cb_num_tiles,
+        output_cb_data_format);
 
     // Reader compile-time args
     KernelHandle unary_reader_kernel_id;
@@ -880,7 +905,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-            all_cores,
+            compute_core_range,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
         // Interleaved input
@@ -889,7 +914,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         unary_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-            all_cores,
+            compute_core_range,
             ReaderDataMovementConfig(reader_compile_time_args));
     }
 
@@ -901,7 +926,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         unary_writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
-            all_cores,
+            compute_core_range,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     } else {
         // Interleaved output
@@ -915,7 +940,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             unary_writer_kernel_id = CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
-                all_cores,
+                compute_core_range,
                 WriterDataMovementConfig(writer_compile_time_args));
         } else {
             bool stick_size_is_power_of_two = is_power_of_two_at_least_32(block_size_nbytes);
@@ -929,7 +954,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                 program,
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
                 "writer_unary_stick_layout_split_rows_interleaved.cpp",
-                all_cores,
+                compute_core_range,
                 WriterDataMovementConfig(writer_compile_time_args));
         }
     }
@@ -938,40 +963,40 @@ operation::ProgramWithCallbacks untilize_multi_core(
     std::string compute_kernel = get_compute_kernel(num_tiles_per_block, use_pack_untilize, a.get_dtype());
 
     // Compute compile-time args
-    if (core_range.ranges().size() > 0) {
+    if (full_compute_core_range.ranges().size() > 0) {
         std::vector<uint32_t> compute_compile_time_args = {
-            (uint32_t)nblocks_per_core,     // per_core_block_cnt
-            (uint32_t)num_tiles_per_block,  // per_block_ntiles
+            (uint32_t)num_blocks_per_full_core,  // per_core_block_cnt
+            (uint32_t)num_tiles_per_block,       // per_block_ntiles
             (uint32_t)src0_cb_index,
             (uint32_t)output_cb_index};
         KernelHandle untilize_kernel_id = CreateKernel(
             program,
             compute_kernel,
-            core_range,
+            full_compute_core_range,
             ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
     }
 
     // Compute Cliff compile_time args
-    if (core_range_cliff.ranges().size() > 0) {
+    if (cliff_compute_core_range.ranges().size() > 0) {
         std::vector<uint32_t> compute_compile_time_args_cliff = {
-            (uint32_t)nblocks_per_core_cliff,
+            (uint32_t)num_blocks_per_cliff_core,
             (uint32_t)num_tiles_per_block,  // per_block_ntiles
             (uint32_t)src0_cb_index,
             (uint32_t)output_cb_index};
         KernelHandle untilize_cliff_kernel_id = CreateKernel(
             program,
             compute_kernel,
-            core_range_cliff,
+            cliff_compute_core_range,
             ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args_cliff});
     }
 
     // 1D distribution of blocks across all cores
-    uint32_t ncores_full = ncores;
-    auto full_cores = all_cores;
-    if (nblocks_per_core_cliff > 0 && nblocks_per_core_cliff < nblocks_per_core) {
+    uint32_t ncores_full = num_compute_cores;
+    auto full_cores = compute_core_range;
+    if (num_blocks_per_cliff_core > 0 && num_blocks_per_cliff_core < num_blocks_per_full_core) {
         // unequal case with cliff
         ncores_full -= 1;
-        full_cores = core_range;
+        full_cores = full_compute_core_range;
     }
 
     // Run-time arg assignment
@@ -988,7 +1013,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         }
 
         // Reader
-        uint32_t num_tiles_to_read = num_tiles_per_block * nblocks_per_core;
+        uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_full_core;
         std::vector<uint32_t> reader_run_time_args;
         if (input_is_sharded) {
             // Sharded input
@@ -1006,7 +1031,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         std::vector<uint32_t> writer_run_time_args;
         if (output_is_sharded) {
             // Sharded output
-            uint32_t num_tiles_to_write = num_tiles_per_block * nblocks_per_core;
+            uint32_t num_tiles_to_write = num_tiles_per_block * num_blocks_per_full_core;
             writer_run_time_args = {num_tiles_to_write};
         } else {
             // Interleaved output
@@ -1049,12 +1074,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     block_start_row_offset};
             } else {
                 writer_run_time_args = {
-                    dst_buffer->address(),           // dst_addr
-                    nblocks_per_core * TILE_HEIGHT,  // nblocks per core
-                    block_size_nbytes,               // block_size_nbytes
-                    num_tiles_per_block,             // ntiles_per_block
-                    block_size_nbytes,               // block_size_nbytes
-                    1,                               // full blocks in a row
+                    dst_buffer->address(),                   // dst_addr
+                    num_blocks_per_full_core * TILE_HEIGHT,  // nblocks per core
+                    block_size_nbytes,                       // block_size_nbytes
+                    num_tiles_per_block,                     // ntiles_per_block
+                    block_size_nbytes,                       // block_size_nbytes
+                    1,                                       // full blocks in a row
                     0,
                     0,
                     row_start_id};
@@ -1066,18 +1091,18 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
         cores_with_run_time_args.push_back(core);
 
-        tile_start_id += num_tiles_per_block * nblocks_per_core;
-        row_start_id += TILE_HEIGHT * nblocks_per_core;
+        tile_start_id += num_tiles_per_block * num_blocks_per_full_core;
+        row_start_id += TILE_HEIGHT * num_blocks_per_full_core;
     }
 
     // Run-time args (cliff core)
-    if (ncores_full < ncores) {
+    if (ncores_full < num_compute_cores) {
         // Last core is the cliff core with nblocks_per_core_cliff blocks
         CoreCoord core = row_major ? CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x}
                                    : CoreCoord{ncores_full / ncores_y, ncores_full % ncores_y};
 
         // Reader
-        uint32_t num_tiles_to_read = num_tiles_per_block * nblocks_per_core_cliff;
+        uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_cliff_core;
         std::vector<uint32_t> reader_run_time_args;
         if (input_is_sharded) {
             // Sharded input
@@ -1095,7 +1120,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         std::vector<uint32_t> writer_run_time_args;
         if (output_is_sharded) {
             // Sharded output
-            uint32_t num_tiles_to_write = num_tiles_per_block * nblocks_per_core_cliff;
+            uint32_t num_tiles_to_write = num_tiles_per_block * num_blocks_per_cliff_core;
             writer_run_time_args = {num_tiles_to_write};
         } else {
             // Interleaved output
@@ -1137,14 +1162,14 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     block_start_row_offset};
             } else {
                 writer_run_time_args = {
-                    dst_buffer->address(),                 // dst_addr
-                    nblocks_per_core_cliff * TILE_HEIGHT,  // nsticks
-                    block_size_nbytes,                     // stick_size_nbytes
-                    num_tiles_per_block,                   // ntiles_per_block
-                    block_size_nbytes,                     // block_width_nbytes
-                    1,                                     // full blocks in a row
-                    0,                                     // UNUSED
-                    0,                                     // UNUSED
+                    dst_buffer->address(),                    // dst_addr
+                    num_blocks_per_cliff_core * TILE_HEIGHT,  // nsticks
+                    block_size_nbytes,                        // stick_size_nbytes
+                    num_tiles_per_block,                      // ntiles_per_block
+                    block_size_nbytes,                        // block_width_nbytes
+                    1,                                        // full blocks in a row
+                    0,                                        // UNUSED
+                    0,                                        // UNUSED
                     row_start_id};
             }
         }
