@@ -4,8 +4,6 @@
 
 #include "nd_sharding_utils.hpp"
 
-#include <algorithm>
-
 namespace tt::tt_metal {
 
 namespace {
