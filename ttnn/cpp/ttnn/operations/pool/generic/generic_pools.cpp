@@ -74,7 +74,7 @@ Tensor Pool2DOp<pool_type>::invoke(
                 ShardOrientation::ROW_MAJOR,
                 false,
                 false,
-                false);
+                0);
         } else {  // auto-sharding
             parallel_config =
                 pool::determine_pool_config_for_auto_shard(input_tensor, sliding_window_config, channels, pool_type);
