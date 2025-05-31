@@ -24,11 +24,23 @@ add_library(TT::NN::Core ALIAS ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 
-GENERATE_FBS_HEADER(${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_types.fbs)
+set(TENSOR_FLATBUFFER_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_coordinate.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_spec.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
+)
+
+set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
+foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE})
+    list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
+endforeach()
+
 target_sources(
     ttnn_core
     PRIVATE
-        ${FBS_GENERATED_HEADER_FILE}
+        ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
         core/cluster.cpp
         core/config.cpp
@@ -46,8 +58,8 @@ target_sources(
         core/graph/graph_trace_utils.cpp
         core/old_infra_device_operation.cpp
         core/run_operation.cpp
-        core/tensor/flatbuffer/tensor_types_from_flatbuffer.cpp
-        core/tensor/flatbuffer/tensor_types_to_flatbuffer.cpp
+        core/tensor/flatbuffer/tensor_flatbuffer.cpp
+        core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
         core/tensor/host_buffer/functions.cpp
         core/tensor/layout/alignment.cpp
         core/tensor/layout/page_config.cpp
