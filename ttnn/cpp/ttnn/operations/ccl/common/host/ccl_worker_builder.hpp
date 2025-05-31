@@ -23,7 +23,6 @@ class IDevice;
 
 namespace ttnn::ccl {
 class WorkerEdmInterfaceArgs;
-class SenderWorkerAdapterSpec;
 
 namespace worker_detail {
 
