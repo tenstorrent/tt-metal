@@ -40,34 +40,6 @@ namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
 
-template <size_t START_OFFSET, size_t SIZE, typename T>
-constexpr auto compile_time_generate_array_of_integer_sequence() -> std::array<T, SIZE> {
-    std::array<T, SIZE> stream_ids{};
-    for (size_t i = 0; i < SIZE; i++) {
-        stream_ids[i] = i + START_OFFSET;
-    }
-    return stream_ids;
-}
-
-template <size_t NUM_FULL_SIZE_CHANNELS, typename T>
-constexpr auto generate_full_size_channel_free_slot_stream_ids() -> std::array<T, NUM_FULL_SIZE_CHANNELS> {
-    return compile_time_generate_array_of_integer_sequence<0, NUM_FULL_SIZE_CHANNELS, T>();
-}
-template <size_t NUM_FULL_SIZE_CHANNELS, size_t NUM_HEADER_ONLY_CHANNELS, typename T>
-constexpr auto generate_header_only_channel_free_slot_stream_ids() -> std::array<T, NUM_HEADER_ONLY_CHANNELS> {
-    return compile_time_generate_array_of_integer_sequence<NUM_FULL_SIZE_CHANNELS, NUM_HEADER_ONLY_CHANNELS, T>();
-}
-
-template <typename OUTPUT_TYPE, size_t SIZE, typename INPUT_TYPE>
-constexpr auto strongly_type_array_elements(const std::array<INPUT_TYPE, SIZE>& input_array)
-    -> std::array<OUTPUT_TYPE, SIZE> {
-    std::array<OUTPUT_TYPE, SIZE> stream_ids{};
-    for (size_t i = 0; i < SIZE; i++) {
-        stream_ids[i] = OUTPUT_TYPE{input_array[i]};
-    }
-    return stream_ids;
-}
-
 template <uint8_t NUM_BUFFERS>
 void setup_channel(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
@@ -124,7 +96,7 @@ void forward_data(
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
-        auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(buffer_address);
+        auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_flush_blocking_from_address(
@@ -145,7 +117,7 @@ void forward_data(
 }
 
 void kernel_main() {
-    auto status_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(status_address);
+    auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
 
     size_t rt_args_idx = 0;
@@ -157,10 +129,6 @@ void kernel_main() {
     std::array<tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
         full_size_channel_worker_interfaces;
     std::array<bool, NUM_FULL_SIZE_CHANNELS> full_size_channel_connection_established;
-    constexpr auto full_size_channel_free_slots_stream_ids =
-        generate_full_size_channel_free_slot_stream_ids<NUM_FULL_SIZE_CHANNELS, uint32_t>();
-    constexpr auto header_only_channel_free_slots_stream_ids =
-        generate_header_only_channel_free_slot_stream_ids<NUM_FULL_SIZE_CHANNELS, NUM_HEADER_ONLY_CHANNELS, uint32_t>();
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
         header_only_channels;
@@ -185,7 +153,7 @@ void kernel_main() {
             connection_info_address,
             connection_handshake_address,
             sender_flow_control_address,
-            StreamId{full_size_channel_free_slots_stream_ids[i]});
+            StreamId{i});
     }
 
     for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
@@ -199,7 +167,7 @@ void kernel_main() {
             connection_info_address,
             connection_handshake_address,
             sender_flow_control_address,
-            StreamId{header_only_channel_free_slots_stream_ids[i]});
+            StreamId{i + NUM_FULL_SIZE_CHANNELS});
     }
 
     volatile auto termination_signal_ptr =
@@ -221,12 +189,11 @@ void kernel_main() {
         if (got_graceful_termination) {
             bool all_channels_drained = false;
             for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                all_channels_drained &=
-                    get_ptr_val(full_size_channel_free_slots_stream_ids[channel_id]) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
+                all_channels_drained &= get_ptr_val(channel_id) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
             }
             for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                all_channels_drained &= get_ptr_val(header_only_channel_free_slots_stream_ids[channel_id]) ==
-                                        NUM_BUFFERS_HEADER_ONLY_CHANNEL;
+                all_channels_drained &=
+                    get_ptr_val(channel_id + NUM_FULL_SIZE_CHANNELS) == NUM_BUFFERS_HEADER_ONLY_CHANNEL;
             }
 
             if (all_channels_drained) {
@@ -242,7 +209,7 @@ void kernel_main() {
                         full_size_channel_worker_interfaces[channel_id],
                         fabric_connection,
                         full_size_channel_connection_established[channel_id],
-                        StreamId{full_size_channel_free_slots_stream_ids[channel_id]},
+                        StreamId{channel_id},
                         channel_id);
                 }
             }
@@ -253,7 +220,7 @@ void kernel_main() {
                     header_only_channel_worker_interfaces[channel_id],
                     fabric_connection,
                     header_only_channel_connection_established[channel_id],
-                    StreamId{header_only_channel_free_slots_stream_ids[channel_id]},
+                    StreamId{channel_id + NUM_FULL_SIZE_CHANNELS},
                     channel_id + NUM_FULL_SIZE_CHANNELS);
             }
         }
