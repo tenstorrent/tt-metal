@@ -244,7 +244,6 @@ std::vector<ttnn::Tensor> all_gather_matmul(
     const std::optional<const std::string>& activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
-    std::vector<IDevice*> devices = input_tensor.active_physical_devices();
     return all_gather_matmul_impl(
         input_tensor,
         weight_tensor,
@@ -262,7 +261,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
         activation,
         compute_kernel_config,
         core_grid,
-        devices);
+        ttnn::ccl::get_active_physical_devices(input_tensor));
 }
 
 std::vector<ttnn::Tensor> all_gather_matmul(

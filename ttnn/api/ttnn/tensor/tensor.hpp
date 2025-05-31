@@ -243,8 +243,6 @@ public:
     // Throws if the tensor is not allocated on a device.
     IDevice* device() const;
 
-    std::vector<IDevice*> active_physical_devices() const;
-
     bool is_sharded() const;
 
     // Size in bytes of a single element held in tensor

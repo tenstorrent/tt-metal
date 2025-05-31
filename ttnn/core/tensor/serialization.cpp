@@ -113,7 +113,10 @@ void dump_host_storage(FILE* output_file, const HostStorage& storage, DataType d
 }
 
 void dump_multi_device_host_storage(
-    FILE* output_file, const MultiDeviceHostStorage& storage, const DistributedTensorConfig& strategy, DataType dtype) {
+    FILE* output_file,
+    const MultiDeviceHostStorage& storage,
+    const DistributedTensorConfig& strategy,
+    const TensorSpec& tensor_spec) {
     uint64_t num_buffers = storage.num_buffers();
     safe_fwrite(&num_buffers, sizeof(num_buffers), 1, output_file);
 
@@ -121,15 +124,14 @@ void dump_multi_device_host_storage(
     safe_fwrite(&strategy, sizeof(strategy), 1, output_file);
 
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
-        dump_host_storage(output_file, storage.get_buffer(0), dtype);
-        auto spec = storage.get_tensor_spec(0);
-        dump_tensor_spec(spec, output_file);
+        dump_host_storage(output_file, storage.get_buffer(0), tensor_spec.data_type());
+        dump_tensor_spec(tensor_spec, output_file);
     } else {
         for (int i = 0; i < num_buffers; i++) {
-            dump_host_storage(output_file, storage.get_buffer(i), dtype);
+            dump_host_storage(output_file, storage.get_buffer(i), tensor_spec.data_type());
         }
         for (int i = 0; i < num_buffers; i++) {
-            dump_tensor_spec(storage.get_tensor_spec(i), output_file);
+            dump_tensor_spec(tensor_spec, output_file);
         }
     }
 }
@@ -190,7 +192,7 @@ DistributedStorage load_multi_device_host_storage(
         }
     }
 
-    return {MultiDeviceHostStorage{std::move(buffers), std::move(specs)}, strategy};
+    return {MultiDeviceHostStorage{std::move(buffers)}, strategy};
 }
 
 HostStorage load_host_storage(FILE* input_file, DataType data_type) {
@@ -305,9 +307,9 @@ void dump_tensor(
             [output_file, dtype = tensor.get_dtype()](const DeviceStorage& storage) {
                 TT_THROW("Device storage isn't supported");
             },
-            [output_file, &strategy, dtype = tensor.get_dtype()](const MultiDeviceHostStorage& storage) {
+            [output_file, &strategy, &tensor_spec = tensor.get_tensor_spec()](const MultiDeviceHostStorage& storage) {
                 auto distribute_config = get_distributed_tensor_config(strategy);
-                dump_multi_device_host_storage(output_file, storage, distribute_config, dtype);
+                dump_multi_device_host_storage(output_file, storage, distribute_config, tensor_spec);
             },
         },
         tensor_to_dump.get_storage());

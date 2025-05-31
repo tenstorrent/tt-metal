@@ -22,6 +22,31 @@
 namespace ttnn {
 namespace ccl {
 
+// Creates a mesh workload by calling the `create_program` function for each coordinate in the `tensor_coords` set.
+tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program);
+
+// Configuration structure for a device, containing its receiver and sender device ids.
+struct SenderRecieverConfig {
+    uint32_t device_index = 0;
+    std::optional<chip_id_t> sender_device_id;
+    std::optional<chip_id_t> receiver_device_id;
+};
+
+// Returns `SenderRecieverConfig` for a given device, given topology.
+SenderRecieverConfig get_device_sender_receiver_config(
+    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
+
+// Returns `SenderRecieverConfig` for a given device in a ring topology with a given cluster axis.
+SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+    const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
+
+// Returns a vector of devices that the given tensor is stored on.
+std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
+
 struct SyncModeSpec {
     uint32_t num_signals = 0;
     CoreCoord core;
@@ -32,25 +57,6 @@ struct SyncModeSpec {
 };
 
 class EriscDatamoverBuilder;
-
-// Creates a mesh workload by calling the `create_program` function for each coordinate in the `tensor_coords` set.
-tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::vector<Tensor>& input_tensors,
-    std::vector<Tensor>& output_tensors,
-    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program);
-
-struct SenderRecieverConfig {
-    uint32_t device_index = 0;
-    std::optional<chip_id_t> sender_device_id;
-    std::optional<chip_id_t> receiver_device_id;
-};
-
-SenderRecieverConfig get_device_sender_receiver_config(
-    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
-
-SenderRecieverConfig get_device_sender_receiver_config_in_ring(
-    const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
