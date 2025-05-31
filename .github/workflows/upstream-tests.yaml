@@ -18,6 +18,9 @@ env:
   BLACKHOLE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh
   BLACKHOLE_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-bh
 
+permissions:
+  packages: write
+
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
