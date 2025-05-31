@@ -209,7 +209,7 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
 
     tt::stl::Span<const uint8_t> protected_span(static_cast<uint8_t*>(mapped_mem), total_size);
     auto xexpr = xt::adapt(
-        protected_span.data(), total_size, xt::no_ownership(), xt::svector<long>(shape.cbegin(), shape.cend()));
+        protected_span.data(), total_size, xt::no_ownership(), std::vector<size_t>(shape.cbegin(), shape.cend()));
 
     // Verify that our set up actually works by attempting to read the protected memory region, and catching a segfault.
     bool segfault_occurred = false;
