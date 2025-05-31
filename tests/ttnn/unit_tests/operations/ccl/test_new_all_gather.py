@@ -245,7 +245,7 @@ def run_all_gather_impl(
         tt_out_tensor_list.append(tt_out_tensor)
     else:
         for i in range(num_iters):
-            tt_out_tensor = ttnn.experimental.all_broadcast_async(
+            tt_out_tensors = ttnn.experimental.all_broadcast_async(
                 input_tensor_mesh_list[i],
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
@@ -253,7 +253,7 @@ def run_all_gather_impl(
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
             )
-            tt_out_tensor_list.append(tt_out_tensor)
+            tt_out_tensor_list.append(tt_out_tensors[0])
 
         logger.info(f"Waiting for op")
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)

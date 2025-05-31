@@ -32,7 +32,7 @@ void bind_all_broadcast_async(pybind11::module& module, const ccl_operation_t& o
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor, multi_device_global_semaphore, num_links, memory_config, topology, subdevice_id);
             },
@@ -54,7 +54,7 @@ void bind_all_broadcast_async(pybind11::module& module, const ccl_operation_t& o
                const std::optional<ttnn::Tensor>& persistent_output_tensor,
                const std::optional<size_t> num_preferred_links,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
                     cluster_axis,

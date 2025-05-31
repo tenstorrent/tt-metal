@@ -12,7 +12,7 @@ namespace ttnn {
 namespace operations::experimental::ccl {
 
 struct ExecuteAllBroadcastAsync {
-    static ttnn::Tensor invoke(
+    static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         const GlobalSemaphore& multi_device_global_semaphore,
         const uint32_t num_links = 1,
@@ -20,7 +20,7 @@ struct ExecuteAllBroadcastAsync {
         const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
 
-    static ttnn::Tensor invoke(
+    static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,

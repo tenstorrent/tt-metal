@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-ttnn::Tensor ExecuteAllBroadcastAsync::invoke(
+std::vector<ttnn::Tensor> ExecuteAllBroadcastAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const GlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_links,
@@ -21,7 +21,7 @@ ttnn::Tensor ExecuteAllBroadcastAsync::invoke(
         input_tensor, multi_device_global_semaphore, num_links, memory_config, topology, subdevice_id);
 }
 
-ttnn::Tensor ExecuteAllBroadcastAsync::invoke(
+std::vector<ttnn::Tensor> ExecuteAllBroadcastAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,

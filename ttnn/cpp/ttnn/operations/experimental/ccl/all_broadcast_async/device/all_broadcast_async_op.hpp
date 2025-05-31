@@ -93,7 +93,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
+    std::vector<Tensor>& output_tensors,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -105,7 +105,7 @@ namespace operations {
 namespace experimental {
 namespace ccl {
 
-Tensor all_broadcast_async(
+std::vector<Tensor> all_broadcast_async(
     const Tensor& input_tensor,
     const GlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_links = 1,
@@ -113,7 +113,7 @@ Tensor all_broadcast_async(
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
-Tensor all_broadcast_async(
+std::vector<Tensor> all_broadcast_async(
     const Tensor& input_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
