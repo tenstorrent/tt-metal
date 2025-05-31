@@ -22,6 +22,7 @@ constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_
 constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(7);
 constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(8);
 constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(9);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(10);
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -52,6 +53,7 @@ void kernel_main() {
     auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x,
         fabric_mux_y,
+        fabric_mux_channel_id,
         fabric_mux_num_buffers_per_channel,
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_channel_base_address,

@@ -12,4 +12,6 @@ inline __attribute__((always_inline)) constexpr uint32_t align(uint32_t addr, ui
     return ((addr + alignment - 1) / alignment) * alignment;
 }
 
-inline __attribute__((always_inline)) constexpr bool is_power_of_2(uint32_t n) { return (n & (n - 1)) == 0; }
+inline __attribute__((always_inline)) constexpr bool is_power_of_2(uint32_t n) {
+    return (n != 0) && (n & (n - 1)) == 0;
+}

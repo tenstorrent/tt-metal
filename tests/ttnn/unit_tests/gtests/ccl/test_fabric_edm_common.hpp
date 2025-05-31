@@ -2791,6 +2791,16 @@ void Run1DFabricPacketSendTest(
 
             std::vector<uint32_t> worker_ct_args = {params.line_sync, params.line_sync};
 
+            TT_FATAL(
+                std::any_of(
+                    worker_cores_vec.begin(),
+                    worker_cores_vec.end(),
+                    [&sync_core_coord](const CoreCoord& core) {
+                        return core.x == sync_core_coord.x && core.y == sync_core_coord.y;
+                    }),
+                "Atleast one worker core must be mapped onto sync core: x={}, y={}",
+                sync_core_coord.x,
+                sync_core_coord.y);
             auto worker_kernel_id = tt_metal::CreateKernel(
                 program,
                 "tests/ttnn/unit_tests/gtests/ccl/kernels/edm_fabric_writer.cpp",
