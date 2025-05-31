@@ -146,10 +146,15 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         int num_cores_c = conv::get_num_cores_channels_from_parallel_config(this->parallel_config_);
         int stick_size = input_tensor.get_padded_shape()[3] / num_cores_c;
 
+        int pad_h = config_.get_pad_h() + config_.get_ceil_pad_h();
+        int pad_w = config_.get_pad_w() + config_.get_ceil_pad_w();
+        bool padding_exists = pad_h > 0 || pad_w > 0;
+
         return {data_movement::detail::inplace_untilize_with_halo_multi_core(
             program,
             input_tensor,
             pad_val_,
+            padding_exists,
             config_.num_cores_nhw,
             config_.num_cores_c,
             max_out_nsticks_per_core_,
