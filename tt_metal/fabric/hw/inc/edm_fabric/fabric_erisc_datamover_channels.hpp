@@ -7,6 +7,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
+#include <utility>
 
 #include "debug/dprint.h"
 #include "dataflow_api.h"
@@ -112,6 +114,49 @@ private:
     uint8_t channel_id;
 };
 
+// A tuple of EthChannelBuffer
+template <size_t... Buffers>
+struct EthChannelBufferTuple {
+    std::tuple<tt::tt_fabric::EthChannelBuffer<Buffers>...> channel_buffers;
+
+    void init(
+        const size_t channel_base_address[],
+        const size_t buffer_size_bytes,
+        const size_t header_size_bytes,
+        const size_t eth_transaction_ack_word_addr,
+        const uint8_t channel_base_id) {
+        std::apply(
+            // <-- note the template<...> here
+            [&]<typename... ChanT>(ChanT&... chans) {
+                size_t idx = 0;
+                (void)std::initializer_list<int>{(
+                    new (&chans) ChanT(
+                        channel_base_address[idx],
+                        buffer_size_bytes,
+                        header_size_bytes,
+                        eth_transaction_ack_word_addr,
+                        channel_base_id + idx),
+                    ++idx,  // increment *after* the read
+                    0       // dummy value
+                    )...};
+            },
+            channel_buffers);
+    }
+
+    template <size_t I>
+    auto& get() {
+        return std::get<I>(channel_buffers);
+    }
+};
+
+template <auto& ChannelBuffers>
+struct EthChannelBuffers {
+    template <size_t... Is>
+    static auto make(std::index_sequence<Is...>) {
+        return EthChannelBufferTuple<ChannelBuffers[Is]...>{};
+    }
+};
+
 template <uint8_t NUM_BUFFERS>
 struct EdmChannelWorkerInterface {
     EdmChannelWorkerInterface() :
@@ -209,6 +254,26 @@ struct EdmChannelWorkerInterface {
     ChannelBufferPointer<NUM_BUFFERS> local_wrptr;
     ChannelBufferPointer<NUM_BUFFERS> local_ackptr;
     ChannelBufferPointer<NUM_BUFFERS> local_rdptr;  // also used as completion_ptr
+};
+
+// A tuple of EDM channel worker interfaces
+template <size_t... Buffers>
+struct EdmChannelWorkerInterfaceTuple {
+    // tuple of EdmChannelWorkerInterface<Buffers>...
+    std::tuple<tt::tt_fabric::EdmChannelWorkerInterface<Buffers>...> channel_worker_interfaces;
+
+    template <size_t I>
+    auto& get() {
+        return std::get<I>(channel_worker_interfaces);
+    }
+};
+
+template <auto& ChannelBuffers>
+struct EdmChannelWorkerInterfaces {
+    template <size_t... Is>
+    static auto make(std::index_sequence<Is...>) {
+        return EdmChannelWorkerInterfaceTuple<ChannelBuffers[Is]...>{};
+    }
 };
 
 }  // namespace tt::tt_fabric
