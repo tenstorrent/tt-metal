@@ -138,11 +138,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     };
 
-    // if (sharded) {
-    //     kernel_defines["SHARDED"] = "1";
-    //     shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
-    //     shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
-    // }
+    if (sharded) {
+        kernel_defines["SHARDED"] = "1";
+        shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
+        shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
+    }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_broadcast_async/device/kernels/"
@@ -182,9 +182,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         for (const auto& arg : reader_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        // if (sharded) {
-        //     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
-        // }
+        if (sharded) {
+            shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
+        }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
@@ -210,9 +210,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        // if (sharded) {
-        //     shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
-        // }
+        if (sharded) {
+            shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
+        }
         printf("writer rt args size after sharded: %zu\n", writer_rt_args.size());
 
         writer_rt_args.push_back(forward_device.has_value());

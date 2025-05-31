@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <utility>
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -54,30 +54,31 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
-    auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
-    /*
-    #ifdef SHARDED
-        typedef ShardedInfo<
-            get_compile_time_arg_val(10),
-            get_compile_time_arg_val(11),
-            get_compile_time_arg_val(12),
-            get_compile_time_arg_val(13),
-            get_compile_time_arg_val(14),
-            get_compile_time_arg_val(15),
-            get_compile_time_arg_val(16)>
-            tensor_shard_info;
 
-        const auto [mapping_table, rt_increment] =
-            experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(arg_idx));
-        experimental::ShardedAddrGen<tensor_shard_info> tensor0_addrgen = {.bank_base_address = tensor_address0,
-    .shard_array = mapping_table}; auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab +
-    rt_increment); #else constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM; auto tensor0_addrgen =
-    InterleavedAddrGenFast<is_dram>{ .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format
-    = get_dataformat(cb0_id)}; auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
+#ifdef SHARDED
+    typedef ShardedInfo<
+        get_compile_time_arg_val(10),
+        get_compile_time_arg_val(11),
+        get_compile_time_arg_val(12),
+        get_compile_time_arg_val(13),
+        get_compile_time_arg_val(14),
+        get_compile_time_arg_val(15),
+        get_compile_time_arg_val(16)>
+        tensor_shard_info;
 
-    #endif
-    */
-    DPRINT << "arg_for_fab: " << (uint32_t)arg_for_fab << "\n";
+    const auto [mapping_table, rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(arg_idx));
+    experimental::ShardedAddrGen<tensor_shard_info> tensor0_addrgen = {
+        .bank_base_address = tensor_address0, .shard_array = mapping_table};
+    size_t fab_idx = arg_for_fab + rt_increment;
+    auto fabric_connection = FabricConnectionManager::build_from_args(fab_idx);
+#else
+    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
+    auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
+        .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
+
+#endif
 
     DPRINT << "ct args: \n";
     DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
@@ -101,6 +102,7 @@ void kernel_main() {
     DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y << "\n";
     DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value << "\n";
 
+    DPRINT << "arg_for_fab: " << (uint32_t)arg_for_fab << "\n";
     DPRINT << "fabric_connection arg 0" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
     DPRINT << "fabric_connection arg 1" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
     DPRINT << "fabric_connection arg 2" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
@@ -132,13 +134,13 @@ void kernel_main() {
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
 
     // interleaved addrgen
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    // constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
+    // auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
+    //    .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open();
     }
-    DPRINT << "fabric connection opened\n";
 
     // 1. mcast via fabric to remote tensor addresses
     DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << "\n";
@@ -156,11 +158,11 @@ void kernel_main() {
 
         uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
         for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-            uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen);
+            uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
             DPRINT << "j: " << j << "\n";
-            DPRINT << "tile_id: " << tile_id << "\n";
             DPRINT << "noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
+            DPRINT << "tile_id: " << tile_id << "\n";
 
             // This issues a flush barrier
             write_and_advance_local_read_address_for_fabric_write(
@@ -181,7 +183,7 @@ void kernel_main() {
 
         cb_pop_front(cb0_id, packet_size_in_pages);
     }
-    DPRINT << "before noc semaphore\n";
+
     // 2. mcast output ready semaphore
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);

@@ -348,14 +348,14 @@ def test_all_broadcast(
     [
         (
             4,
-            [1, 4, 32, 64],
+            [1, 4, 32, 128],
             3,
             ttnn.TILE_LAYOUT,
-            (32, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            (64, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
             None,
             None,
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
     ],
 )
