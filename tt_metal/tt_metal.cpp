@@ -33,6 +33,7 @@
 #include "data_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
+#include "kernels/kernel_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
