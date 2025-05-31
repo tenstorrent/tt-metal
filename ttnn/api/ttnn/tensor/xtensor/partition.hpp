@@ -73,7 +73,7 @@ auto chunk_xexpression(XtExpr& expr, tt::stl::SmallVector<int> num_chunks, tt::s
         auto chunk_view = xt::strided_view(expr, indices);
         chunk_views.push_back(chunk_view);
 
-        for (size_t i = 0; i < dims.size(); ++i) {
+        for (int i = static_cast<int>(dims.size()) - 1; i >= 0; --i) {
             if (++current_indices[i] < num_chunks_per_dim[i]) {
                 break;
             }

@@ -100,7 +100,6 @@ private:
 
         using XTensorView = std::reference_wrapper<std::decay_t<decltype(chunks.front())>>;
         MeshContainer<std::optional<XTensorView>> sharded_xtensor_views(shape_, std::nullopt);
-        sharded_xtensor_views.at(MeshCoordinate::zero_coordinate(shape_.dims())) = chunks.front();
 
         // Distribute chunks to appropriate mesh coordinates.
         size_t chunk_idx = 0;
@@ -122,25 +121,29 @@ private:
             replicate_sizes.push_back(shape_[replicate_mesh_dim]);
         }
 
-        // Fill in gaps along replicated dimensions.
-        for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
-            const bool replication_source =
-                !replicate_dims.empty() &&
-                std::all_of(replicate_dims.begin(), replicate_dims.end(), [&](size_t replicate_mesh_dim) {
-                    return coord[replicate_mesh_dim] == 0;
-                });
-            if (xtensor_view.has_value() && replication_source) {
-                tt::stl::SmallVector<size_t> replicate_indices(replicate_dims.size(), 0);
-                do {
-                    tt::stl::SmallVector<uint32_t> mesh_coords(coord.coords().begin(), coord.coords().end());
-                    for (size_t i = 0; i < replicate_dims.size(); ++i) {
-                        mesh_coords[replicate_dims[i]] = replicate_indices[i];
-                    }
-                    sharded_xtensor_views.at(MeshCoordinate(mesh_coords)) = *xtensor_view;
-                } while (increment_indices(replicate_indices, replicate_sizes));
+        // Fill in gaps along replicated dimensions:
+        // Treat shards placed at the beginning of each replication axes as "replication sources";
+        // for each one, copy its value to all other shards along the axes.
+        if (!replicate_dims.empty()) {
+            for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
+                const bool replication_source =
+                    std::all_of(replicate_dims.begin(), replicate_dims.end(), [&](size_t replicate_mesh_dim) {
+                        return coord[replicate_mesh_dim] == 0;
+                    });
+                if (xtensor_view.has_value() && replication_source) {
+                    tt::stl::SmallVector<size_t> replicate_indices(replicate_dims.size(), 0);
+                    do {
+                        tt::stl::SmallVector<uint32_t> mesh_coords(coord.coords().begin(), coord.coords().end());
+                        for (size_t i = 0; i < replicate_dims.size(); ++i) {
+                            mesh_coords[replicate_dims[i]] = replicate_indices[i];
+                        }
+                        sharded_xtensor_views.at(MeshCoordinate(mesh_coords)) = *xtensor_view;
+                    } while (increment_indices(replicate_indices, replicate_sizes));
+                }
             }
         }
 
+        // Compute shard shape and validate that all shards are uniform.
         auto shard_shape = [&]() {
             std::optional<ttnn::Shape> shard_shape;
             for (const auto& [_, xtensor_view] : sharded_xtensor_views) {
@@ -189,7 +192,7 @@ private:
     }
 
     static bool increment_indices(tt::stl::SmallVector<size_t>& indices, const tt::stl::SmallVector<int>& limits) {
-        for (size_t i = 0; i < indices.size(); ++i) {
+        for (int i = static_cast<int>(indices.size()) - 1; i >= 0; --i) {
             if (++indices[i] < static_cast<size_t>(limits[i])) {
                 return true;
             }
