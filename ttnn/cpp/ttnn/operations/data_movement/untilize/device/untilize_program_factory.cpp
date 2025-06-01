@@ -32,6 +32,18 @@ uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint3
     return 1;
 }
 
+std::string get_compute_kernel(uint32_t num_tiles_per_block, bool use_pack_untilize, DataType input_data_type) {
+    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || input_data_type == DataType::UINT16) {
+        // Slow untilize
+        log_debug(tt::LogOp, "Using slow untilize.");
+        return std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+    } else {
+        // Fast untilize
+        log_debug(tt::LogOp, "Using fast pack untilize.");
+        return std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    }
+}
+
 operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     const Tensor& a,
     Tensor& output,
@@ -728,12 +740,127 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks untilize_multi_core(
+operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_spec_indentical(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 
-    bool src_sharded = a.memory_config().is_sharded();
-    bool out_sharded = output.memory_config().is_sharded();
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+
+    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::Buffer* src0_buffer = a.buffer();
+    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    const auto& tile_shape = a.get_tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
+
+    ShardSpec shard_spec = a.shard_spec().value();
+    uint32_t shard_height = shard_spec.shape[0];
+    uint32_t shard_width = shard_spec.shape[1];
+
+    uint32_t num_tiles_per_block = shard_width / tile_width;
+    uint32_t num_blocks_per_core = shard_height / tile_height;
+    uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_core;
+
+    // Input CB
+    auto [src0_cb_index, cb_src0] = create_cb(
+        tt::CBIndex::c_0,
+        program,
+        shard_spec.grid,
+        input_single_tile_size,
+        num_tiles_per_shard,
+        input_cb_data_format,
+        src0_buffer);
+
+    // Output CB
+    auto [output_cb_index, cb_output] = create_cb(
+        tt::CBIndex::c_16,
+        program,
+        shard_spec.grid,
+        output_single_tile_size,
+        num_tiles_per_shard,
+        output_cb_data_format,
+        dst_buffer);
+
+    // Reader compile-time args
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
+
+    // Reader kernel
+    KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+        shard_spec.grid,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+
+    // Writer compile-time args
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)output_cb_index};
+
+    // Writer kernel
+    KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
+        shard_spec.grid,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+
+    // Compute compile-time args
+    std::vector<uint32_t> compute_compile_time_args = {
+        (uint32_t)num_blocks_per_core,
+        (uint32_t)num_tiles_per_block,
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
+
+    // Compute kernel
+    std::string compute_kernel = get_compute_kernel(num_tiles_per_block, use_pack_untilize, a.get_dtype());
+    KernelHandle untilize_kernel_id = CreateKernel(
+        program,
+        compute_kernel,
+        shard_spec.grid,
+        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
+
+    // Run-time args
+    auto cores =
+        corerange_to_cores(shard_spec.grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        CoreCoord core = cores[i];
+
+        // Reader run-time args
+        uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_core;
+        std::vector<uint32_t> reader_run_time_args = {num_tiles_to_read};
+
+        // Writer run-time args
+        uint32_t num_tiles_to_write = num_tiles_per_block * num_blocks_per_core;
+        std::vector<uint32_t> writer_run_time_args = {num_tiles_to_write};
+
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
+    }
+
+    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
+                                           writer_kernel_id = unary_writer_kernel_id,
+                                           cb_src0 = cb_src0,
+                                           cb_output = cb_output](
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
+
+        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+    };
+
+    return {std::move(program), override_runtime_args_callback};
+}
+
+operation::ProgramWithCallbacks untilize_multi_core(
+    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
+    tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
@@ -883,7 +1010,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         input_single_tile_size,
         input_cb_num_tiles,
         input_cb_data_format,
-        input_is_sharded ? a.buffer() : nullptr);
+        input_is_sharded ? src0_buffer : nullptr);
 
     // Output CB
     // Process a single input block at a time (while double buffering)
