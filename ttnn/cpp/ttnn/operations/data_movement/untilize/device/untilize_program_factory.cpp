@@ -933,15 +933,16 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     // TODO : currently multi_core parallelization on column only works for single tile height tensors.
     // Need to debug this to work on wide tensors that are higher than a single tile
-    if (!input_is_sharded and !output_is_sharded) {
-        if (num_tiles_per_row > max_tiles_per_cb) {
-            uint32_t ntiles_height = num_tiles / num_tiles_per_row;
-            if (ntiles_height == 1) {
-                return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
 
-            } else {
-                return untilize_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
-            }
+    // If the input is interleaved and an entire row of tiles can't fit in a CB at once
+    if (!input_is_sharded && num_tiles_per_row > max_tiles_per_cb) {
+        // If the output is also interleaved and the tensor is only a single tile high, we can
+        // parellize the work column wise. Otherwise we have to resort to the single core implementation,
+        // as the current default multi core implementation processes an entire row of tiles at once.
+        if (!output_is_sharded && num_tiles_per_col == 1) {
+            return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
+        } else {
+            return untilize_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
         }
     }
 
