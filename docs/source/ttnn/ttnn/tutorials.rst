@@ -1,20 +1,22 @@
 .. _Tutorials:
 
-.. note::
-   Certain TT-NN tutorials currently work on Grayskull only. Please check the specific pages
-   of tutorials below for more information.
-
 Tutorials
 #########
 
-This is a collection of tutorials written with Jupyter Notebooks to help you ramp up your skillset for using `tt-metal`. These
-notebooks can be found under https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials.
+This is a collection of tutorials written in Python to help you ramp up using TT-NN for various tasks such as tensor operations, model conversion, and profiling.
 
-These tutorials assume you already have a machine set up with either a grayskull or wormhole device available and that you have successfully
-followed the instructions for `installing and building the software from source <https://github.com/tenstorrent/tt-metal/blob/main/README.md>`_.
+These tutorials assume you already have a machine set up with either a wormhole or blackhole device available and that you have successfully
+followed the instructions for `TT-NN / TT-Metalium Installation, Option 1: From Source <https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md>`_.
 
-From within the `ttnn/tutorials` directory, launch the notebooks with: :code:`jupyter lab --no-browser --port=8888`
-Hint: Be sure to always run the cells from top to bottom as the order of the cells are dependent.
+With the recommended virtual environment activated, you can run these tutorials directly:
+
+.. code-block:: console
+
+   $ python3 --version
+   Python 3.10.12
+   $ python3 example.py
+   ...
+
 
 .. toctree::
 
