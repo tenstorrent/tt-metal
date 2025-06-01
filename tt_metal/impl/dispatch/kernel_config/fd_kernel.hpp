@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <map>
@@ -193,7 +194,7 @@ protected:
 
     // Some static helper functions commonly used by FD kernels
     static chip_id_t GetUpstreamDeviceId(chip_id_t device_id);
-    static chip_id_t GetDownstreamDeviceId(chip_id_t device_id);
+    static chip_id_t GetDownstreamDeviceId(chip_id_t device_id, int tunnel = -1);
     static uint32_t GetTunnelStop(chip_id_t device_id);
 
     tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()

@@ -39,7 +39,8 @@ void FabricMux::GenerateStaticConfigs() {
 
     const uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
-    logical_core_ = MetalContext::instance().get_dispatch_core_manager().fabric_mux_core(device_->id(), channel, this->cq_id_);
+    logical_core_ = MetalContext::instance().get_dispatch_core_manager().fabric_mux_core(
+        device_->id(), channel, this->cq_id_, tunnel_id_);
 
     // Count number of value kernels that need the channels
     const auto kernels_requiring_full_size_channel =
@@ -66,38 +67,47 @@ void FabricMux::GenerateStaticConfigs() {
         static_config_.buffer_size_bytes.value(),
         static_config_.buffer_base_address.value(),
         programmable_core_type_index);
-    mux_ct_args = mux_kernel_config_->get_fabric_mux_compile_time_args();
+    mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args();
 
     log_debug(
-        tt::LogDevice,
-        "Create FabricMux on Device {} with {} Header Only Channels and {} Full Size Channels. {} x {} B Buffers Each "
-        "Full Channel. {} status {:#x} termination {:#x}",
+        tt::LogMetal,
+        "FabricMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {}",
         device_->id(),
         kernels_requiring_header_only_channel,
         kernels_requiring_full_size_channel,
-        k_NumSlotsPerChannel,
         static_config_.buffer_size_bytes.value(),
         logical_core_.str(),
-        mux_kernel_config_->get_status_address(),
-        mux_kernel_config_->get_termination_signal_address());
+        GetVirtualCore().str(),
+        d2h_);
 
     uint32_t mux_buffer_end = mux_kernel_config_->get_start_address_to_clear() + mux_kernel_config_->get_num_bytes_to_clear();
     TT_ASSERT(
         mux_buffer_end < l1_size,
         "Fabric MUX Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
 
-    mux_rt_args.clear();
+    mux_rt_args_.clear();
+    int destination_device_id = -1;
+    TT_ASSERT(!(d2h_ && device_->is_mmio_capable()), "There is no D2H (return path) for MMIO devices");
+    if (d2h_) {
+        // Get the device which is upstream
+        destination_device_id = tt::tt_metal::FDKernel::GetUpstreamDeviceId(device_id_);
+    } else {
+        // Get the device which is downstream on the specified tunnel
+        destination_device_id = tt::tt_metal::FDKernel::GetDownstreamDeviceId(device_id_, tunnel_id_);
+    }
+    const auto& available_links = tt_fabric::get_forwarding_link_indices(device_id_, destination_device_id);
+    TT_ASSERT(!available_links.empty());
     tt_fabric::append_fabric_connection_rt_args(
-        device_id_, servicing_device_id_, 0, *program_, {logical_core_}, mux_rt_args, GetCoreType());
+        device_id_, destination_device_id, available_links[0], *program_, {logical_core_}, mux_rt_args_, GetCoreType());
 }
 
 void FabricMux::GenerateDependentConfigs() {}
 
 void FabricMux::CreateKernel() {
     auto mux_kernel =
-        configure_kernel_variant(dispatch_kernel_file_names[FABRIC_MUX], mux_ct_args, {}, false, false, false);
+        configure_kernel_variant(dispatch_kernel_file_names[FABRIC_MUX], mux_ct_args_, {}, false, false, false);
 
-    tt::tt_metal::SetRuntimeArgs(*program_, mux_kernel, logical_core_, mux_rt_args);
+    tt::tt_metal::SetRuntimeArgs(*program_, mux_kernel, logical_core_, mux_rt_args_);
 }
 
 void FabricMux::ConfigureCore() {
@@ -146,7 +156,7 @@ void assemble_fabric_mux_client_config_args(
 int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id) {
     const auto dev_mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(mmio_dev_id);
-    
+
     if (dev_mmio_device_id != mmio_dev_id) {
         TT_THROW("Specified MMIO device ID {} is not an MMIO device. MMIO device is {}", mmio_dev_id, dev_mmio_device_id);
     }

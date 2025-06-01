@@ -460,6 +460,7 @@ void DispatchKernel::CreateKernel() {
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
+
     auto my_virtual_core = get_virtual_core_coord(logical_core_, GetCoreType());
     auto upstream_virtual_core = get_virtual_core_coord(dependent_config_.upstream_logical_core.value(), GetCoreType());
     auto downstream_virtual_core =

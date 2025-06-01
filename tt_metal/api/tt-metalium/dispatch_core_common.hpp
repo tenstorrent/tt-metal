@@ -31,7 +31,8 @@ enum DispatchWorkerType : uint32_t {
     US_TUNNELER_REMOTE = 14,
     PACKET_ROUTER_MUX = 15,
     PACKET_ROUTER_DEMUX = 16,
-    FABRIC_MUX = 17,
+    FABRIC_MUX = 17,         // Downstream from MMIO to remote mux
+    RETURN_FABRIC_MUX = 18,  // Upstream from remote to MMIO mux
     COUNT,
 };
 

@@ -412,11 +412,13 @@ template <
     uint32_t cb_pages_per_block,
     uint32_t fabric_mux_num_buffers_per_channel,
     uint32_t header_rb,
+    uint8_t num_hops,
     typename T>
 FORCE_INLINE void cb_block_release_pages_remote(T& edm, uint32_t& block_noc_writes_to_clear, uint8_t noc = noc_index) {
     if (cb_block_released_prev_block) {
         while (!wrap_ge(NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT), block_noc_writes_to_clear));
-        cq_fabric_release_pages<noc_xy, sem_id, fabric_mux_num_buffers_per_channel, header_rb>(edm, cb_pages_per_block);
+        cq_fabric_release_pages<noc_xy, sem_id, fabric_mux_num_buffers_per_channel, header_rb, num_hops>(
+            edm, cb_pages_per_block);
     } else {
         cb_block_released_prev_block = true;
     }
@@ -445,6 +447,7 @@ template <
     uint32_t cb_blocks,
     uint32_t fabric_mux_num_buffers_per_channel,
     uint32_t header_rb,
+    uint8_t num_hops,
     typename T>
 inline void move_rd_to_next_block_and_release_pages_remote(
     T& edm, uint32_t& block_noc_writes_to_clear, uint32_t& rd_block_idx) {
@@ -454,7 +457,8 @@ inline void move_rd_to_next_block_and_release_pages_remote(
         sem_id,
         cb_pages_per_block,
         fabric_mux_num_buffers_per_channel,
-        header_rb>(edm, block_noc_writes_to_clear);
+        header_rb,
+        num_hops>(edm, block_noc_writes_to_clear);
     move_rd_to_next_block<cb_blocks>(rd_block_idx);
 }
 
@@ -508,6 +512,7 @@ template <
     uint32_t cb_pages_per_block,
     uint32_t fabric_mux_num_buffers_per_channel,
     uint32_t header_rb,
+    uint8_t num_hops,
     typename T>
 FORCE_INLINE uint32_t get_cb_page_and_release_pages_remote(
     T& edm,
@@ -531,7 +536,8 @@ FORCE_INLINE uint32_t get_cb_page_and_release_pages_remote(
             cb_pages_per_block,
             cb_blocks,
             fabric_mux_num_buffers_per_channel,
-            header_rb>(edm, block_noc_writes_to_clear, rd_block_idx);
+            header_rb,
+            num_hops>(edm, block_noc_writes_to_clear, rd_block_idx);
     }
 
     // Wait for dispatcher to supply a page

@@ -49,20 +49,30 @@ struct fabric_mux_static_config {
 //  Downstreamkernels: Header only channel
 //
 // Device Id: Which device this kernel is on
-// Servicing Device Id: Which device this kernel intends to send data to
+// Servicing Device Id: The downstream tunnel index
+// d2h: True means this MUX is for returning data from device to host. Servicing device Id is ignored if this is true.
 //
 class FabricMux : public FDKernel {
 private:
     fabric_mux_static_config static_config_;
     // This is separate from independent/dependent config as it's managed by fabric
     std::shared_ptr<tt::tt_fabric::FabricMuxConfig> mux_kernel_config_;
-    std::vector<uint32_t> mux_ct_args;
-    std::vector<uint32_t> mux_rt_args;
+    std::vector<uint32_t> mux_ct_args_;
+    std::vector<uint32_t> mux_rt_args_;
+    bool d2h_ = false;
+    int tunnel_id_ = 0;
 
 public:
     FabricMux(
-        int node_id, chip_id_t device_id, chip_id_t servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
-        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
+        int node_id,
+        chip_id_t device_id,
+        chip_id_t servicing_device_id,
+        uint8_t cq_id,
+        noc_selection_t noc_selection,
+        bool d2h) :
+        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection),
+        d2h_{d2h},
+        tunnel_id_{servicing_device_id_} {
         kernel_type_ = FDKernelType::ROUTING;
     }
 

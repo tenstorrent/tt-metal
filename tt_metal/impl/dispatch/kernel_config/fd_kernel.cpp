@@ -43,12 +43,22 @@ chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
     return device_id;
 }
 
-// Same thing for downstream, is ambiuous for mmio device though if it drives more than one tunnel
-chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id) {
+// Helper function to get downstream device in the tunnel from current device
+chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    for (auto tunnel :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
+    auto tunnels = tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+    if (tunnel < -1 || tunnel >= tunnels.size()) {
+        TT_THROW("Tunnel {} is out of range. {} tunnels exist", tunnel, tunnels.size());
+    }
+
+    if (tunnel != -1) {
+        // Remove all tunnels except the relevant one which will be at the front
+        std::swap(tunnels[0], tunnels[tunnel]);
+        tunnels.erase(tunnels.begin() + 1, tunnels.end());
+    }
+
+    for (auto tunnel : tunnels) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 // End of tunnel doesn't have downstream, just return itself
@@ -108,7 +118,9 @@ FDKernel* FDKernel::Generate(
         case PACKET_ROUTER_DEMUX:
             return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
         case FABRIC_MUX:
-            return new tt::tt_metal::FabricMux(node_id, device_id, servicing_device_id, cq_id, noc_selection);
+            return new tt::tt_metal::FabricMux(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
+        case RETURN_FABRIC_MUX:
+            return new tt::tt_metal::FabricMux(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
         default: TT_FATAL(false, "Unrecognized dispatch kernel type: {}.", type); return nullptr;
     }
 }
