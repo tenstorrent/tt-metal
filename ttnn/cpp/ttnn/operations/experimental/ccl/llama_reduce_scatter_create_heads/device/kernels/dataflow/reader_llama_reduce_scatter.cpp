@@ -6,7 +6,6 @@
 #include "dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-#include "debug/dprint_pages.h"
 
 void kernel_main() {
     // Constants for indexing
@@ -145,24 +144,14 @@ void kernel_main() {
             noc_async_read(output_noc_address, receiver_l1_address, page_size_bytes);
         }
 
-        DPRINT << "semaphore value at receiver_semaphore_address before wait:"
-               << *((uint32_t*)receiver_semaphore_address) << ENDL();
         noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices);
-        DPRINT << "semaphore value at receiver_semaphore_address after wait:"
-               << *((uint32_t*)receiver_semaphore_address) << ENDL();
 
         noc_async_read_barrier();
         cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
-        DPRINT << "fabric_receiver_cb_id:" << fabric_receiver_cb_id << ENDL();
-        DPRINT << "get_read_ptr(fabric_receiver_cb_id):" << get_read_ptr(fabric_receiver_cb_id) << ENDL();
-        tt::data_movement::common::print_bf16_pages(
-            get_read_ptr(fabric_receiver_cb_id), page_size_bytes / 2, num_pages_per_packet * num_devices);
 
         uint32_t head_idx = linear_output_page_start_idx / 2;  // each head has 2 pages/blocks
         cb_wait_front(accumulator_cb_id, num_pages_per_packet);
         auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
-        DPRINT << "accumulator_l1_addr:" << accumulator_l1_addr << ENDL();
-        tt::data_movement::common::print_bf16_pages(accumulator_l1_addr, page_size_bytes / 2, num_pages_per_packet);
         if (head_idx < q_heads) {  // write q heads
             for (uint32_t iblock = 1; iblock < num_pages_per_packet;
                  iblock += 2) {  // increment by 2 so that we can handle 1 head each time.
