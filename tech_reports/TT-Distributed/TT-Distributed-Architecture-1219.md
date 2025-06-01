@@ -1712,7 +1712,7 @@ TT-Distributed is the proposed solution for interfacing with a mesh of accelerat
 
 ![](images/image038.png)
 
-## 4.2. Offline System Descriptor: Caching UMD Queries <a id="offline-system-descriptor"></a>
+## 4.1 Offline System Descriptor: Caching UMD Queries <a id="offline-system-descriptor"></a>
 
 TT-Metal exposes several APIs to query physical device state through the tt\_cluster interface during runtime. Additionally, setting up the local or distributed session requires the ability to query system parameters, not directly exposed to users, through tt\_cluster.
 
