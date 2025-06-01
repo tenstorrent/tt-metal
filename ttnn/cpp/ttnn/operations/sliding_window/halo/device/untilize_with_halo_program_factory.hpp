@@ -12,6 +12,7 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const uint32_t pad_val,
+    const bool padding_exists,
     const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
     const Tensor& padding_config,
