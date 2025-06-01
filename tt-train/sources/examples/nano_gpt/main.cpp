@@ -10,6 +10,7 @@
 #include <wandbcpp.hpp>
 
 #include "3tier/remote_optimizer.hpp"
+#include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
@@ -992,5 +993,6 @@ int main(int argc, char **argv) {
     }
     tt::tt_metal::detail::DumpDeviceProfileResults(
         device->get_devices()[0], tt::tt_metal::ProfilerDumpState::CLOSE_DEVICE_SYNC);
+    ttml::autograd::ctx().close_device();
     return 0;
 }
