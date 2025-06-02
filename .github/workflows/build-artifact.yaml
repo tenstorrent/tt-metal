@@ -1,5 +1,8 @@
 name: "Build tt-metal artifacts"
 
+permissions:
+  packages: write
+
 on:
   workflow_call:
     inputs:
@@ -229,7 +232,7 @@ jobs:
             build_command="$build_command --build-umd-tests"
           fi
 
-          nice -n 19 $build_command
+          $build_command
 
       - name: 🛠️ Compile
         run: |
@@ -240,18 +243,18 @@ jobs:
         if: ${{ inputs.profile }}
         run: |
           echo "maxNameLength = 300" > ClangBuildAnalyzer.ini
-          nice -n 19 ClangBuildAnalyzer --all build capture.bin
-          nice -n 19 ClangBuildAnalyzer --analyze capture.bin
+          ClangBuildAnalyzer --all build capture.bin
+          ClangBuildAnalyzer --analyze capture.bin
 
       - name: 📦 Package
         run: |
-          nice -n 19 cmake --build build --target package
+          cmake --build build --target package
           ls -1sh build/*.deb build/*.ddeb || true
 
       - name: 🐍 Build wheel
         if: ${{ inputs.build-wheel }}
         run: |
-          nice -n 19 python3 -m build --wheel
+          python3 -m build --wheel
 
       - name: Publish ccache summary
         run: |

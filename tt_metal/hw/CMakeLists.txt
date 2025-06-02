@@ -136,11 +136,17 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
     endif()
 endfunction()
 
-# Define the compiler command
-set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++)
+if(TT_USE_SYSTEM_SFPI)
+    set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++")
+else()
+    set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++")
+endif()
 
-# May switch to this someday
-# set(GPP_CMD /opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++)
+if(NOT EXISTS "${GPP_CMD}")
+    message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
+endif()
+
+message(STATUS "Using SFPI compiler: ${GPP_CMD}")
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
@@ -268,6 +274,13 @@ add_library(Metalium::Metal::Hardware ALIAS hw)
 target_include_directories(hw INTERFACE inc)
 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
+    # These headers are for the device, not host; will require cross compiling to verify.
+    set_target_properties(
+        hw
+        PROPERTIES
+            VERIFY_INTERFACE_HEADER_SETS
+                FALSE
+    )
     target_sources(
         hw
         PUBLIC

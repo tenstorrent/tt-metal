@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,7 +36,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t K,
     bool bcast_batch,
     uint32_t in0_block_w,
-    uint32_t in0_last_ktile_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
     uint32_t out_block_h,
@@ -335,8 +334,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
             (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
-            (std::uint32_t)in0_last_ktile_w,
-
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
             (std::uint32_t)out_num_blocks_x,
@@ -367,11 +364,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)in0_block_w,      // in0_tensor_next_inner_dim_block_stride
             (std::uint32_t)K * in0_block_h,  // in0_tensor_next_h_dim_block_stride
             // in0 block args
-            (std::uint32_t)in0_block_w,          // in0_block_w
-            (std::uint32_t)in0_block_h,          // in0_block_h
-            (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
-            (std::uint32_t)in0_last_ktile_w,
-
+            (std::uint32_t)in0_block_w,                // in0_block_w
+            (std::uint32_t)in0_block_h,                // in0_block_h
+            (std::uint32_t)in0_block_num_tiles,        // in0_block_num_tiles
             (std::uint32_t)false,                      // extract_shard_sub_blocks (not used for interleaved)
             (std::uint32_t)in0_shard_width_in_tiles,   // shard_width_in_tiles (not used for interleaved)
             (std::uint32_t)in0_shard_height_in_tiles,  // shard_height_in_tiles (not used for interleaved)
@@ -1360,8 +1355,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());          // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());  // output
 
-    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1];
-
     tt_metal::Buffer* bias_buffer = nullptr;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
@@ -1456,7 +1449,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         Kt,
         bcast_batch,
         in0_block_w,
-        in0_last_ktile_w,
         out_subblock_h,
         out_subblock_w,
         out_block_h,
