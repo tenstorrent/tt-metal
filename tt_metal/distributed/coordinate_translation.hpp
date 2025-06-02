@@ -5,6 +5,7 @@
 #pragma once
 
 #include <mesh_coord.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <stdint.h>
 
 namespace tt {
@@ -23,9 +24,9 @@ namespace tt::tt_metal::distributed {
 class PhysicalMeshCoordinate {
 public:
     using chip_id_t = uint32_t;
-    using mesh_id_t = uint32_t;
+    using mesh_id_t = tt::tt_fabric::mesh_id_t;
     PhysicalMeshCoordinate() = delete;
-    PhysicalMeshCoordinate(chip_id_t mesh_id, chip_id_t chip_id) : mesh_id_(mesh_id), chip_id_(chip_id) {}
+    PhysicalMeshCoordinate(chip_id_t mesh_id, chip_id_t chip_id) : mesh_id_(mesh_id_t(mesh_id)), chip_id_(chip_id) {}
     mesh_id_t mesh_id() const { return mesh_id_; }
     chip_id_t chip_id() const { return chip_id_; }
 

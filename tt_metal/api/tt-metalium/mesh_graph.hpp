@@ -7,6 +7,7 @@
 #include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt_stl/reflection.hpp>
 #include <umd/device/types/arch.h>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
@@ -65,7 +66,6 @@ struct hash_pair {
 };
 
 using port_id_t = std::pair<RoutingDirection, uint32_t>;
-using mesh_id_t = uint32_t;
 using InterMeshConnectivity = std::vector<std::vector<std::unordered_map<mesh_id_t, RouterEdge>>>;
 using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<chip_id_t, RouterEdge>>>;
 
@@ -83,14 +83,14 @@ public:
     const ChipSpec& get_chip_spec() const { return chip_spec_; }
 
     // TODO: remove the ns/ew apis
-    std::uint32_t get_mesh_ns_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].first; }
-    std::uint32_t get_mesh_ew_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].second; }
+    std::uint32_t get_mesh_ns_size(mesh_id_t mesh_id) const { return mesh_shapes_[*mesh_id].first; }
+    std::uint32_t get_mesh_ew_size(mesh_id_t mesh_id) const { return mesh_shapes_[*mesh_id].second; }
     MeshShape get_mesh_shape(mesh_id_t mesh_id) const {
-        return MeshShape{mesh_shapes_[mesh_id].first, mesh_shapes_[mesh_id].second};
+        return MeshShape{mesh_shapes_[*mesh_id].first, mesh_shapes_[*mesh_id].second};
     }
-    const MeshContainer<std::uint32_t>& get_host_ranks(mesh_id_t mesh_id) const { return mesh_host_ranks_[mesh_id]; }
+    const MeshContainer<std::uint32_t>& get_host_ranks(mesh_id_t mesh_id) const { return mesh_host_ranks_[*mesh_id]; }
     const MeshCoordinateRange& get_host_rank_coord_range(mesh_id_t mesh_id, std::uint32_t host_rank) const {
-        return host_rank_coord_ranges_[mesh_id][host_rank];
+        return host_rank_coord_ranges_[*mesh_id][host_rank];
     }
     const std::vector<mesh_id_t>& get_mesh_ids() const { return mesh_ids_; }
 
@@ -102,7 +102,7 @@ private:
     void add_to_connectivity(
         mesh_id_t src_mesh_id,
         chip_id_t src_chip_id,
-        chip_id_t dest_mesh_id,
+        mesh_id_t dest_mesh_id,
         chip_id_t dest_chip_id,
         RoutingDirection port_direction);
 

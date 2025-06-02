@@ -481,9 +481,9 @@ void DispatchKernel::UpdateArgsForFabric(
     chip_id_t downstream_dev_id) {
     dependent_config_.fabric_router_noc_xy =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
-    dependent_config_.upstream_mesh_id = upstream_mesh_id;
+    dependent_config_.upstream_mesh_id = *upstream_mesh_id;
     dependent_config_.upstream_dev_id = upstream_dev_id;
-    dependent_config_.downstream_mesh_id = downstream_mesh_id;
+    dependent_config_.downstream_mesh_id = *downstream_mesh_id;
     dependent_config_.downstream_dev_id = downstream_dev_id;
     dependent_config_.outbound_eth_chan = outbound_eth_chan;
     auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());

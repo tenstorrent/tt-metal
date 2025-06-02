@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_fabric {
@@ -23,8 +24,8 @@ using RoutingTable =
 // Need to update the usage in routing table generator
 class FabricNodeId {
 public:
-    explicit FabricNodeId(std::uint32_t mesh_id, std::uint32_t chip_id);
-    std::uint32_t mesh_id = 0;
+    explicit FabricNodeId(mesh_id_t mesh_id, std::uint32_t chip_id);
+    mesh_id_t mesh_id{0};
     std::uint32_t chip_id = 0;
 };
 
