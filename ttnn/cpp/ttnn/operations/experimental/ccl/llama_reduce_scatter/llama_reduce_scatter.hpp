@@ -7,6 +7,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
 
 namespace ttnn {
 namespace operations::experimental::ccl {
@@ -22,7 +23,8 @@ struct ExecuteLlamaReduceScatter {
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,
         const uint32_t num_links,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear);
 };
 
 }  // namespace operations::experimental::ccl
