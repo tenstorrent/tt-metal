@@ -69,20 +69,22 @@ constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(39);
 constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(40);
 constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(41);
 constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(42);
-constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(43);
-constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(44);
-constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(45);
+constexpr size_t worker_credits_stream_id = get_compile_time_arg_val(43);
 
-constexpr uint32_t first_stream_used = get_compile_time_arg_val(46);
+constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(44);
+constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(45);
+constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(46);
 
-constexpr uint32_t virtualize_unicast_cores = get_compile_time_arg_val(47);
-constexpr uint32_t num_virtual_unicast_cores = get_compile_time_arg_val(48);
-constexpr uint32_t num_physical_unicast_cores = get_compile_time_arg_val(49);
+constexpr uint32_t first_stream_used = get_compile_time_arg_val(47);
 
-constexpr uint32_t num_hops = get_compile_time_arg_val(50);
+constexpr uint32_t virtualize_unicast_cores = get_compile_time_arg_val(48);
+constexpr uint32_t num_virtual_unicast_cores = get_compile_time_arg_val(49);
+constexpr uint32_t num_physical_unicast_cores = get_compile_time_arg_val(50);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(51);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(52);
+constexpr uint32_t num_hops = get_compile_time_arg_val(51);
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(52);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(53);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -1276,6 +1278,7 @@ void kernel_main() {
     FDFabricMuxConnectionScope<
         fabric_mux_x,
         fabric_mux_y,
+        worker_credits_stream_id,
         fabric_mux_channel_base_address,
         fabric_mux_num_buffers_per_channel,
         fabric_mux_flow_control_address,

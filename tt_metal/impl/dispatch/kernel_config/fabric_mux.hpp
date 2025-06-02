@@ -26,6 +26,7 @@ struct fabric_mux_client_config {
     std::optional<uint32_t> buffer_index_address;
     std::optional<uint32_t> status_address;
     std::optional<uint32_t> termination_signal_address;
+    std::optional<uint32_t> worker_credits_stream_id;
 };
 
 struct fabric_mux_static_config {

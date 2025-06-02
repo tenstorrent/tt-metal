@@ -90,16 +90,18 @@ constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(37);
 constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(38);
 constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(39);
 constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(40);
-constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(41);
-constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(42);
-constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(43);
+constexpr size_t worker_credits_stream_id = get_compile_time_arg_val(41);
+
+constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(42);
+constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(43);
+constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(44);
 
 // Prefetch H: Num hops to prefetch D
 // Prefetch D: Num hops to prefetch H
-constexpr uint32_t num_hops = get_compile_time_arg_val(44);
+constexpr uint32_t num_hops = get_compile_time_arg_val(45);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(45);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(46);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(46);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(47);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -1676,6 +1678,7 @@ void kernel_main() {
     FDFabricMuxConnectionScope<
         fabric_mux_x,
         fabric_mux_y,
+        worker_credits_stream_id,
         fabric_mux_channel_base_address,
         fabric_mux_num_buffers_per_channel,
         fabric_mux_flow_control_address,

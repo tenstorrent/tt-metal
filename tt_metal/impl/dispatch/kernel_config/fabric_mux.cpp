@@ -57,8 +57,8 @@ void FabricMux::GenerateStaticConfigs() {
     static_config_.num_header_only_channels = kernels_requiring_header_only_channel;
     static_config_.buffer_size_bytes = sizeof(tt::tt_fabric::PacketHeader) + 4096;
 
-    uint32_t programmable_core_type_index =
-        get_programmable_core_type_index(GetCoreType(), /*is_active_eth_core=*/false);
+    // FabricMuxConfig only accepts Worker or Idle Eth. Eth is not accepted.
+    CoreType mux_config_core = GetCoreType() == CoreType::WORKER ? CoreType::WORKER : CoreType::IDLE_ETH;
     mux_kernel_config_ = std::make_shared<tt::tt_fabric::FabricMuxConfig>(
         static_config_.num_full_size_channels.value(),
         static_config_.num_header_only_channels.value(),
@@ -66,7 +66,7 @@ void FabricMux::GenerateStaticConfigs() {
         k_NumSlotsPerChannel,
         static_config_.buffer_size_bytes.value(),
         static_config_.buffer_base_address.value(),
-        programmable_core_type_index);
+        mux_config_core);
     mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args();
 
     log_debug(
@@ -151,6 +151,8 @@ void assemble_fabric_mux_client_config_args(
     config.buffer_index_address = fabric_mux->GetMuxKernelConfig()->get_buffer_index_address(ch_type, ch_index);
     config.status_address = fabric_mux->GetMuxKernelConfig()->get_status_address();
     config.termination_signal_address = fabric_mux->GetMuxKernelConfig()->get_termination_signal_address();
+    config.worker_credits_stream_id =
+        fabric_mux->GetMuxKernelConfig()->get_channel_credits_stream_id(ch_type, ch_index);
 }
 
 int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id) {

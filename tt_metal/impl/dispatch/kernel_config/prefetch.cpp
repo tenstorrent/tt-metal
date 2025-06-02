@@ -418,6 +418,8 @@ void PrefetchKernel::CreateKernel() {
         dependent_config_.fabric_mux_client_config.buffer_index_address.value_or(0),
         dependent_config_.fabric_mux_client_config.status_address.value_or(0),
         dependent_config_.fabric_mux_client_config.termination_signal_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.worker_credits_stream_id.value_or(0),
+
         edm_connection_attributes_.worker_flow_control_sem,
         edm_connection_attributes_.worker_teardown_sem,
         edm_connection_attributes_.worker_buffer_index_sem,

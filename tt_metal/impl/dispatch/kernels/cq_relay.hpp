@@ -18,6 +18,7 @@
 template <
     uint32_t mux_x,
     uint32_t mux_y,
+    uint32_t fabric_sender_channel_credits_stream_id,
     uint32_t mux_channel_base_address,
     uint32_t mux_num_buffers_per_channel,
     uint32_t mux_flow_control_address,
@@ -42,9 +43,9 @@ struct FDFabricMuxConnectionScope {
 
         WAYPOINT("FMCW");
 
-        edm.init(
+        edm.template init<fd_core_type>(
             true /*connected_to_persistent_fabric*/,
-            0,
+            0, /* ignored, direction */
             mux_x,
             mux_y,
             mux_channel_base_address,
@@ -56,7 +57,10 @@ struct FDFabricMuxConnectionScope {
             mux_buffer_index_address,
             (volatile uint32_t* const)get_semaphore<fd_core_type>(worker_flow_control_sem),
             (volatile uint32_t* const)get_semaphore<fd_core_type>(worker_teardown_sem),
-            get_semaphore<fd_core_type>(worker_buffer_index_sem));
+            get_semaphore<fd_core_type>(worker_buffer_index_sem),
+            fabric_sender_channel_credits_stream_id,
+            StreamId{0}  // my stream id -- As a sender I currently do NOT get acks over stream regs
+        );
 
         tt::tt_fabric::wait_for_fabric_endpoint_ready(mux_x, mux_y, mux_status_address, local_mux_status_address);
         tt::tt_fabric::fabric_client_connect<mux_num_buffers_per_channel>(edm);
