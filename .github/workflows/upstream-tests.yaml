@@ -188,6 +188,9 @@ jobs:
       - ${{ matrix.bh-card }}
       - in-service
       - cloud-virtual-machine
+      # Targeting cloud machines with pipeline-functional per now per
+      # https://github.com/tenstorrent/tt-metal/issues/21738#issuecomment-2925788342
+      - pipeline-functional
     steps:
       - name: Run image
         timeout-minutes: 30
