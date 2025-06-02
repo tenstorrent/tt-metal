@@ -13,13 +13,14 @@ import socket
 
 from loguru import logger
 
+import ttnn
+
 from .process_ops_logs import process_ops
 from .common import (
     TT_METAL_HOME,
     PROFILER_BIN_DIR,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_SCRIPTS_ROOT,
-    TRACY_MODULE_PATH,
     TRACY_FILE_NAME,
     TRACY_OPS_TIMES_FILE_NAME,
     TRACY_OPS_DATA_FILE_NAME,
