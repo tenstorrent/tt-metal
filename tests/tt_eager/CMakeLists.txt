@@ -1,3 +1,12 @@
+set(Python3_FIND_STRATEGY LOCATION)
+find_package(
+    Python3
+    REQUIRED
+    COMPONENTS
+        Interpreter
+        Development
+)
+
 add_library(test_eager_common_libs INTERFACE)
 target_link_libraries(test_eager_common_libs INTERFACE test_common_libs)
 

@@ -495,12 +495,10 @@ if(WITH_PYTHON_BINDINGS)
             ${TTNN_SRC_PYBIND}
             ${CCL_TTNN_SRCS_PYBIND}
             ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
-            ${Python3_LIBRARY_DIRS}
     )
     target_include_directories(
         ttnn
         PUBLIC
-            ${Python3_INCLUDE_DIRS}
             ${PROJECT_SOURCE_DIR}/ttnn
             ${CMAKE_CURRENT_SOURCE_DIR}/cpp
     )
@@ -510,7 +508,7 @@ if(WITH_PYTHON_BINDINGS)
         PUBLIC
             TT::NN::CPP
         PRIVATE
-            ${Python3_LIBRARIES}
+            Python3::Module
             pybind11::module
             Boost::algorithm
             TT::Metalium
