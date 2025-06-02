@@ -883,6 +883,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t tile_width = tile_shape[1];
     uint32_t tile_volume = tile_height * tile_width;
 
+    bool input_is_sharded = a.is_sharded();
+    bool output_is_sharded = output.is_sharded();
+
     uint32_t num_tiles = a.volume() / tile_volume;
     uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / tile_width;
     uint32_t num_tiles_per_col = num_tiles / num_tiles_per_row;
@@ -895,9 +898,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
          cliff_compute_core_range,
          num_rows_per_full_core,
          num_rows_per_cliff_core] = ttnn::split_blocks_for_tilize(grid_size, num_tiles_per_col);
-
-    bool input_is_sharded = a.is_sharded();
-    bool output_is_sharded = output.is_sharded();
 
     constexpr uint32_t threshold_row_block = 32;
     if (!input_is_sharded and !output_is_sharded) {
@@ -1041,7 +1041,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         output_cb_num_tiles,
         output_cb_data_format);
 
-    // Reader compile-time args
+    // Reader compile-time args and kernel
     KernelHandle unary_reader_kernel_id;
     if (input_is_sharded) {
         // Sharded input
@@ -1060,7 +1060,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             (uint32_t)src0_is_dram,
             (uint32_t)src0_cb_index,
             (uint32_t)num_tiles_to_read,     // num_tiles to read TODO: (GR) Will need to be run-time for cliff core
-            (uint32_t)bytes_per_input_tile,  // bytes per tile
+            (uint32_t)bytes_per_input_tile,  // bytes per tile -> no longer here
             (uint32_t)5                      // start page id to read -> move to run-time args
         };
         unary_reader_kernel_id = CreateKernel(
@@ -1076,6 +1076,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
 
     // TODO: (GR) Add/write actual kernel
+    // Writer kernel
     unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
@@ -1249,23 +1250,27 @@ operation::ProgramWithCallbacks untilize_single_core(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
+    tt::tt_metal::IDevice* device = a.device();
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
+    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
     uint32_t tile_volume = tile_height * tile_width;
 
-    uint32_t num_tiles = a.physical_volume() / tile_volume;
+    bool input_is_sharded = a.memory_config().is_sharded();
+    bool output_is_sharded = output.memory_config().is_sharded();
 
-    uint32_t num_blocks_across_height = a.physical_volume() / a.padded_shape()[-1] / tile_height;
+    uint32_t num_tiles = a.volume() / tile_volume;
+    uint32_t num_blocks_across_height = a.volume() / a.get_padded_shape()[-1] / tile_height;
     uint32_t num_columns_of_blocks = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         num_columns_of_blocks = a.padded_shape()[-1] / output.shard_spec().value().shape[1];
     }
-
-    uint32_t num_tiles_per_column_row = a.padded_shape()[-1] / num_columns_of_blocks / tile_width;
+    uint32_t num_tiles_per_column_row = a.get_padded_shape()[-1] / num_columns_of_blocks / tile_width;
 
     // Determine how much L1 space we can use for input and output CBs,
     // ensuring that we don't intrude into other L1 storage space
@@ -1289,38 +1294,27 @@ operation::ProgramWithCallbacks untilize_single_core(
     }
 
     uint32_t num_blocks_per_column_row = num_tiles_per_column_row / num_tiles_per_block;
-    uint32_t single_block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
-    uint32_t num_total_sticks = a.physical_volume() / a.padded_shape()[-1] * num_columns_of_blocks;
-    uint32_t stick_size = a.physical_volume() * output.element_size() / num_total_sticks;
+    uint32_t output_single_block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
+    uint32_t num_total_sticks = a.volume() / a.get_padded_shape()[-1] * num_columns_of_blocks;
+    uint32_t output_stick_size = a.volume() * output.element_size() / num_total_sticks;
 
-    // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
+    // Input CB
+    uint32_t input_cb_num_tiles = num_tiles_per_block;
+    auto [src0_cb_index, cb_src0] =
+        create_cb(tt::CBIndex::c_0, program, core, input_single_tile_size, input_cb_num_tiles, input_cb_data_format);
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    // Output CB
+    uint32_t output_cb_num_tiles = num_tiles_per_block;
+    auto [output_cb_index, cb_output] = create_cb(
+        tt::CBIndex::c_16, program, core, output_single_tile_size, output_cb_num_tiles, output_cb_data_format);
 
-    uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = num_tiles_per_block;
-    auto cb_src0_config = tt::tt_metal::CircularBufferConfig(
-                              num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
-                              .set_page_size(src0_cb_index, input_single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    uint32_t num_output_tiles = num_tiles_per_block;
-    auto cb_output_config = tt::tt_metal::CircularBufferConfig(
-                                num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
-                                .set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-
-    bool input_is_sharded = a.memory_config().is_sharded();
-    bool output_is_sharded = output.memory_config().is_sharded();
-
+    // Reader compute defines
     std::map<string, string> reader_compute_defines;
     if (input_is_sharded) {
         reader_compute_defines["SHARDED"] = "1";
     }
 
+    // Writer compute defines
     std::map<string, string> writer_compute_defines;
     if (output_is_sharded) {
         writer_compute_defines["SHARDED"] = "1";
@@ -1328,23 +1322,29 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    uint32_t tile_bytes = tile_volume * output.element_size();
     uint32_t start_page_id = 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src0_is_dram,
         (uint32_t)src0_cb_index,
         (uint32_t)num_tiles,
-        (uint32_t)tile_bytes,
         (uint32_t)start_page_id,
     };
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(a, reader_compile_time_args);
     }
 
+    // Tilized reader
+    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+        "reader_unary_start_id.cpp",
+        core,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_compute_defines));
+
     // Writer compile-time args
     bool output_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(stick_size) - 1) : 0;
+    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(output_stick_size);
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(output_stick_size) - 1) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)output_is_dram,
         (uint32_t)output_cb_index,
@@ -1355,20 +1355,12 @@ operation::ProgramWithCallbacks untilize_single_core(
         (uint32_t)num_columns_of_blocks,
         (uint32_t)num_blocks_per_column_row,
         (uint32_t)num_tiles_per_block,
-        (uint32_t)single_block_width_size,
-        (uint32_t)stick_size,
+        (uint32_t)output_single_block_width_size,
+        (uint32_t)output_stick_size,
     };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
     }
-
-    // Tilized reader
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
-        "reader_unary_start_id.cpp",
-        core,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_compute_defines));
 
     // Untilized writer
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
