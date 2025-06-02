@@ -66,23 +66,53 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - name: Add labels based on changes
+      - name: Sync labels based on changes
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const labels = [];
-            if ("${{ needs.detect-changes.outputs.blackhole }}" === "true") labels.push("blackhole");
-            if ("${{ needs.detect-changes.outputs.wormhole }}" === "true") labels.push("wormhole");
-            if ("${{ needs.detect-changes.outputs.tests }}" === "true") labels.push("test-infra");
-            if ("${{ needs.detect-changes.outputs.github }}" === "true") labels.push("ci");
-            if (labels.length > 0) {
+            const expectedLabels = new Set();
+            if ("${{ needs.detect-changes.outputs.blackhole }}" === "true") expectedLabels.add("blackhole");
+            if ("${{ needs.detect-changes.outputs.wormhole }}" === "true") expectedLabels.add("wormhole");
+            if ("${{ needs.detect-changes.outputs.tests }}" === "true") expectedLabels.add("test-infra");
+            if ("${{ needs.detect-changes.outputs.github }}" === "true") expectedLabels.add("ci");
+
+            // Get current labels
+            const {data: currentLabels} = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            // Create sets for comparison
+            const managedLabels = new Set(["blackhole", "wormhole", "test-infra", "ci"]);
+            const currentLabelSet = new Set(currentLabels.map(label => label.name));
+
+            // Calculate labels to add and remove
+            const labelsToAdd = [...expectedLabels].filter(label => !currentLabelSet.has(label));
+            const labelsToRemove = [...currentLabelSet]
+              .filter(label => managedLabels.has(label) && !expectedLabels.has(label));
+
+            // Add new labels if needed
+            if (labelsToAdd.length > 0) {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                labels
+                labels: labelsToAdd
               });
+            }
+
+            // Remove outdated labels in parallel
+            if (labelsToRemove.length > 0) {
+              await Promise.all(labelsToRemove.map(label =>
+                github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  name: label
+                })
+              ));
             }
 
   build-images:
