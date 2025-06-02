@@ -388,6 +388,8 @@ def test_graph_capture_with_hang(device):
 
 ```
 
+You can check the full test here: https://github.com/tenstorrent/tt-metal/pull/22756/files#diff-0b28f2a718f7dad91bb0aab5246bde64a3ad5a88dc6d35b5bc65219386d7f100
+
 
 Please note that given the hacky nature of this test, it is recommended to build with --debug flag.
 
