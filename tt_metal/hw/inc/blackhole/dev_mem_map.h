@@ -36,6 +36,8 @@
 // Top 64K is reserved for syseng
 #define MEM_ETH_SIZE (512 * 1024 - 64 * 1024)
 
+#define MEM_DRAM_SIZE (4177920 * 1024U)
+
 #define MEM_LOCAL_BASE 0xFFB00000
 #define MEM_BRISC_LOCAL_SIZE (8 * 1024)
 #define MEM_NCRISC_LOCAL_SIZE (8 * 1024)
