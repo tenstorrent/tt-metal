@@ -138,6 +138,8 @@ jobs:
           sudo apt install -y gettext
           export TEST_COMMAND=${{ matrix.image-config.test-command }}
           export HW_TOPOLOGY=${{ matrix.image-config.hw-topology }}
+          export TT_METAL_DEV_VERSION=latest
+          export TT_METAL_COMMIT_SHA=${{ github.sha }}
           envsubst < dockerfile/upstream_test_images/Dockerfile.template > dockerfile/upstream_test_images/Dockerfile-generated
           cat dockerfile/upstream_test_images/Dockerfile-generated
       - name: Build and push
@@ -147,10 +149,6 @@ jobs:
           platforms: linux/amd64
           pull: true
           push: true
-          # https://github.com/docker/build-push-action/issues/557#issuecomment-1030412477
-          build-args: |
-            TT_METAL_DEV_VERSION=latest
-            TT_METAL_COMMIT_SHA=${{ github.sha }}
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
   test-wh-6u-image:

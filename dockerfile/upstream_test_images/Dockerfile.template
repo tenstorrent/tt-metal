@@ -1,7 +1,4 @@
-ARG TT_METAL_DEV_VERSION=latest
 FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:${TT_METAL_DEV_VERSION} as base
-
-ARG TT_METAL_COMMIT_SHA
 
 ENV DEBIAN_FRONTEND=noninteractive
 
