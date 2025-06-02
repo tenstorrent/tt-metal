@@ -9,7 +9,9 @@ struct ExecutePointToPoint {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
-        const tt::tt_metal::distributed::MeshCoordinate& receive_coord,
+        const MeshCoordinate& send_coord,
+        const MeshCoordinate& receive_coord,
+        MeshDevice& receive_device,
         const ccl::Topology topology,
         MeshDevice& mesh_device,
         const GlobalSemaphore& receiver_semaphore);

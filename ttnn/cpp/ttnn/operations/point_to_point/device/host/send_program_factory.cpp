@@ -45,9 +45,9 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const PointToPointOp::tensor_args_t& tensor_args,
     const PointToPointOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& send_coord,
+    const MeshCoordinate& receive_coord,
     PointToPointOp::tensor_return_value_t& output_tensors) {
     auto mesh_device = operation_attributes.mesh_device();
-    const auto& receive_coord = operation_attributes.receive_coord;
     const auto& topology = operation_attributes.topology;
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& receiver_semaphore = operation_attributes.receiver_semaphore;
@@ -112,19 +112,17 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         tt::tt_metal::ReaderDataMovementConfig({input_is_dram}));
 
     auto this_device = mesh_device->get_device(send_coord);
-    const auto [num_hops, dst_is_forward, next_device] =
+
+    //! debug
+    auto [num_hops, dst_is_forward, next_device] =
         calculate_fabric_connection(mesh_device, send_coord, receive_coord, topology);
+    dst_is_forward = !dst_is_forward;
+
     const bool output_is_dram = output_tensors.at(0).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const std::vector<uint32_t> writer_ct_args = {
         sender_cb_id, packet_cb_id, packet_header_cb_id, output_is_dram, l1_alignment};
-    std::cout << "------SEND PF------" << std::endl;
-    std::cout << "CT ARGS: ";
-    for (auto& a : writer_ct_args) {
-        std::cout << a << " ";
-    }
-    std::cout << std::endl;
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -150,12 +148,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         const std::vector<uint32_t> reader_runtime_args = {input_tensor.buffer()->address(), increment, page_idx_start};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
-        std::cout << "READER RT ARGS: ";
-        for (auto& a : reader_runtime_args) {
-            std::cout << a << " ";
-        }
-        std::cout << std::endl;
-
         std::vector<uint32_t> writer_runtime_args = {
             output_tensors.at(0).buffer()->address(),
             page_idx_start,
@@ -180,18 +172,10 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
                 this_device->id(), next_device->id(), link_idx, program, c, writer_runtime_args);
         }
 
-        std::cout << "WRITER RT ARGS: ";
-        for (auto& a : writer_runtime_args) {
-            std::cout << a << " ";
-        }
-        std::cout << std::endl;
-
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
 
         page_idx_start += increment;
     }
-
-    std::cout << "------END SEND PF------" << std::endl;
 
     // !TODO
     return {std::move(program), PointToPointOp::SendReceive::shared_variables_t{}};
