@@ -23,6 +23,7 @@ namespace ttnn::operations::transformer::detail {
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
 operation::ProgramWithCallbacks ring_joint_sdpa(
+    tt::tt_metal::Program& program,
     const Tensor& input_tensor_q,
     const Tensor& gathered_input_tensor_k,
     const Tensor& gathered_input_tensor_v,
@@ -120,6 +121,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     tt::log_info("local_Nt: {}", local_Nt);
     tt::log_info("global_Nt: {}", global_Nt);
     tt::log_info("logical_Lt: {}", logical_Lt);
+    tt::log_info("logical_n: {}", logical_n);
+    tt::log_info("global_N: {}", global_N);
 
     // Log chunking parameters
     tt::log_info("Sq_chunk_t: {}", Sq_chunk_t);
@@ -137,7 +140,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
 
     tt::log_info("use_joint_mask: {}", use_joint_mask);
 
-    Program program = CreateProgram();
+    // Program program = CreateProgram();
 
     IDevice* device = input_tensor_q.device();
 
@@ -153,6 +156,10 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
+
+    tt::log_info("num_cores: {}", num_cores);
+    tt::log_info("device->compute_with_storage_grid_size(): {}", device->compute_with_storage_grid_size());
+    tt::log_info("grid_size: {}", grid_size);
 
     TT_FATAL(
         num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y,

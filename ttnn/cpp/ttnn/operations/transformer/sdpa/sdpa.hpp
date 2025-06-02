@@ -7,6 +7,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 
 namespace ttnn {
 namespace operations::transformer {
@@ -97,9 +98,21 @@ struct ExecuteRingJointAttention {
         const ttnn::Tensor& joint_tensor_q,
         const ttnn::Tensor& joint_tensor_k,
         const ttnn::Tensor& joint_tensor_v,
+        ttnn::Tensor& persistent_intermediate_buffer_k,
+        ttnn::Tensor& persistent_intermediate_buffer_v,
+        ttnn::Tensor& persistent_output_buffer_k,
+        ttnn::Tensor& persistent_output_buffer_v,
         const std::string& joint_strategy,
         std::size_t logical_n,
         SDPAProgramConfig program_config,
+        const int32_t dim,
+        const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+        const uint32_t num_links,
+        const uint32_t cluster_axis,
+        const MeshDevice& mesh_device,
+        const ttnn::ccl::Topology topology,
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+        const CoreCoord ccl_core_grid_offset,
         std::optional<float> scale = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };

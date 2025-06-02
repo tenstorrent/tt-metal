@@ -7,13 +7,18 @@
 #include "ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::transformer {
 
 void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(input_tensors.size() == 6, "Must have 6 input tensors (Q, K, V, joint_Q, joint_K, joint_V)");
+    TT_FATAL(
+        input_tensors.size() == 10,
+        "Must have 6 SDPA input tensors (Q, K, V, joint_Q, joint_K, joint_V) and 4 AllGather input tensors.");
 
     const auto& input_tensor_q = input_tensors.at(0);
     const auto& input_tensor_k = input_tensors.at(1);
@@ -21,13 +26,43 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
     const auto& joint_tensor_q = input_tensors.at(3);
     const auto& joint_tensor_k = input_tensors.at(4);
     const auto& joint_tensor_v = input_tensors.at(5);
+    const auto& persistent_intermediate_buffer_k = input_tensors.at(6);
+    const auto& persistent_intermediate_buffer_v = input_tensors.at(7);
+    const auto& persistent_output_buffer_k = input_tensors.at(8);
+    const auto& persistent_output_buffer_v = input_tensors.at(9);
+
+    const std::vector<Tensor> sdpa_input_tensors = {
+        input_tensor_q,
+        persistent_output_buffer_k,
+        persistent_output_buffer_v,
+        joint_tensor_q,
+        joint_tensor_k,
+        joint_tensor_v};
+    const std::vector<Tensor> ring_gather_input_tensors = {
+        input_tensor_k,
+        input_tensor_v,
+    };
+    const std::vector<std::optional<Tensor>> ring_gather_output_tensors = {
+        persistent_intermediate_buffer_k,
+        persistent_output_buffer_k,
+        persistent_intermediate_buffer_v,
+        persistent_output_buffer_v,
+    };
+
+    this->all_gather_struct.validate_with_output_tensors(ring_gather_input_tensors, ring_gather_output_tensors);
+
+    // Check that SDPA coregrid does not overlap with AllGather coregrid
+    TT_FATAL(this->program_config.has_value(), "Program config must be provided");
+    TT_FATAL(
+        this->ccl_core_grid_offset.y >= this->program_config.value().compute_with_storage_grid_size.y,
+        "SDPA coregrid overlaps with AllGather coregrid");
 
     // Validate joint strategy is 'rear'
     TT_FATAL(this->joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", this->joint_strategy);
 
     // Validate all tensors have the same dtype
     const auto dtype = input_tensor_q.get_dtype();
-    for (const auto& tensor : input_tensors) {
+    for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(
             tensor.get_dtype() == dtype,
             "All tensors must have the same dtype. Expected {}, got {}",
@@ -37,14 +72,14 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
 
     // Get shapes
     const auto q_shape = input_tensor_q.get_logical_shape();
-    const auto k_shape = input_tensor_k.get_logical_shape();
-    const auto v_shape = input_tensor_v.get_logical_shape();
+    const auto k_shape = persistent_output_buffer_k.get_logical_shape();
+    const auto v_shape = persistent_output_buffer_v.get_logical_shape();
     const auto joint_q_shape = joint_tensor_q.get_logical_shape();
     const auto joint_k_shape = joint_tensor_k.get_logical_shape();
     const auto joint_v_shape = joint_tensor_v.get_logical_shape();
 
     // Validate storage types and buffers
-    for (auto& tensor : input_tensors) {
+    for (auto& tensor : sdpa_input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
         TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.get_layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
@@ -174,7 +209,7 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         TT_FATAL(logical_shape[3] == padded_shape[3], "Padding is not supported on the head_dim dimension");
     };
 
-    for (const auto& tensor : input_tensors) {
+    for (const auto& tensor : sdpa_input_tensors) {
         validate_padding(tensor);
     }
 }
@@ -205,17 +240,113 @@ std::vector<TensorSpec> RingJointScaledDotProductAttention::compute_output_specs
         TensorSpec(lse_shape, TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
-operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+operation::MeshWorkloadWithCallbacks RingJointScaledDotProductAttention::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    return ccl::create_mesh_workload_from_programs(
+        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+            return create_program_at(coord, input_tensors, output_tensors);
+        });
+}
+
+tt::tt_metal::operation::Hash RingJointScaledDotProductAttention::compute_program_hash(
+    const std::vector<Tensor>& input_tensors) const {
+    return tt::tt_metal::operation::hash_operation<RingJointScaledDotProductAttention>(
+        input_tensors,
+        this->joint_strategy,
+        this->scale,
+        this->logical_n,
+        this->ring_size,
+        this->compute_kernel_config,
+        this->program_config,
+        this->ccl_core_grid_offset,
+        this->all_gather_struct.compute_program_hash(
+            {input_tensors.at(1), input_tensors.at(2)}) /*all_gather input tensors*/
+    );
+}
+
+operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_program_at(
+    const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    tt::log_debug(tt::LogOp, "DEBUG: create_program_at is called");
+    auto mesh_device = input_tensors[0].mesh_device();
+    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
+    std::vector<IDevice*> devices_to_use = {};
+    // User specified the cluster-axis. Derive devices based on the current coordinate
+    // and the cluster-axis.
+    const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+    devices_to_use = (this->all_gather_struct.cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
+                                                                         : mesh_view.get_devices_on_row(coord[0]);
+
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
+    uint32_t device_index = 0;  // Initialize device index
+    for (uint32_t i = 0; i < this->all_gather_struct.ring_size; ++i) {
+        if (devices_to_use.at(i) == target_device) {
+            device_index = i;
+            if (i != 0) {
+                backward_device = devices_to_use.at(i - 1);
+            } else if (this->all_gather_struct.topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices_to_use.at(this->all_gather_struct.ring_size - 1);
+            }
+            if (i != this->all_gather_struct.ring_size - 1) {
+                forward_device = devices_to_use.at(i + 1);
+            } else if (this->all_gather_struct.topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices_to_use.at(0);
+            }
+        }
+    }
+
     auto& input_tensor_q = input_tensors.at(0);
     auto& input_tensor_k = input_tensors.at(1);
     auto& input_tensor_v = input_tensors.at(2);
     auto& joint_tensor_q = input_tensors.at(3);
     auto& joint_tensor_k = input_tensors.at(4);
     auto& joint_tensor_v = input_tensors.at(5);
+    auto& persistent_intermediate_buffer_k = input_tensors.at(6);
+    auto& persistent_intermediate_buffer_v = input_tensors.at(7);
+    auto& persistent_output_buffer_k = input_tensors.at(8);
+    auto& persistent_output_buffer_v = input_tensors.at(9);
     auto& output_tensor = output_tensors.at(0);
     auto& joint_output_tensor = output_tensors.at(1);
     auto& lse_output_tensor = output_tensors.at(2);
+
+    tt::tt_metal::Program program{};
+    // TODO: Initialize fused op signaler
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
+
+    std::vector<Tensor> all_gather_input_tensors = {
+        input_tensor_k,
+        input_tensor_v,
+    };
+    std::vector<Tensor> all_gather_intermediate_tensors = {
+        persistent_intermediate_buffer_k,
+        persistent_intermediate_buffer_v,
+    };
+    std::vector<Tensor> all_gather_output_tensors = {
+        persistent_output_buffer_k,
+        persistent_output_buffer_v,
+    };
+    auto all_gather_program = ring_attention_all_gather_async_multi_core_with_workers_helper(
+        program,
+        all_gather_input_tensors,
+        all_gather_intermediate_tensors,
+        target_device,
+        forward_device,
+        backward_device,
+        all_gather_output_tensors,
+        this->all_gather_struct.dim,
+        this->all_gather_struct.num_links,
+        this->all_gather_struct.ring_size,
+        device_index,
+        this->all_gather_struct.topology,
+        this->all_gather_struct.semaphore,
+        this->all_gather_struct.sub_device_id,
+        empty_fused_op_signaler,
+        this->ccl_core_grid_offset);
+
+    const auto all_gather_callback = all_gather_program.override_runtime_arguments_callback;
+
     auto scale = this->scale;
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_logical_shape()[-1]));
@@ -224,10 +355,11 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
     std::size_t q_chunk_size = this->get_q_chunk_size();
     std::size_t k_chunk_size = this->get_k_chunk_size();
 
-    return detail::ring_joint_sdpa(
+    auto ring_joint_sdpa_program = detail::ring_joint_sdpa(
+        all_gather_program.program,  // Can't pass program, must pass allgather's program
         input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
+        persistent_output_buffer_k,
+        persistent_output_buffer_v,
         joint_tensor_q,
         joint_tensor_k,
         joint_tensor_v,
@@ -241,6 +373,98 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         this->ring_size,
         this->compute_kernel_config,
         this->program_config);
+
+    const auto ring_attention_callback = ring_joint_sdpa_program.override_runtime_arguments_callback;
+
+    auto override_runtime_args = [all_gather_callback, ring_attention_callback](
+                                     const void* operation,
+                                     Program& program,
+                                     const std::vector<Tensor>& input_tensors,
+                                     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                                     const std::vector<Tensor>& output_tensors) {
+        auto& input_tensor_q = input_tensors.at(0);
+        auto& input_tensor_k = input_tensors.at(1);
+        auto& input_tensor_v = input_tensors.at(2);
+        auto& joint_tensor_q = input_tensors.at(3);
+        auto& joint_tensor_k = input_tensors.at(4);
+        auto& joint_tensor_v = input_tensors.at(5);
+        auto& persistent_intermediate_buffer_k = input_tensors.at(6);
+        auto& persistent_intermediate_buffer_v = input_tensors.at(7);
+        auto& persistent_output_buffer_k = input_tensors.at(8);
+        auto& persistent_output_buffer_v = input_tensors.at(9);
+        auto& output_tensor = output_tensors.at(0);
+        auto& joint_output_tensor = output_tensors.at(1);
+        auto& lse_output_tensor = output_tensors.at(2);
+
+        all_gather_callback.value()(
+            operation,
+            program,
+            {input_tensor_k, input_tensor_v}, /*input_tensors*/
+            {},                               /*optional_input_tensors*/
+            {persistent_intermediate_buffer_k,
+             persistent_output_buffer_k,
+             persistent_intermediate_buffer_v,
+             persistent_output_buffer_v} /*output_tensors*/
+        );
+
+        ring_attention_callback.value()(
+            operation,
+            program,
+            {input_tensor_q,
+             persistent_output_buffer_k,
+             persistent_output_buffer_v,
+             joint_tensor_q,
+             joint_tensor_k,
+             joint_tensor_v},                                       /*input_tensors*/
+            {},                                                     /*optional_input_tensors*/
+            {output_tensor, joint_output_tensor, lse_output_tensor} /*output_tensors*/
+        );
+    };
+
+    ring_joint_sdpa_program.override_runtime_arguments_callback = override_runtime_args;
+    return ring_joint_sdpa_program;
 }
+
+// operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_program(
+//     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+//     auto& input_tensor_q = input_tensors.at(0);
+//     auto& input_tensor_k = input_tensors.at(1);
+//     auto& input_tensor_v = input_tensors.at(2);
+//     auto& joint_tensor_q = input_tensors.at(3);
+//     auto& joint_tensor_k = input_tensors.at(4);
+//     auto& joint_tensor_v = input_tensors.at(5);
+//     auto& persistent_intermediate_buffer_k = input_tensors.at(6);
+//     auto& persistent_intermediate_buffer_v = input_tensors.at(7);
+//     auto& persistent_output_buffer_k = input_tensors.at(8);
+//     auto& persistent_output_buffer_v = input_tensors.at(9);
+//     auto& output_tensor = output_tensors.at(0);
+//     auto& joint_output_tensor = output_tensors.at(1);
+//     auto& lse_output_tensor = output_tensors.at(2);
+//     auto scale = this->scale;
+//     if (not scale.has_value()) {
+//         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_logical_shape()[-1]));
+//     }
+
+//     std::size_t q_chunk_size = this->get_q_chunk_size();
+//     std::size_t k_chunk_size = this->get_k_chunk_size();
+
+//     return detail::ring_joint_sdpa(
+//         input_tensor_q,
+//         input_tensor_k,
+//         input_tensor_v,
+//         joint_tensor_q,
+//         joint_tensor_k,
+//         joint_tensor_v,
+//         output_tensor,
+//         joint_output_tensor,
+//         lse_output_tensor,
+//         this->logical_n,
+//         scale,
+//         q_chunk_size,
+//         k_chunk_size,
+//         this->ring_size,
+//         this->compute_kernel_config,
+//         this->program_config);
+// }
 
 }  // namespace ttnn::operations::transformer

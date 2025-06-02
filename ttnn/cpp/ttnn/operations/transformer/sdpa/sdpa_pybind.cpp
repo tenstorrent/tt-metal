@@ -9,6 +9,7 @@
 
 #include "sdpa.hpp"
 #include "ttnn-pybind/decorators.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 
 namespace ttnn::operations::transformer {
 
@@ -276,11 +277,23 @@ void py_bind_sdpa(py::module& module) {
                const ttnn::Tensor& joint_tensor_q,
                const ttnn::Tensor& joint_tensor_k,
                const ttnn::Tensor& joint_tensor_v,
+               ttnn::Tensor& persistent_intermediate_buffer_k,
+               ttnn::Tensor& persistent_intermediate_buffer_v,
+               ttnn::Tensor& persistent_output_buffer_k,
+               ttnn::Tensor& persistent_output_buffer_v,
                const std::string& joint_strategy,
                std::size_t logical_n,
                SDPAProgramConfig program_config,
                std::optional<float> scale,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               const int32_t dim,
+               const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+               const uint32_t num_links,
+               const uint32_t cluster_axis,
+               const MeshDevice& mesh_device,
+               const ttnn::ccl::Topology topology,
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+               const CoreCoord ccl_core_grid_offset,
                QueueId queue_id) {
                 auto outputs = self(
                     queue_id,
@@ -290,9 +303,21 @@ void py_bind_sdpa(py::module& module) {
                     joint_tensor_q,
                     joint_tensor_k,
                     joint_tensor_v,
+                    persistent_intermediate_buffer_k,
+                    persistent_intermediate_buffer_v,
+                    persistent_output_buffer_k,
+                    persistent_output_buffer_v,
                     joint_strategy,
                     logical_n,
                     program_config,
+                    dim,
+                    multi_device_global_semaphore,
+                    num_links,
+                    cluster_axis,
+                    mesh_device,
+                    topology,
+                    subdevice_id,
+                    ccl_core_grid_offset,
                     scale,
                     compute_kernel_config);
                 return outputs;
@@ -304,11 +329,23 @@ void py_bind_sdpa(py::module& module) {
             py::arg("joint_tensor_k").noconvert(),
             py::arg("joint_tensor_v").noconvert(),
             py::kw_only(),
+            py::arg("persistent_intermediate_buffer_k").noconvert(),
+            py::arg("persistent_intermediate_buffer_v").noconvert(),
+            py::arg("persistent_output_buffer_k").noconvert(),
+            py::arg("persistent_output_buffer_v").noconvert(),
             py::arg("joint_strategy"),
             py::arg("logical_n"),
             py::arg("program_config").noconvert(),
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("dim"),
+            py::arg("multi_device_global_semaphore"),
+            py::arg("num_links"),
+            py::arg("cluster_axis"),
+            py::arg("mesh_device"),
+            py::arg("topology"),
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("ccl_core_grid_offset"),
             py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::transformer

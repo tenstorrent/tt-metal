@@ -11,6 +11,7 @@
 namespace ttnn::operations::transformer::detail {
 
 tt::tt_metal::operation::ProgramWithCallbacks ring_joint_sdpa(
+    tt::tt_metal::Program& program,
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,

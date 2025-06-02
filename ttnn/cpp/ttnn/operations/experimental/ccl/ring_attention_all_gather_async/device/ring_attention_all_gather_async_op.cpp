@@ -154,7 +154,7 @@ tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::creat
             }
         }
     }
-    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
+
     std::vector<Tensor> persistent_intermediate_tensors, persistent_output_tensors;
     for (uint32_t i = 0; i < input_tensors.size(); i++) {
         persistent_intermediate_tensors.push_back(output_tensors[2 * i]);

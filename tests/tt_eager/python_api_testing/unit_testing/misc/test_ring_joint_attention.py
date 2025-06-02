@@ -205,6 +205,12 @@ def test_ring_joint_sdpa_stress(device, b, nh, seq_len, joint_seq_len, d, q_chun
     run_ring_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype)
 
 
+def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
+    # create global semaphore handles
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+    return ccl_semaphore_handles
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("q_chunk_size", [64], ids=["q256"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k256"])
@@ -217,12 +223,24 @@ def test_ring_joint_sdpa_stress(device, b, nh, seq_len, joint_seq_len, d, q_chun
         (4096, 333),
     ],
 )
-@pytest.mark.parametrize("n_iters, trace_enabled", [(10, False), (10, True)], ids=["no_trace", "yes_trace"])
+@pytest.mark.parametrize("n_iters, trace_enabled", [(1, False), (10, True)], ids=["no_trace", "yes_trace"])
+@pytest.mark.parametrize("num_devices, num_links, rp_dim, rp_axis, rp_factor", [[8, 1, 2, 1, 8]])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
+    "device_params, all_gather_topology",
+    [
+        ({"trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, ttnn.Topology.Ring),
+        ({"trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["ring", "line"],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 8)],
+    indirect=True,
 )
 def test_ring_joint_sdpa_perf(
-    t3k_mesh_device,
+    mesh_device,
     use_program_cache,
     b,
     nh,
@@ -234,14 +252,72 @@ def test_ring_joint_sdpa_perf(
     dtype,
     n_iters,
     trace_enabled,
+    num_devices,
+    num_links,
+    rp_dim,
+    rp_axis,
+    rp_factor,
+    all_gather_topology,
 ):
-    num_devices = 8
-    torch.manual_seed(1234)
+    full_compute_grid = mesh_device.compute_with_storage_grid_size()
+    sdpa_compute_grid = (8, 7)
+    ccl_core_grid_offset = (0, 7)
 
-    compute_grid = t3k_mesh_device.compute_with_storage_grid_size()
+    # Basic CCL setup
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice(
+        [
+            ccl_sub_device_crs,
+        ]
+    )
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
+
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+    # create global semaphore handles
+    ccl_semaphore_handles = [
+        create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(n_iters)
+    ]
+
+    # Create persistent output buffers
+    ag_output_shape = (b, nh, seq_len, d)
+    persistent_intermediate_buffers = [
+        [
+            ttnn.from_torch(
+                torch.zeros(ag_output_shape),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(2)  # Num inputs K, V
+        ]
+        for _ in range(n_iters)
+    ]
+
+    persistent_output_buffers = [
+        [
+            ttnn.from_torch(
+                torch.zeros(ag_output_shape),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(2)  # Num inputs K, V
+        ]
+        for _ in range(n_iters)
+    ]
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=compute_grid,
+        compute_with_storage_grid_size=sdpa_compute_grid,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -271,95 +347,89 @@ def test_ring_joint_sdpa_perf(
         Q,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(t3k_mesh_device, dim=-2),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-2),
     )
     tt_K = ttnn.from_torch(
         K,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(t3k_mesh_device, dim=-2),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-2),
     )
     tt_V = ttnn.from_torch(
         V,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(t3k_mesh_device, dim=-2),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-2),
     )
     tt_joint_Q = ttnn.from_torch(
         joint_Q,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_joint_K = ttnn.from_torch(
         joint_K,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_joint_V = ttnn.from_torch(
         joint_V,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ccl_sub_device_crs,
-        ]
-    )
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = t3k_mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    t3k_mesh_device.load_sub_device_manager(sub_device_manager)
-    t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-    # create global semaphore handles
-    ccl_semaphore_handles = [
-        [ttnn.create_global_semaphore(t3k_mesh_device, ccl_sub_device_crs, 0) for j in range(2)] for i in range(n_iters)
-    ]
 
     tt_out_list = []
     tt_joint_out_list = []
 
     def run_iters(tt_out_list, tt_joint_out_list):
         for i in range(n_iters):
-            K_gathered = ttnn.experimental.all_gather_async(
-                tt_K,
-                dim=2,
-                multi_device_global_semaphore=[ccl_semaphore_handles[i][0]],
-                num_links=1,
-                topology=ttnn.Topology.Ring,
-                subdevice_id=worker_sub_device_id,
-            )
-            V_gathered = ttnn.experimental.all_gather_async(
-                tt_V,
-                dim=2,
-                multi_device_global_semaphore=[ccl_semaphore_handles[i][1]],
-                num_links=1,
-                topology=ttnn.Topology.Ring,
-                subdevice_id=worker_sub_device_id,
-            )
+            # K_gathered = ttnn.experimental.all_gather_async(
+            #     tt_K,
+            #     dim=2,
+            #     multi_device_global_semaphore=[ccl_semaphore_handles[i][0]],
+            #     num_links=1,
+            #     topology=ttnn.Topology.Ring,
+            #     subdevice_id=worker_sub_device_id,
+            # )
+            # V_gathered = ttnn.experimental.all_gather_async(
+            #     tt_V,
+            #     dim=2,
+            #     multi_device_global_semaphore=[ccl_semaphore_handles[i][1]],
+            #     num_links=1,
+            #     topology=ttnn.Topology.Ring,
+            #     subdevice_id=worker_sub_device_id,
+            # )
             tt_out, tt_joint_out, tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_Q,
-                K_gathered,
-                V_gathered,
+                tt_K,
+                tt_V,
                 tt_joint_Q,
                 tt_joint_K,
                 tt_joint_V,
+                persistent_intermediate_buffer_k=persistent_intermediate_buffers[i][0],
+                persistent_intermediate_buffer_v=persistent_intermediate_buffers[i][1],
+                persistent_output_buffer_k=persistent_output_buffers[i][0],
+                persistent_output_buffer_v=persistent_output_buffers[i][1],
                 joint_strategy="rear",
                 logical_n=seq_len,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
+                dim=rp_dim,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                num_links=num_links,
+                cluster_axis=rp_axis,
+                mesh_device=mesh_device,
+                topology=all_gather_topology,
+                subdevice_id=worker_sub_device_id,
+                ccl_core_grid_offset=ccl_core_grid_offset,
             )
             tt_out_list.append(tt_out)
             tt_joint_out_list.append(tt_joint_out)
@@ -368,14 +438,14 @@ def test_ring_joint_sdpa_perf(
         print("Compile run")
         run_iters([], [])
         print("Capture trace")
-        trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         run_iters(tt_out_list, tt_joint_out_list)
-        ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(t3k_mesh_device)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
         print("Execute trace")
-        ttnn.execute_trace(t3k_mesh_device, trace_id, blocking=False)
-        ttnn.release_trace(t3k_mesh_device, trace_id)
-        ttnn.synchronize_device(t3k_mesh_device)
+        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.synchronize_device(mesh_device)
 
     else:
         print("Run without trace")
@@ -386,10 +456,10 @@ def test_ring_joint_sdpa_perf(
     gt_joint_out = gt[:, :, seq_len:, :]
 
     for i in range(n_iters):
-        tt_out = ttnn.to_torch(tt_out_list[i], mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=2))
-        tt_joint_out = ttnn.to_torch(
-            tt_joint_out_list[i], mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=0)
-        )[:1]
+        tt_out = ttnn.to_torch(tt_out_list[i], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+        tt_joint_out = ttnn.to_torch(tt_joint_out_list[i], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
+            :1
+        ]
         # Slice out any tile-padding
         tt_out = tt_out[:, :, :seq_len, :]
         tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
