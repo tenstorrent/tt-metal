@@ -172,6 +172,17 @@ class Phi3MiniModelArgs(ModelArgs):
         wrapper = HfDecoderWrapper(layer, self.head_dim)
         return wrapper
 
+    def create_tokenizer(self):
+        """Create and return a Tokenizer instance."""
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+
+        # Add stop token list to the HF tokenizer
+        if not "stop_tokens" in tokenizer.__dict__:
+            tokenizer.stop_tokens = [tokenizer.eos_token_id, tokenizer.encode("<|end|>")[0]]
+        return tokenizer
+
 
 class HfDecoderWrapper(LightweightModule):
     def __init__(self, decoder, head_dim):

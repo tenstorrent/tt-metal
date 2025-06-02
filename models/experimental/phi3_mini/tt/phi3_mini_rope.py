@@ -37,131 +37,37 @@ class Phi3MiniRotarySetup(RotarySetup):
             scale_factor=scale_factor,
             orig_context_len=orig_context_len,
         )
-        self.orig_context_len = orig_context_len
-
         # Generate the cos/sin matrices needed for ttnn.embedding op
-        short_scaled_cos_matrix, short_scaled_sin_matrix = compute_gather_cos_sin(
-            dhead=head_dim,
-            end=max_seq_len,
-            theta=rope_theta,
-            scale_factor=scale_factor,
-            ext_scale_tensor=torch.tensor(ext_scale_tensors["short_factor"]),
-            # using max_seq_len in case padded_prefill > orig_context_len for model
-            position_ids=torch.arange(max_seq_len),
-        )
-        long_scaled_cos_matrix, long_scaled_sin_matrix = compute_gather_cos_sin(
-            dhead=head_dim,
-            end=max_seq_len,
-            theta=rope_theta,
-            scale_factor=scale_factor,
-            ext_scale_tensor=torch.tensor(ext_scale_tensors["long_factor"]),
-            position_ids=torch.arange(max_seq_len),
-        )
-
-        # In prefill mode, the scaling of sin and cos tensors will be based on the total length of input being prefilled
-        # If prefill_seq_len < orig_context_len, it will use the short_factor scaling tensor from model.config
-        # IF prefill_seq_len > orig_context_len, all positions embeddings will be scaled using the long_factor tensor from model.config
-        self.cos_matrix, self.sin_matrix = {}, {}
-        self.cos_matrix["short_scaled"] = ttnn.from_torch(
-            short_scaled_cos_matrix,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
-        )
-        self.sin_matrix["short_scaled"] = ttnn.from_torch(
-            short_scaled_sin_matrix,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
-        )
-        self.cos_matrix["long_scaled"] = ttnn.from_torch(
-            long_scaled_cos_matrix,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
-        )
-        self.sin_matrix["long_scaled"] = ttnn.from_torch(
-            long_scaled_sin_matrix,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
-        )
-
-        # In decode mode, the scaling of sin and cos tensors will switch dynamically after crossing the orig_context_len of the model
-        cos_decode = torch.cat(
-            (
-                short_scaled_cos_matrix[..., : self.orig_context_len, :],
-                long_scaled_cos_matrix[..., self.orig_context_len :, :],
-            ),
-            dim=-2,
-        )
-        sin_decode = torch.cat(
-            (
-                short_scaled_sin_matrix[..., : self.orig_context_len, :],
-                long_scaled_sin_matrix[..., self.orig_context_len :, :],
-            ),
-            dim=-2,
-        )
-        self.cos_decode = ttnn.from_torch(
-            cos_decode,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
-        )
-        self.sin_decode = ttnn.from_torch(
-            sin_decode,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
-        )
-
-    def get_rot_mats(self, position_idxs, return_rot_idxs=False):
-        device = self.device
-
-        # If position_idxs is a torch tensor, get the TTNN version of it
-        if isinstance(position_idxs, torch.Tensor):
-            rot_idxs = self.get_rot_idxs(position_idxs)
+        if max_seq_len > orig_context_len:
+            cos_matrix, sin_matrix = compute_gather_cos_sin(
+                dhead=head_dim,
+                end=max_seq_len,
+                theta=rope_theta,
+                scale_factor=scale_factor,
+                ext_scale_tensor=torch.tensor(ext_scale_tensors["long_factor"]),
+                position_ids=torch.arange(max_seq_len),
+            )
         else:
-            rot_idxs = position_idxs
-            assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
+            cos_matrix, sin_matrix = compute_gather_cos_sin(
+                dhead=head_dim,
+                end=max_seq_len,
+                theta=rope_theta,
+                scale_factor=scale_factor,
+                ext_scale_tensor=torch.tensor(ext_scale_tensors["short_factor"]),
+                position_ids=torch.arange(max_seq_len),
+            )
 
-        # Send the idxs to device
-        if rot_idxs.device != device:
-            rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        embedding_layout = ttnn.TILE_LAYOUT
-
-        # Using rot_mats which can dynamically shift scaling when crossing the model's original context length
-        cos = ttnn.embedding(rot_idxs, self.cos_decode, layout=embedding_layout)  # [1, batch, head_dim]
-        sin = ttnn.embedding(rot_idxs, self.sin_decode, layout=embedding_layout)  # [1, batch, head_dim]
-
-        cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
-        sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
-
-        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
-        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
-
-        if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
-            cos = cos[:, : self.batch_size_per_device_group, :, :]
-            sin = sin[:, : self.batch_size_per_device_group, :, :]
-
-        mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=self.batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
+        self.cos_matrix = ttnn.from_torch(
+            cos_matrix,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=datatype,
+            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
-
-        cos = ttnn.interleaved_to_sharded(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
-        sin = ttnn.interleaved_to_sharded(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
-
-        if return_rot_idxs:
-            return [cos, sin], rot_idxs
-        return [cos, sin]
+        self.sin_matrix = ttnn.from_torch(
+            sin_matrix,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=datatype,
+            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+        )
