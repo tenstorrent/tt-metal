@@ -23,7 +23,8 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import T
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
 
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 
 # Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
@@ -116,11 +117,11 @@ def run_llama3_demo(
     layers,
     stress_test,
     start_pos,
+    json_perf_targets,
     enable_prefetcher_performance_mode=True,
     galaxy_type="4U",
 ):
     # Creat batch output file
-    benchmark_data = BenchmarkData()
     profiler_step_name = "tg-llama-demo-e2e"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_directory = "models/demos/llama3/demo/output"
@@ -143,6 +144,7 @@ def run_llama3_demo(
     profiler.start("run")
     profiler.start(profiler_step_name)
 
+    # Reading input prompts
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
     if len(user_input) == 1:
@@ -485,15 +487,7 @@ def run_llama3_demo(
         profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
         # Print out generated outputs for each user at the end of every iteration
         if not is_ci_env:
-            # if len(user_input) == 1:
             logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
-            # else:
-            #     for user in range(batch_size):
-            #         text = "".join(tokenizer.decode(all_outputs[user]))
-            #         if len(text) > 100:
-            #             text = "..." + text[-97:]
-            #         text = text.replace("\n", " ")
-            #         logger.info("[User {}] {}".format(user, text))
 
         if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
             # Always print perf at every iteration if not in CI
@@ -527,16 +521,28 @@ def run_llama3_demo(
     profiler.end(profiler_step_name)
     profiler.end("run")
 
-    if is_ci_env and tokens_per_second_per_user_token127 is not None:
-        benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
+    # Gather measurements from run (only collected if in CI environment)
+    measurements = {
+        "capture_trace": profiler.get_duration("capture_trace"),
+        "loading_inputs": profiler.get_duration("loading_inputs"),
+        "loading_weights_to_device": profiler.get_duration("loading_weights_to_device"),
+        "compile_prefill": None,
+        "compile_decode": profiler.get_duration("compile_decode"),
+        "prefill_t/s": None,
+        "prefill_time_to_token": None,
+        "decode_t/s": tokens_per_second_per_user_token127 * batch_size,
+        "decode_t/s/u": tokens_per_second_per_user_token127,
+    }
 
-        run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+    benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, json_perf_targets)
 
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type=run_type,
-            ml_model_name="llama70b-tg",
-        )
+    run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=run_type,
+        ml_model_name="llama70b-tg",
+    )
 
     if not stress_test:
         # print before assertion
@@ -560,11 +566,11 @@ def run_llama3_demo(
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
 # page_params (dict): Page parameters for paged attention (block_size, max_num_blocks) For smaller context lengths use block_size=32 and max_num_blocks=1024, for larger context use block_size=64 and max_num_blocks=2048
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
-#
+# perf_mode (bool): Whether to provide a target perf for reporting
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
+    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos, perf_mode",
     [
         (  # full demo, batch 32
             "instruct",
@@ -574,12 +580,13 @@ def run_llama3_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
-            0,  # start_pos
+            0,  # start_pos,
+            True,  # perf_mode
         ),
         (  # quick 1L demo
             "random",
@@ -589,12 +596,13 @@ def run_llama3_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
+            True,  # perf_mode
         ),
         (  # Stress test: batch-32 very long generations but at same token index
             "instruct",
@@ -610,6 +618,7 @@ def run_llama3_demo(
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
+            False,  # perf_mode
         ),
         (  # full demo, long generation test
             "instruct",
@@ -625,6 +634,7 @@ def run_llama3_demo(
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
+            False,  # perf_mode
         ),
         (  # 10 layers for devive perf measurements
             "instruct",
@@ -640,6 +650,7 @@ def run_llama3_demo(
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
+            False,  # perf_mode
         ),
         (  # Stress test: batch-32 very long generations but at same token index
             "instruct",
@@ -655,6 +666,7 @@ def run_llama3_demo(
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
+            False,  # perf_mode
         ),
     ],
     ids=[
@@ -670,7 +682,6 @@ def run_llama3_demo(
     "optimizations",
     [
         LlamaOptimizations.performance,
-        # LlamaOptimizations.accuracy,
     ],
 )
 @pytest.mark.parametrize(
@@ -713,6 +724,7 @@ def test_llama_demo(
     reset_seeds,
     request,
     galaxy_type,
+    perf_mode,
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
@@ -734,6 +746,16 @@ def test_llama_demo(
 
     enable_pf_perf_mode = not request.config.getoption("--disable_pf_perf_mode")
 
+    if perf_mode:
+        target_decode_tsu = TSU_THRESHOLDS[galaxy_type].get(layers)["min"]
+        json_perf_targets = {
+            "prefill_t/s": None,
+            "decode_t/s": target_decode_tsu * batch_size,
+            "decode_t/s/u": target_decode_tsu,
+        }
+    else:
+        json_perf_targets = {}
+
     return run_llama3_demo(
         user_input=input_prompts,
         mesh_device=mesh_device,
@@ -752,6 +774,7 @@ def test_llama_demo(
         layers=layers,
         stress_test=stress_test,
         start_pos=start_pos,
+        json_perf_targets=json_perf_targets,
         enable_prefetcher_performance_mode=enable_pf_perf_mode,
         galaxy_type=galaxy_type,
     )
