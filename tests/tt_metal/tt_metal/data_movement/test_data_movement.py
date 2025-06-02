@@ -97,13 +97,25 @@ test_id_to_comment = {
     16: "Loopback will have similar characteristics to the one to one test, however it uses two \n\
         ports to send and receive data, as such it is more likely to cause contention.",
     17: "This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions \n\
-        and transactions size.",
+        and transactions size. Reshard perf is dictated based on the number of transactions and the \n\
+        transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
     18: "This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions \n\
-        and transactions size.",
+        and transactions size. Reshard perf is dictated based on the number of transactions and the \n\
+        transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
     19: "This is a 8 reader reshard. It seems to be getting expected perf based on number of transactions \n\
-        and transactions size.",
+        and transactions size. Reshard perf is dictated based on the number of transactions and the \n\
+        transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
     20: "This is a 2 core to 8 reader reshard. It seems to be getting expected perf based on number of \n\
-        transactions and transactions size.",
+        transactions and transactions size. Reshard perf is dictated based on the number of transactions \n\
+        and the transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
