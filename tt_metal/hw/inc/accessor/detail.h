@@ -73,10 +73,18 @@ struct ShapeWrapperDynamic {
 
 template <size_t... PackedCoords>
 struct BankCoordWrapper {
+    static constexpr bool is_static = true;
     static constexpr size_t num_banks = sizeof...(PackedCoords);
     // TODO: Each bank coord is packed as one uint32_t (ie. (16 bits) <x> | (16 bits) <y>)
     // This can be optimized to be 8 bits per coord, so we pack two bank coords in one uint32_t compile time arg
     static constexpr std::array<uint32_t, num_banks> packed_xy_coords = {PackedCoords...};
+};
+
+template <size_t NumBanks>
+struct BankCoordWrapperDynamic {
+    static constexpr bool is_static = false;
+    static constexpr size_t num_banks = NumBanks;
+    std::array<uint32_t, NumBanks> packed_xy_coords;
 };
 
 //
@@ -98,7 +106,10 @@ struct DistributionSpec {
     using ShapeBase = typename TensorShape::ShapeBase;
     static_assert(rank > 0, "Tensor and shard shape ranks must be greater than 0!");
 
-    static constexpr bool is_static = TensorShape::is_static && ShardShape::is_static;
+    static constexpr bool all_shapes_static = TensorShape::is_static && ShardShape::is_static;
+
+    static constexpr bool bank_coords_static = BankCoords::is_static;
+    static constexpr size_t num_banks = BankCoords::num_banks;
 
     template <
         class... Ts1,
@@ -114,7 +125,7 @@ struct DistributionSpec {
         shard_shape_{std::make_from_tuple<ShardShape>(shard_shape)} {
         // Check that the number of shards is greater than or equal to the number of banks
         // Here, shard_grid_strides[0] * shard_grid[0] is the total number of shards
-        if constexpr (!is_static) {
+        if constexpr (!all_shapes_static) {
             compute_shard_grid_and_strides_rt(tensor_shape_.shape, shard_shape_.shape);
             ASSERT(
                 shard_grid_rt[0] * shard_grid_strides_rt[0] >= num_banks,
@@ -147,7 +158,7 @@ private:
             return static_tensor_dynamic_shard_tag{};
         } else {
             // This case is handled by the tuple constructor, so it shouldn't reach here
-            static_assert(!is_static, "Static tensor and static shard should use the tuple constructor");
+            static_assert(!all_shapes_static, "Static tensor and static shard should use the tuple constructor");
         }
     }
 
@@ -169,32 +180,32 @@ private:
     }
 
 public:
-    constexpr ShapeBase get_shard_grid() const {
-        if constexpr (is_static) {
-            return shard_grid_ct(TensorShape::shape, ShardShape::shape);
+    constexpr const ShapeBase& get_shard_grid() const {
+        if constexpr (all_shapes_static) {
+            return shard_grid_ct_;
         } else {
             return shard_grid_rt;
         }
     }
 
-    constexpr ShapeBase get_shard_grid_strides() const {
-        if constexpr (is_static) {
-            return shard_grid_strides_ct(TensorShape::shape, ShardShape::shape);
+    constexpr const ShapeBase& get_shard_grid_strides() const {
+        if constexpr (all_shapes_static) {
+            return shard_grid_strides_ct_;
         } else {
             return shard_grid_strides_rt;
         }
     }
 
-    constexpr ShapeBase get_tensor_shape() const {
-        if constexpr (is_static) {
+    constexpr const ShapeBase& get_tensor_shape() const {
+        if constexpr (TensorShape::is_static) {
             return TensorShape::shape;
         } else {
             return tensor_shape_.shape;
         }
     }
 
-    constexpr ShapeBase get_tensor_strides() const {
-        if constexpr (is_static) {
+    constexpr const ShapeBase& get_tensor_strides() const {
+        if constexpr (TensorShape::is_static) {
             return TensorShape::strides;
         } else {
             return tensor_shape_.strides;
@@ -202,23 +213,23 @@ public:
     }
 
     constexpr size_t get_tensor_volume() const {
-        if constexpr (is_static) {
+        if constexpr (TensorShape::is_static) {
             return TensorShape::volume;
         } else {
             return tensor_shape_.volume;
         }
     }
 
-    constexpr ShapeBase get_shard_shape() const {
-        if constexpr (is_static) {
+    constexpr const ShapeBase& get_shard_shape() const {
+        if constexpr (ShardShape::is_static) {
             return ShardShape::shape;
         } else {
             return shard_shape_.shape;
         }
     }
 
-    constexpr ShapeBase get_shard_strides() const {
-        if constexpr (is_static) {
+    constexpr const ShapeBase& get_shard_strides() const {
+        if constexpr (ShardShape::is_static) {
             return ShardShape::strides;
         } else {
             return shard_shape_.strides;
@@ -226,15 +237,27 @@ public:
     }
 
     constexpr size_t get_shard_volume() const {
-        if constexpr (is_static) {
+        if constexpr (ShardShape::is_static) {
             return ShardShape::volume;
         } else {
             return shard_shape_.volume;
         }
     }
 
+    constexpr const std::array<uint32_t, num_banks>& get_packed_xy_coords() const {
+        if constexpr (BankCoords::is_static) {
+            return BankCoords::packed_xy_coords;
+        } else {
+            return bank_coords_.packed_xy_coords;
+        }
+    }
+
     // Compute shard grid and shard grid strides at compile time
     static constexpr ShapeBase shard_grid_ct(const ShapeBase& tensor_shape, const ShapeBase& shard_shape) {
+        // If shapes are dynamic, we cannot compute shard grid at compile time
+        if (!all_shapes_static) {
+            return {};
+        }
         ShapeBase shard_grid = {};
         for (int i = rank - 1; i >= 0; --i) {
             shard_grid[i] = (tensor_shape[i] - 1) / shard_shape[i] + 1;  // div_up
@@ -243,6 +266,10 @@ public:
     }
 
     static constexpr ShapeBase shard_grid_strides_ct(const ShapeBase& tensor_shape, const ShapeBase& shard_shape) {
+        // If shapes are dynamic, we cannot compute strides at compile time
+        if (!all_shapes_static) {
+            return {};
+        }
         ShapeBase shard_grid_strides = {};
         uint32_t stride = 1;
         for (int i = rank - 1; i >= 0; --i) {
@@ -265,14 +292,17 @@ public:
             "Number of shards must be greater than or equal to number of banks!");
     }
 
-    std::conditional_t<is_static, std::monostate, ShapeBase> shard_grid_rt{};
-    std::conditional_t<is_static, std::monostate, ShapeBase> shard_grid_strides_rt{};
+    std::conditional_t<all_shapes_static, std::monostate, ShapeBase> shard_grid_rt{};
+    std::conditional_t<all_shapes_static, std::monostate, ShapeBase> shard_grid_strides_rt{};
+
+    static constexpr ShapeBase shard_grid_ct_ = shard_grid_ct(TensorShape::shape, ShardShape::shape);
+    static constexpr ShapeBase shard_grid_strides_ct_ = shard_grid_strides_ct(TensorShape::shape, ShardShape::shape);
 
     TensorShape tensor_shape_;  // Tensor shape
     ShardShape shard_shape_;    // Shard shape
+    BankCoords bank_coords_;    // Bank coordinates
 
-    static constexpr auto num_banks = BankCoords::num_banks;
-    static constexpr auto packed_xy_coords = BankCoords::packed_xy_coords;
+    // static constexpr auto packed_xy_coords = BankCoords::packed_xy_coords;
 };
 
 template <size_t BASE, size_t RANK, size_t NUM_BANKS>

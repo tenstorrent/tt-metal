@@ -22,7 +22,8 @@ struct ShardedAccessor {
     static constexpr auto page_size = PageSize;
     static constexpr DSpec static_dspec{};  // Used only if DSpec is static
 
-    std::conditional_t<DSpec::is_static, std::monostate, DSpec> dspec_instance;  // Used only if DSpec is not static
+    std::conditional_t<DSpec::all_shapes_static, std::monostate, DSpec>
+        dspec_instance;  // Used only if DSpec is not static
     const size_t bank_base_address;
 
     ShardedAccessor(const size_t bank_base_address_in = 0) : bank_base_address(bank_base_address_in) {}
@@ -31,7 +32,7 @@ struct ShardedAccessor {
 
     // Helper to get the appropriate DSpec instance
     constexpr auto& get_dspec() const {
-        if constexpr (DSpec::is_static) {
+        if constexpr (DSpec::all_shapes_static) {
             return static_dspec;
         } else {
             return dspec_instance;
@@ -42,9 +43,10 @@ struct ShardedAccessor {
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t id, uint8_t noc = noc_index) const {
         const auto [bank_id, bank_offset] = this->get_bank_and_offset(id);
+        const auto& packed_xy_coords = get_dspec().get_packed_xy_coords();
         return NOC_XY_ADDR(
-            DYNAMIC_NOC_X(noc, (get_dspec().packed_xy_coords[bank_id] >> 16) & 0xFFFF),
-            DYNAMIC_NOC_Y(noc, get_dspec().packed_xy_coords[bank_id] & 0xFFFF),
+            DYNAMIC_NOC_X(noc, (packed_xy_coords[bank_id] >> 16) & 0xFFFF),
+            DYNAMIC_NOC_Y(noc, packed_xy_coords[bank_id] & 0xFFFF),
             bank_base_address + bank_offset * page_size);
     }
 
