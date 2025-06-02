@@ -210,6 +210,8 @@ public:
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
+    bool kernel_binary_always_stored_in_ringbuffer();
+
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -323,7 +325,6 @@ private:
 
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
-    bool kernel_binary_always_stored_in_ringbuffer();
     void set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state);
     void set_program_attrs_across_core_types(IDevice* device);
 

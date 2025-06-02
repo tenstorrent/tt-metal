@@ -165,7 +165,6 @@ private:
     CoreCoord completion_queue_writer_core_;
     NOC noc_index_;
 
-    void allocate_trace_programs();
     void read_completion_queue();
 
     // sub_device_ids only needs to be passed when blocking and there are specific sub_devices to wait on
