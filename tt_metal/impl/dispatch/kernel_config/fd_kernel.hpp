@@ -120,6 +120,15 @@ public:
         noc_selection_t noc_selection,
         tt::tt_metal::DispatchWorkerType type);
 
+    // Translate DispatchCoreType to programmable core type index
+    static uint32_t get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core = false);
+
+    // Translate core coord using the chip_id from the logical_cxy
+    //
+    // IDevice::virtual_core_from_logical_core uses the chip_id of the device instance whereas this function uses the
+    // chip_id specified in the logical coordinate.
+    static CoreCoord get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const CoreType& core_type);
+
     // Register another kernel as upstream/downstream of this one
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
     void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
