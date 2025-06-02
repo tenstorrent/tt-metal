@@ -10,6 +10,9 @@ target_sources(
         all_gather_matmul/all_gather_matmul.cpp
         all_gather_matmul/device/all_gather_matmul_op.cpp
         all_gather_matmul/device/multi_core/all_gather_matmul_op_multi_core.cpp
+        all_gather_matmul_async/all_gather_matmul_async.cpp
+        all_gather_matmul_async/device/all_gather_matmul_async_op.cpp
+        all_gather_matmul_async/device/multi_core/all_gather_matmul_async_op_multi_core.cpp
         all_reduce/all_reduce.cpp
         all_reduce/device/all_reduce_op.cpp
         all_reduce_async/device/all_reduce_async_op.cpp
@@ -37,9 +40,6 @@ target_sources(
         all_gather_concat_heads_fused/all_gather_concat.cpp
         all_gather_concat_heads_fused/device/all_gather_concat_op.cpp
         all_gather_concat_heads_fused/device/all_gather_concat_program.cpp
-        all_gather_matmul_async/all_gather_matmul_async.cpp
-        all_gather_matmul_async/device/all_gather_matmul_async_op.cpp
-        all_gather_matmul_async/device/multi_core/all_gather_matmul_async_op_multi_core.cpp
         matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp
         matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.cpp
         matmul_reduce_scatter_async/device/multi_core/matmul_reduce_scatter_async_op_multi_core.cpp
