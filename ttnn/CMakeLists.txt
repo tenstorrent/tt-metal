@@ -508,7 +508,6 @@ if(WITH_PYTHON_BINDINGS)
         PUBLIC
             TT::NN::CPP
         PRIVATE
-            Python3::Module
             pybind11::module
             Boost::algorithm
             TT::Metalium
