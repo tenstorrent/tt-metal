@@ -13,75 +13,190 @@ const RUNS_PER_PAGE = 100; // GitHub API max per page
 const DEFAULT_DAYS = 15; // Default rolling window in days
 
 /**
- * Get the cutoff date for filtering runs.
- * @param {number} days - Number of days to look back
- * @returns {Date} The cutoff date
+ * Core business logic, independent of GitHub Actions
  */
-function getCutoffDate(days) {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d;
+class WorkflowDataFetcher {
+  constructor(options = {}) {
+    this.maxPages = options.maxPages || MAX_PAGES;
+    this.runsPerPage = options.runsPerPage || RUNS_PER_PAGE;
+    this.defaultDays = options.defaultDays || DEFAULT_DAYS;
+  }
+
+  /**
+   * Date utility functions
+   */
+  getEarliestDateInRuns(runs) {
+    if (!runs.length) return new Date(); // Safe default: current date
+    const times = runs
+      .map(run => new Date(run.created_at).getTime())
+      .filter(t => !isNaN(t) && t > 0);
+    if (!times.length) return new Date();
+    return new Date(Math.min(...times));
+  }
+
+  getMostRecentDateInRuns(runs) {
+    if (!runs.length) return new Date(0); // Safe default: epoch
+    const times = runs
+      .map(run => new Date(run.created_at).getTime())
+      .filter(t => !isNaN(t) && t > 0);
+    if (!times.length) return new Date(0);
+    return new Date(Math.max(...times));
+  }
+
+  getCutoffDate(days) {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    return d;
+  }
+
+  getLatestCachedDate(runs) {
+    if (!runs.length) return new Date(0); // Safe default: epoch
+    const times = runs
+      .map(run => new Date(run.created_at).getTime())
+      .filter(t => !isNaN(t) && t > 0);
+    if (!times.length) return new Date(0);
+    return new Date(Math.max(...times));
+  }
+
+  getOldestCachedDate(runs) {
+    if (!runs.length) return new Date(); // Safe default: current date
+    const times = runs
+      .map(run => new Date(run.created_at).getTime())
+      .filter(t => !isNaN(t) && t > 0);
+    if (!times.length) return new Date();
+    return new Date(Math.min(...times));
+  }
+
+  /**
+   * Core data processing functions
+   */
+  groupRunsByName(runs) {
+    const grouped = new Map();
+    for (const run of runs) {
+      if (!run.name) continue; // Skip runs without names
+      if (!grouped.has(run.name)) {
+        grouped.set(run.name, []);
+      }
+      grouped.get(run.name).push(run);
+    }
+    return grouped;
+  }
+
+  filterRunsByConfig(runs, workflowConfigs) {
+    // Create sets of workflow names and prefixes from configs
+    const configWorkflows = new Set();
+    const configPrefixes = new Set();
+    workflowConfigs.forEach(config => {
+      if (config.wkflw_name) {
+        configWorkflows.add(config.wkflw_name);
+      }
+      if (config.wkflw_prefix) {
+        configPrefixes.add(config.wkflw_prefix);
+      }
+    });
+
+    // Filter runs based on config
+    return runs.filter(run => {
+      if (!run.name) return false;
+
+      // Check for exact name match
+      if (configWorkflows.has(run.name)) {
+        return true;
+      }
+
+      // Check for prefix match
+      for (const prefix of configPrefixes) {
+        if (run.name.startsWith(prefix)) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+  }
+
+  mergeRuns(previousRuns, newRuns) {
+    const allRuns = [...previousRuns];
+    const seenIds = new Set(previousRuns.map(run => run.id));
+    for (const run of newRuns) {
+      if (!seenIds.has(run.id)) {
+        allRuns.push(run);
+        seenIds.add(run.id);
+      }
+    }
+    return allRuns;
+  }
 }
 
 /**
- * Get the latest created_at date from cached runs.
- * @param {Array} runs - Array of workflow run objects
- * @returns {Date} The latest created_at date, or epoch if none
+ * GitHub Actions specific implementation
  */
-function getLatestCachedDate(runs) {
-  if (!runs.length) return new Date(0); // Safe default: epoch
-  // Map to timestamps, filter out invalid dates
-  const times = runs
-    .map(run => new Date(run.created_at).getTime())
-    .filter(t => !isNaN(t) && t > 0);
-  if (!times.length) return new Date(0);
-  return new Date(Math.max(...times));
-}
+class GitHubWorkflowFetcher extends WorkflowDataFetcher {
+  constructor(githubClient, context, options = {}) {
+    super(options);
+    this.github = githubClient;
+    this.context = context;
+  }
 
-/**
- * Get the oldest created_at date from cached runs.
- * @param {Array} runs - Array of workflow run objects
- * @returns {Date} The oldest created_at date, or current date if none
- */
-function getOldestCachedDate(runs) {
-  if (!runs.length) return new Date(); // Safe default: current date
-  // Map to timestamps, filter out invalid dates
-  const times = runs
-    .map(run => new Date(run.created_at).getTime())
-    .filter(t => !isNaN(t) && t > 0);
-  if (!times.length) return new Date();
-  return new Date(Math.min(...times));
-}
+  async fetchAllWorkflowRuns(days, sinceDate, oldestCachedDate) {
+    const allRuns = [];
+    const cutoffDate = this.getCutoffDate(days);
+    core.info(`days ${days}, sinceDate: ${sinceDate}, cutoffDate: ${cutoffDate}, oldestCachedDate: ${oldestCachedDate}`);
 
-/**
- * Fetch all workflow runs for the repository, paginated, stopping at sinceDate if provided.
- * @param {object} github - Octokit client
- * @param {object} context - GitHub Actions context
- * @param {number} days - Number of days to look back
- * @param {Date} sinceDate - Only fetch runs after this date
- * @param {Date} oldestCachedDate - Oldest date in our cache
- * @returns {Promise<Array>} Array of workflow run objects
- */
-async function fetchAllWorkflowRuns(github, context, days, sinceDate, oldestCachedDate) {
-  const allRuns = [];
-  const cutoffDate = getCutoffDate(days);
-  core.info(`days ${days}, sinceDate: ${sinceDate}, cutoffDate: ${cutoffDate}, oldestCachedDate: ${oldestCachedDate}`);
+    // If our cutoff date is newer than oldest cached date, we only need to fetch new data
+    const needHistoricalData = cutoffDate < oldestCachedDate;
+    core.info(`Need historical data: ${needHistoricalData} (cutoffDate ${cutoffDate} < oldestCachedDate ${oldestCachedDate})`);
 
-  // If our cutoff date is newer than oldest cached date, we only need to fetch new data
-  const needHistoricalData = cutoffDate < oldestCachedDate;
-  core.info(`Need historical data: ${needHistoricalData} (cutoffDate ${cutoffDate} < oldestCachedDate ${oldestCachedDate})`);
+    // If we don't need historical data and we have a valid sinceDate, we can optimize our fetch
+    if (!needHistoricalData && sinceDate && !isNaN(sinceDate.getTime())) {
+      core.info(`Optimizing fetch: only getting runs after ${sinceDate.toISOString()}`);
+      try {
+        for (let page = 1; page <= this.maxPages; page++) {
+          const { data: runs } = await this.github.rest.actions.listWorkflowRunsForRepo({
+            owner: this.context.repo.owner,
+            repo: this.context.repo.repo,
+            per_page: this.runsPerPage,
+            page,
+            created: `>=${sinceDate.toISOString()}`
+          });
 
-  // If we don't need historical data and we have a valid sinceDate, we can optimize our fetch
-  if (!needHistoricalData && sinceDate && !isNaN(sinceDate.getTime())) {
-    core.info(`Optimizing fetch: only getting runs after ${sinceDate.toISOString()}`);
-    try {
-      for (let page = 1; page <= MAX_PAGES; page++) {
-        const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
-          owner: context.repo.owner,
-          repo: context.repo.repo,
-          per_page: RUNS_PER_PAGE,
-          page,
-          created: `>=${sinceDate.toISOString()}`
+          if (!runs.workflow_runs.length) {
+            core.info('No more runs found, stopping fetch');
+            break;
+          }
+
+          // Filter out skipped runs
+          const validRuns = runs.workflow_runs.filter(run =>
+            run.conclusion !== 'skipped' && run.status !== 'skipped'
+          );
+          const skippedCount = runs.workflow_runs.length - validRuns.length;
+          if (skippedCount > 0) {
+            core.info(`Filtered out ${skippedCount} skipped runs on page ${page}`);
+          }
+
+          allRuns.push(...validRuns);
+          core.info(`Fetched ${validRuns.length} runs on page ${page}`);
+
+          if (runs.workflow_runs.length < this.runsPerPage) {
+            core.info('Received fewer runs than requested, reached end of data');
+            break;
+          }
+        }
+        return allRuns;
+      } catch (error) {
+        core.warning(`Error during optimized fetch: ${error.message}. Falling back to full fetch.`);
+      }
+    }
+
+    // Full fetch
+    core.info('Performing full fetch of workflow runs');
+    for (let page = 1; page <= this.maxPages; page++) {
+      try {
+        const { data: runs } = await this.github.rest.actions.listWorkflowRunsForRepo({
+          owner: this.context.repo.owner,
+          repo: this.context.repo.repo,
+          per_page: this.runsPerPage,
+          page
         });
 
         if (!runs.workflow_runs.length) {
@@ -89,152 +204,103 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, oldestCach
           break;
         }
 
-        // Filter out skipped runs - a run is skipped if either:
-        // 1. conclusion is 'skipped'
-        // 2. status is 'skipped'
-        const validRuns = runs.workflow_runs.filter(run =>
-          run.conclusion !== 'skipped' && run.status !== 'skipped'
-        );
-        const skippedCount = runs.workflow_runs.length - validRuns.length;
-        if (skippedCount > 0) {
-          core.info(`Filtered out ${skippedCount} skipped runs on page ${page}`);
+        for (const run of runs.workflow_runs) {
+          const runDate = new Date(run.created_at);
+
+          if (run.conclusion === 'skipped' || run.status === 'skipped') {
+            continue;
+          }
+
+          if (!needHistoricalData && runDate <= oldestCachedDate) {
+            core.info(`Early exit: found run at ${runDate} <= oldest cached date ${oldestCachedDate}`);
+            return allRuns;
+          }
+
+          if (runDate >= cutoffDate) {
+            allRuns.push(run);
+          } else {
+            core.info(`Early exit: found run at ${runDate} <= cutoff date ${cutoffDate}`);
+            return allRuns;
+          }
         }
 
-        // Add all valid runs since they're all newer than our sinceDate
-        allRuns.push(...validRuns);
-        core.info(`Fetched ${validRuns.length} runs on page ${page}`);
-
-        // If we got fewer runs than requested, we've reached the end
-        if (runs.workflow_runs.length < RUNS_PER_PAGE) {
+        if (runs.workflow_runs.length < this.runsPerPage) {
           core.info('Received fewer runs than requested, reached end of data');
           break;
         }
-      }
-      return allRuns;
-    } catch (error) {
-      core.warning(`Error during optimized fetch: ${error.message}. Falling back to full fetch.`);
-      // Fall back to full fetch if optimized fetch fails
-    }
-  }
-
-  // If we need historical data, don't have a sinceDate, or optimized fetch failed, fetch everything
-  core.info('Performing full fetch of workflow runs');
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    try {
-      const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        per_page: RUNS_PER_PAGE,
-        page
-      });
-
-      if (!runs.workflow_runs.length) {
-        core.info('No more runs found, stopping fetch');
+      } catch (error) {
+        core.warning(`Error fetching page ${page}: ${error.message}`);
         break;
       }
-
-      for (const run of runs.workflow_runs) {
-        const runDate = new Date(run.created_at);
-
-        // Skip runs that were skipped - check both conclusion and status
-        if (run.conclusion === 'skipped' || run.status === 'skipped') {
-          continue;
-        }
-
-        // If we don't need historical data and we hit a run older than our oldest cached date, we can stop
-        if (!needHistoricalData && runDate <= oldestCachedDate) {
-          core.info(`Early exit: found run at ${runDate} <= oldest cached date ${oldestCachedDate}`);
-          return allRuns;
-        }
-
-        // Only add runs that are within our cutoff date window
-        if (runDate >= cutoffDate) {
-          allRuns.push(run);
-        } else {
-          // If we hit a run older than our cutoff date, we can stop
-          core.info(`Early exit: found run at ${runDate} <= cutoff date ${cutoffDate}`);
-          return allRuns;
-        }
-      }
-
-      // If we got fewer runs than requested, we've reached the end
-      if (runs.workflow_runs.length < RUNS_PER_PAGE) {
-        core.info('Received fewer runs than requested, reached end of data');
-        break;
-      }
-    } catch (error) {
-      core.warning(`Error fetching page ${page}: ${error.message}`);
-      break;
     }
+    return allRuns;
   }
-  return allRuns;
+
+  async getRateLimitInfo() {
+    const rateLimit = await this.github.rest.rateLimit.get();
+    return {
+      remaining: rateLimit.data.resources.core.remaining,
+      limit: rateLimit.data.resources.core.limit
+    };
+  }
 }
 
 /**
- * Group runs by workflow name.
- * @param {Array} runs - Array of workflow run objects
- * @returns {Map} Map of workflow name to array of runs
+ * Cache management
  */
-function groupRunsByName(runs) {
-  const grouped = new Map();
-  // Group all runs by name
-  for (const run of runs) {
-    if (!run.name) continue; // Skip runs without names
-    if (!grouped.has(run.name)) {
-      grouped.set(run.name, []);
-    }
-    grouped.get(run.name).push(run);
+class CacheManager {
+  constructor(fetcher) {
+    this.fetcher = fetcher;
   }
-  return grouped;
-}
 
-/**
- * Filter runs based on workflow configs.
- * @param {Array} runs - Array of workflow run objects
- * @param {Array} workflowConfigs - Array of workflow config objects
- * @returns {Array} Filtered array of workflow run objects
- */
-function filterRunsByConfig(runs, workflowConfigs) {
-  // Create sets of workflow names and prefixes from configs
-  const configWorkflows = new Set();
-  const configPrefixes = new Set();
-  workflowConfigs.forEach(config => {
-    if (config.wkflw_name) {
-      configWorkflows.add(config.wkflw_name);
-    }
-    if (config.wkflw_prefix) {
-      configPrefixes.add(config.wkflw_prefix);
-    }
-  });
+  loadPreviousCache(cachePath) {
+    let previousRuns = [];
+    let mostRecentCachedDate = null;
+    let earliestCachedDate = null;
 
-  // Filter runs based on config
-  return runs.filter(run => {
-    if (!run.name) return false;
+    if (fs.existsSync(cachePath)) {
+      try {
+        const rawCache = fs.readFileSync(cachePath, 'utf8');
+        const prev = JSON.parse(rawCache);
 
-    // Check for exact name match
-    if (configWorkflows.has(run.name)) {
-      return true;
-    }
+        // Handle different cache formats
+        if (Array.isArray(prev)) {
+          if (prev.length && Array.isArray(prev[0])) {
+            // Format: [[workflowName, runs], ...]
+            previousRuns = prev.flatMap(([_, runs]) => runs);
+          } else if (prev.length && prev[0] && prev[0].id) {
+            // Format: [run1, run2, ...]
+            previousRuns = prev;
+          }
+        }
 
-    // Check for prefix match
-    for (const prefix of configPrefixes) {
-      if (run.name.startsWith(prefix)) {
-        return true;
+        // Calculate date boundaries
+        mostRecentCachedDate = this.fetcher.getMostRecentDateInRuns(previousRuns);
+        earliestCachedDate = this.fetcher.getEarliestDateInRuns(previousRuns);
+
+        core.info(`Loaded ${previousRuns.length} runs from cache`);
+        core.info(`Cache date range: ${earliestCachedDate.toISOString()} to ${mostRecentCachedDate.toISOString()}`);
+      } catch (error) {
+        core.warning(`Error loading cache: ${error.message}`);
       }
     }
 
-    return false;
-  });
+    return { previousRuns, mostRecentCachedDate, earliestCachedDate };
+  }
+
+  saveCache(cachePath, groupedRuns) {
+    const cacheData = Array.from(groupedRuns.entries());
+    fs.writeFileSync(cachePath, JSON.stringify(cacheData, null, 2));
+    core.info(`Saved ${groupedRuns.size} workflows to cache`);
+  }
 }
 
 /**
  * Main entrypoint for the action.
- * Loads previous cache, fetches new runs, merges/deduplicates, and saves updated cache.
  */
 async function run() {
   try {
     // Get inputs
-    const branch = core.getInput('branch') || 'main';
     const days = parseInt(core.getInput('days') || DEFAULT_DAYS);
     const cachePath = core.getInput('cache-path', { required: true });
     const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
@@ -244,72 +310,36 @@ async function run() {
       throw new Error('Workflow configs must be a JSON array');
     }
 
-    // Create authenticated Octokit client
+    // Initialize components
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
+    const fetcher = new GitHubWorkflowFetcher(octokit, github.context);
+    const cacheManager = new CacheManager(fetcher);
 
-    // Load previous cache if it exists
-    let previousRuns = [];
-    let latestCachedDate = null;
-    let oldestCachedDate = null;
-    if (fs.existsSync(cachePath)) {
-      try {
-        const rawCache = fs.readFileSync(cachePath, 'utf8');
-        const prev = JSON.parse(rawCache);
-        if (Array.isArray(prev)) {
-          if (prev.length && Array.isArray(prev[0])) {
-            // Array of [name, runs[]] pairs
-            previousRuns = prev.flatMap(([_, runs]) => runs);
-          } else if (prev.length && prev[0] && prev[0].id) {
-            // Array of runs
-            previousRuns = prev;
-          } else {
-            previousRuns = [];
-          }
-        }
-        latestCachedDate = getLatestCachedDate(previousRuns);
-        oldestCachedDate = getOldestCachedDate(previousRuns);
-        core.info(`Loaded ${previousRuns.length} runs from cache`);
-      } catch (error) {
-        core.warning(`Error loading cache: ${error.message}`);
-        previousRuns = [];
-      }
-    }
+    // Load previous cache
+    const { previousRuns, mostRecentCachedDate, earliestCachedDate } = cacheManager.loadPreviousCache(cachePath);
 
     // Fetch new runs
-    const newRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, oldestCachedDate);
+    const newRuns = await fetcher.fetchAllWorkflowRuns(days, mostRecentCachedDate, earliestCachedDate);
     core.info(`Fetched ${newRuns.length} new runs`);
 
-    // Merge and deduplicate runs
-    const allRuns = [...previousRuns];
-    const seenIds = new Set(previousRuns.map(run => run.id));
-    for (const run of newRuns) {
-      if (!seenIds.has(run.id)) {
-        allRuns.push(run);
-        seenIds.add(run.id);
-      }
-    }
-
-    // Filter runs based on workflow configs
-    const filteredRuns = filterRunsByConfig(allRuns, workflowConfigs);
+    // Process runs
+    const allRuns = fetcher.mergeRuns(previousRuns, newRuns);
+    const filteredRuns = fetcher.filterRunsByConfig(allRuns, workflowConfigs);
     core.info(`Filtered to ${filteredRuns.length} runs based on workflow configs`);
 
     // Group runs by name
-    const groupedRuns = groupRunsByName(filteredRuns);
+    const groupedRuns = fetcher.groupRunsByName(filteredRuns);
 
-    // Save to cache
-    const cacheData = Array.from(groupedRuns.entries());
-    fs.writeFileSync(cachePath, JSON.stringify(cacheData, null, 2));
-    core.info(`Saved ${groupedRuns.size} workflows to cache`);
+    // Save cache
+    cacheManager.saveCache(cachePath, groupedRuns);
 
     // Set outputs
     core.setOutput('total-runs', filteredRuns.length);
     core.setOutput('workflow-count', groupedRuns.size);
     core.setOutput('cache-path', cachePath);
 
-    // Log remaining GitHub API rate limit
-    const rateLimit = await octokit.rest.rateLimit.get();
-    const remaining = rateLimit.data.resources.core.remaining;
-    const limit = rateLimit.data.resources.core.limit;
+    // Log rate limit info
+    const { remaining, limit } = await fetcher.getRateLimitInfo();
     core.info(`GitHub API rate limit remaining: ${remaining} / ${limit}`);
   } catch (error) {
     core.setFailed(error.message);
@@ -320,3 +350,10 @@ async function run() {
 if (require.main === module) {
   run();
 }
+
+// Export for testing
+module.exports = {
+  WorkflowDataFetcher,
+  GitHubWorkflowFetcher,
+  CacheManager
+};
