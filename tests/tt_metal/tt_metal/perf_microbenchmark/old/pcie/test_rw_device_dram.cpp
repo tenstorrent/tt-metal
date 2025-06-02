@@ -11,6 +11,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/context/metal_context.hpp"
 #include <algorithm>
 #include <cstring>
 #include <exception>
@@ -62,7 +63,8 @@ int main(int argc, char** argv) {
 
         // Application Setup
         srand(time(0));
-        uint32_t dram_addr = 64;
+        uint32_t dram_addr =
+            tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalDramMemAddrType::UNRESERVED);
         uint32_t dram_channel = rand() % 8;
         log_info(LogTest, "Target DRAM channel = {}", dram_channel);
 
