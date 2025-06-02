@@ -31,7 +31,7 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
-    TT_ASSERT(sizeof float_num == sizeof uint32_data);
+    TT_FATAL(sizeof float_num == sizeof uint32_data, "sizeof data types not equal");
 
     uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
     // just move upper 16 to lower 16 (truncate)
@@ -1748,14 +1748,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                     current_storage_core += 1;        // Move to next storage core
                     current_storage_core_offset = 0;  // Reset offset on new storage core
 
-                    TT_ASSERT(
+                    TT_FATAL(
                         current_storage_core <= num_storage_cores,
                         "current_storage_core {} is exceeding number of storage cores {}",
                         current_storage_core,
                         num_storage_cores);
                 }
             }
-            TT_ASSERT(
+            TT_FATAL(
                 worker_core_current_offset == block_wt,
                 "All worker core data should be written, but worker_core_current_offset {} != block_wt {}",
                 worker_core_current_offset,

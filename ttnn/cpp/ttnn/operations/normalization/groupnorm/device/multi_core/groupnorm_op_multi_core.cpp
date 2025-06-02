@@ -1273,7 +1273,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         num_batches_per_core_group_2 = num_batches / num_cores_r;
         num_batches_per_core_group_1 = num_batches_per_core_group_2 + 1;
 
-        TT_ASSERT(Ht % num_batches == 0);
+        TT_FATAL(Ht % num_batches == 0, "Ht ({}) needs to be divisible by the number of batches ({})", Ht, num_batches);
         uint32_t per_batch_tiles = Ht / num_batches;
         per_core_Mt_group_1 = num_batches_per_core_group_1 * per_batch_tiles;
         per_core_Mt_group_2 = num_batches_per_core_group_2 * per_batch_tiles;
@@ -1305,7 +1305,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     }
     if (per_core_N != W) {
         TT_FATAL(per_core_N * num_cores_c == W, "cores_x mus divide Channels");
-        // TT_ASSERT(per_core_M_group_1 * num_cores_r == H); TODO VASH
+        // TT_FATAL(per_core_M_group_1 * num_cores_r == H, "{} * {} should equal {}", per_core_M_group_1, num_cores_r,
+        // H); TODO VASH
     }
 
     TT_FATAL(per_core_M_group_1 % TILE_HEIGHT == 0, "per_core_M must be divisible by TILE_HEIGHT");

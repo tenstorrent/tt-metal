@@ -168,7 +168,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
         if (core_group_1.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_1_id, core, {num_reduce_input_tile, num_tiles_per_core});
         } else if (core_group_2.contains(core)) {
-            TT_ASSERT(compute_kernel_2_id.has_value());
+            TT_FATAL(compute_kernel_2_id.has_value(), "compute_kernel_2_id needs to have a value");
             SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_reduce_input_tile, num_tiles_per_core});
         } else {
             TT_THROW("Core not in specified core ranges.");
