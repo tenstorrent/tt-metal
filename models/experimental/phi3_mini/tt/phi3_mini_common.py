@@ -14,7 +14,7 @@ def precompute_freqs(
     ext_scale_tensor: torch.tensor = torch.tensor([1.0]),
 ):
     """
-    Precompute the frequency tensor for sine and cosine values with given dimensions, grok-style.
+    Precompute the frequency tensor for sine and cosine values with given dimensions
 
     Args:
         dim (int): Dimension of the frequency tensor.

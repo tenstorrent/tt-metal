@@ -18,7 +18,6 @@ class Phi3MiniGenerator(Generator):
 
     def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1):
         seq_len = tokens.shape[-1]
-        unpadded_seq_len = last_token_idx + 1
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         if use_chunked_prefill:
             """
@@ -70,7 +69,6 @@ class Phi3MiniGenerator(Generator):
                     chunk_page_table_tt,
                 ) = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
-                    unpadded_seq_len,
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
@@ -93,7 +91,6 @@ class Phi3MiniGenerator(Generator):
         else:
             prefill_input, rot_mats_prefill, page_table_tt, _ = self.model[model_id].prepare_inputs_prefill(
                 tokens,
-                unpadded_seq_len,
                 page_table=page_table,
             )
 
