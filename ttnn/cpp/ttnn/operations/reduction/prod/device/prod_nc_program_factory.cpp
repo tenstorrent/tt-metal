@@ -17,7 +17,7 @@ namespace primary {
 
 tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     const tt::tt_metal::Tensor& input, const tt::tt_metal::Tensor& output, int64_t dim) {
-    TT_ASSERT(dim == 0 || dim == 1);
+    TT_FATAL(dim == 0 || dim == 1, "Dimension ({}) must be either 0 or 1", dim);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -168,10 +168,10 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
         if (core_group_1.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_1_id, core, {num_reduce_input_tile, num_tiles_per_core});
         } else if (core_group_2.contains(core)) {
-            TT_ASSERT(compute_kernel_2_id.has_value());
+            TT_FATAL(compute_kernel_2_id.has_value(), "compute_kernel_2_id needs to have a value");
             SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_reduce_input_tile, num_tiles_per_core});
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
+            TT_THROW("Core not in specified core ranges.");
         }
         tile_offset += num_tiles_per_core;
     }
