@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -57,10 +57,10 @@ private:
 
 public:
     static constexpr size_t SIZEOF = sizeof(int32_t);
-    
+
     int32(float f) : value(static_cast<int32_t>(f)) {}
     int32(uint32_t u) : value(static_cast<int32_t>(u)) {}
-    
+
     float to_float() const { return static_cast<float>(value); }
     uint32_t to_packed() const { return static_cast<uint32_t>(value); }
 };
@@ -68,7 +68,7 @@ public:
 class DataFormatHandler {
 public:
     virtual ~DataFormatHandler() = default;
-    
+
     // Template method that defines the algorithm structure
     void print_data(std::stringstream& ss, const std::vector<uint32_t>& data) {
         for (uint32_t i = 0; i < data.size(); ++i) {
@@ -130,11 +130,11 @@ protected:
     void print_datum(std::stringstream& ss, uint32_t datum) override {
         uint32_t shifted_value1 = (datum & 0x0000ffff) << 16;
         uint32_t shifted_value2 = datum & 0xffff0000;
-        
+
         float value1, value2;
         memcpy(&value1, &shifted_value1, sizeof(float));
         memcpy(&value2, &shifted_value2, sizeof(float));
-        
+
         ss << std::setw(8) << value1 << " " << std::setw(8) << value2 << " ";
     }
 };
@@ -170,7 +170,7 @@ using namespace tt::test_utils::df;
 // Configuration for Data Flow Test involving Reader, Datacopy, and Writer
 struct DestPrintTestConfig {
     static constexpr size_t DEFAULT_NUM_TILES = 1;
-    
+
     size_t num_tiles = DEFAULT_NUM_TILES;
     tt::DataFormat data_format = tt::DataFormat::Invalid;
     CoreCoord core = {};
@@ -186,14 +186,11 @@ struct DestPrintTestConfig {
     size_t get_input_buffer_size() const { return num_tiles * get_tile_size(); }
     // Returns the size of the output buffer
     size_t get_output_buffer_size() const { return num_tiles * get_tile_size(); }
-    
+
     // Add validation method
     bool is_valid() const {
-        return num_tiles > 0 && 
-               data_format != tt::DataFormat::Invalid &&
-               !reader_kernel.empty() &&
-               !writer_kernel.empty() &&
-               !compute_kernel.empty();
+        return num_tiles > 0 && data_format != tt::DataFormat::Invalid && !reader_kernel.empty() &&
+               !writer_kernel.empty() && !compute_kernel.empty();
     }
 };
 
@@ -418,8 +415,7 @@ struct TestParams {
 };
 
 // Parameterized test fixture
-class DestPrintTest : public DPrintFixture, 
-                     public ::testing::WithParamInterface<TestParams> {
+class DestPrintTest : public DPrintFixture, public ::testing::WithParamInterface<TestParams> {
 protected:
     void SetUp() override {
         DPrintFixture::SetUp();
@@ -439,9 +435,7 @@ protected:
         }
 
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, IDevice* device) { 
-                run_test_with_config(fixture, device, config);
-            },
+            [&](DPrintFixture* fixture, IDevice* device) { run_test_with_config(fixture, device, config); },
             this->devices_[0]);
     }
 
