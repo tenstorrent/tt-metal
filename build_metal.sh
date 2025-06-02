@@ -85,7 +85,6 @@ cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
-enable_operation_timeout="OFF"
 
 # Requested handling for 20.04 -> 22.04 migration
 if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
@@ -136,7 +135,11 @@ configure-only
 enable-coverage
 without-distributed
 without-python-bindings
+<<<<<<< HEAD
 enable-fake-kernels-target
+=======
+operation-timeout-seconds:
+>>>>>>> d2bcf7f664 (Addressed feedback, unified the flags to just use the timeout)
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -198,8 +201,13 @@ while true; do
             configure_only="ON";;
         --without-python-bindings)
             with_python_bindings="OFF";;
+<<<<<<< HEAD
         --enable-fake-kernels-target)
             enable_fake_kernels_target="ON";;
+=======
+        --operation-timeout-seconds)
+            operation_timeout_seconds="$2";shift;;
+>>>>>>> d2bcf7f664 (Addressed feedback, unified the flags to just use the timeout)
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -275,7 +283,6 @@ echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
-echo "INFO: Enable Operation Timeout: $enable_operation_timeout"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")

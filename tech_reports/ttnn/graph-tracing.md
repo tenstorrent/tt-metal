@@ -347,10 +347,9 @@ Please note that we have over 300.000 lines in the json file, so we just include
 Sometimes there might be cases where an operation hangs and the arguments can be quite handy to troubleshoot the issue or even adding extra coverage.
 We have added the following configuration
 
-./build_metal.sh --build-all --debug --enable-operation-timeout --operation-timeout-seconds=10
+./build_metal.sh --build-all --debug --operation-timeout-seconds=10
 
-enable-operation-timeout will enable a timeout mechanism for operations, with a default timeout of 30 seconds
-operation-timeout-seconds is optional and can be set to different values in seconds.
+operation-timeout-seconds will enable a timeout mechanism for operations, the value is the amount of seconds we will wait for the operation to finish.
 
 We have included an example case in the test_graph_capture.py file, you can check it here:
 
@@ -388,6 +387,9 @@ def test_graph_capture_with_hang(device):
         )
 
 ```
+
+
+Please note that given the hacky nature of this test, it is recommended to build with --debug flag.
 
 In this case, we are using a ttnn.test.test_hang_operation, which is a test operation that runs a while(true) loop.
 The idea behind it is to simulate an unresponsive operation, so we can test the graph capture and the arguments that generated the hang.
