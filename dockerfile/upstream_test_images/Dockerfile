@@ -7,7 +7,7 @@ ARG TEST_COMMAND
 ENV DEBIAN_FRONTEND=noninteractive
 
 LABEL org.opencontainers.image.source=https://github.com/tenstorrent/tt-metal
-LABEL org.opencontainers.image.description="Run 6U upstream smoke tests"
+LABEL org.opencontainers.image.description="Run upstream smoke tests"
 LABEL org.opencontainers.image.licenses=MIT
 
 ## add user
@@ -36,10 +36,6 @@ COPY ttnn-*.whl ./
 
 RUN WHEEL_FILENAME=$(ls -1 *.whl) && pip3 install $WHEEL_FILENAME
 
-# TODO: Revisit the addition of TRACY_NO_INVARIANT_CHECK https://github.com/tenstorrent/tt-metal/issues/20161
-RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestQuantaGalaxyControlPlaneInit" --gtest_list_tests
-RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*" --gtest_list_tests
-RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*" --gtest_list_tests
 RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites" --gtest_list_tests
 RUN TRACY_NO_INVARIANT_CHECK=1 python3 -c 'import ttnn'
 ENTRYPOINT ["sh", "-c", "$TEST_COMMAND"]
