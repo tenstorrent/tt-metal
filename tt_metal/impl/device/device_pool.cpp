@@ -321,8 +321,7 @@ void DevicePool::initialize_active_devices() const {
             // TODO: need to write routing tables for unified 2d fabric.
             // write routing tables to all ethernet cores
             tt::tt_metal::MetalContext::instance()
-                .get_control_plane()
-                ->write_routing_tables_to_all_chips();
+                .get_control_plane().write_routing_tables_to_all_chips();
         }
 
         // Initialize fabric on mmio device
@@ -492,8 +491,8 @@ void DevicePool::wait_for_fabric_router_sync() const {
         return;
     }
 
-    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane->get_fabric_context();
+    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
 
     auto wait_for_handshake = [&](IDevice* dev) {
         if (!dev) {
@@ -741,8 +740,8 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     // Terminate fabric routers
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
-        const auto* control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        const auto& fabric_context = control_plane->get_fabric_context();
+        const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& fabric_context = control_plane.get_fabric_context();
         auto [termination_signal_address, signal] = fabric_context.get_fabric_router_termination_address_and_signal();
         std::vector<uint32_t> termination_signal(1, signal);
 

@@ -88,6 +88,7 @@ void MetalContext::initialize(
         std::atexit([]() { MetalContext::instance().teardown(); });
         teardown_registered_ = true;
     }
+
 }
 
 void MetalContext::teardown() {
@@ -234,10 +235,11 @@ void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
     }
 }
 
-tt::tt_fabric::ControlPlane* MetalContext::get_control_plane() {
-    if (global_control_plane_.get() == nullptr) {
+tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
+    if (!global_control_plane_) {
         this->initialize_control_plane();
     }
+    TT_FATAL(global_control_plane_, "Global control plane is not initialized. Did you call InitializeFabricConfig?");
     return global_control_plane_->get_local_node_control_plane();
 }
 
@@ -247,8 +249,7 @@ void MetalContext::set_custom_control_plane_mesh_graph(
     TT_FATAL(
         !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
-    TT_FATAL(global_control_plane_.get() == nullptr, "Control plane has already been initialized");
-    
+
     global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
         mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
 }
@@ -258,24 +259,23 @@ void MetalContext::set_default_control_plane_mesh_graph() {
         !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
     global_control_plane_.reset();
-    this->initialize_control_plane();
     this->initialize_fabric_config(fabric_config_);
 }
 
 void MetalContext::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
     fabric_config_ = fabric_config;
     cluster_->initialize_fabric_config(fabric_config);
-    
+
     // Initialize fabric context in control plane if fabric is enabled
     if (fabric_config != tt_metal::FabricConfig::DISABLED) {
         if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
-            this->get_control_plane()->initialize_fabric_context(fabric_config);
+            this->get_control_plane().initialize_fabric_context(fabric_config);
         }
     } else {
-        this->get_control_plane()->clear_fabric_context();
+        this->get_control_plane().clear_fabric_context();
     }
-    
-    this->get_control_plane()->configure_routing_tables_for_fabric_ethernet_channels();
+
+    this->get_control_plane().configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 tt_metal::FabricConfig MetalContext::get_fabric_config() const {
@@ -306,7 +306,7 @@ void MetalContext::initialize_control_plane() {
         case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        default: TT_THROW("Unknown cluster type"); // TODO: we could expose this as a custom mesh graph option
+        case tt::ClusterType::INVALID: TT_THROW("Unknown cluster type");
     }
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                                        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;

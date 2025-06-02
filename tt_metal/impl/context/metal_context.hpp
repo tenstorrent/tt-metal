@@ -55,7 +55,7 @@ public:
         const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, const BankMapping& l1_bank_remap);
 
     // Control plane accessors
-    tt::tt_fabric::ControlPlane* get_control_plane();
+    tt::tt_fabric::ControlPlane& get_control_plane();
     void set_custom_control_plane_mesh_graph(
         const std::string& mesh_graph_desc_file,
         const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);

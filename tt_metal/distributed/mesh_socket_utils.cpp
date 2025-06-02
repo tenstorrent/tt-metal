@@ -68,11 +68,11 @@ uint32_t get_sender_receiver_chip_fabric_encoding(
                std::abs(static_cast<int>(sender_global_coord[1]) - static_cast<int>(recv_global_coord[1]));
     } else {
         // 2D/Mesh Fabric requires looking up "logical" encodings from the control plane
-        auto* control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
         if (is_sender) {
-            return control_plane->get_fabric_node_id_from_physical_chip_id(recv_physical_device_id).chip_id;
+            return control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id).chip_id;
         } else {
-            return control_plane->get_fabric_node_id_from_physical_chip_id(sender_physical_device_id).chip_id;
+            return control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id).chip_id;
         }
     }
 }

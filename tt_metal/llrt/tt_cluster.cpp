@@ -1099,7 +1099,7 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
 
 void Cluster::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
-    
+
     if (fabric_config != tt_metal::FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
     } else {
