@@ -126,9 +126,9 @@ private:
 
 
 // A tuple of EthChannelBuffer
-template <size_t... Buffers>
+template <size_t... BufferSizes>
 struct EthChannelBufferTuple {
-    std::tuple<tt::tt_fabric::EthChannelBuffer<Buffers>...> channel_buffers;
+    std::tuple<tt::tt_fabric::EthChannelBuffer<BufferSizes>...> channel_buffers;
 
     void init(
         const size_t channel_base_address[],
@@ -278,10 +278,10 @@ struct EdmChannelWorkerInterface {
 };
 
 // A tuple of EDM channel worker interfaces
-template <size_t... Buffers>
+template <size_t... BufferSizes>
 struct EdmChannelWorkerInterfaceTuple {
-    // tuple of EdmChannelWorkerInterface<Buffers>...
-    std::tuple<tt::tt_fabric::EdmChannelWorkerInterface<Buffers>...> channel_worker_interfaces;
+    // tuple of EdmChannelWorkerInterface<BufferSizes>...
+    std::tuple<tt::tt_fabric::EdmChannelWorkerInterface<BufferSizes>...> channel_worker_interfaces;
 
     template <size_t I>
     auto& get() {

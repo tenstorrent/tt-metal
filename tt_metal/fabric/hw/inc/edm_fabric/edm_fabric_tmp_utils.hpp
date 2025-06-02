@@ -14,7 +14,7 @@ namespace tt::tt_fabric {
 template <typename Tuple, typename F, size_t... Is>
 constexpr void tuple_for_each_impl(Tuple&& t, F&& f, std::index_sequence<Is...>) {
     // expansion: f(std::get<0>(t),0), f(std::get<1>(t),1), …
-    (void)std::initializer_list<int>{(f(std::get<Is>(std::forward<Tuple>(t)), Is), 0)...};
+    (f(std::get<Is>(std::forward<Tuple>(t)), Is), ...);
 }
 
 template <typename Tuple, typename F>
