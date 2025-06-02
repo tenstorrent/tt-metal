@@ -14,12 +14,12 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_rsqrt() {
-    _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS, true>(ITERATIONS);
+    _calculate_rsqrt_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS);
 }
 
 template <bool APPROXIMATION_MODE>
 void rsqrt_init() {
-    _init_sqrt_<APPROXIMATION_MODE>();
+    _init_rsqrt_<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu
