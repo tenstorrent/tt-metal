@@ -166,24 +166,26 @@ TEST_P(PrepareNdShardedDataTests, PrepareNdShardedData) {
     CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{0, params.num_cores - 1}));
     NdShardSpec nd_shard_spec{params.shard_shape, cores, ShardOrientation::ROW_MAJOR};
     MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
-    TensorLayout tensor_layout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory_config);
+    TensorLayout tensor_layout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), memory_config);
     TensorSpec tensor_spec(params.shape, tensor_layout);
 
     std::vector<uint8_t> data(params.shape.volume());
     for (size_t i = 0; i < data.size(); i++) {
         data[i] = static_cast<uint8_t>(i);
     }
+    auto tensor = Tensor::from_vector(data, tensor_spec);
+    auto tensor_data = std::get<HostStorage>(tensor.get_storage()).buffer.view_as<uint8_t>();
 
-    auto sharded_data = pack_nd_sharded_data<uint8_t>(data, tensor_spec);
+    auto sharded_data = pack_nd_sharded_data<uint8_t>(tensor_data, tensor_spec);
     EXPECT_EQ(sharded_data.size(), params.expected_data.size());
     for (size_t i = 0; i < sharded_data.size(); i++) {
         EXPECT_EQ(sharded_data[i], static_cast<std::byte>(params.expected_data[i]));
     }
 
     auto unpacked_data = unpack_nd_sharded_data<std::byte>(sharded_data, tensor_spec);
-    EXPECT_EQ(unpacked_data.size(), data.size());
+    EXPECT_EQ(unpacked_data.size(), tensor_data.size());
     for (size_t i = 0; i < unpacked_data.size(); i++) {
-        EXPECT_EQ(unpacked_data[i], static_cast<std::byte>(data[i]));
+        EXPECT_EQ(unpacked_data[i], static_cast<std::byte>(tensor_data[i]));
     }
 }
 
