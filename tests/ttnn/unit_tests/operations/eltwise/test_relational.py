@@ -405,3 +405,50 @@ def test_binary_relational_scalar_ttnn(device, input_shapes, scalar, ttnn_functi
     golden_tensor = golden_function(in_data, scalar)
 
     assert torch.equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "range1, range2",
+    [
+        ((-5, 5), (-10, 10)),
+        ((-100, 100), (-150, 150)),
+        ((0, 1), (1, 2)),
+        ((-1, 1), (-1, 1)),
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.eq,
+        ttnn.ne,
+        ttnn.lt,
+        ttnn.le,
+        ttnn.gt,
+        ttnn.ge,
+    ],
+)
+@pytest.mark.parametrize(
+    "use_legacy",
+    [False],
+)
+def test_binary_relational_sfpu_ttnn(input_shapes, ttnn_function, range1, range2, use_legacy, device):
+    low1, high1 = range1
+    low2, high2 = range2
+    in_data1 = torch.Tensor(size=input_shapes).uniform_(low1, high1).to(torch.float32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    in_data2 = torch.Tensor(size=input_shapes).uniform_(low2, high2).to(torch.float32)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor1, input_tensor2, use_legacy=use_legacy)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    golden_tensor = golden_function(in_data1, in_data2)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(golden_tensor, output_tensor)

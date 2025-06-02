@@ -159,12 +159,54 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 binary_op = FpuBinaryOp::ADD;
             }
             break;
-        case BinaryOpType::GT: postprocess = unary::UnaryOpType::GTZ; break;
-        case BinaryOpType::LT: postprocess = unary::UnaryOpType::LTZ; break;
-        case BinaryOpType::GTE: postprocess = unary::UnaryOpType::GEZ; break;
-        case BinaryOpType::LTE: postprocess = unary::UnaryOpType::LEZ; break;
-        case BinaryOpType::EQ: postprocess = unary::UnaryOpType::EQZ; break;
-        case BinaryOpType::NE: postprocess = unary::UnaryOpType::NEZ; break;
+        case BinaryOpType::GT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::GT;
+            } else {
+                postprocess = unary::UnaryOpType::GTZ;
+                break;
+            }
+            break;
+        case BinaryOpType::GTE:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::GTE;
+            } else {
+                postprocess = unary::UnaryOpType::GEZ;
+                break;
+            }
+            break;
+        case BinaryOpType::LT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LT;
+            } else {
+                postprocess = unary::UnaryOpType::LTZ;
+                break;
+            }
+            break;
+        case BinaryOpType::LTE:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LTE;
+            } else {
+                postprocess = unary::UnaryOpType::LEZ;
+                break;
+            }
+            break;
+        case BinaryOpType::EQ:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::EQ;
+            } else {
+                postprocess = unary::UnaryOpType::EQZ;
+                break;
+            }
+            break;
+        case BinaryOpType::NE:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::NE;
+            } else {
+                postprocess = unary::UnaryOpType::NEZ;
+                break;
+            }
+            break;
         // (a-b)**2
         case BinaryOpType::SQUARED_DIFFERENCE: postprocess = unary::UnaryOpType::SQUARE; break;
         // gelu(a+b)
@@ -331,6 +373,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB: return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+        case EQ: return {"eq_binary_tile_init();", "eq_binary_tile"};
+        case NE: return {"ne_binary_tile_init();", "ne_binary_tile"};
+        case LT: return {"lt_binary_tile_init();", "lt_binary_tile"};
+        case LTE: return {"le_binary_tile_init();", "le_binary_tile"};
+        case GT: return {"gt_binary_tile_init();", "gt_binary_tile"};
+        case GTE: return {"ge_binary_tile_init();", "ge_binary_tile"};
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT: return {"binary_shift_tile_init();", "binary_left_shift_tile"};
