@@ -26,13 +26,14 @@
 namespace ttnn {
 namespace {
 
-flatbuffers::Offset<flatbuffer::MeshCoordinate> to_flatbuffer(
+flatbuffers::Offset<tt::tt_metal::distributed::flatbuffer::MeshCoordinate> to_flatbuffer(
     const tt::tt_metal::distributed::MeshCoordinate& coord, flatbuffers::FlatBufferBuilder& builder) {
     auto values_vector = builder.CreateVector(std::vector<uint32_t>(coord.coords().begin(), coord.coords().end()));
-    return flatbuffer::CreateMeshCoordinate(builder, values_vector);
+    return tt::tt_metal::distributed::flatbuffer::CreateMeshCoordinate(builder, values_vector);
 }
 
-tt::tt_metal::distributed::MeshCoordinate from_flatbuffer(const flatbuffer::MeshCoordinate* coord) {
+tt::tt_metal::distributed::MeshCoordinate from_flatbuffer(
+    const tt::tt_metal::distributed::flatbuffer::MeshCoordinate* coord) {
     return tt::tt_metal::distributed::MeshCoordinate(
         std::vector<uint32_t>(coord->values()->begin(), coord->values()->end()));
 }

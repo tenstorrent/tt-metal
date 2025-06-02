@@ -17,7 +17,7 @@ struct InlineFileStorage {
 
 table TensorShard {
     buffer: TensorBuffer;
-    mesh_coordinate: MeshCoordinate;
+    mesh_coordinate: tt.tt_metal.distributed.flatbuffer.MeshCoordinate;
 }
 
 union TensorType {
