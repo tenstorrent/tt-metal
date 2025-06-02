@@ -1077,7 +1077,7 @@ FORCE_INLINE void run_receiver_channel_step(
     std::array<ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
-    if (is_receiver_channel_serviced[receiver_channel]) {
+    if constexpr (is_receiver_channel_serviced[receiver_channel]) {
         run_receiver_channel_step_impl<receiver_channel>(
             local_receiver_channels[receiver_channel],
             downstream_edm_interface,
