@@ -49,8 +49,7 @@ show_help() {
     echo "  --enable-coverage                Instrument the binaries for code coverage."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
-    echo "  --enable-operation-timeout       Enable operation timeout for ttnn. (use it to troubleshoot hangs with graph capture)"
-    echo "  --operation-timeout-seconds      Set the operation timeout in seconds for ttnn, depends on --enable-operation-timeout. (default: 30)"
+    echo "  --operation-timeout-seconds      Set the operation timeout in seconds for ttnn, (use it to troubleshoot hangs with graph capture)"
 }
 
 clean() {
@@ -84,7 +83,6 @@ cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
-enable_operation_timeout="OFF"
 
 # Requested handling for 20.04 -> 22.04 migration
 if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
@@ -133,7 +131,6 @@ configure-only
 enable-coverage
 without-distributed
 without-python-bindings
-enable-operation-timeout
 operation-timeout-seconds:
 "
 
@@ -194,8 +191,6 @@ while true; do
             configure_only="ON";;
         --without-python-bindings)
             with_python_bindings="OFF";;
-        --enable-operation-timeout)
-            enable_operation_timeout="ON";;
         --operation-timeout-seconds)
             operation_timeout_seconds="$2";shift;;
         --disable-unity-builds)
@@ -273,7 +268,6 @@ echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
-echo "INFO: Enable Operation Timeout: $enable_operation_timeout"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -391,13 +385,8 @@ else
     cmake_args+=("-DENABLE_DISTRIBUTED=OFF")
 fi
 
-if [ "$enable_operation_timeout" = "ON" ]; then
-    cmake_args+=("-DTTNN_ENABLE_OPERATION_TIMEOUT=ON")
-    if [ ! -z "$operation_timeout_seconds" ]; then
-        cmake_args+=("-DTTNN_OPERATION_TIMEOUT_SECONDS=$operation_timeout_seconds")
-    fi
-else
-    cmake_args+=("-DTTNN_ENABLE_OPERATION_TIMEOUT=OFF")
+if [ ! -z "$operation_timeout_seconds" ]; then
+    cmake_args+=("-DTTNN_OPERATION_TIMEOUT_SECONDS=$operation_timeout_seconds")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother

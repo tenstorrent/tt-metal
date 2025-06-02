@@ -118,20 +118,9 @@ message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRA
 message(STATUS "Build with Multihost Distributed Compute: ${ENABLE_DISTRIBUTED}")
 
 # Add timeout configuration
-if(TTNN_ENABLE_OPERATION_TIMEOUT)
-    if(DEFINED TTNN_OPERATION_TIMEOUT_SECONDS)
-        add_definitions(
-            -DTTNN_ENABLE_OPERATION_TIMEOUT
-            -DTTNN_OPERATION_TIMEOUT_SECONDS=${TTNN_OPERATION_TIMEOUT_SECONDS}
-        )
-        message(STATUS "TTNN Operation Timeout: ${TTNN_OPERATION_TIMEOUT_SECONDS} seconds")
-    else()
-        add_definitions(
-            -DTTNN_ENABLE_OPERATION_TIMEOUT
-            -DTTNN_OPERATION_TIMEOUT_SECONDS=30
-        )
-        message(STATUS "TTNN Operation Timeout: 30 seconds (default)")
-    endif()
+if(DEFINED TTNN_OPERATION_TIMEOUT_SECONDS)
+    add_definitions(-DTTNN_OPERATION_TIMEOUT_SECONDS=${TTNN_OPERATION_TIMEOUT_SECONDS})
+    message(STATUS "TTNN Operation Timeout: ${TTNN_OPERATION_TIMEOUT_SECONDS} seconds")
 else()
     message(STATUS "TTNN Operation Timeout: Disabled")
 endif()
