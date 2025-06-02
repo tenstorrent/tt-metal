@@ -177,13 +177,13 @@ TEST_P(PrepareNdShardedDataTests, PrepareNdShardedData) {
     auto sharded_data = pack_nd_sharded_data<uint8_t>(data, tensor_spec);
     EXPECT_EQ(sharded_data.size(), params.expected_data.size());
     for (size_t i = 0; i < sharded_data.size(); i++) {
-        EXPECT_EQ(sharded_data[i], params.expected_data[i]);
+        EXPECT_EQ(sharded_data[i], static_cast<std::byte>(params.expected_data[i]));
     }
 
-    auto unpacked_data = unpack_nd_sharded_data<uint8_t>(sharded_data, tensor_spec);
+    auto unpacked_data = unpack_nd_sharded_data<std::byte>(sharded_data, tensor_spec);
     EXPECT_EQ(unpacked_data.size(), data.size());
     for (size_t i = 0; i < unpacked_data.size(); i++) {
-        EXPECT_EQ(unpacked_data[i], data[i]);
+        EXPECT_EQ(unpacked_data[i], static_cast<std::byte>(data[i]));
     }
 }
 

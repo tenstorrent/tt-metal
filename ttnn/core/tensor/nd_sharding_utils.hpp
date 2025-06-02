@@ -8,26 +8,20 @@
 
 namespace tt::tt_metal {
 
-std::vector<uint8_t> pack_nd_sharded_data(
-    tt::stl::Span<uint8_t> data, const TensorSpec& tensor_spec, size_t element_size_bytes);
+std::vector<std::byte> pack_nd_sharded_data(
+    tt::stl::Span<const std::byte> data, const TensorSpec& tensor_spec, size_t element_size_bytes);
 
-std::vector<uint8_t> unpack_nd_sharded_data(
-    tt::stl::Span<uint8_t> sharded_data, const TensorSpec& tensor_spec, size_t element_size_bytes);
+std::vector<std::byte> unpack_nd_sharded_data(
+    tt::stl::Span<const std::byte> sharded_data, const TensorSpec& tensor_spec, size_t element_size_bytes);
 
 template <typename T>
-std::vector<uint8_t> pack_nd_sharded_data(tt::stl::Span<T> data, const TensorSpec& tensor_spec) {
-    return pack_nd_sharded_data(
-        tt::stl::Span<uint8_t>(reinterpret_cast<uint8_t*>(data.data()), data.size() * sizeof(T)),
-        tensor_spec,
-        sizeof(T));
+std::vector<std::byte> pack_nd_sharded_data(tt::stl::Span<const T> data, const TensorSpec& tensor_spec) {
+    return pack_nd_sharded_data(tt::stl::as_bytes(data), tensor_spec, sizeof(T));
 }
 
 template <typename T>
-std::vector<uint8_t> unpack_nd_sharded_data(tt::stl::Span<T> sharded_data, const TensorSpec& tensor_spec) {
-    return unpack_nd_sharded_data(
-        tt::stl::Span<uint8_t>(reinterpret_cast<uint8_t*>(sharded_data.data()), sharded_data.size() * sizeof(T)),
-        tensor_spec,
-        sizeof(T));
+std::vector<std::byte> unpack_nd_sharded_data(tt::stl::Span<const T> sharded_data, const TensorSpec& tensor_spec) {
+    return unpack_nd_sharded_data(tt::stl::as_bytes(sharded_data), tensor_spec, sizeof(T));
 }
 
 }  // namespace tt::tt_metal

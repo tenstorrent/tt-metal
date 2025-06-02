@@ -93,8 +93,8 @@ void pack_unpack_nd_sharded_data_impl(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-std::vector<uint8_t> pack_nd_sharded_data(
-    tt::stl::Span<uint8_t> data, const TensorSpec& tensor_spec, size_t element_size_bytes) {
+std::vector<std::byte> pack_nd_sharded_data(
+    tt::stl::Span<const std::byte> data, const TensorSpec& tensor_spec, size_t element_size_bytes) {
     const auto& memory_config = tensor_spec.memory_config();
     const auto& shape = tensor_spec.padded_shape();
     const auto& shard_spec = memory_config.nd_shard_spec().value();
@@ -108,16 +108,16 @@ std::vector<uint8_t> pack_nd_sharded_data(
     size_t num_cores = shard_spec.grid.num_cores();
     size_t num_shards_per_core = (num_shards + num_cores - 1) / num_cores;
 
-    std::vector<uint8_t> sharded_data(num_shards_per_core * num_cores * shard_size * element_size_bytes);
-    CMAKE_UNIQUE_NAMESPACE::pack_unpack_nd_sharded_data_impl<const uint8_t, uint8_t, true>(
+    std::vector<std::byte> sharded_data(num_shards_per_core * num_cores * shard_size * element_size_bytes);
+    CMAKE_UNIQUE_NAMESPACE::pack_unpack_nd_sharded_data_impl<const std::byte, std::byte, true>(
         data, sharded_data, tensor_spec, element_size_bytes);
     return sharded_data;
 }
 
-std::vector<uint8_t> unpack_nd_sharded_data(
-    tt::stl::Span<uint8_t> sharded_data, const TensorSpec& tensor_spec, size_t element_size_bytes) {
-    std::vector<uint8_t> data(tensor_spec.padded_shape().volume() * element_size_bytes);
-    CMAKE_UNIQUE_NAMESPACE::pack_unpack_nd_sharded_data_impl<uint8_t, const uint8_t, false>(
+std::vector<std::byte> unpack_nd_sharded_data(
+    tt::stl::Span<const std::byte> sharded_data, const TensorSpec& tensor_spec, size_t element_size_bytes) {
+    std::vector<std::byte> data(tensor_spec.padded_shape().volume() * element_size_bytes);
+    CMAKE_UNIQUE_NAMESPACE::pack_unpack_nd_sharded_data_impl<std::byte, const std::byte, false>(
         data, sharded_data, tensor_spec, element_size_bytes);
     return data;
 }
