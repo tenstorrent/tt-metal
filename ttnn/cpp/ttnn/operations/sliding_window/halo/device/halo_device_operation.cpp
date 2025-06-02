@@ -203,7 +203,6 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             program,
             input_tensor,
             pad_val_,
-            false,
             config_.num_cores_nhw,
             max_out_nsticks_per_core_,
             pad_config_device_tensor,
