@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t padded_row_size_bytes = get_arg_val<uint32_t>(3);
     const uint32_t pad_size_bytes = padded_row_size_bytes - unpadded_row_size_bytes;
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_temp_pad = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_temp_pad = get_compile_time_arg_val(1);
 
 #ifdef DEBUG
     DPRINT << "num_units: " << num_units << ", num_elements_per_row: " << num_elements_per_row
