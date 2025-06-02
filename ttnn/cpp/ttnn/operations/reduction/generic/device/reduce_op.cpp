@@ -23,7 +23,7 @@ std::map<string, string> get_defines(tt::tt_metal::ReduceOpMath reduce_op, tt::t
         case tt::tt_metal::ReduceOpDim::W: reduce_dim_str = "ReduceDim::REDUCE_ROW"; break;
         case tt::tt_metal::ReduceOpDim::H: reduce_dim_str = "ReduceDim::REDUCE_COL"; break;
         case tt::tt_metal::ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
-        default: TT_ASSERT(false && "Invalid reduce_op!");
+        default: TT_THROW("Invalid reduce_op!");
     }
     defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
     defines["REDUCE_DIM"] = reduce_dim_str;
@@ -198,7 +198,7 @@ Tensor reduce(
         // Get the device
         if (input_tensor.storage_type() != StorageType::DEVICE) {
             device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
-            TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
+            TT_FATAL(device != nullptr, "Default device must be set if no inputs to op are on device");
         } else {
             device = input_tensor.device();
         }
