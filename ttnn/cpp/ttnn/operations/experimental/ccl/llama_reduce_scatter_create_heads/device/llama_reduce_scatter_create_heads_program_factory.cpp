@@ -863,7 +863,14 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads
 
         const auto& input_tensor = tensor_args.input_tensor;
         const auto& intermediate_packet_buffer = tensor_args.intermediate_packet_buffer;
-        auto& output_tensor = tensor_return_value;
+        auto& output_tensors = tensor_return_value;
+        auto& output_tensor_q = output_tensors.at(0);
+        auto& output_tensor_k = output_tensors.at(1);
+        auto& output_tensor_v = output_tensors.at(2);
+
+        uint32_t q_base_addr = output_tensor_q.buffer()->address();
+        uint32_t k_base_addr = output_tensor_k.buffer()->address();
+        uint32_t v_base_addr = output_tensor_v.buffer()->address();
 
         auto input_tensor_buffer = input_tensor.buffer();
         auto packet_buffer = intermediate_packet_buffer.buffer();
@@ -878,8 +885,15 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads
         for (const auto& core : cores) {
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
             writer_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore->address();
+            writer_runtime_args[8] = q_base_addr;
+            writer_runtime_args[9] = k_base_addr;
+            writer_runtime_args[10] = v_base_addr;
+
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
             reader_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore->address();
+            reader_runtime_args[10] = q_base_addr;
+            reader_runtime_args[11] = k_base_addr;
+            reader_runtime_args[12] = v_base_addr;
         }
     }
 }
