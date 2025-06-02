@@ -42,12 +42,12 @@ def gen_tensor(dim, height, width, num_devices_scatter, num_devices_fracture, nu
     factor = 1
     shard_height = height // num_devices_scatter
     torch_fracture_tensors = []
-    for row in range(num_devices_fracture):
+    for _ in range(num_devices_fracture):
         torch_scatter_tensors = []
-        for col in range(num_devices_scatter):
+        for _ in range(num_devices_scatter):
             torch_input_tensors = []
             factor = 1
-            for hshard in range(num_devices_scatter):
+            for _ in range(num_devices_scatter):
                 if scheme == "random":
                     torch_input_tensors.append(torch.rand(1, 1, shard_height, width))
                 elif scheme == "sequential":
@@ -250,15 +250,13 @@ def run_reduce_scatter_test(
     tt_out_tensor_v_list = []
 
     def run_op(n_iters, store_all_results=True):
-        tt_output_list = []
         for i in range(n_iters):
-            # buffer_index = 0 if trace_mode else i
-            buffer_index = i
+            buffer_index = 0 if trace_mode else i
             tt_out_tensor_q, tt_out_tensor_k, tt_out_tensor_v = ttnn.experimental.llama_rs_create_heads(
                 tt_input_tensors_list[buffer_index],
                 tt_intermediate_tensors_list[buffer_index % cyclic_buffer_size],
                 dim,
-                ccl_semaphore_handles[i],
+                ccl_semaphore_handles[buffer_index],
                 worker_sub_device_id,
                 cluster_axis=1,
                 mesh_device=mesh_device,
@@ -330,9 +328,7 @@ def run_reduce_scatter_test(
     failed_indices = []
     expected_pcc = 0.999 if dtype == ttnn.bfloat8_b else 0.9999
 
-    logger.info(f"tt_out_tensor_list size: {len(tt_out_tensor_list[0])}")
     for tensor_index in range(len(tt_out_tensor_list[0])):
-        logger.info(f"tensor_index: {tensor_index}")
         tt_torch_tensor_q = ttnn.to_torch(
             tt_out_tensor_list[0][tensor_index],
             mesh_composer=ttnn.ConcatMesh2dToTensor(
