@@ -23,7 +23,7 @@ bool find_device_with_neighbor_in_multi_direction(
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>>& dst_physical_device_ids_by_dir,
     const std::unordered_map<RoutingDirection, uint32_t>& mcast_hops,
     std::optional<RoutingDirection> incoming_direction) {
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     auto devices = fixture->get_devices();
     // Find a device with enough neighbours in the specified direction
@@ -78,7 +78,7 @@ bool find_device_with_neighbor_in_direction(
     chip_id_t& src_physical_device_id,
     chip_id_t& dst_physical_device_id,
     RoutingDirection direction) {
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto devices = fixture->get_devices();
     for (auto* device : devices) {
         src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(device->id());

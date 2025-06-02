@@ -19,7 +19,7 @@ namespace tt::tt_fabric {
 std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
     std::unordered_map<MeshId, bool> wrap_around_mesh;
 
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto mesh_ids = control_plane->get_user_physical_mesh_ids();
     for (const auto& mesh_id : mesh_ids) {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {

@@ -148,7 +148,7 @@ void RunAsyncWriteTest(
     FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Find a device with a neighbour in the specified direction
     if (!find_device_with_neighbor_in_direction(
@@ -265,7 +265,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     if (!find_device_with_neighbor_in_direction(
@@ -365,7 +365,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     if (!find_device_with_neighbor_in_direction(
@@ -500,7 +500,7 @@ void RunAsyncWriteMulticastTest(
         mcast_hops[RoutingDirection::E] = 1;
     }
 
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Find a device with enough neighbours in the specified directions
     if (!find_device_with_neighbor_in_multi_direction(

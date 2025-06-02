@@ -377,6 +377,12 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
     }
 
     if (device_sender != nullptr and device_receiver != nullptr) {
+        FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+        TT_FATAL(
+            fabric_config != FabricConfig::DISABLED,
+            "Cannot support device to device synchronization when TT-Fabric is disabled.");
+        log_info("Calling {} when TT-Fabric is enabled. This may take a while", __FUNCTION__);
+
         constexpr std::uint16_t sample_count = 240;
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;

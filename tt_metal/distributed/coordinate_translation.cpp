@@ -21,7 +21,7 @@ namespace tt::tt_metal::distributed {
 
 const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translation_map() {
     static tt::stl::Indestructible<MeshContainer<PhysicalMeshCoordinate>> kTranslationMap([]() {
-        const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+        const auto* control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         TT_FATAL(control_plane != nullptr, "Control plane must be initialized before MeshDevice can be created.");
 
         const auto mesh_ids = control_plane->get_user_physical_mesh_ids();

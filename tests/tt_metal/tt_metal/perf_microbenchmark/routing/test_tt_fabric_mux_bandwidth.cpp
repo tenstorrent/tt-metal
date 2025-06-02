@@ -336,7 +336,7 @@ int main(int argc, char** argv) {
     test_params.buffer_size_bytes_header_only_channel = sizeof(tt::tt_fabric::PacketHeader);
 
     // for now, just use one device for running benchmarks
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto mesh_id = control_plane->get_user_physical_mesh_ids()[0];
     chip_id_t logical_chip_id = 0;
     auto physical_chip_id =

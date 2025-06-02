@@ -164,7 +164,6 @@ struct FabricMuxConfig {
 
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const {
         const auto& fabric_router_config = tt::tt_metal::MetalContext::instance()
-                                               .get_cluster()
                                                .get_control_plane()
                                                ->get_fabric_context()
                                                .get_fabric_router_config();

@@ -56,7 +56,7 @@ bool is_TG_gateway_connection(const chip_id_t src_chip_id, const chip_id_t dst_c
 namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes() {
-    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane->get_fabric_context().get_fabric_channel_buffer_size_bytes();
 }
 
@@ -74,7 +74,7 @@ void append_fabric_connection_rt_args(
         src_chip_id,
         dst_chip_id);
 
-    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     const auto src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_chip_id);
     const auto dst_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(dst_chip_id);

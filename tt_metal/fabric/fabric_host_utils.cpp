@@ -61,7 +61,7 @@ FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::Cluster
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     chip_id_t src_chip_id, chip_id_t dst_chip_id, RoutingDirection direction) {
-    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_chip_id);
     const auto dst_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     const bool is_2d_fabric = control_plane->get_fabric_context().get_fabric_topology() == Topology::Mesh;
@@ -100,7 +100,7 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
 }
 
 std::vector<uint32_t> get_forwarding_link_indices(chip_id_t src_chip_id, chip_id_t dst_chip_id) {
-    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_chip_id);
     const auto dst_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(dst_chip_id);
 
@@ -150,7 +150,7 @@ void set_routing_mode(uint16_t routing_mode) {
         !(routing_mode & ROUTING_MODE_2D) || !(routing_mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING)),
         "2D routing mode cannot be combined with LINE or RING topology");
 
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     control_plane->set_routing_mode(routing_mode);
 }
 
