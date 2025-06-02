@@ -46,6 +46,7 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
             "sub_core_grid implementation only supported when use_multicore flag argument is set to true");
     }
 
+    // TODO: (GR) Uneven shard support
     // Shard shape restrictions
     if (input_tensor_a.is_sharded()) {
         std::array<uint32_t, 2> input_shard_shape = input_tensor_a.shard_spec().value().shape;
