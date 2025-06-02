@@ -1233,17 +1233,19 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     }
 
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    const auto num_risc_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    const auto num_enabled_eth_cores = edm_builders.size();
+    const auto num_enabled_risc_cores =
+        edm_builders.begin()->second.get_configured_risc_count();  // same across all eth cores
     for (auto& [eth_chan, edm_builder] : edm_builders) {
         edm_builder.set_wait_for_host_signal(true);
         const std::vector<uint32_t> rt_args = edm_builder.get_runtime_args();
-        for (uint32_t risc_id = 0; risc_id < num_risc_cores; risc_id++) {
+        for (uint32_t risc_id = 0; risc_id < num_enabled_risc_cores; risc_id++) {
             std::vector<uint32_t> ct_args = edm_builder.get_compile_time_args(risc_id);
 
-            ct_args.push_back(eth_chan == master_router_chan);
+            const auto is_master_risc_core = eth_chan == master_router_chan && (risc_id == 0);
+            ct_args.push_back(is_master_risc_core);
             ct_args.push_back(master_router_chan);
-            ct_args.push_back(edm_builders.size());
+            ct_args.push_back(num_enabled_risc_cores * num_enabled_eth_cores);
             ct_args.push_back(router_channels_mask);
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
