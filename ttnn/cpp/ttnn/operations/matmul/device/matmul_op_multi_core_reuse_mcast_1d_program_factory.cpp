@@ -899,7 +899,7 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in0(
 }
 
 ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in1(
-    tt::tt_metal::Program& program,
+    tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
@@ -937,8 +937,6 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in1(
     bool untilize_out) {
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
-
-    tt_metal::Program program{};
 
     bool fuse_op = false;
 
@@ -1593,6 +1591,7 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
     bool packer_l1_acc,
     bool dst_full_sync_en,
     CoreCoord compute_with_storage_grid_size,
+    uint32_t base_cb_index,
     uint32_t B,
     uint32_t M,
     uint32_t N,
@@ -1738,7 +1737,7 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
     /* Create circular buffers */
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    uint32_t src0_cb_index = base_cb_index;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size)
@@ -1746,11 +1745,11 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
             .set_globally_allocated_address(*in0_buffer);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    uint32_t src1_cb_index = base_cb_index + 1;
     tt::tt_metal::CBHandle cb_src1;
+    uint32_t remote_cb_index = tt::CBIndex::c_31;
     if (use_global_cb) {
         uint32_t in1_block_size_bytes = in1_single_tile_size * in1_block_num_tiles;
-        uint32_t remote_cb_index = tt::CBIndex::c_31;
         tt_metal::CircularBufferConfig remote_cb_config =
             tt_metal::CircularBufferConfig((global_cb->size() / in1_block_size_bytes) * in1_block_size_bytes);
         remote_cb_config.remote_index(remote_cb_index)
@@ -1769,29 +1768,29 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
         cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     }
 
-    uint32_t src2_cb_index = tt::CBIndex::c_2;
+    uint32_t src2_cb_index = base_cb_index + 2;
     tt_metal::CircularBufferConfig src2_cb_config =
         tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in2_single_tile_size)
             .set_tile_dims(src2_cb_index, in0_tile);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
 
-    uint32_t sync_cb_index = tt::CBIndex::c_3;
+    uint32_t sync_cb_index = base_cb_index + 3;
     uint32_t sync_cb_size_bytes = 16;
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
             .set_page_size(sync_cb_index, sync_cb_size_bytes);
     auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
 
-    uint32_t sync_cb2_index = tt::CBIndex::c_4;
+    uint32_t sync_cb2_index = base_cb_index + 4;
     uint32_t sync_cb2_size_bytes = 16;
     tt_metal::CircularBufferConfig sync_cb2_config =
         tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
             .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
     auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_5;  // output operands start at index 16
-    uint32_t interm0_cb_index = tt::CBIndex::c_6;
+    uint32_t output_cb_index = base_cb_index + 5;  // output operands start at index 16
+    uint32_t interm0_cb_index = base_cb_index + 6;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
     tt_metal::CircularBufferConfig output_cb_config =
@@ -1870,6 +1869,8 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
         (std::uint32_t)batch,       // batch
         (std::uint32_t)ring_size,   // ring_size
         (std::uint32_t)in0_signal_semaphore_id,
+        (std::uint32_t)src0_cb_index,
+        (std::uint32_t)src2_cb_index,
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -1884,6 +1885,10 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
         (std::uint32_t)in1_block_page_size_last,
         (std::uint32_t)in1_block_width_num_pages,
         (std::uint32_t)in1_shard_width_in_dram,
+        (std::uint32_t)src1_cb_index,
+        (std::uint32_t)sync_cb_index,
+        (std::uint32_t)sync_cb2_index,
+        (std::uint32_t)remote_cb_index,
     };
 
     /* compute kernel args */
@@ -1914,7 +1919,14 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
         untilize_out,             // untilize_out
         in1_is_dram_interleaved,  // in1_is_dram_interleaved
         in1_is_dram_sharded,      // in1_is_dram_sharded
+        0,                        // to be overwritten by size of static ct vars
+        src0_cb_index,
+        src1_cb_index,
+        src2_cb_index,
+        sync_cb_index,
+        sync_cb2_index,
     };
+    compute_kernel_args.at(18) = compute_kernel_args.size();
     for (uint32_t i = 0; i < num_output_cb; ++i) {
         compute_kernel_args.push_back(output_cb_indices[i]);
     }
@@ -2176,7 +2188,7 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
 inline void override_program_mcast_in1(
     const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
     const void* operation,
-    tt::tt_metal::Program& program,
+    tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
@@ -2247,7 +2259,7 @@ inline void override_program_mcast_in1(
 inline void override_program_mcast_in0(
     const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
     const void* operation,
-    tt::tt_metal::Program& program,
+    tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
@@ -2310,7 +2322,7 @@ inline void override_program_mcast_in0(
 inline void override_program_gather_in0(
     const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
     const void* operation,
-    tt::tt_metal::Program& program,
+    tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
@@ -2363,7 +2375,7 @@ inline void override_program_gather_in0(
 void override_program(
     const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
     const void* operation,
-    tt::tt_metal::Program& program,
+    tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
@@ -2392,7 +2404,7 @@ namespace operations {
 namespace matmul {
 
 ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_(
-    tt::tt_metal::Program& program,
+    tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
@@ -2416,7 +2428,8 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    uint32_t start_cb_index) {
     const auto b = b_tensors[0];
     const auto output = output_tensors[0];
 
@@ -2532,6 +2545,7 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
             packer_l1_acc,
             dst_full_sync_en,
             compute_with_storage_grid_size,
+            start_cb_index,
             B,
             Mt,
             Nt,
@@ -2558,7 +2572,7 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
             num_global_cb_receivers,
             sub_device_id);
     }
-
+    TT_FATAL(start_cb_index == tt::CBIndex::c_0, "mcast does not support a non-zero start cb index");
     if (mcast_in0) {
         return reuse_mcast_1d_optimized_helpers::process_program_mcast_in0(
             program,
@@ -2693,11 +2707,12 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         empty_fused_op_signaler,
         global_cb,
         num_global_cb_receivers,
-        sub_device_id);
+        sub_device_id,
+        tt::CBIndex::c_0);
     auto override_runtime_arguments_callback =
         [shared_vars](
             const void* operation,
-            tt::tt_metal::Program& program,
+            tt_metal::Program& program,
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
@@ -2709,7 +2724,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
 }
 
 ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_expander(
-    tt::tt_metal::Program& program,
+    tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
@@ -2720,7 +2735,8 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    uint32_t start_cb_index) {
     MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
@@ -2749,11 +2765,12 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
         fused_op_signaler,
         global_cb,
         config.num_global_cb_receivers,
-        sub_device_id);
+        sub_device_id,
+        start_cb_index);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
-    tt::tt_metal::Program& program,
+    tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
@@ -2778,11 +2795,12 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             untilize_out,
             fused_op_signaler,
             global_cb,
-            sub_device_id);
+            sub_device_id,
+            tt::CBIndex::c_0);
     auto override_runtime_arguments_callback =
         [shared_vars](
             const void* operation,
-            tt::tt_metal::Program& program,
+            tt_metal::Program& program,
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
