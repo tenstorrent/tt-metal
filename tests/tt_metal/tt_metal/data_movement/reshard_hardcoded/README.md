@@ -1,6 +1,7 @@
 # Reshard Hardcoded Data Movement Tests
 
-This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions between two Tensix cores.
+This test suite implements tests that measure the performance (i.e. bandwidth) of reshard transactions between Tensix cores.
+They are based on kernel runtime arguments of existing metal tests.
 
 ## Test Flow
 
