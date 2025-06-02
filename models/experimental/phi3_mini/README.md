@@ -50,7 +50,7 @@ export MAX_PREFILL_CHUNK_SIZE=1
 
 ### 2. Run the demo
 
-The `simple_text_demo.py` script includes the following main modes of operation and is parametrized to support other configurations.
+The `demo.py` script includes the following main modes of operation and is parametrized to support other configurations.
 
 - `batch-1`: Runs a small prompt (128 tokens) for a single user
 
@@ -58,7 +58,7 @@ The `simple_text_demo.py` script includes the following main modes of operation 
 # Examples of how to run the demo:
 
 # Batch-1
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
+pytest pytest models/experimental/phi3_mini/demo/demo.py -k "performance and batch-1"
 ```
 
 The above examples are run in `ModelOptimizations.performance` mode. You can override this by setting the `optimizations` argument in the demo to run in `ModelOptimizations.accuracy` mode.
