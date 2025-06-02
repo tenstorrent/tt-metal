@@ -533,8 +533,8 @@ void Device::reset_cores() {
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
 
-    // Active ethernet
     if (hal.get_eth_fw_is_cooperative()) {
+        // Active ethernet
         for (const auto& eth_core : this->get_active_ethernet_cores()) {
             CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
             if (erisc_app_still_running(virtual_core)) {
@@ -542,14 +542,14 @@ void Device::reset_cores() {
                 device_to_early_exit_cores[this->id()].insert(virtual_core);
             }
         }
-    }
 
-    // Idle ethernet
-    for (const auto& eth_core : this->get_inactive_ethernet_cores()) {
-        CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
-        if (erisc_app_still_running(virtual_core)) {
-            tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
-                tt_cxy_pair(this->id(), virtual_core));
+        // Idle ethernet
+        for (const auto& eth_core : this->get_inactive_ethernet_cores()) {
+            CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
+            if (erisc_app_still_running(virtual_core)) {
+                tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
+                    tt_cxy_pair(this->id(), virtual_core));
+            }
         }
     }
 
