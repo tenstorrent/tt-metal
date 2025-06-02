@@ -4,7 +4,7 @@
 
 #include "nd_sharding_utils.hpp"
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::detail {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -122,4 +122,4 @@ std::vector<std::byte> unpack_nd_sharded_data(
     return data;
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::detail
