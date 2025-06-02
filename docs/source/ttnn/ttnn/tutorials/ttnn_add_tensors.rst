@@ -164,8 +164,6 @@ Running this script will output the input tensors and the result of their additi
 
 Source Code
 ###########
-.. toctree::
-   :maxdepth: 1
-   :caption: Source Code
 
-   ttnn_tutorials_python3/ttnn_add_tensors.py
+.. literalinclude:: ttnn_tutorials_python3/ttnn_add_tensors.py
+   :caption: Source Code
