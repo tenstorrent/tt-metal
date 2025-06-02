@@ -129,8 +129,8 @@ struct DistributionSpec {
     }
 
     // Single constructor that handles all array cases
-    constexpr DistributionSpec(const ShapeBase& tensor_shape_arr, const ShapeBase& shard_shape_arr = {}) :
-        DistributionSpec(tensor_shape_arr, shard_shape_arr, select_constructor_tag()) {}
+    constexpr DistributionSpec(const ShapeBase& shape1_arr, const ShapeBase& shape2_arr = {}) :
+        DistributionSpec(shape1_arr, shape2_arr, select_constructor_tag()) {}
 
 private:
     struct dynamic_tensor_dynamic_shard_tag {};
@@ -163,7 +163,7 @@ private:
         compute_shard_grid_and_strides_rt(tensor_shape_.shape, ShardShape::shape);
     }
 
-    constexpr DistributionSpec(const ShapeBase&, const ShapeBase& shard_shape_arr, static_tensor_dynamic_shard_tag) :
+    constexpr DistributionSpec(const ShapeBase& shard_shape_arr, const ShapeBase&, static_tensor_dynamic_shard_tag) :
         shard_shape_(shard_shape_arr) {
         compute_shard_grid_and_strides_rt(TensorShape::shape, shard_shape_.shape);
     }
