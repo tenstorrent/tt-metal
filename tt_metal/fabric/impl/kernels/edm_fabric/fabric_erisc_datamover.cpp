@@ -1729,33 +1729,14 @@ void kernel_main() {
     // create the remote receiver channel buffers with input array of number of buffers
     auto remote_receiver_channels = tt::tt_fabric::EthChannelBuffers<REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
-    // initialize the remote receiver channel buffers
-    remote_receiver_channels.init(
-        remote_receiver_buffer_addresses.data(),
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE),
-        eth_transaction_ack_word_addr,
-        receiver_channel_base_id);
+
     // create the local receiver channnel buffers with input array of number of buffers
     auto local_receiver_channels = tt::tt_fabric::EthChannelBuffers<RECEIVER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
-    // initialize the local receiver channel buffers
-    local_receiver_channels.init(
-        local_receiver_buffer_addresses.data(),
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE),
-        eth_transaction_ack_word_addr,
-        receiver_channel_base_id);
+
     // create the sender channnel buffers with input array of number of buffers
     auto local_sender_channels = tt::tt_fabric::EthChannelBuffers<SENDER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_SENDER_CHANNELS>{});
-    // initialize the local sender channel worker interfaces
-    local_sender_channels.init(
-        local_sender_buffer_addresses.data(),
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE),
-        0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
-        sender_channel_base_id);
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -1929,6 +1910,30 @@ void kernel_main() {
                     tt::tt_fabric::forward_and_local_write_noc_vc>();
         }
     }
+
+    // initialize the local receiver channel buffers
+    local_receiver_channels.init(
+        local_receiver_buffer_addresses.data(),
+        channel_buffer_size,
+        sizeof(PACKET_HEADER_TYPE),
+        eth_transaction_ack_word_addr,
+        receiver_channel_base_id);
+
+    // initialize the remote receiver channel buffers
+    remote_receiver_channels.init(
+        remote_receiver_buffer_addresses.data(),
+        channel_buffer_size,
+        sizeof(PACKET_HEADER_TYPE),
+        eth_transaction_ack_word_addr,
+        receiver_channel_base_id);
+
+    // initialize the local sender channel worker interfaces
+    local_sender_channels.init(
+        local_sender_buffer_addresses.data(),
+        channel_buffer_size,
+        sizeof(PACKET_HEADER_TYPE),
+        0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
+        sender_channel_base_id);
 
     // initialize the local sender channel worker interfaces
     init_local_sender_channel_worker_interfaces<decltype(local_sender_channel_worker_interfaces), NUM_SENDER_CHANNELS>(

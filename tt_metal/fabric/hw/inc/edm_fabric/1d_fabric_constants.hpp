@@ -200,7 +200,7 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
 // assume the non-dateline receiver channels have the same buffer slots for now, dateline edm recv channel 0 has 0
 // buffer slots.
-constexpr size_t RECEIVER_NUM_BUFFERS = RECEIVER_NUM_BUFFERS_ARRAY[1];
+constexpr size_t RECEIVER_NUM_BUFFERS = RECEIVER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
 
 constexpr size_t REMOTE_RECEIVER_NUM_BUFFERS_IDX = RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY =
