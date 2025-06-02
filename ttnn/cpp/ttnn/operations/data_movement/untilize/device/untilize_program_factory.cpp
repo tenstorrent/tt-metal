@@ -1372,7 +1372,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
-        "writer_unary_stick_layout_split_rows.cpp",
+        "writer_unary_stick_layout_split_rows_single_core.cpp",
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
 
