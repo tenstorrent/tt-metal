@@ -1965,8 +1965,11 @@ void kernel_main() {
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
                 wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
+                // This master sends notification to self for multi risc in single eth core case,
+                // This still send to self even though with single risc core case, but no side effects
+                constexpr uint32_t exclude_eth_chan = std::numeric_limits<uint32_t>::max();
                 notify_subordinate_routers(
-                    edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
+                    edm_channels_mask, exclude_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
             } else {
                 notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
                 wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
