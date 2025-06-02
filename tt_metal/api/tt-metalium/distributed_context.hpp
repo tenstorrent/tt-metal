@@ -153,6 +153,7 @@ public:
     //--- Topology ------------------------------------------------------------
     [[nodiscard]] virtual Rank rank() const = 0;
     [[nodiscard]] virtual Size size() const = 0;
+    [[nodiscard]] virtual bool supports_fault_tolerance() const = 0;
 
     //--- Synchronization ----------------------------------------------------
     virtual void barrier() const = 0;

@@ -150,3 +150,24 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+
+  ttnn-import-test:
+    name: ttnn import test ubuntu-22.04
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: sudo ./install_dependencies.sh
+      - name: 🧪 Download Python Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+      - name: 💿 Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install "$WHEEL_FILENAME"
+      - name: ttnn import test
+        run: python3 -c "import ttnn"

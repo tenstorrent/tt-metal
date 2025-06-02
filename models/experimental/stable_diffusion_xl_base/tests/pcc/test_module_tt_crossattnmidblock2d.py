@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -7,6 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnmidblock2d import TtUNetMidBlock2DCrossAttn
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -37,20 +38,21 @@ def test_crossattnmid(
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
-    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
     torch_crosattn = unet.mid_block
+
+    model_config = ModelOptimisations(conv_w_dtype=conv_weights_dtype)
     tt_crosattn = TtUNetMidBlock2DCrossAttn(
         device,
         state_dict,
         f"mid_block",
+        model_config,
         query_dim,
         num_attn_heads,
         out_dim,
         transformer_weights_dtype=transformer_weights_dtype,
-        conv_weights_dtype=conv_weights_dtype,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
@@ -89,6 +91,8 @@ def test_crossattnmid(
     ttnn_output_tensor, output_shape = tt_crosattn.forward(
         ttnn_input_tensor, [B, C, H, W], temb=ttnn_temb_tensor, encoder_hidden_states=ttnn_encoder_tensor
     )
+    model_config.clear_weight_preprocess()
+
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
     output_tensor = output_tensor.reshape(B, output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
