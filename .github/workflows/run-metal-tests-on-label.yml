@@ -4,6 +4,16 @@ on:
   pull_request:
     types: [labeled, synchronize]
 
+concurrency:
+  # Use github.run_id on main branch (or any protected branch)
+  # This ensures that no runs get cancelled on main.
+  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
+  # and will cancel obsolete runs.
+  # Use github.ref on other branches, so it's unique per branch.
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
+    github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-tt-metal-wormhole:
     name: "🌀 Running tests (Wormhole)"
