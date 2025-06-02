@@ -13,7 +13,7 @@ inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_
     cb_reserve_back(out_cb_id, tiles_per_reduction);
     tile_regs_acquire();
     cb_wait_front(in_cb_id, 4);
-    unpack_tilizeA_B_block(
+    unpack_tilizeA_B_block<false, true, false, true>(
         in_cb_id,
         in_scalar_cb_id,
         tiles_per_reduction,

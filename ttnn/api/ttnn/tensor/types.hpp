@@ -90,8 +90,11 @@ using Array8D = std::array<uint32_t, 8>;
 
 struct NdShardSpec {
     Shape shard_shape;
-    CoreRangeSet cores;
-    ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
+    CoreRangeSet grid;
+    ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
+
+    bool operator==(const NdShardSpec& other) const = default;
+    bool operator!=(const NdShardSpec& other) const = default;
 };
 
 class MemoryConfig final {
@@ -157,6 +160,8 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b);
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b);
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout);
 
 }  // namespace tt_metal
 }  // namespace tt

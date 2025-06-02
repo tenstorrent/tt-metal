@@ -38,7 +38,6 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include <umd/device/tt_xy_pair.h>
-#include "work_executor.hpp"
 #include "data_collection.hpp"
 
 namespace tt {
@@ -56,6 +55,20 @@ Buffer& get_buffer_object(const std::variant<std::reference_wrapper<Buffer>, std
             [](const std::shared_ptr<Buffer>& b) -> Buffer& { return *b; },
             [](const std::reference_wrapper<Buffer>& b) -> Buffer& { return b.get(); }},
         buffer);
+}
+
+// Binds a device worker/reader thread to a CPU core, determined using round-robin.
+void set_device_thread_affinity(std::thread& thread_, int cpu_core_for_worker) {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(cpu_core_for_worker, &cpuset);
+    int rc = pthread_setaffinity_np(thread_.native_handle(), sizeof(cpu_set_t), &cpuset);
+    if (rc) {
+        log_warning(
+            tt::LogMetal,
+            "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}",
+            rc);
+    }
 }
 
 }  // namespace
@@ -226,7 +239,6 @@ void HWCommandQueue::enqueue_read_buffer(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     if (buffer_obj.is_nd_sharded()) {
-        TT_FATAL(buffer_obj.is_l1(), "Buffer with BufferDistributionSpec must be L1 for enqueue_read_buffer!");
         const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
@@ -311,7 +323,6 @@ void HWCommandQueue::enqueue_write_buffer(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     if (buffer_obj.is_nd_sharded()) {
-        TT_FATAL(buffer_obj.is_l1(), "Buffer with BufferDistributionSpec must be L1 for enqueue_write_buffer!");
         const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
@@ -702,10 +713,51 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
     this->manager_.set_bypass_mode(true, true);  // start trace capture
 }
 
-void HWCommandQueue::record_end() {
+// Allocate space for program binaries and other data in the worker config ring buffer.
+void HWCommandQueue::allocate_trace_programs() {
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t expected_workers_completed = 0;
     for (auto& node : this->trace_nodes_) {
+        auto& program = *node.program;
         auto sub_device_id = node.sub_device_id;
         auto sub_device_index = *sub_device_id;
+        uint32_t num_workers = 0;
+        if (program.runs_on_noc_multicast_only_cores()) {
+            num_workers += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+        }
+        if (program.runs_on_noc_unicast_only_cores()) {
+            num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+        }
+        program_dispatch::ProgramDispatchMetadata dispatch_metadata;
+        // Reserve space for this program in the kernel config ring buffer
+        program_dispatch::reserve_space_in_kernel_config_buffer(
+            this->config_buffer_mgr_[sub_device_index],
+            program.get_program_config_sizes(),
+            program.get_program_binary_status(device_->id()),
+            num_workers,
+            expected_workers_completed,
+            dispatch_metadata);
+        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        ProgramConfig& program_config = program.get_program_config(index);
+
+        node.dispatch_metadata.binary_kernel_config_addrs = dispatch_metadata.kernel_config_addrs;
+        node.dispatch_metadata.nonbinary_kernel_config_addrs = dispatch_metadata.kernel_config_addrs;
+        node.dispatch_metadata.sync_count = dispatch_metadata.sync_count;
+        node.dispatch_metadata.stall_first = dispatch_metadata.stall_first;
+        node.dispatch_metadata.stall_before_program = dispatch_metadata.stall_before_program;
+
+        // Allocate non-binaries before binaries for tensix. Non-tensix doesn't use a ringbuffer for binaries, so its
+        // addresses don't need adjustment.
+        node.dispatch_metadata.binary_kernel_config_addrs[index].addr += program_config.kernel_text_offset;
+
+        expected_workers_completed += num_workers;
+    }
+}
+
+void HWCommandQueue::record_end() {
+    allocate_trace_programs();
+    for (auto& node : this->trace_nodes_) {
+        auto sub_device_id = node.sub_device_id;
         auto& program = *node.program;
 
         // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
@@ -721,17 +773,6 @@ void HWCommandQueue::record_end() {
             num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         }
         this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;
-
-        program_dispatch::ProgramDispatchMetadata dispatch_metadata;
-
-        // Reserve space for this program in the kernel config ring buffer
-        program_dispatch::reserve_space_in_kernel_config_buffer(
-            this->config_buffer_mgr_[sub_device_index],
-            program.get_program_config_sizes(),
-            program.get_program_binary_status(device_->id()),
-            num_workers,
-            expected_workers_completed,
-            dispatch_metadata);
 
         RecordProgramRun(program.get_id());
 
@@ -749,7 +790,6 @@ void HWCommandQueue::record_end() {
             this->virtual_enqueue_program_dispatch_core_,
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
             sub_device_id,
-            dispatch_metadata,
             program.get_program_binary_status(device_->id()));
         // Issue dispatch commands for this program
         program_dispatch::write_program_command_sequence(
@@ -757,8 +797,9 @@ void HWCommandQueue::record_end() {
             this->manager_,
             this->id_,
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
-            dispatch_metadata.stall_first,
-            dispatch_metadata.stall_before_program);
+            node.dispatch_metadata.stall_first,
+            node.dispatch_metadata.stall_before_program,
+            node.dispatch_metadata.send_binary);
 
         // Update wptrs for tensix and eth launch message in the device class
         if (program.runs_on_noc_multicast_only_cores()) {

@@ -56,8 +56,9 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     log_debug(tt::LogOp, "num_cores_nhw: {}", config_.num_cores_nhw);
 
     const auto& input_tensor = input_tensors.at(0);
-    DataType output_dtype =
-        input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
+    DataType output_dtype = (input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32)
+                                ? tt::tt_metal::DataType::FLOAT32
+                                : tt::tt_metal::DataType::BFLOAT16;
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == output_memory_config_.memory_layout(),

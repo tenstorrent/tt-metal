@@ -145,6 +145,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE: {
+            ASSERT(payload_size_bytes > 0);
             // TODO: confirm if we need to adjust dest core count if we span eth or dram cores
             const auto mcast_dest_address = get_noc_multicast_addr(
                 header.command_fields.mcast_write.noc_x_start,

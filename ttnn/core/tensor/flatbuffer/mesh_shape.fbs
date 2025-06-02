@@ -1,0 +1,8 @@
+namespace ttnn.flatbuffer;
+
+table MeshShape {
+    // The dimensions of the mesh
+    dimensions:[uint32];
+}
+
+root_type MeshShape;
