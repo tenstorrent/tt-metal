@@ -12,7 +12,7 @@
 #include "demux.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
-#include "dispatch/kernel_config/fabric_router_vc.hpp"
+#include "dispatch/kernel_config/fabric_mux.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
 #include "dprint_server.hpp"
@@ -29,7 +29,6 @@
 
 using namespace tt::tt_metal;
 
-// Helper function to get upstream device in the tunnel from current device, not valid for mmio
 chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
@@ -46,12 +45,21 @@ chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
     return device_id;
 }
 
-// Same thing for downstream, is ambiuous for mmio device though if it drives more than one tunnel
-chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id) {
+chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    for (auto tunnel :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
+    auto tunnels = tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+    if (tunnel < -1 || tunnel >= tunnels.size()) {
+        TT_THROW("Tunnel {} is out of range. {} tunnels exist", tunnel, tunnels.size());
+    }
+
+    if (tunnel != -1) {
+        // Remove all tunnels except the relevant one which will be at the front
+        std::swap(tunnels[0], tunnels[tunnel]);
+        tunnels.erase(tunnels.begin() + 1, tunnels.end());
+    }
+
+    for (auto tunnel : tunnels) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 // End of tunnel doesn't have downstream, just return itself
@@ -63,7 +71,6 @@ chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id) {
     return device_id;
 }
 
-// Helper function to get the tunnel stop of current device
 uint32_t FDKernel::GetTunnelStop(chip_id_t device_id) {
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
@@ -110,7 +117,10 @@ FDKernel* FDKernel::Generate(
             return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
         case PACKET_ROUTER_DEMUX:
             return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
-        case FABRIC_ROUTER_VC: return new tt::tt_metal::FabricRouterVC(node_id, device_id, servicing_device_id, cq_id);
+        case FABRIC_MUX:
+            return new tt::tt_metal::FabricMux(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
+        case RETURN_FABRIC_MUX:
+            return new tt::tt_metal::FabricMux(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
         default: TT_FATAL(false, "Unrecognized dispatch kernel type: {}.", type); return nullptr;
     }
 }
@@ -133,7 +143,7 @@ CoreCoord FDKernel::get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const
     return cluster.get_virtual_coordinate_from_logical_coordinates(logical_cxy, core_type);
 }
 
-void FDKernel::configure_kernel_variant(
+KernelHandle FDKernel::configure_kernel_variant(
     const string& path,
     const std::vector<uint32_t>& compile_args,
     std::map<string, string> defines_in,
@@ -163,7 +173,7 @@ void FDKernel::configure_kernel_variant(
     defines.insert(defines_in.begin(), defines_in.end());
 
     if (GetCoreType() == CoreType::WORKER) {
-        tt::tt_metal::CreateKernel(
+        return tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
@@ -175,7 +185,7 @@ void FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     } else {
-        tt::tt_metal::CreateKernel(
+        return tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
