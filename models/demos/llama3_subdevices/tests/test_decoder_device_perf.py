@@ -278,7 +278,9 @@ def is_collective_op(op_code):
 
 
 def process_measurements(df, num_layers):
-    raw_dict = df[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]", "DEVICE KERNEL FIRST TO LAST START [ns]"]].to_dict(orient="records")
+    raw_dict = df[
+        ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]", "DEVICE KERNEL FIRST TO LAST START [ns]"]
+    ].to_dict(orient="records")
 
     # Kernel duration
     kernel_duration_dict = build_duration_dict(raw_dict, "DEVICE KERNEL DURATION [ns]")
@@ -424,10 +426,20 @@ def test_llama_TG_perf_device(
     df_model_tail_compilation = df_model_compilation[DECODER_OP_END_INDEX:]
     df_model_tail_trace = df_model_trace[DECODER_OP_END_INDEX:]
     # Get first layer compilation and trace measurements
-    avg_kernel_duration_first_layer_compilation, _, _, _, _, _, _, _, _ = process_measurements(df_first_layer_compilation, 1)
-    avg_kernel_duration_first_layer_trace, _, _, avg_dispatch_duration_first_layer_trace, _, _, _, _, _ = process_measurements(
-        df_first_layer_trace, 1
+    avg_kernel_duration_first_layer_compilation, _, _, _, _, _, _, _, _ = process_measurements(
+        df_first_layer_compilation, 1
     )
+    (
+        avg_kernel_duration_first_layer_trace,
+        _,
+        _,
+        avg_dispatch_duration_first_layer_trace,
+        _,
+        _,
+        _,
+        _,
+        _,
+    ) = process_measurements(df_first_layer_trace, 1)
     # Get mid layers compilation and trace measurements
     (
         avg_kernel_duration_mid_layers_compilation,
@@ -766,7 +778,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     assert len(df_layers) % num_layers == 0
-    df_model_tail = df_model[DECODE_OP_END_INDEX:]
+    df_model_tail = df_model[DECODER_OP_END_INDEX:]
 
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
