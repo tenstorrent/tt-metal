@@ -11,7 +11,7 @@
 namespace ttnn::operations::experimental::test {
 
 ttnn::Tensor ExecuteTestHangOperation::invoke(const ttnn::Tensor& input_tensor) {
-#ifdef TTNN_ENABLE_OPERATION_TIMEOUT
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
     while (true);  // Ugly yet functional way to hang the operation
 #else
     return input_tensor;

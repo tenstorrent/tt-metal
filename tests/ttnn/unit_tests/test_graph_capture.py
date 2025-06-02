@@ -618,6 +618,7 @@ def test_graph_capture_with_hang(device):
         captured_graph = ttnn.graph.end_graph_capture()
         failed = True
         assert "TIMEOUT" in str(e)
+        assert "ttnn::experimental::test::test_hang_operation" in str(e)
 
     # this is the normal case for CI
     if not failed:

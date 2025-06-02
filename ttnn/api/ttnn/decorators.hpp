@@ -5,7 +5,7 @@
 #pragma once
 
 #include <reflect>
-#ifdef TTNN_ENABLE_OPERATION_TIMEOUT
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
 #include <future>
 #include <chrono>
 #endif
@@ -158,13 +158,13 @@ private:
         ZoneScopedN("Run composite ttnn operation ");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data), cpp_fully_qualified_name.size());
 
-#ifdef TTNN_ENABLE_OPERATION_TIMEOUT
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
         // Since this section of the code is quite critical, we add conditional compiling
         // for cases where we need to troubleshoot hangs with graph capture
         // They are more an exception than the norm, so we don't want to pay the cost of the future
         // and the exception handling for the timeout.
         // Create a future to run the operation asynchronously
-        int timeout_seconds = TTNN_OPERATION_TIMEOUT_SECONDS > 0 ? TTNN_OPERATION_TIMEOUT_SECONDS : 30;
+        int timeout_seconds = TTNN_OPERATION_TIMEOUT_SECONDS;
         const auto timeout = std::chrono::seconds(timeout_seconds);
 
         using ReturnType = decltype(operation_t::invoke(std::forward<decltype(args)>(args)...));
@@ -181,7 +181,9 @@ private:
 
         if (future.wait_for(timeout) == std::future_status::timeout) {
             t.detach();
-            TT_THROW("TIMEOUT: ttnn operation timed out, potential hang detected, please check the graph capture");
+            TT_THROW(
+                "TIMEOUT: ttnn operation {} timed out, potential hang detected, please check the graph capture",
+                cpp_fully_qualified_name.data);
         } else {
             t.join();
             return future.get();
