@@ -794,7 +794,6 @@ void run_sender_channel_step_impl(
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
     tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& remote_receiver_channel,
-    volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_counters,
     PacketHeaderRecorder& packet_header_recorder,
     bool& channel_connection_established,
     uint32_t sender_channel_free_slots_stream_id) {
@@ -913,8 +912,6 @@ FORCE_INLINE void run_sender_channel_step(
     std::array<OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>&
         outbound_to_receiver_channel_pointers,
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& remote_receiver_channels,
-    std::array<volatile tt::tt_fabric::EdmFabricSenderChannelCounters*, MAX_NUM_SENDER_CHANNELS>&
-        sender_channel_counters_ptrs,
     std::array<PacketHeaderRecorder, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
     std::array<bool, NUM_SENDER_CHANNELS>& channel_connection_established,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
@@ -924,7 +921,6 @@ FORCE_INLINE void run_sender_channel_step(
             local_sender_channel_worker_interfaces[sender_channel_index],
             outbound_to_receiver_channel_pointers[VC_RECEIVER_CHANNEL],
             remote_receiver_channels[VC_RECEIVER_CHANNEL],
-            sender_channel_counters_ptrs[sender_channel_index],
             sender_channel_packet_recorders[sender_channel_index],
             channel_connection_established[sender_channel_index],
             local_sender_channel_free_slots_stream_ids_ordered[sender_channel_index]);
@@ -1145,8 +1141,7 @@ template <
     size_t NUM_RECEIVER_CHANNELS,
     uint8_t SENDER_NUM_BUFFERS,
     size_t NUM_SENDER_CHANNELS,
-    size_t MAX_NUM_SENDER_CHANNELS,
-    size_t MAX_NUM_RECEIVER_CHANNELS>
+    size_t MAX_NUM_SENDER_CHANNELS>
 void run_fabric_edm_main_loop(
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& local_receiver_channels,
     std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& local_sender_channels,
@@ -1154,14 +1149,8 @@ void run_fabric_edm_main_loop(
         local_sender_channel_worker_interfaces,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>&
         downstream_edm_noc_interfaces,
-    std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_sender_channels,
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& remote_receiver_channels,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
-    std::array<volatile tt::tt_fabric::EdmFabricReceiverChannelCounters*, MAX_NUM_RECEIVER_CHANNELS>
-        receiver_channel_counters_ptrs,
-    std::array<volatile tt::tt_fabric::EdmFabricSenderChannelCounters*, MAX_NUM_SENDER_CHANNELS>
-        sender_channel_counters_ptrs,
-    std::array<PacketHeaderRecorder, MAX_NUM_RECEIVER_CHANNELS>& receiver_channel_packet_recorders,
     std::array<PacketHeaderRecorder, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, 0>& receiver_channel_0_trid_tracker,
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, NUM_TRANSACTION_IDS>&
@@ -1211,7 +1200,6 @@ void run_fabric_edm_main_loop(
                 local_sender_channel_worker_interfaces,
                 outbound_to_receiver_channel_pointers,
                 remote_receiver_channels,
-                sender_channel_counters_ptrs,
                 sender_channel_packet_recorders,
                 channel_connection_established,
                 local_sender_channel_free_slots_stream_ids_ordered);
@@ -1238,7 +1226,6 @@ void run_fabric_edm_main_loop(
                 local_sender_channel_worker_interfaces,
                 outbound_to_receiver_channel_pointers,
                 remote_receiver_channels,
-                sender_channel_counters_ptrs,
                 sender_channel_packet_recorders,
                 channel_connection_established,
                 local_sender_channel_free_slots_stream_ids_ordered);
@@ -1248,7 +1235,6 @@ void run_fabric_edm_main_loop(
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointers,
                     remote_receiver_channels,
-                    sender_channel_counters_ptrs,
                     sender_channel_packet_recorders,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids_ordered);
@@ -1257,7 +1243,6 @@ void run_fabric_edm_main_loop(
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointers,
                     remote_receiver_channels,
-                    sender_channel_counters_ptrs,
                     sender_channel_packet_recorders,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids_ordered);
@@ -1268,7 +1253,6 @@ void run_fabric_edm_main_loop(
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointers,
                     remote_receiver_channels,
-                    sender_channel_counters_ptrs,
                     sender_channel_packet_recorders,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids_ordered);
@@ -2004,16 +1988,8 @@ void kernel_main() {
         local_sender_channels,
         local_sender_channel_worker_interfaces,
         downstream_edm_noc_interfaces,
-        remote_sender_channels,
         remote_receiver_channels,
         termination_signal_ptr,
-        {receiver_0_channel_counters_ptr, receiver_1_channel_counters_ptr},
-        {sender_channel_0_counters_ptr,
-         sender_channel_1_counters_ptr,
-         sender_channel_2_counters_ptr,
-         sender_channel_3_counters_ptr,
-         sender_channel_4_counters_ptr},
-        receiver_channel_packet_recorders,
         sender_channel_packet_recorders,
         receiver_channel_0_trid_tracker,
         receiver_channel_1_trid_tracker,
