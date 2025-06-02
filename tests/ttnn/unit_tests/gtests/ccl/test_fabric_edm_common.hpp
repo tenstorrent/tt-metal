@@ -379,7 +379,6 @@ struct mcast_send {
 
 using mode_variant_t = std::variant<mcast_send, unicast_send>;
 
-static constexpr size_t PACKET_HEADER_SIZE_BYTES = sizeof(tt::tt_fabric::PacketHeader);
 void generate_sender_worker_kernels(
     Program& program,
     IDevice* device,
@@ -404,7 +403,7 @@ void generate_sender_worker_kernels(
     std::vector<uint32_t> sender_worker_reader_compile_args{
         src_is_dram,      //
         num_pages_total,  //
-        page_plus_header_size - PACKET_HEADER_SIZE_BYTES,
+        page_plus_header_size - tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
         num_pages_per_edm_buffer};
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_input_buffer_base_addr};
 
@@ -420,7 +419,7 @@ void generate_sender_worker_kernels(
     std::vector<uint32_t> sender_worker_writer_compile_args{
         num_pages_per_edm_buffer,
         num_pages_total,
-        page_plus_header_size - PACKET_HEADER_SIZE_BYTES,
+        page_plus_header_size - tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
         worker_fabric_connection.num_buffers_per_channel,
         dest_is_dram,
         std::holds_alternative<mcast_send>(mode) ? 1 : 0};
@@ -467,9 +466,11 @@ void generate_sender_worker_kernels(
     }
 
     // Just want a dummy DF
-    tt::DataFormat df = (page_plus_header_size - PACKET_HEADER_SIZE_BYTES) == 1024   ? tt::DataFormat::Bfp8
-                        : (page_plus_header_size - PACKET_HEADER_SIZE_BYTES) == 2048 ? tt::DataFormat::Float16
-                                                                                     : tt::DataFormat::Float32;
+    tt::DataFormat df = (page_plus_header_size - tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()) == 1024
+                            ? tt::DataFormat::Bfp8
+                        : (page_plus_header_size - tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()) == 2048
+                            ? tt::DataFormat::Float16
+                            : tt::DataFormat::Float32;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_plus_header_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_plus_header_size);
@@ -510,7 +511,7 @@ bool RunLoopbackTest(
     std::optional<SubdeviceInfo>& subdevice_managers,
     bool enable_persistent_fabric) {
     auto& sender_program = programs.at(0);
-    std::size_t page_plus_header_size = page_size + sizeof(tt::tt_fabric::PacketHeader);
+    std::size_t page_plus_header_size = page_size + tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
     std::vector<CoreCoord> worker_cores = {CoreCoord(0, 0)};
@@ -548,8 +549,8 @@ bool RunLoopbackTest(
     // EDM Builder Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
+    const std::size_t edm_buffer_size = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+                                        tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
     ////////////////////////////////////////////////////////////////////////////
@@ -557,7 +558,8 @@ bool RunLoopbackTest(
     ////////////////////////////////////////////////////////////////////////////
     log_trace(tt::LogTest, "Generating local_sender -> remote_receiver workers");
     const std::size_t pages_per_send =
-        (chip0_worker_fabric_connection.buffer_size_bytes - PACKET_HEADER_SIZE_BYTES) / page_size;
+        (chip0_worker_fabric_connection.buffer_size_bytes - tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()) /
+        page_size;
     const auto& worker_core = worker_cores.at(0);
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
@@ -753,9 +755,11 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
     std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& chip0_worker_backward_fabric_connection,
     const ttnn::ccl::cmd::CclCommandDestArgs& dest_args) {
     // Just want a dummy DF
-    tt::DataFormat df = (page_plus_header_size - PACKET_HEADER_SIZE_BYTES) == 1024   ? tt::DataFormat::Bfp8
-                        : (page_plus_header_size - PACKET_HEADER_SIZE_BYTES) == 2048 ? tt::DataFormat::Float16
-                                                                                     : tt::DataFormat::Float32;
+    tt::DataFormat df = (page_plus_header_size - tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()) == 1024
+                            ? tt::DataFormat::Bfp8
+                        : (page_plus_header_size - tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()) == 2048
+                            ? tt::DataFormat::Float16
+                            : tt::DataFormat::Float32;
 
     {
         tt_metal::CircularBufferConfig cb_src0_config =
@@ -776,7 +780,7 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
         {first_cb_index, second_cb_index},
         {&input_tensor0, &input_tensor1},
         device,
-        page_plus_header_size - PACKET_HEADER_SIZE_BYTES,
+        page_plus_header_size - tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
         CoreRangeSet({CoreRange(worker_core)}),
         num_pages_per_edm_buffer,
         in0_tensor_slice,
@@ -793,7 +797,7 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
         {first_cb_index, second_cb_index},
         {&output_tensor0, &output_tensor1},
         device,
-        page_plus_header_size - PACKET_HEADER_SIZE_BYTES,
+        page_plus_header_size - tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
         CoreRangeSet({CoreRange(worker_core)}),
         num_pages_per_edm_buffer,
         out0_tensor_slice,
@@ -866,7 +870,7 @@ bool RunLocalTestWithMultiInputReaders(
             std::holds_alternative<ttnn::ccl::cmd::DestTypeArgsNull>(dest_args), "Local command dest args expected");
     }
 
-    std::size_t page_plus_header_size = page_size + sizeof(tt::tt_fabric::PacketHeader);
+    std::size_t page_plus_header_size = page_size + tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto first_cb_index = tt::CB::c_in0;
     auto second_cb_index = tt::CB::c_in1;
@@ -1029,11 +1033,11 @@ bool RunLineFabricTest(
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     bool enable_persistent_fabric) {
-    std::size_t page_plus_header_size = page_size + sizeof(tt::tt_fabric::PacketHeader);
+    std::size_t page_plus_header_size = page_size + tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
+    const std::size_t edm_buffer_size = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+                                        tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     const size_t local_chip_id = 0;
     const size_t remote_chip_id = 1;
     auto program_ptrs = std::vector<Program*>(devices.size());
@@ -1108,7 +1112,8 @@ bool RunLineFabricTest(
         line_fabric.uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD);
 
     const std::size_t pages_per_send =
-        (chip0_worker_fabric_connection.buffer_size_bytes - PACKET_HEADER_SIZE_BYTES) / page_size;
+        (chip0_worker_fabric_connection.buffer_size_bytes - tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()) /
+        page_size;
     generate_sender_worker_kernels(
         programs[0],
         devices[0],
@@ -1378,8 +1383,8 @@ int TestLoopbackEntrypoint(
     IDevice* sender_device = device_0;
     IDevice* receiver_device = device_1;
 
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
+    const std::size_t edm_buffer_size = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+                                        tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     const chip_id_t local_chip_id = 0;
     const chip_id_t remote_chip_id = 1;
     const auto& edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
@@ -2554,10 +2559,10 @@ void Run1DFabricPacketSendTest(
             fabric_context_switch_interval,
             false,
             is_6u_galaxy);
-        packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+        packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     } else {
         // TODO: get packet header size from control plane after it adds APIs to present this information
-        packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+        packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     }
     TT_FATAL(packet_header_size_bytes != 0, "Error in initializing local variable `packet_header_size_bytes`");
 
@@ -3194,9 +3199,9 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         // reserve CB
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(
-                packet_header_cb_size_in_headers * sizeof(tt::tt_fabric::PacketHeader),
+                packet_header_cb_size_in_headers * tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
                 {{packet_header_cb_index, cb_df}})
-                .set_page_size(packet_header_cb_index, sizeof(tt::tt_fabric::PacketHeader));
+                .set_page_size(packet_header_cb_index, tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
         CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
 
         tt_metal::CircularBufferConfig cb_src1_config =
