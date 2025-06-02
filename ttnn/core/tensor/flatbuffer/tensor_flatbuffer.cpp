@@ -202,7 +202,7 @@ Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, tt::stl::Span<
                 buffers.push_back(std::move(host_buffer));
             }
 
-            tt::tt_metal::MultiDeviceHostStorage multi_device_storage{std::move(buffers), std::move(specs)};
+            tt::tt_metal::MultiDeviceHostStorage multi_device_storage{std::move(buffers)};
 
             return Tensor(std::move(multi_device_storage), spec, strategy);
         }
