@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,8 @@
 #include "mesh_command_queue_base.hpp"
 
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/multi_producer_single_consumer_queue.hpp>
 
+#include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/worker_config_buffer.hpp"
@@ -184,13 +184,13 @@ public:
     // TODO: This will error out for SD mesh command queues
     // - Need to add equivalent APIs for SD and expose via mesh command queue base or mesh command queue
     void enqueue_write_shard_to_core(
-        const DeviceMemoryAddress& address,
+        DeviceMemoryAddress address,
         const void* src,
         uint32_t size_bytes,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void enqueue_read_shard_from_core(
-        const DeviceMemoryAddress& address,
+        DeviceMemoryAddress address,
         void* dst,
         uint32_t size_bytes,
         bool blocking,
@@ -209,8 +209,7 @@ public:
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data,
-        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) override;
+        const vector_aligned<uint32_t>& go_signal_noc_data) override;
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;

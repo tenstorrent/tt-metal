@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nlohmann/json.hpp>
@@ -46,21 +45,23 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(
         operation0.arguments[0],
         "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
-        "type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
+        "type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)),tensor_"
+        "spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
-        "Tile(tile_"
-        "shape={32, 32},face_shape={16, "
+        "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
-        "BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))");
+        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
+        "Alignment([32, 32]))))");
     EXPECT_EQ(
         operation0.arguments[1],
         "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
-        "type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
+        "type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)),tensor_"
+        "spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
-        "Tile(tile_"
-        "shape={32, 32},face_shape={16, "
+        "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
-        "BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))");
+        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
+        "Alignment([32, 32]))))");
     EXPECT_EQ(operation0.arguments[2], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
     EXPECT_EQ(operation0.arguments[3], "DataType::BFLOAT16");
     EXPECT_EQ(operation0.arguments[4], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
@@ -72,21 +73,23 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(
         operation1.arguments[0],
         "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
-        "type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
+        "type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)),tensor_"
+        "spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
-        "Tile(tile_"
-        "shape={32, 32},face_shape={16, "
+        "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
-        "BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))");
+        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
+        "Alignment([32, 32]))))");
     EXPECT_EQ(
         operation1.arguments[1],
         "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
-        "type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
+        "type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)),tensor_"
+        "spec=TensorSpec(logical_shape=Shape([1, 1, 1, "
         "32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile="
-        "Tile(tile_"
-        "shape={32, 32},face_shape={16, "
+        "Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
-        "BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))");
+        "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
+        "Alignment([32, 32]))))");
     EXPECT_EQ(operation1.arguments[2], "nullopt");
     EXPECT_EQ(operation1.arguments[3], "DataType::BFLOAT16");
     EXPECT_EQ(operation1.arguments[4], "nullopt");
@@ -110,12 +113,12 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation3.arguments.size(), 5);
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 1, 1, 1])");
     EXPECT_EQ(operation3.arguments[1], "DataType::BFLOAT16");
-    EXPECT_EQ(operation3.arguments[2], "Tile");
+    EXPECT_EQ(operation3.arguments[2], "Layout::TILE");
     EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]");
     EXPECT_EQ(
         operation3.arguments[4],
-        "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::"
-        "nullopt)");
+        "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,"
+        "nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)");
 }
 
 }  // namespace

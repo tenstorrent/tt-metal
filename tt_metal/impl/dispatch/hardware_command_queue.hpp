@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,16 +22,16 @@
 #include "event.hpp"
 #include "host_runtime_commands.hpp"
 #include "launch_message_ring_buffer_state.hpp"
-#include "multi_producer_single_consumer_queue.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include "sub_device_types.hpp"
-#include "trace_buffer.hpp"
-#include "tt_metal/impl/buffers/dispatch.hpp"
+#include "trace/trace_buffer.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
+#include "tt_metal/impl/buffers/dispatch.hpp"
+#include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -63,8 +63,7 @@ public:
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data,
-        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) override;
+        const vector_aligned<uint32_t>& go_signal_noc_data) override;
 
     void set_go_signal_noc_data_and_dispatch_sems(
         uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) override;
@@ -166,6 +165,7 @@ private:
     CoreCoord completion_queue_writer_core_;
     NOC noc_index_;
 
+    void allocate_trace_programs();
     void read_completion_queue();
 
     // sub_device_ids only needs to be passed when blocking and there are specific sub_devices to wait on

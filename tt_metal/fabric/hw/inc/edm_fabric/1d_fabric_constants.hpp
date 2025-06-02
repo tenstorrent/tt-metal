@@ -15,7 +15,6 @@
 // ETH TXQ SELECTION
 
 constexpr uint32_t DEFAULT_ETH_TXQ = 0;
-constexpr uint32_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = 32;
 
 // STREAM REGISTER ASSIGNMENT
 // senders update this stream
@@ -42,6 +41,87 @@ constexpr uint32_t to_sender_2_pkts_completed_id = 9;
 constexpr uint32_t to_sender_3_pkts_completed_id = 10;
 // receivers updates the reg on this stream
 constexpr uint32_t to_sender_4_pkts_completed_id = 11;
+
+/*
+Receiver channel side registers are defined here to receive free-slot credits from downstream sender channels.
+
+                                North Router
+                        ┌───────────────────────────────────┐
+                        │                                   │
+                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  └────┘ └────┘ └────┘ └────┘      │
+                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  └────┘ └─┬──┘ └────┘ └────┘      │
+    West Router         └───────────┼───────────────────────┘        East Router
+ ┌─────────────────────┐            │                             ┌────────────────────────────┐
+ │                     │            │                             │                            │
+ │                     │            │                             │                            │
+ │               ┌────┐│ (increment)│    Acks From East           │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    ◄┼────────────┼───────────────────┐         ││              │ │    │ E   │
+ │     East      │    ││            │                   │         ││              │ │    │     │
+ │               └────┘│            │                   │         │└──────────────┘ └────┘     │
+ │                 12  │            │                   │         │                            │
+ │               ┌────┐│            │                   │         │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    ││            │                   │         ││              │ │    │ W   │
+ │     West      │    ││            │                   └─────────┼┼              │ │    │     │
+ │               └────┘│            │                             │└──────────────┘ └────┘     │
+ │                 13  │            │                             │                            │
+ │               ┌────┐│ (increment)│                             │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    │◄────────────┘                             ││              │ │    │ N   │
+ │     North     │    ││  Acks From North                         ││              │ │    │     │
+ │               └────┘│                                          │└──────────────┘ └────┘     │
+ │                 14  │                                          │                            │
+ │               ┌────┐│  Acks From South                         │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    │◄────────────────┐                         ││              │ │    │ S   │
+ │     South     │    ││ (increment)    │                         ││              │ │    │     │
+ │               └────┘│                │                         │└──────────────┘ └────┘     │
+ │                 15  │                │                         │                            │
+ │                     │                │                         │                            │
+ │                     │                │                         │                            │
+ └─────────────────────┘  ┌─────────────┼───────────────────┐     └────────────────────────────┘
+                          │   ┌────┐ ┌──┼─┐ ┌────┐ ┌────┐   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   └────┘ └────┘ └────┘ └────┘   │
+                          │   ┌────┐ ┌────┐ ┌────┐ ┌────┐   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   └────┘ └────┘ └────┘ └────┘   │
+                          │                                 │
+                          └─────────────────────────────────┘
+                                   South Router
+*/
+constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
+constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
+constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
+constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
+constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
+
+// For post-dateline connection. We only have one counter here because if we are
+// post-dateline, there is only one other possible post-dateline consumer that we
+// can forward to (the consumer in the same direction). Switching directions/turning
+// requires directing back to pre-dateline consumer channels (in those cases, we'd
+// use the receiver_channel_0_free_slots_* location). For the time being, this is
+// placeholder until 2D torus is implemented
+constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
+
+// These are the
+// Slot 17 is defined in the edm_fabric_worker_adapter
+constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
+constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
+constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
+constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
+constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
@@ -170,12 +250,36 @@ constexpr size_t sender_3_completed_packet_header_cb_size_headers =
 constexpr size_t sender_4_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 54);
 constexpr size_t sender_4_completed_packet_header_cb_size_headers =
     get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 55);
-constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 56);
-constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 57);
 
-constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 58);
+constexpr size_t sender_channel_serviced_args_idx = MAIN_CT_ARGS_START_IDX + 56;
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced =
+    fill_array_with_next_n_args<bool, sender_channel_serviced_args_idx, MAX_NUM_SENDER_CHANNELS>();
+constexpr size_t receiver_channel_serviced_args_idx =
+    sender_channel_serviced_args_idx + is_sender_channel_serviced.size();
+constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced =
+    fill_array_with_next_n_args<bool, receiver_channel_serviced_args_idx, MAX_NUM_RECEIVER_CHANNELS>();
+constexpr size_t MAIN_CT_ARGS_IDX_2 = receiver_channel_serviced_args_idx + is_receiver_channel_serviced.size();
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_START_IDX + 59;
+constexpr bool enable_ethernet_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2) != 0;
+constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) != 0;
+constexpr bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2) != 0;
+constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3);
+constexpr size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 4);
+constexpr size_t iterations_between_ctx_switch_and_teardown_checks = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 5);
+constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 6);
+constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 7);
+constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 8);
+
+
+// If true, the sender channel will spin inside send_next_data until the eth_txq is not busy, rather than checking
+// eth_txq_is_busy() being false as a prerequisite for sending the next packet
+constexpr bool ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 9) != 0;
+constexpr bool ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK =
+    get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 10) != 0;
+
+constexpr size_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 11);
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_2 + 12;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
@@ -261,7 +365,6 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_3_pkts_completed_id, to_sender_4_pkts_completed_id});
 
 // Miscellaneous configuration
-constexpr uint32_t DEFAULT_ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS = 32;
 constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = 0;
 
 namespace tt::tt_fabric {

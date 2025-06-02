@@ -231,11 +231,16 @@ std::string ComputeKernel::config_hash() const {
 }
 
 std::string Kernel::compute_hash() const {
+    size_t hash_value = 0;
+    for (const auto& [define, value] : this->defines_) {
+        tt::utils::hash_combine(hash_value, std::hash<std::string>{}(define + value));
+    }
+
     return fmt::format(
         "{}_{}_{}_{}",
         std::hash<std::string>{}(this->kernel_src_.source_),
         fmt::join(this->compile_time_args_, "_"),
-        tt::utils::DefinesHash{}(this->defines_),
+        hash_value,
         this->config_hash());
 }
 
@@ -450,11 +455,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
-    // TODO: from HAL
-    auto load_type =
-        (riscv_id == 1) && (device->arch() == tt::ARCH::WORMHOLE_B0)
-            ? ll_api::memory::Loading::CONTIGUOUS
-            : ll_api::memory::Loading::CONTIGUOUS_XIP;
+    auto load_type = MetalContext::instance().hal().get_jit_build_config(tensix_core_type, riscv_id, 0).memory_load;
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         load_type);
@@ -498,8 +499,8 @@ void EthernetKernel::read_binaries(IDevice* device) {
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
     // TODO: fix when active eth supports relo
-    auto load_type = (this->config_.eth_mode == Eth::IDLE) ?
-        ll_api::memory::Loading::CONTIGUOUS_XIP : ll_api::memory::Loading::DISCRETE;
+    auto load_type =
+        MetalContext::instance().hal().get_jit_build_config(erisc_core_type, dm_class_idx, erisc_id).memory_load;
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         load_type);
@@ -559,9 +560,12 @@ void ComputeKernel::read_binaries(IDevice* device) {
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, compute_class_idx, trisc_id);
-        ll_api::memory const& binary_mem = llrt::get_risc_binary(
-            build_state.get_target_out_path(this->kernel_full_name_),
-            ll_api::memory::Loading::CONTIGUOUS_XIP);
+        auto load_type = MetalContext::instance()
+                             .hal()
+                             .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
+                             .memory_load;
+        const ll_api::memory& binary_mem =
+            llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
         binaries.push_back(&binary_mem);
         uint32_t binary_size = binary_mem.get_packed_size();
     }

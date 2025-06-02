@@ -23,6 +23,7 @@ test_suite_bh_single_pcie_metal_unit_tests() {
 test_suite_bh_single_pcie_small_ml_model_tests() {
     echo "[upstream-tests] Running BH upstream small model tests"
     pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation
+    pytest models/demos/blackhole/resnet50/tests/upstream_pipeline
 }
 
 # Define test suite mappings for different hardware topologies

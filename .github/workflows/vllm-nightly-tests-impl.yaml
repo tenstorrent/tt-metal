@@ -20,44 +20,163 @@ jobs:
       matrix:
         test-group: [
           {
-            name: "Llama3 vLLM T3K test",
+            name: "[T3K] Llama-3.1-8B-Instruct",
             arch: wormhole_b0,
+            model: "meta-llama/Llama-3.1-8B-Instruct",
+            server_timeout: 5,
+            benchmark_timeout: 5,
             runner-label: config-t3000,
-            owner_id: U08E1JCDVNX # Pavle Petrovic
-          },
-          {
-            name: "Llama3 vLLM TG test",
-            arch: wormhole_b0,
-            runner-label: config-tg,
-            owner_id: U08E1JCDVNX # Pavle Petrovic
+            co-owner-1_id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2_id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
         ]
     runs-on:
       - arch-${{ matrix.test-group.arch }}
       - ${{ matrix.test-group.runner-label }}
       - in-service
-      - bare-metal
       - pipeline-functional
     container:
       image: ${{ inputs.docker-image }}
       env:
+        TT_METAL_HOME: /work
+        vllm_dir: /work/vllm
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        VLLM_TARGET_DEVICE: "tt"
+        PYTHONPATH: /work:/work/vllm
+        LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
+        HF_HUB_OFFLINE: 1
+        HF_HOME: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 👋 Hello World
-        run: echo "Hello from vLLM nightly tests!"
+      - name: ⬇️ Setup Metal
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: ⬇️ Checkout vLLM
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/vllm
+          path: docker-job/vllm
+          ref: dev
+          fetch-depth: 1
+
+      - name: 📀 Install vLLM
+        run: |
+          pip3 install vllm/
+
+      - name: 📂 Create output directory
+        run: |
+          mkdir -p output
+
+      - name: 🚀 Run server
+        timeout-minutes: 1
+        run: |
+          if [[ "${{ matrix.test-group.runner-label }}" == "config-t3000" ]]; then
+            export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            export MESH_DEVICE="T3K"
+          fi
+
+          export HF_MODEL="${{ matrix.test-group.model }}"
+
+          # Keep TT cache separate from HF hub
+          MODEL_NAME="${HF_MODEL/\//--}"
+          export TT_CACHE_PATH="$HF_HOME/tt_cache/$MODEL_NAME"
+
+          # vLLM environment variables
+          export VLLM_RPC_TIMEOUT=300000
+
+          python3 vllm/examples/server_example_tt.py \
+            --model ${{ matrix.test-group.model }} \
+            "${OVERRIDE_TT_CONFIG[@]}" \
+            > ./output/vllm_server.log 2>&1 &
+
+          # Store server's pid for cleanup
+          echo $! > ./server.pid
+
+      - name: ⏰ Wait for server to be ready
+        run: |
+          echo "Waiting for server..."
+
+          timeout_seconds=$(( ${{ matrix.test-group.server_timeout }} * 60 ))
+          elapsed=0
+          interval=10
+
+          while [ $elapsed -lt $timeout_seconds ]; do
+            if curl -sf http://localhost:8000/health; then
+              echo "Server is up! 🚀"
+              exit 0
+            fi
+            sleep $interval
+            elapsed=$((elapsed + interval))
+          done
+
+          echo "Server did not become ready in time (${timeout_seconds}s)."
+          cat ./output/vllm_server.log
+          exit 1
+
+      - name: 📐 Run benchmark
+        timeout-minutes: ${{ matrix.test-group.benchmark_timeout }}
+        run: |
+          python3 vllm/benchmarks/benchmark_serving.py \
+            --backend vllm \
+            --model ${{ matrix.test-group.model }} \
+            --dataset-name random \
+            --num-prompts 8 \
+            --random-input-len 100 \
+            --random-output-len 100 \
+            --ignore-eos \
+            --percentile-metrics ttft,tpot,itl,e2el \
+            --save-result \
+            --result-filename output/vllm_result.json \
+            2>&1 | tee output/vllm_benchmark.log
+
+      - name: 🧹 Cleanup server process
+        if: always()
+        run: |
+          file = ./server.pid
+          if [ -f "$file" ]; then
+            pid = $(cat $file)
+            kill "$pid" 2>/dev/null || true
+            echo "Server process with pid $pid terminated 🧹"
+            rm -f "$file"
+          fi
+
+      - name: Show report
+        if: always()
+        continue-on-error: true
+        run: |
+          cat output/vllm_result.json
 
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.owner_id }}
+          owner: ${{ matrix.test-group.co-owner-1_id }}
+
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.co-owner-2_id }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: docker-job/output/
+          prefix: "vllm_output_"
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
