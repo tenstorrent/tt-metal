@@ -2,6 +2,7 @@ add_library(ttnn_op_eltwise_binary_ng ${LIB_TYPE})
 add_library(TT::NN::Ops::Eltwise::Binary::NG ALIAS ttnn_op_eltwise_binary_ng)
 
 target_precompile_headers(ttnn_op_eltwise_binary_ng REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary_ng)
 
 target_sources(
     ttnn_op_eltwise_binary_ng

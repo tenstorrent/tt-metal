@@ -2,6 +2,7 @@ add_library(ttnn_op_transformer ${LIB_TYPE})
 add_library(TT::NN::Ops::Transformer ALIAS ttnn_op_transformer)
 
 target_precompile_headers(ttnn_op_transformer REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_transformer)
 
 target_sources(
     ttnn_op_transformer

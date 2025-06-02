@@ -2,6 +2,7 @@ add_library(ttnn_op_index_fill ${LIB_TYPE})
 add_library(TT::NN::Ops::IndexFill ALIAS ttnn_op_index_fill)
 
 target_precompile_headers(ttnn_op_index_fill REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_index_fill)
 
 target_sources(
     ttnn_op_index_fill
