@@ -1136,7 +1136,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     for (uint32_t i = 0; i < full_cores.size(); ++i) {
         CoreCoord core = full_cores[i];
 
-        // Reader
+        // Reader run-time args
         uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_full_core;
         std::vector<uint32_t> reader_run_time_args;
         if (input_is_sharded) {
@@ -1152,10 +1152,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
             };
         }
 
-        // Writer
+        // Writer run-time args
         std::vector<uint32_t> writer_run_time_args;
         // TODO: (GR) Set after figuring out kernel
 
+        // Set run-time arg
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
 
@@ -1172,7 +1173,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         // Should only ever be 0 or 1 cliff cores
         CoreCoord cliff_core = cliff_cores[0];
 
-        // Reader (always reading interleaved input)
+        // Reader run-time args (always reading interleaved input as cliff core does not exist for sharded)
         uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_cliff_core;
         std::vector<uint32_t> reader_run_time_args = {
             src0_buffer->address(),  // src_addr
@@ -1180,10 +1181,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
             tile_start_id            // start_id
         };
 
-        // Writer
+        // Writer run-time args
         std::vector<uint32_t> writer_run_time_args;
         // TODO: (GR) Set after figuring out kernel
 
+        // Set run-time args
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, cliff_core, reader_run_time_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, cliff_core, writer_run_time_args);
     }
@@ -1407,13 +1409,15 @@ operation::ProgramWithCallbacks untilize_single_core(
     if (input_is_sharded) {
         shard_builder::extend_sharding_run_time_args(a, reader_run_time_args);
     }
-    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
 
     // Writer run-time args
     std::vector<uint32_t> writer_run_time_args = {dst_buffer->address()};
     if (output_is_sharded) {
         shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
     }
+
+    // Set run-time args
+    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
 
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
