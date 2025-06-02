@@ -12,39 +12,48 @@ import pytest
 import ttnn
 
 from .tt.fun_pipeline import TtStableDiffusion3Pipeline
-from .tt.parallel_config import create_dit_parallel_config, ParallelConfig
+from .tt.utils import create_global_semaphores, initialize_sd_parallel_config
 
 
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "model_name, image_w, image_h, guidance_scale, num_inference_steps, cfg_factor",  # "prompt_sequence_length", "spatial_sequence_length",
+    "model_name, image_w, image_h, guidance_scale, num_inference_steps, cfg_factor, sp_factor, tp_factor, topology",  # "prompt_sequence_length", "spatial_sequence_length",
     [
         #        ("medium", 512, 512, 4.5, 40, 333, 1024),
         #        ("medium", 1024, 1024, 4.5, 40, 333, 4096),
         #        ("large", 512, 512, 3.5, 28, 333, 1024),
-        ("large", 1024, 1024, 3.5, 28, 2),  # , 333, 4096),
+        ("large", 1024, 1024, 3.5, 28, 2, 2, 2, ttnn.Topology.Linear),  # , 333, 4096),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192, "trace_region_size": 15210496}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 15210496}],
+    indirect=True,
+)
+@pytest.mark.usefixtures("use_program_cache")
 def test_sd3(
-    *, mesh_device: ttnn.MeshDevice, model_name, image_w, image_h, guidance_scale, num_inference_steps, cfg_factor
+    *,
+    mesh_device: ttnn.MeshDevice,
+    model_name,
+    image_w,
+    image_h,
+    guidance_scale,
+    num_inference_steps,
+    cfg_factor,
+    sp_factor,
+    tp_factor,
+    topology,
 ) -> None:  # , prompt_sequence_length, spatial_sequence_length,) -> None:
     mesh_shape = tuple(mesh_device.shape)
-    cfg_parallel = ParallelConfig(
-        mesh_shape=(mesh_shape[0], mesh_shape[1] // cfg_factor), factor=cfg_factor, mesh_axis=1
-    )
-    tensor_parallel = ParallelConfig(mesh_shape=(mesh_shape[0], 1), factor=mesh_shape[1] // cfg_factor, mesh_axis=1)
-    dit_parallel_config = create_dit_parallel_config(
-        mesh_shape=mesh_shape, cfg_parallel=cfg_parallel, tensor_parallel=tensor_parallel, topology=ttnn.Topology.Linear
-    )
+    dit_parallel_config = initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, topology)
 
     # create submeshes and update mesh_shape before passing to parallel_configs
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
@@ -53,6 +62,25 @@ def test_sd3(
         if isinstance(mesh_device, ttnn.MeshDevice) and cfg_factor > 1
         else [mesh_device]
     )
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+
+    # create global semaphore handles
+    ag_ccl_semaphore_handles = [
+        create_global_semaphores(submesh_devices[i], submesh_devices[i].get_num_devices(), ccl_sub_device_crs, 0)
+        for i in range(cfg_factor)
+    ]
+    rs_from_ccl_semaphore_handles = [
+        create_global_semaphores(submesh_devices[i], submesh_devices[i].get_num_devices(), ccl_sub_device_crs, 0)
+        for i in range(cfg_factor)
+    ]
+    rs_to_ccl_semaphore_handles = [
+        create_global_semaphores(submesh_devices[i], submesh_devices[i].get_num_devices(), ccl_sub_device_crs, 0)
+        for i in range(cfg_factor)
+    ]
 
     if guidance_scale > 1 and cfg_factor == 1:
         guidance_cond = 2
@@ -66,6 +94,11 @@ def test_sd3(
         enable_t5_text_encoder=False,  # submesh_devices[0].get_num_devices() >= 4,
         guidance_cond=guidance_cond,
         parallel_config=dit_parallel_config,
+        ag_ccl_semaphore_handles=ag_ccl_semaphore_handles,
+        rs_from_ccl_semaphore_handles=rs_from_ccl_semaphore_handles,
+        rs_to_ccl_semaphore_handles=rs_to_ccl_semaphore_handles,
+        height=image_h,
+        width=image_w,
     )
 
     pipeline.prepare(
@@ -105,3 +138,6 @@ def test_sd3(
         )
 
         images[0].save(f"sd35_{image_w}_{image_h}.png")
+
+        for submesh_device in submesh_devices:
+            ttnn.synchronize_device(submesh_device)

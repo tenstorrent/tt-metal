@@ -4,8 +4,8 @@
 
 from __future__ import annotations
 
-import os
 import time
+import math
 from dataclasses import dataclass
 
 import torch
@@ -18,7 +18,7 @@ from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchE
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
 
-from ..tt.utils import from_torch_fast, to_torch
+from ..tt.utils import from_torch_fast
 from .t5_encoder import TtT5Encoder, TtT5EncoderParameters
 from .fun_transformer import sd_transformer, TtSD3Transformer2DModelParameters
 
@@ -35,6 +35,11 @@ class TtStableDiffusion3Pipeline:
         enable_t5_text_encoder: bool = True,
         guidance_cond: int,
         parallel_config: DiTParallelConfig,
+        ag_ccl_semaphore_handles,
+        rs_from_ccl_semaphore_handles,
+        rs_to_ccl_semaphore_handles,
+        height: int,
+        width: int,
     ) -> None:
         self._mesh_device = mesh_device
         self._submesh_devices = submesh_devices
@@ -65,6 +70,10 @@ class TtStableDiffusion3Pipeline:
         assert isinstance(self._vae, AutoencoderKL)
         assert isinstance(torch_transformer, SD3Transformer2DModel)
 
+        self._ag_ccl_semaphore_handles = ag_ccl_semaphore_handles
+        self._rs_from_ccl_semaphore_handles = rs_from_ccl_semaphore_handles
+        self._rs_to_ccl_semaphore_handles = rs_to_ccl_semaphore_handles
+
         logger.info("creating TT-NN transformer...")
 
         if checkpoint == "stabilityai/stable-diffusion-3.5-medium":
@@ -73,14 +82,18 @@ class TtStableDiffusion3Pipeline:
             embedding_dim = 2432
 
         num_devices = submesh_devices[0].get_num_devices()
-        ## heads padding for T3K TP
-        pad_embedding_dim = False
-        if os.environ["MESH_DEVICE"] == "T3K" and embedding_dim == 2432:
-            pad_embedding_dim = True
-            hidden_dim_padding = (
-                ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE
-            ) * num_devices - embedding_dim
-            num_heads = 40
+        ## heads padding
+        assert not embedding_dim % torch_transformer.config.num_attention_heads, "Embedding_dim % num_heads != 0"
+        pad_embedding_dim = (bool)(
+            torch_transformer.config.num_attention_heads
+        ) % parallel_config.tensor_parallel.factor
+        if pad_embedding_dim:
+            head_size = embedding_dim // torch_transformer.config.num_attention_heads
+            num_heads = (
+                math.ceil(torch_transformer.config.num_attention_heads / parallel_config.tensor_parallel.factor)
+                * parallel_config.tensor_parallel.factor
+            )
+            hidden_dim_padding = (num_heads * head_size) - embedding_dim
         else:
             num_heads = torch_transformer.config.num_attention_heads
 
@@ -97,6 +110,8 @@ class TtStableDiffusion3Pipeline:
                     dtype=ttnn.bfloat8_b if submesh_device.get_num_devices() == 1 else ttnn.bfloat16,
                     guidance_cond=guidance_cond,
                     parallel_config=parallel_config,
+                    height=height // 2 ** (len(self._vae.config.block_out_channels) - 1),
+                    width=width // 2 ** (len(self._vae.config.block_out_channels) - 1),
                 )
             )
 
@@ -316,7 +331,9 @@ class TtStableDiffusion3Pipeline:
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
                 device=submesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(submesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    submesh_device, self.parallel_config.cfg_parallel.mesh_shape, dims=[None, None]
+                ),
             )
             tt_prompt_embeds_list.append(tt_prompt_embeds)
 
@@ -327,7 +344,9 @@ class TtStableDiffusion3Pipeline:
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
                 device=submesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(submesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    submesh_device, self.parallel_config.cfg_parallel.mesh_shape, dims=[None, None]
+                ),
             )
             tt_pooled_prompt_embeds_list.append(tt_pooled_prompt_embeds)
 
@@ -336,9 +355,12 @@ class TtStableDiffusion3Pipeline:
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
                 device=submesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(submesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    submesh_device,
+                    self.parallel_config.cfg_parallel.mesh_shape,
+                    dims=[self.parallel_config.sequence_parallel.mesh_axis + 1, None],
+                ),
             )
-
             latents_step = tt_initial_latents
             tt_latents_step_list.append(latents_step)
 
@@ -390,14 +412,23 @@ class TtStableDiffusion3Pipeline:
         image_decoding_start_time = time.time()
 
         # latents = ttnn.to_torch(self._trace.spatial_input_output).to(torch.float32)
-        latents = to_torch(
+        latents = ttnn.to_torch(
             tt_latents_step_list[0],
-            mesh_device=tt_latents_step_list[0].device(),
-            dtype=tt_latents_step_list[0].get_dtype(),
-            shard_dim=-1,
-        ).to(torch.float32)[..., : tt_latents_step_list[0].shape[-1]]
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device=tt_latents_step_list[0].device(),
+                mesh_shape=tuple(tt_latents_step_list[0].device().shape),
+                dims=[
+                    self.parallel_config.sequence_parallel.mesh_axis + 1,
+                    self.parallel_config.tensor_parallel.mesh_axis + 1,
+                ],
+            ),
+        ).to(torch.float32)[
+            :,
+            : tt_latents_step_list[0].shape[-3] * self.parallel_config.sequence_parallel.factor,
+            : tt_latents_step_list[0].shape[-2],
+            : tt_latents_step_list[0].shape[-1],
+        ]
         latents = (latents.permute([0, 3, 1, 2]) / self._vae_scaling_factor) + self._vae_shift_factor
-
         with torch.no_grad():
             image = self._vae.decoder(latents)
             image = self._image_processor.postprocess(image, output_type="pt")
@@ -447,11 +478,14 @@ class TtStableDiffusion3Pipeline:
                 num_heads=self.num_heads,
                 N=spatial_sequence_length,
                 L=prompt_sequence_length,
+                ag_global_semaphore=self._ag_ccl_semaphore_handles[submesh_id],
+                rs_from_global_semaphore=self._rs_from_ccl_semaphore_handles[submesh_id],
+                rs_to_global_semaphore=self._rs_to_ccl_semaphore_handles[submesh_id],
             )
 
             noise_pred = _reshape_noise_pred(
                 noise_pred,
-                height=latents[0].shape[-3],
+                height=latents[0].shape[-3] * self.parallel_config.sequence_parallel.factor,
                 width=latents[0].shape[-2],
                 patch_size=self.patch_size,
             )
@@ -465,32 +499,54 @@ class TtStableDiffusion3Pipeline:
                 cond = noise_pred_list[0][split_pos:]
                 noise_pred_list[0] = uncond + guidance_scale * (cond - uncond)
             else:
-                uncond = to_torch(
+                uncond = ttnn.to_torch(
                     noise_pred_list[0],
-                    mesh_device=noise_pred_list[0].device(),
-                    dtype=noise_pred_list[0].get_dtype(),
-                    shard_dim=-1,
-                ).to(torch.float32)[..., : noise_pred_list[0].shape[-1]]
-                cond = to_torch(
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device=noise_pred_list[0].device(),
+                        mesh_shape=tuple(noise_pred_list[0].device().shape),
+                        dims=[
+                            self.parallel_config.sequence_parallel.mesh_axis + 1,
+                            self.parallel_config.tensor_parallel.mesh_axis + 1,
+                        ],
+                    ),
+                ).to(torch.float32)[
+                    ..., : noise_pred_list[0].shape[-3], : noise_pred_list[0].shape[-2], : noise_pred_list[0].shape[-1]
+                ]
+                cond = ttnn.to_torch(
                     noise_pred_list[1],
-                    mesh_device=noise_pred_list[1].device(),
-                    dtype=noise_pred_list[1].get_dtype(),
-                    shard_dim=-1,
-                ).to(torch.float32)[..., : noise_pred_list[0].shape[-1]]
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device=noise_pred_list[1].device(),
+                        mesh_shape=tuple(noise_pred_list[1].device().shape),
+                        dims=[
+                            self.parallel_config.sequence_parallel.mesh_axis + 1,
+                            self.parallel_config.tensor_parallel.mesh_axis + 1,
+                        ],
+                    ),
+                ).to(torch.float32)[
+                    ..., : noise_pred_list[1].shape[-3], : noise_pred_list[1].shape[-2], : noise_pred_list[1].shape[-1]
+                ]
                 torch_noise_pred = uncond + guidance_scale * (cond - uncond)
                 noise_pred_list[0] = ttnn.from_torch(
                     torch_noise_pred,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
                     device=self._submesh_devices[0],
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self._submesh_devices[0]),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self._submesh_devices[0],
+                        self.parallel_config.cfg_parallel.mesh_shape,
+                        dims=[self.parallel_config.sequence_parallel.mesh_axis + 1, None],
+                    ),
                 )
                 noise_pred_list[1] = ttnn.from_torch(
                     torch_noise_pred,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
                     device=self._submesh_devices[1],
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self._submesh_devices[1]),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self._submesh_devices[1],
+                        self.parallel_config.cfg_parallel.mesh_shape,
+                        dims=[self.parallel_config.sequence_parallel.mesh_axis + 1, None],
+                    ),
                 )
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
