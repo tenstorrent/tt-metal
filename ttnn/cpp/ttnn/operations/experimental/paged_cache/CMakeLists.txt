@@ -2,6 +2,7 @@ add_library(ttnn_op_experimental_paged_cache ${LIB_TYPE})
 add_library(TT::NN::Ops::Experimental::PagedCache ALIAS ttnn_op_experimental_paged_cache)
 
 target_precompile_headers(ttnn_op_experimental_paged_cache REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_paged_cache)
 
 target_sources(
     ttnn_op_experimental_paged_cache
