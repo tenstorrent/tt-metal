@@ -1245,10 +1245,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    tt::tt_metal::IDevice* device = a.device();
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -1291,6 +1288,12 @@ operation::ProgramWithCallbacks untilize_single_core(
     uint32_t single_block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
     uint32_t num_total_sticks = a.physical_volume() / a.padded_shape()[-1] * num_columns_of_blocks;
     uint32_t stick_size = a.physical_volume() * output.element_size() / num_total_sticks;
+
+    // This should allocate a DRAM buffer on the device
+    tt::tt_metal::IDevice* device = a.device();
+
+    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
@@ -1371,17 +1374,26 @@ operation::ProgramWithCallbacks untilize_single_core(
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
 
-    std::string compute_kernel;
+    // Compute file path
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     }
 
+    // Compute compile-time args
+    uint32_t num_blocks = num_columns_of_blocks * num_blocks_per_column_row * num_blocks_across_height;
+    std::vector<uint32_t> compute_compile_time_args = {
+        (uint32_t)num_blocks,           // per_core_block_cnt
+        (uint32_t)num_tiles_per_block,  // per_core_block_tile_cnt
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
+
+    // Compute kernel
     auto untilize_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel,
