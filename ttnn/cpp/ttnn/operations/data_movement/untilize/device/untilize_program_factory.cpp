@@ -737,7 +737,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_spec_indentical(
+operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_spec_identical(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 
@@ -954,10 +954,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     // Old stuff for input block sharded
     // Handling input block/width sharding, and uneven shards
+    /*
     bool src_block_sharded = false;
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
     CoreCoord end_core;
+    */
     // Handling input block/width sharding, and uneven shards
     // Old stuff for input block sharded
 
@@ -983,6 +985,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
         // Old stuff for input block sharded
         // Handling input block/width sharding, and uneven shards
+        /*
         src_block_sharded = a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
 
         num_rows_block = input_shard_spec.shape[0];
@@ -996,6 +999,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         num_output_rows_unpadded =
             num_rows_block - (tt::round_up(num_output_rows, input_shard_spec.shape[0]) - num_output_rows);
         end_core = (*input_shard_spec.grid.ranges().begin()).end_coord;
+        */
         // Handling input block/width sharding, and uneven shards
         // Old stuff for input block sharded
     }
@@ -1055,14 +1059,15 @@ operation::ProgramWithCallbacks untilize_multi_core(
         std::vector<uint32_t> reader_compile_time_args = {
             (uint32_t)src0_is_dram,
             (uint32_t)src0_cb_index,
-            (uint32_t)num_tiles_to_read      // num_tiles to read TODO: (GR) Will need to be run-time for cliff core
-            (uint32_t) bytes_per_input_tile  // bytes per tile
-            (uint32_t)                       // start page id to read -> move to run-time args
+            (uint32_t)num_tiles_to_read,     // num_tiles to read TODO: (GR) Will need to be run-time for cliff core
+            (uint32_t)bytes_per_input_tile,  // bytes per tile
+            (uint32_t)5                      // start page id to read -> move to run-time args
         };
         unary_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
-            "reader_unary_start_id.cpp" compute_core_range,
+            "reader_unary_start_id.cpp",
+            compute_core_range,
             ReaderDataMovementConfig(reader_compile_time_args));
     }
 
@@ -1124,7 +1129,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Run-time arg assignment
     bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;
     uint32_t tile_start_id = 0;
-    uint32_t row_start_id = 0;
+    // uint32_t row_start_id = 0;
 
     // Run-time args (full cores)
     std::vector<CoreCoord> full_cores = corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
@@ -1154,11 +1159,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
 
-        cores_with_run_time_args.push_back(core);
+        // Correct for interleaved - if not needed for sharding then rename?
+        tile_start_id += num_tiles_per_block * num_blocks_per_full_core;
 
-        tile_start_id += num_tiles_per_block *
-                         num_blocks_per_full_core;  // Correct for interleaved - if not needed for sharding then rename?
-        row_start_id += TILE_HEIGHT * num_blocks_per_full_core;
+        // row_start_id += TILE_HEIGHT * num_blocks_per_full_core;
     }
 
     // Run-time args (cliff core)
@@ -1170,7 +1174,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
         // Reader (always reading interleaved input)
         uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_cliff_core;
-        reader_run_time_args = {
+        std::vector<uint32_t> reader_run_time_args = {
             src0_buffer->address(),  // src_addr
             num_tiles_to_read,       // ntiles
             tile_start_id            // start_id
@@ -1180,10 +1184,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
         std::vector<uint32_t> writer_run_time_args;
         // TODO: (GR) Set after figuring out kernel
 
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
-
-        cores_with_run_time_args.push_back(core);
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, cliff_core, reader_run_time_args);
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, cliff_core, writer_run_time_args);
     }
 
     std::vector<CoreCoord> cores_with_run_time_args;
