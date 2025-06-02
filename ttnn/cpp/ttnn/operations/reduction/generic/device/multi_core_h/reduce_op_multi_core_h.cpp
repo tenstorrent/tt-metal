@@ -227,7 +227,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             } else if (core_group_2.contains(core)) {
                 num_cols_per_core = num_cols_per_core_group_2;
             } else {
-                TT_ASSERT(false, "Core not in specified core ranges");
+                TT_THROW("Core not in specified core ranges");
             }
             tt_metal::SetRuntimeArgs(
                 program,

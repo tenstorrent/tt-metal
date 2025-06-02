@@ -240,33 +240,26 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         }
     }
 
-    TT_ASSERT(
-        in0_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        in1_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        out0_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        im0_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        im3_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        in5_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        in6_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        im6_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(Wt % block_size == 0);
-    TT_ASSERT(num_gamma_tiles % block_size == 0);
-    TT_ASSERT(num_beta_tiles % block_size == 0);
+    TT_FATAL(in0_t % block_size == 0, "Buffer size in0_t ({}) must be divisible by block_size ({})", in0_t, block_size);
+    TT_FATAL(in1_t % block_size == 0, "Buffer size in1_t ({}) must be divisible by block_size ({})", in1_t, block_size);
+    TT_FATAL(
+        out0_t % block_size == 0, "Buffer size out0_t ({}) must be divisible by block_size ({})", out0_t, block_size);
+    TT_FATAL(im0_t % block_size == 0, "Buffer size im0_t ({}) must be divisible by block_size ({})", im0_t, block_size);
+    TT_FATAL(im3_t % block_size == 0, "Buffer size im3_t ({}) must be divisible by block_size ({})", im3_t, block_size);
+    TT_FATAL(in5_t % block_size == 0, "Buffer size in5_t ({}) must be divisible by block_size ({})", in5_t, block_size);
+    TT_FATAL(in6_t % block_size == 0, "Buffer size in6_t ({}) must be divisible by block_size ({})", in6_t, block_size);
+    TT_FATAL(im6_t % block_size == 0, "Buffer size im6_t ({}) must be divisible by block_size ({})", im6_t, block_size);
+    TT_FATAL(Wt % block_size == 0, "Width (Wt={}) must be divisible by block_size ({})", Wt, block_size);
+    TT_FATAL(
+        num_gamma_tiles % block_size == 0,
+        "Number of gamma tiles ({}) must be divisible by block_size ({})",
+        num_gamma_tiles,
+        block_size);
+    TT_FATAL(
+        num_beta_tiles % block_size == 0,
+        "Number of beta tiles ({}) must be divisible by block_size ({})",
+        num_beta_tiles,
+        block_size);
 
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
@@ -472,7 +465,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t tile_offset = curr_row * Wt;
