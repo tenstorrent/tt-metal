@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -273,4 +273,3 @@ inline void dprint_tensix_struct_field(
     }
     DPRINT << ((word & mask) >> shamt) << ENDL();
 }
-
