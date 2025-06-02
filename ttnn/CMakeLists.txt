@@ -26,15 +26,19 @@ target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NA
 target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
 
 set(TENSOR_FLATBUFFER_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_coordinate.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_spec.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
 )
 
+set(TENSOR_FLATBUFFER_INCLUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/tt_metal/distributed/flatbuffer
+)
+
 set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
 foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
-    GENERATE_FBS_HEADER(${FBS_FILE})
+    GENERATE_FBS_HEADER(${FBS_FILE} ${TENSOR_FLATBUFFER_INCLUDES})
     list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
 endforeach()
 
@@ -88,7 +92,13 @@ target_include_directories(
         cpp # FIXME: Depend on the Ops needed (make the circular obvious)
         . # FIXME: Depend on the Ops needed (make the circular obvious)
 )
-target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
+target_include_directories(
+    ttnn_core
+    SYSTEM
+    PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
+        ${CMAKE_BINARY_DIR}/tt_metal/distributed/flatbuffers
+)
 target_link_libraries(
     ttnn_core
     PRIVATE
