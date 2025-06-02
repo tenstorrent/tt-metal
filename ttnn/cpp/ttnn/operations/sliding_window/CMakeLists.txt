@@ -2,6 +2,7 @@ add_library(ttnn_op_sliding_window ${LIB_TYPE})
 add_library(TT::NN::Ops::SlidingWindow ALIAS ttnn_op_sliding_window)
 
 target_precompile_headers(ttnn_op_sliding_window REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_sliding_window)
 
 target_sources(
     ttnn_op_sliding_window

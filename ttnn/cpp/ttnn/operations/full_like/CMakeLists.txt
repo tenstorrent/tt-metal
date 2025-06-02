@@ -2,6 +2,7 @@ add_library(ttnn_op_full_like ${LIB_TYPE})
 add_library(TT::NN::Ops::FullLike ALIAS ttnn_op_full_like)
 
 target_precompile_headers(ttnn_op_full_like REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_full_like)
 
 target_sources(
     ttnn_op_full_like

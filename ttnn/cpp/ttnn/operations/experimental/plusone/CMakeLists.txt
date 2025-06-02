@@ -2,6 +2,7 @@ add_library(ttnn_op_experimental_plusone ${LIB_TYPE})
 add_library(TT::NN::Ops::Experimental::PlusOne ALIAS ttnn_op_experimental_plusone)
 
 target_precompile_headers(ttnn_op_experimental_plusone REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_plusone)
 
 target_sources(
     ttnn_op_experimental_plusone
