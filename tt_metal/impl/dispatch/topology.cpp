@@ -992,7 +992,7 @@ void configure_dispatch_cores(IDevice* device) {
 bool check_dateline(
     const tt_fabric::ControlPlane& control_plane,
     tt_fabric::Topology topology,
-    tt_fabric::mesh_id_t mesh_id,
+    tt_fabric::MeshId mesh_id,
     chip_id_t chip0,
     chip_id_t chip1,
     bool wrap_around_mesh) {

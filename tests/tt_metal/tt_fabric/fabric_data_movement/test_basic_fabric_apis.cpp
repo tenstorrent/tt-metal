@@ -143,9 +143,9 @@ void RunAsyncWriteTest(
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
     CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    FabricNodeId start_fabric_node_id(mesh_id_t{0}, 0);
+    FabricNodeId start_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_start_device_id;
-    FabricNodeId end_fabric_node_id(mesh_id_t{0}, 0);
+    FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
@@ -260,9 +260,9 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
     CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    FabricNodeId start_fabric_node_id(mesh_id_t{0}, 0);
+    FabricNodeId start_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_start_device_id;
-    FabricNodeId end_fabric_node_id(mesh_id_t{0}, 0);
+    FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
@@ -360,9 +360,9 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
     CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    FabricNodeId start_fabric_node_id(mesh_id_t{0}, 0);
+    FabricNodeId start_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_start_device_id;
-    FabricNodeId end_fabric_node_id(mesh_id_t{0}, 0);
+    FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
@@ -486,7 +486,7 @@ void RunAsyncWriteMulticastTest(
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
     CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    FabricNodeId start_fabric_node_id(mesh_id_t{0}, 0);
+    FabricNodeId start_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_start_device_id;
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;

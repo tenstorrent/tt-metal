@@ -26,9 +26,9 @@ MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path) {
 }
 
 void MeshGraph::add_to_connectivity(
-    mesh_id_t src_mesh_id,
+    MeshId src_mesh_id,
     chip_id_t src_chip_id,
-    mesh_id_t dest_mesh_id,
+    MeshId dest_mesh_id,
     chip_id_t dest_chip_id,
     RoutingDirection port_direction) {
     TT_ASSERT(
@@ -216,7 +216,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
     std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>> mesh_edge_ports_to_chip_id;
     for (const auto& mesh : yaml["Mesh"]) {
         std::string mesh_board = mesh["board"].as<std::string>();
-        mesh_id_t mesh_id{mesh["id"].as<std::uint32_t>()};
+        MeshId mesh_id{mesh["id"].as<std::uint32_t>()};
         if (this->intra_mesh_connectivity_.size() <= *mesh_id) {
             // Resize all variables that loop over mesh_ids
             this->intra_mesh_connectivity_.resize(*mesh_id + 1);
@@ -329,8 +329,8 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         }
     }
     // Loop over Graph, populate inter mesh
-    auto convert_yaml_to_port_id = [](const YAML::Node& node) -> std::pair<mesh_id_t, port_id_t> {
-        mesh_id_t mesh_id{node[0].as<std::uint32_t>()};
+    auto convert_yaml_to_port_id = [](const YAML::Node& node) -> std::pair<MeshId, port_id_t> {
+        MeshId mesh_id{node[0].as<std::uint32_t>()};
         std::string port_string = node[1].as<std::string>();
         RoutingDirection port_direction =
             magic_enum::enum_cast<RoutingDirection>(port_string.substr(0, 1), magic_enum::case_insensitive).value();

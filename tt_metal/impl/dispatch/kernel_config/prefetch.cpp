@@ -476,9 +476,9 @@ void PrefetchKernel::ConfigureCore() {
 void PrefetchKernel::UpdateArgsForFabric(
     const CoreCoord& fabric_router_virtual,
     uint32_t outbound_eth_chan,
-    tt::tt_fabric::mesh_id_t upstream_mesh_id,
+    tt::tt_fabric::MeshId upstream_mesh_id,
     chip_id_t upstream_dev_id,
-    tt::tt_fabric::mesh_id_t downstream_mesh_id,
+    tt::tt_fabric::MeshId downstream_mesh_id,
     chip_id_t downstream_dev_id) {
     dependent_config_.fabric_router_noc_xy =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);

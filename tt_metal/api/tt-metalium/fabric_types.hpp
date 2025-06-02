@@ -21,6 +21,6 @@ enum class FabricConfig : uint32_t {
 
 namespace tt::tt_fabric {
 
-using mesh_id_t = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
+using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
 
 }  // namespace tt::tt_fabric
