@@ -203,13 +203,11 @@ def test_cumsum_backward(size, dim, dtypes, device):
 
     (torch_dtype, ttnn_dtype) = dtypes
 
-<<<<<<< HEAD
     # Generate integer input on [-2; 2];
     # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
     # which are not handled yet
     torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype, requires_grad=True)
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
-
 
     torch_output = torch.cumsum(torch_input_tensor, dim)
     torch_output.backward(torch_output_grad)
@@ -306,6 +304,7 @@ def test_cumsum_failing_cases(
     expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
     tensor_rank = len(size)
+
 
 # OFT
 
