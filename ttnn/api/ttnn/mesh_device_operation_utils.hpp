@@ -41,10 +41,10 @@ void filter_tensor_shards(
                 std::get<tt::tt_metal::DeviceStorage>(tensor_to_return.tensor_attributes->get_storage());
 
             auto coord_it = tensor_coordinates.cbegin();
-            auto storage_it = tensor_storage.specs.begin();
-            auto insert_it = tensor_storage.specs.begin();
-            while (coord_it != tensor_coordinates.end() && storage_it != tensor_storage.specs.end()) {
-                if (storage_it->first == *coord_it) {
+            auto storage_it = tensor_storage.coords.begin();
+            auto insert_it = tensor_storage.coords.begin();
+            while (coord_it != tensor_coordinates.end() && storage_it != tensor_storage.coords.end()) {
+                if (*storage_it == *coord_it) {
                     std::swap(*insert_it, *storage_it);
                     ++insert_it;
                     ++coord_it;
@@ -53,7 +53,7 @@ void filter_tensor_shards(
                     ++storage_it;
                 }
             }
-            tensor_storage.specs.erase(insert_it, tensor_storage.specs.end());
+            tensor_storage.coords.erase(insert_it, tensor_storage.coords.end());
         },
         tensor_return_value);
 }
@@ -95,21 +95,21 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& t
     Tensor first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     std::vector<ttnn::MeshCoordinate> tensor_coordinates;
     std::transform(
-        first_tensor.device_storage().specs.begin(),
-        first_tensor.device_storage().specs.end(),
+        first_tensor.device_storage().coords.begin(),
+        first_tensor.device_storage().coords.end(),
         std::back_inserter(tensor_coordinates),
-        [](const auto& spec) { return spec.first; });
+        [](const auto& coord) { return coord; });
     // Verification Step: Assert if the tensors are placed on different coordinate ranges
     // that do not overlap.
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor) {
-            if (tensor.device_storage().specs.size() != tensor_coordinates.size()) {
+            if (tensor.device_storage().coords.size() != tensor_coordinates.size()) {
                 std::vector<ttnn::MeshCoordinate> tensor_mesh_coords;
                 std::transform(
-                    tensor.device_storage().specs.begin(),
-                    tensor.device_storage().specs.end(),
+                    tensor.device_storage().coords.begin(),
+                    tensor.device_storage().coords.end(),
                     std::back_inserter(tensor_mesh_coords),
-                    [](const auto& spec) { return spec.first; });
+                    [](const auto& coord) { return coord; });
                 if (tensor_mesh_coords.size() < tensor_coordinates.size()) {
                     // Case 1: Current tensor is placed on a smaller set of coordinates than tensor_coordinates.
                     TT_ASSERT(

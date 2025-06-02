@@ -28,14 +28,8 @@ MemoryConfig DeviceStorage::memory_config() const {
 }
 
 DeviceStorage::DeviceStorage(
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_) :
-    specs(std::move(specs_)), mesh_buffer(std::move(mesh_buffer_)) {
-    TT_FATAL(
-        std::all_of(
-            specs.begin(), specs.end(), [this](const auto& spec) { return spec.second == specs.front().second; }),
-        "All specs in device storage must be the same");
-}
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_) :
+    coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)) {}
 
 Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() != nullptr) {
@@ -65,35 +59,18 @@ IDevice* DeviceStorage::get_device() const {
     return this->buffer->device();
 }
 
-void DeviceStorage::update_specs(const TensorSpec& new_spec) {
-    for (auto& [_, spec] : this->specs) {
-        spec = new_spec;
-    }
-}
-
 bool DeviceStorage::is_uniform_storage() const {
     if (mesh_buffer.get() == nullptr) {
         return true;
     }
-    return specs.size() == mesh_buffer->device()->num_devices() &&
-           std::all_of(specs.begin(), specs.end(), [this](const auto& spec) { return spec.second == specs[0].second; });
+    return coords.size() == mesh_buffer->device()->num_devices();
 }
 
-MultiDeviceHostStorage::MultiDeviceHostStorage(std::vector<HostBuffer> buffers, std::vector<TensorSpec> specs) :
-    buffers_(std::move(buffers)), specs_(std::move(specs)) {
-    TT_FATAL(
-        std::all_of(specs_.begin(), specs_.end(), [this](const auto& spec) { return spec == specs_.front(); }),
-        "All specs in multi-device host storage must be the same");
-}
+MultiDeviceHostStorage::MultiDeviceHostStorage(std::vector<HostBuffer> buffers) : buffers_(std::move(buffers)) {}
 
 HostBuffer MultiDeviceHostStorage::get_buffer(int buffer_index) const {
     TT_FATAL(buffer_index < buffers_.size(), "Buffer not found for buffer_index {}", buffer_index);
     return buffers_[buffer_index];
-}
-
-TensorSpec MultiDeviceHostStorage::get_tensor_spec(int spec_index) const {
-    TT_FATAL(spec_index < specs_.size(), "Spec for device {} not found in spec list", spec_index);
-    return specs_[spec_index];
 }
 
 size_t MultiDeviceHostStorage::num_buffers() const { return buffers_.size(); }
