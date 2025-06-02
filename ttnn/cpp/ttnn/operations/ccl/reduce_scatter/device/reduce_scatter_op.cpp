@@ -210,7 +210,7 @@ Tensor reduce_scatter(
         topology,
         user_defined_num_workers,
         user_defined_num_buffers_per_channel,
-        input_tensor.active_physical_devices());
+        ttnn::ccl::get_active_physical_devices(input_tensor));
 }
 
 std::vector<Tensor> reduce_scatter(

@@ -349,7 +349,7 @@ Tensor all_gather(
         user_defined_num_workers,
         user_defined_num_buffers_per_channel,
         topology,
-        input_tensor.active_physical_devices());
+        ttnn::ccl::get_active_physical_devices(input_tensor));
 }
 
 std::vector<Tensor> all_gather(

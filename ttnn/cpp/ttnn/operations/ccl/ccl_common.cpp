@@ -137,6 +137,16 @@ SenderRecieverConfig get_device_sender_receiver_config_in_ring(
     return config;
 }
 
+std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
+    auto mesh_device = tensor.mesh_device();
+    std::vector<IDevice*> devices = {};
+    devices.reserve(tensor.device_storage().coords.size());
+    for (const auto& coord : tensor.device_storage().coords) {
+        devices.push_back(mesh_device->get_device(coord));
+    }
+    return devices;
+}
+
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     const uint32_t num_devices,
