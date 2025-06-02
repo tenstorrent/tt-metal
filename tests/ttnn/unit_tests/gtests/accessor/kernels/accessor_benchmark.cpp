@@ -16,7 +16,7 @@ void kernel_main() {
 
     using input_dspec = distribution_spec_t<base_idx, rank, num_banks>;
 
-    auto sharded_accessor = ShardedAccessor<input_dspec, page_size>{.bank_base_address = bank_base_address};
+    auto sharded_accessor = ShardedAccessor<input_dspec, page_size>(bank_base_address);
 
     auto interleaved_accessor = InterleavedAddrGenFast</*DRAM=*/false>{
         .bank_base_address = bank_base_address, .page_size = page_size, .data_format = data_format};
@@ -34,7 +34,7 @@ void kernel_main() {
      */
     constexpr size_t loop_count = 30;
     for (size_t i = 0; i < loop_count; ++i) {
-        auto page_id = i % input_dspec::tensor_volume;
+        auto page_id = i % sharded_accessor.get_dspec().get_tensor_volume();
         {
             DeviceZoneScopedN("SHARDED_ACCESSOR");
             volatile auto _ = sharded_accessor.get_noc_addr(i);
