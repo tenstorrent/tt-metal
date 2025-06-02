@@ -6,6 +6,13 @@
 #include "height_sharded_reader_common.hpp"
 #include "debug/debug.h"
 
+template <uint32_t NumTiles, uint32_t TileSizeBytes>
+FORCE_INLINE void copy_weights_from_dram(uint32_t bank_id, uint32_t dram_base_read_addr, uint32_t l1_base_write_addr) {
+    constexpr uint32_t size = NumTiles * TileSizeBytes;
+    const uint64_t l1_read_addr = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
+    noc_async_read(l1_read_addr, l1_base_write_addr, size);
+}
+
 void kernel_main() {
     // This writer is for output tensor in tile format
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(0);
@@ -136,6 +143,15 @@ void kernel_main() {
         start_reader_idx = act_block_h_datums_first_reader / 2;
     }
 
+    constexpr uint32_t number_of_banks = 1;
+    constexpr uint32_t bank_id = 0;
+    constexpr uint32_t total_weight_tiles = weight_block_num_tiles * num_blocks_weight_h;
+    constexpr uint32_t tiles_per_bank = total_weight_tiles / number_of_banks;
+    constexpr uint32_t weight_bytes_per_bank = tiles_per_bank * weight_tile_nbytes;
+    const uint32_t weights_l1_base_write_addr = get_read_ptr(cb_id_weight);
+    copy_weights_from_dram<tiles_per_bank, weight_tile_nbytes>(
+        bank_id, weight_addr_dram_base, weights_l1_base_write_addr);
+
     for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
         // READ WEIGHTS + MCAST SEND WEIGHTS
         // read weight blocks inner dim
@@ -176,32 +192,16 @@ void kernel_main() {
             // Do weights read + mcast
             cb_reserve_back(cb_id_weight, weight_block_num_tiles);
             if (bh == 0) {
-                uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
-                uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id + weight_h_offset;
-
                 // mcast args
-                uint32_t weights_start_address = weight_write_l1_addr;
-                uint32_t weights_block_size_bytes = 0;
-
-                // loop over weight block tiles along h
-                for (uint32_t weight_tile_h_i = 0; weight_tile_h_i < weight_block_height_ntiles; ++weight_tile_h_i) {
-                    uint32_t weight_tile_id = weight_row_start_tile_id;
-                    // loop over weight block tiles along w
-                    for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                        // DPRINT << "weight_tile_id=" << weight_tile_id << ENDL();
-                        noc_async_read_tile(weight_tile_id, s_weight, weight_write_l1_addr);
-                        weight_write_l1_addr += weight_tile_nbytes;
-                        weights_block_size_bytes += weight_tile_nbytes;
-                        weight_tile_id += 1;
-                    }  // for weight_block_w
-                    weight_row_start_tile_id += weight_stride_h;
-                }  // for weight_block_h
-                noc_async_read_barrier();
+                uint32_t weights_start_address = get_write_ptr(cb_id_weight);
+                uint32_t weights_block_size_bytes =
+                    weight_tile_nbytes * weight_block_height_ntiles * weight_block_width_ntiles;
 
 #ifndef SKIP_MCAST
                 // wait until all weights mcast destinations have atomically incremented the weights
                 // semaphore_addr (i.e. its value should be weights_mcast_num_dests), then reset the
                 // semaphore_addr value back to zero for the next block
+                noc_async_read_barrier();
                 noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
                 noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
 

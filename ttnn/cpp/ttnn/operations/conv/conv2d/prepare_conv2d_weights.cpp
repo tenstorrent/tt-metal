@@ -1042,7 +1042,25 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     }
 
     if (parameters_on_device) {
-        weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
+        uint32_t number_of_banks = 1;
+        const auto core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({number_of_banks - 1, 0}));
+        TT_FATAL(
+            padded_target_shape[-2] % number_of_banks == 0,
+            "Weights must evenly divide by number of banks ({} % {} == 0)",
+            padded_target_shape[-2],
+            number_of_banks);
+        const auto grid = CoreRangeSet({core_range});
+        const auto shard_spec =
+            tt::tt_metal::ShardSpec(grid, {padded_target_shape[-2] / number_of_banks, padded_target_shape[-1]});
+        const MemoryConfig config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::DRAM, shard_spec};
+        bool skip_shard = original_weights_window_h == 1 && original_weights_window_w == 1;
+        if (skip_shard) {
+            weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
+        } else {
+            tt::log_info("truing to sharding weight tensor {} ", config);
+            weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, config);
+            tt::log_info("DONE sharding weight tensor {} ", weight_tensor_.memory_config());
+        }
     }
 
     if (bias_tensor.has_value()) {
