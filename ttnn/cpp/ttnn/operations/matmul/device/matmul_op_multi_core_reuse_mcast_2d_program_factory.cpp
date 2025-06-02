@@ -1251,8 +1251,14 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
-            TT_ASSERT(output_tensors.size() == 1);
+            TT_FATAL(
+                input_tensors.size() + optional_input_tensors.size() == 3,
+                "Total number of input tensors (required + optional) must be 3, but got {} + {} = {}",
+                input_tensors.size(),
+                optional_input_tensors.size(),
+                input_tensors.size() + optional_input_tensors.size());
+            TT_FATAL(
+                output_tensors.size() == 1, "Number of output tensors must be 1, but got {}", output_tensors.size());
 
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();
