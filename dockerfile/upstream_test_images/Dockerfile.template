@@ -2,7 +2,6 @@ ARG TT_METAL_DEV_VERSION=latest
 FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:${TT_METAL_DEV_VERSION} as base
 
 ARG TT_METAL_COMMIT_SHA
-ARG TEST_COMMAND
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -25,7 +24,6 @@ RUN git reset --hard ${TT_METAL_COMMIT_SHA} && git submodule update --init --rec
 ENV PYTHONPATH=/home/user/tt-metal
 ENV LD_LIBRARY_PATH=/home/user/tt-metal/build/lib
 ENV TT_METAL_HOME=/home/user/tt-metal
-ENV TEST_COMMAND=${TEST_COMMAND}
 
 RUN ls -hal
 
@@ -34,8 +32,9 @@ COPY _tt-metal/build/ ./build/
 COPY _tt-metal/runtime/ ./runtime/
 COPY ttnn-*.whl ./
 
-RUN WHEEL_FILENAME=$(ls -1 *.whl) && pip3 install $WHEEL_FILENAME
+RUN pip3 install $(ls -1 *.whl)
 
 RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites" --gtest_list_tests
 RUN TRACY_NO_INVARIANT_CHECK=1 python3 -c 'import ttnn'
-ENTRYPOINT ["sh", "-c", "$TEST_COMMAND"]
+ENTRYPOINT ["$TEST_COMMAND"]
+CMD ["$HW_TOPOLOGY"]
