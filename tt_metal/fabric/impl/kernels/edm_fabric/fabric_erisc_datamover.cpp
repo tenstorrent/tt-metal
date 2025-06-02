@@ -1884,11 +1884,15 @@ void kernel_main() {
 
             *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
 
-            // 1. master receives notification from host and exits from this wait
+            // 1. All risc cores wait for READY_FOR_TRAFFIC signal
+            // 2. All risc cores in master eth core receive signal from host and exits from this wait
+            //    Other subordinate risc cores wait for this signal
+            // 4. The other subordinate risc cores receive the READY_FOR_TRAFFIC signal and exit from this wait
             wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
             if constexpr (is_local_handshake_master) {
-                // 2. master notifies all subordinate routers that it is ready for traffic
+                // 3. Only master risc core notifies all subordinate risc cores (except subordinate riscs in master eth
+                // core)
                 notify_subordinate_routers(
                     edm_channels_mask,
                     local_handshake_master_eth_chan,
