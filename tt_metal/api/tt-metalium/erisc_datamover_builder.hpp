@@ -23,6 +23,8 @@
 
 namespace tt::tt_fabric {
 
+struct FabricRiscConfig;
+
 struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
     static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
@@ -51,6 +53,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
     static constexpr std::size_t eth_word_l1_alignment = 16;
+    static constexpr uint32_t default_iterations_between_ctx_switch_and_teardown_checks = 32;
     static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
     static constexpr bool enable_fabric_counters = false;
     static constexpr bool enable_fabric_pkt_header_recording = false;
@@ -82,6 +85,7 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, num_receiver_channels> receivers_completed_packet_header_cb_address;
     std::array<std::size_t, num_sender_channels> senders_completed_packet_header_cb_address;
 
+    std::vector<FabricRiscConfig> risc_configs;
     // ----------- Sender Channels
     std::array<std::size_t, num_sender_channels> sender_channels_buffer_index_address;
     // Connection info layout:
@@ -127,6 +131,9 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_used_sender_channels = 0;
     std::size_t num_used_receiver_channels = 0;
     std::size_t num_fwd_paths = 0;
+    std::size_t sender_txq_id = 0;
+    std::size_t receiver_txq_id = 0;
+    std::size_t num_riscv_cores = 0;
 
     Topology topology = Topology::Linear;
 
@@ -145,6 +152,26 @@ struct FabricEriscDatamoverConfig {
 
 private:
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
+};
+
+struct FabricRiscConfig {
+    FabricRiscConfig(uint32_t risc_id);
+    bool enable_handshake() const { return enable_handshake_; };
+    bool enable_context_switch() const { return enable_context_switch_; };
+    bool enable_interrupts() const { return enable_interrupts_; };
+    size_t iterations_between_ctx_switch_and_teardown_checks() const {
+        return iterations_between_ctx_switch_and_teardown_checks_;
+    };
+    bool is_sender_channel_serviced(int id) const { return is_sender_channel_serviced_[id]; };
+    bool is_receiver_channel_serviced(int id) const { return is_receiver_channel_serviced_[id]; };
+
+private:
+    bool enable_handshake_ = false;
+    bool enable_context_switch_ = false;
+    bool enable_interrupts_ = false;
+    size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;
+    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced_;
+    std::array<bool, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced_;
 };
 
 struct SenderWorkerAdapterSpec {
@@ -224,7 +251,7 @@ public:
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);
 
-    [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
+    [[nodiscard]] std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 

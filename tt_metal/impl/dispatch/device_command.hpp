@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -86,7 +86,7 @@ public:
         uint32_t wait_count,
         uint32_t go_signal,
         uint32_t wait_addr,
-        uint8_t multicast_go_offset,
+        uint8_t num_mcast_txns,
         uint8_t num_unicast_txns,
         uint8_t noc_data_start_index,
         DispatcherSelect dispatcher_type);
@@ -113,7 +113,7 @@ public:
     void add_dispatch_set_go_signal_noc_data(
         const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);
 
-    void add_dispatch_set_write_offsets(uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2);
+    void add_dispatch_set_write_offsets(tt::stl::Span<const uint32_t> write_offsets);
 
     void add_dispatch_terminate(DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER);
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -226,7 +226,6 @@ enum CQDispatchCmdPackedWriteType {
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH = 0x2 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS = 0x3 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
     CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_EVENT = 0x4 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
-    CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_GO_MSG_INDEX = 0x5 << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT,
 };
 
 struct CQDispatchWritePackedCmd {
@@ -310,12 +309,12 @@ struct CQDispatchDelayCmd {
     uint32_t delay;
 } __attribute__((packed));
 
+// The maximum value allowed for offset_count in CQDispatchSetWriteOffsetCmd.
+constexpr uint32_t CQ_DISPATCH_MAX_WRITE_OFFSETS = 4;
+
 struct CQDispatchSetWriteOffsetCmd {
-    uint8_t pad1;
+    uint8_t offset_count;  // Number of uint32_t offsets this command sets. Offsets are stored after the CQDispatchCmd.
     uint16_t program_host_id;  // Program Host ID for upcoming commands. Used for profiling.
-    uint32_t offset0;
-    uint32_t offset1;
-    uint32_t offset2;
 } __attribute__((packed));
 
 struct CQDispatchSetUnicastOnlyCoresCmd {
@@ -324,12 +323,9 @@ struct CQDispatchSetUnicastOnlyCoresCmd {
     uint32_t num_unicast_only_cores;
 } __attribute__((packed));
 
-constexpr uint8_t CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET = 0xff;
-
 struct CQDispatchGoSignalMcastCmd {
     uint32_t go_signal;
-    uint8_t multicast_go_offset;  // Index of the multicast go to write to. CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET - no
-                                  // multicast gos.
+    uint8_t num_mcast_txns;
     uint8_t num_unicast_txns;
     uint8_t noc_data_start_index;
     uint32_t wait_count;

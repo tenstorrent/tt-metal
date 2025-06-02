@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@
 #include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include <trace.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
@@ -48,6 +47,7 @@
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
+#include "trace/trace.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dprint_server.hpp"
@@ -63,7 +63,7 @@
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
-#include "trace_buffer.hpp"
+#include "trace/trace_buffer.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
@@ -225,8 +225,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
          .dram_bank_offsets = {},
-         .dram_unreserved_base =
-             hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
+         .dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED),
          .dram_alignment = hal.get_alignment(HalMemType::DRAM),
          .l1_unreserved_base = align(worker_l1_unreserved_start, hal.get_alignment(HalMemType::DRAM)),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
@@ -438,9 +437,6 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
     uint32_t zero = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         &zero, sizeof(uint32_t), tt_cxy_pair(this->id(), virtual_core), launch_msg_buffer_read_ptr_addr);
-    uint64_t go_msg_index_addr = this->get_dev_addr(virtual_core, HalL1MemAddrType::GO_MSG_INDEX);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        &zero, sizeof(uint32_t), tt_cxy_pair(this->id(), virtual_core), go_msg_index_addr);
 }
 
 void Device::clear_launch_messages_on_eth_cores() {
@@ -1297,6 +1293,16 @@ uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) c
         logical_core);
 }
 
+uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+    for (uint32_t channel = 0; channel < this->num_dram_channels(); ++channel) {
+        if (soc_desc.get_preferred_worker_core_for_dram_view(channel) == virtual_core) {
+            return channel;
+        }
+    }
+    TT_THROW("Virtual core {} is not a DRAM core", virtual_core.str());
+}
+
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
 }
@@ -1495,16 +1501,18 @@ void Device::generate_device_bank_to_noc_tables()
     }
 }
 
-bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
+uint8_t Device::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
 }
 
 uint8_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
 }
 
-uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data) const {
-    if (unicast_data) {
+uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
+    if (mcast_data) {
+        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_data_start_index(sub_device_id);
+    } else if (unicast_data) {
         return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
             sub_device_id);
     } else {

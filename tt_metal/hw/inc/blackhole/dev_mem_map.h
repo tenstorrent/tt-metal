@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +35,8 @@
 #define MEM_ETH_BASE 0x0
 // Top 64K is reserved for syseng
 #define MEM_ETH_SIZE (512 * 1024 - 64 * 1024)
+
+#define MEM_DRAM_SIZE (4177920 * 1024U)
 
 #define MEM_LOCAL_BASE 0xFFB00000
 #define MEM_BRISC_LOCAL_SIZE (8 * 1024)
@@ -84,7 +86,7 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 64  // (MEM_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2))  // 2 nocs
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12656
+#define MEM_MAILBOX_SIZE 12640
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -142,7 +144,7 @@
 #define MEM_MAX_NUM_CONCURRENT_TRANSACTIONS 8
 #define MEM_ERISC_SYNC_INFO_SIZE (160 + 16 * MEM_MAX_NUM_CONCURRENT_TRANSACTIONS)
 #define MEM_ERISC_FABRIC_ROUTER_CONFIG_SIZE 2064
-#define MEM_ERISC_MAILBOX_SIZE 12608
+#define MEM_ERISC_MAILBOX_SIZE 12544
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (69 * 1024)
 #define MEM_ERISC_BASE 0
 
@@ -221,7 +223,8 @@
 #define MEM_AERISC_STACK_TOP (MEM_LOCAL_BASE + MEM_ERISC_LOCAL_SIZE)
 #define MEM_SUBORDINATE_AERISC_STACK_TOP (MEM_LOCAL_BASE + MEM_SUBORDINATE_ERISC_LOCAL_SIZE)
 
-#define MEM_AERISC_BANK_TO_NOC_SCRATCH (MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_ERISC_LOCAL_SIZE)
+#define MEM_AERISC_BANK_TO_NOC_SCRATCH \
+    (MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_SUBORDINATE_ERISC_LOCAL_SIZE)
 #define MEM_AERISC_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
 
 /////////////

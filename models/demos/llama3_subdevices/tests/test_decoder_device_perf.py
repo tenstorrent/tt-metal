@@ -22,7 +22,7 @@ from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -12
+DECODER_OP_END_INDEX = -13
 
 
 @pytest.mark.parametrize(
@@ -339,16 +339,36 @@ def test_llama_TG_perf_device(
     df_mid_layers_trace = df_layers_trace[int(len(df_layers_trace) / num_layers) :]
 
     mid_layers_raw_dict_compilation = df_mid_layers_compilation[
-        ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]
+        [
+            "OP CODE",
+            "DEVICE KERNEL DURATION [ns]",
+            "OP TO OP LATENCY [ns]",
+            "DEVICE KERNEL FIRST TO LAST START [ns]",
+        ]
     ].to_dict(orient="records")
     mid_layers_raw_dict_trace = df_mid_layers_trace[
-        ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]
+        [
+            "OP CODE",
+            "DEVICE KERNEL DURATION [ns]",
+            "OP TO OP LATENCY [ns]",
+            "DEVICE KERNEL FIRST TO LAST START [ns]",
+        ]
     ].to_dict(orient="records")
     first_layer_raw_dict_compilation = df_first_layer_compilation[
-        ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]
+        [
+            "OP CODE",
+            "DEVICE KERNEL DURATION [ns]",
+            "OP TO OP LATENCY [ns]",
+            "DEVICE KERNEL FIRST TO LAST START [ns]",
+        ]
     ].to_dict(orient="records")
     first_layer_raw_dict_trace = df_first_layer_trace[
-        ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]
+        [
+            "OP CODE",
+            "DEVICE KERNEL DURATION [ns]",
+            "OP TO OP LATENCY [ns]",
+            "DEVICE KERNEL FIRST TO LAST START [ns]",
+        ]
     ].to_dict(orient="records")
 
     # Build dicts of op_code to list of durations
@@ -357,6 +377,7 @@ def test_llama_TG_perf_device(
     )
     kernel_duration_dict_trace = build_duration_dict(mid_layers_raw_dict_trace, "DEVICE KERNEL DURATION [ns]")
     dispatch_duration_dict = build_duration_dict(mid_layers_raw_dict_trace, "OP TO OP LATENCY [ns]")
+    first_to_last_start_dict = build_duration_dict(mid_layers_raw_dict_trace, "DEVICE KERNEL FIRST TO LAST START [ns]")
 
     # first layer
     kernel_duration_dict_compilation_first_layer = build_duration_dict(
@@ -366,6 +387,9 @@ def test_llama_TG_perf_device(
         first_layer_raw_dict_trace, "DEVICE KERNEL DURATION [ns]"
     )
     dispatch_duration_dict_first_layer = build_duration_dict(first_layer_raw_dict_trace, "OP TO OP LATENCY [ns]")
+    first_to_last_start_dict_first_layer = build_duration_dict(
+        first_layer_raw_dict_trace, "DEVICE KERNEL FIRST TO LAST START [ns]"
+    )
 
     # Build dicts of op_code_with_id to list of durations - one list per op instance
     kernel_duration_per_instance_dict_compilation = build_duration_per_instance_dict(
@@ -375,6 +399,7 @@ def test_llama_TG_perf_device(
         kernel_duration_dict_trace, num_layers - 1
     )
     dispatch_duration_per_instance_dict = build_duration_per_instance_dict(dispatch_duration_dict, num_layers - 1)
+    first_to_last_start_per_instance_dict = build_duration_per_instance_dict(first_to_last_start_dict, num_layers - 1)
 
     # first layer
     kernel_duration_per_instance_dict_compilation_first_layer = build_duration_per_instance_dict(
@@ -386,6 +411,9 @@ def test_llama_TG_perf_device(
     dispatch_duration_per_instance_dict_first_layer = build_duration_per_instance_dict(
         dispatch_duration_dict_first_layer, 1
     )
+    first_to_last_start_per_instance_dict_first_layer = build_duration_per_instance_dict(
+        first_to_last_start_dict_first_layer, 1
+    )
 
     # Average over all iterations of each op instance
     kernel_duration_per_instance_averaged_dict_compilation = average_per_instance_dict(
@@ -395,6 +423,18 @@ def test_llama_TG_perf_device(
         kernel_duration_per_instance_dict_trace
     )
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
+    first_to_last_start_per_instance_averaged_dict = average_per_instance_dict(first_to_last_start_per_instance_dict)
+
+    # first layer
+    kernel_duration_per_instance_averaged_dict_compilation_first_layer = average_per_instance_dict(
+        kernel_duration_per_instance_dict_compilation_first_layer
+    )
+    kernel_duration_per_instance_averaged_dict_trace_first_layer = average_per_instance_dict(
+        kernel_duration_per_instance_dict_trace_first_layer
+    )
+    dispatch_duration_per_instance_averaged_dict_first_layer = average_per_instance_dict(
+        dispatch_duration_per_instance_dict_first_layer
+    )
 
     # Min over all iterations of each op instance
     kernel_duration_per_instance_min_dict_compilation = min_per_instance_dict(
@@ -402,6 +442,7 @@ def test_llama_TG_perf_device(
     )
     kernel_duration_per_instance_min_dict_trace = min_per_instance_dict(kernel_duration_per_instance_dict_trace)
     dispatch_duration_per_instance_min_dict = min_per_instance_dict(dispatch_duration_per_instance_dict)
+    first_to_last_start_per_instance_min_dict = min_per_instance_dict(first_to_last_start_per_instance_dict)
 
     # Max over all iterations of each op instance
     kernel_duration_per_instance_max_dict_compilation = max_per_instance_dict(
@@ -409,6 +450,7 @@ def test_llama_TG_perf_device(
     )
     kernel_duration_per_instance_max_dict_trace = max_per_instance_dict(kernel_duration_per_instance_dict_trace)
     dispatch_duration_per_instance_max_dict = max_per_instance_dict(dispatch_duration_per_instance_dict)
+    first_to_last_start_per_instance_max_dict = max_per_instance_dict(first_to_last_start_per_instance_dict)
 
     if len(kernel_duration_per_instance_averaged_dict_compilation) != len(perf_targets):
         print(f"perf_targets: {perf_targets}")
@@ -418,6 +460,7 @@ def test_llama_TG_perf_device(
     )
     print_dict(kernel_duration_per_instance_averaged_dict_trace, "kernel_duration_per_instance_averaged_dict_trace")
     print_dict(dispatch_duration_per_instance_averaged_dict, "dispatch_duration_per_instance_averaged_dict")
+    print_dict(first_to_last_start_per_instance_averaged_dict, "first_to_last_start_per_instance_averaged_dict")
 
     assert len(kernel_duration_per_instance_averaged_dict_compilation) == len(
         perf_targets
@@ -444,6 +487,13 @@ def test_llama_TG_perf_device(
             benchmark_data.add_measurement(
                 profiler, 0, step_name, op_name + "-model-op_to_op-avg", avg_dispatch_duration
             )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-first_to_last-avg",
+                first_to_last_start_per_instance_averaged_dict[op_code_with_id],
+            )
 
             # min
             benchmark_data.add_measurement(
@@ -460,6 +510,13 @@ def test_llama_TG_perf_device(
                 op_name + "-model-op_to_op-min",
                 dispatch_duration_per_instance_min_dict[op_code_with_id],
             )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-first_to_last-min",
+                first_to_last_start_per_instance_min_dict[op_code_with_id],
+            )
 
             # max
             benchmark_data.add_measurement(
@@ -475,6 +532,13 @@ def test_llama_TG_perf_device(
                 step_name,
                 op_name + "-model-op_to_op-max",
                 dispatch_duration_per_instance_max_dict[op_code_with_id],
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-first_to_last-max",
+                first_to_last_start_per_instance_max_dict[op_code_with_id],
             )
 
             # Verify kernel duration is within tolerance
@@ -538,6 +602,39 @@ def test_llama_TG_perf_device(
                     f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(perf_targets[op_code_with_id]['op_to_op'] - avg_dispatch_duration) / perf_targets[op_code_with_id]['op_to_op']}"
+                )
+
+            # Verify first_to_last_start is within tolerance
+            avg_first_to_last = first_to_last_start_per_instance_averaged_dict[op_code_with_id]
+            upper_limit = (
+                perf_targets[op_code_with_id]["first_to_last_start"]
+                + perf_targets[op_code_with_id]["first_to_last_start_relative_margin"]
+                * perf_targets[op_code_with_id]["first_to_last_start"]
+            )
+            lower_limit = (
+                perf_targets[op_code_with_id]["first_to_last_start"]
+                - perf_targets[op_code_with_id]["first_to_last_start_relative_margin"]
+                * perf_targets[op_code_with_id]["first_to_last_start"]
+            )
+            if avg_first_to_last > upper_limit:
+                passing = False
+                logger.info(
+                    f"{op_code_with_id} first_to_last_start: {avg_first_to_last} ns is larger than target "
+                    f"({perf_targets[op_code_with_id]['first_to_last_start']}) ns, difference: "
+                    f"{abs(avg_first_to_last - upper_limit)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['first_to_last_start_relative_margin']}, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['first_to_last_start'] - avg_first_to_last) / perf_targets[op_code_with_id]['first_to_last_start']}"
+                )
+            elif avg_first_to_last < lower_limit:
+                passing = False
+                logger.info(
+                    f"{op_code_with_id} first_to_last_start: {avg_first_to_last} ns is smaller than target "
+                    f"({perf_targets[op_code_with_id]['first_to_last_start']}) ns, difference: "
+                    f"{abs(lower_limit - avg_first_to_last)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['first_to_last_start_relative_margin']}, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['first_to_last_start'] - avg_first_to_last) / perf_targets[op_code_with_id]['first_to_last_start']}"
                 )
 
         else:

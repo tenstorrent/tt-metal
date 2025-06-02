@@ -40,6 +40,8 @@ class RunTimeOptions;
 }
 namespace tt_fabric {
 class ControlPlane;
+class GlobalControlPlane;
+class FabricNodeId;
 }
 namespace tt_metal {
 class Hal;
@@ -111,7 +113,7 @@ public:
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
-    std::unordered_map<chip_id_t, uint64_t> get_unique_chip_ids() const {
+    const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
@@ -135,6 +137,10 @@ public:
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
     }
 
+    uint16_t get_bus_id(chip_id_t chip) const {
+        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
+    }
+
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
 
@@ -146,26 +152,13 @@ public:
         const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
 
     void write_dram_vec(
-        std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access = false) const;
-    void read_dram_vec(
-        std::vector<uint32_t>& vec,
-        uint32_t size_in_bytes,
-        chip_id_t device_id,
-        int dram_view,
-        uint64_t addr,
-        bool small_access = false) const;
+        const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
+    void read_dram_vec(void* mem_ptr, uint32_t size_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
 
     // Accepts physical noc coordinates
-    void write_core(
-        const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
-    void read_core(
-        void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
-    void read_core(
-        std::vector<uint32_t>& data,
-        uint32_t sz_in_bytes,
-        tt_cxy_pair core,
-        uint64_t addr,
-        bool small_access = false) const;
+    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
@@ -226,10 +219,16 @@ public:
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
 
     // Returns whether `logical_core` has an eth link to a core on a connected chip
+    // Cores that connect to another cluster will show up as connected
     bool is_ethernet_link_up(chip_id_t chip_id, const CoreCoord& logical_core) const;
 
     // Returns connected ethernet core on the other chip
+    // If the core is connected to a device not accessible through this Cluster, it will assert
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
+
+    // Returns connected ethernet core on the other chip that is not managed by this Cluster
+    std::tuple<uint64_t, CoreCoord> get_connected_ethernet_core_to_remote_mmio_device(
+        std::tuple<chip_id_t, CoreCoord> eth_core) const;
 
     // Returns a ethernet sockets between local chip and remote chip
     // get_ethernet_sockets(a, b)[0] is connected to get_ethernet_sockets(b, a)[0]
@@ -269,6 +268,12 @@ public:
         return this->cluster_desc_->get_ethernet_connections();
     }
 
+    // TODO: unify uint64_t with ChipUID
+    std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>
+    get_ethernet_connections_to_remote_mmio_devices() const {
+        return this->cluster_desc_->get_ethernet_connections_to_remote_mmio_devices();
+    }
+
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
         return this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
@@ -301,7 +306,7 @@ public:
 
     void set_custom_control_plane_mesh_graph(
         const std::string& mesh_graph_desc_file,
-        const std::vector<std::vector<chip_id_t>>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
 
     void set_default_control_plane_mesh_graph();
 
@@ -334,6 +339,12 @@ public:
     std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const;
 
     const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
+
+    std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) const;
+
+    // TODO: move to separate system descriptor class
+    // return enum for connection type, Internal, QSFP, Other, Unknown
+    bool is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) const;
 
 private:
     void detect_arch_and_target();
@@ -401,7 +412,7 @@ private:
 
     tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
 
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
+    std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
 
     // Tunnels setup in cluster
     std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};

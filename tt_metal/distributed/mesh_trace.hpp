@@ -6,7 +6,7 @@
 
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <tt-metalium/trace_buffer.hpp>
+#include "trace/trace_buffer.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -61,10 +61,10 @@ public:
 // Ties a MeshTraceDescriptor (host side state) to a MeshBuffer (device side state)
 struct MeshTraceBuffer {
     // The trace descriptor associated with a MeshTrace
-    std::shared_ptr<MeshTraceDescriptor> desc;
+    std::shared_ptr<MeshTraceDescriptor> desc = nullptr;
     // The MeshBuffer this trace will be serialized to, before being run on a
     // MeshDevice
-    std::shared_ptr<MeshBuffer> mesh_buffer;
+    std::shared_ptr<MeshBuffer> mesh_buffer = nullptr;
 };
 
 // Top level class - Manages MeshTrace

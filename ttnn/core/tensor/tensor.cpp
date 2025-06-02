@@ -650,7 +650,7 @@ void memcpy(
 
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     if (auto mesh_device = dst.mesh_device()) {
-        memcpy(dst.mesh_device()->mesh_command_queue(), dst, src, region);
+        memcpy(mesh_device->mesh_command_queue(), dst, src, region);
     } else {
         memcpy(dst.device()->command_queue(), dst, src, region);
     }
@@ -834,6 +834,8 @@ IDevice* Tensor::device() const {
 const MemoryConfig& Tensor::memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
 
 const std::optional<ShardSpec>& Tensor::shard_spec() const { return this->memory_config().shard_spec(); }
+
+const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->memory_config().nd_shard_spec(); }
 
 const DistributedTensorConfig& Tensor::distributed_tensor_config() const {
     return this->tensor_attributes->get_distributed_tensor_config();

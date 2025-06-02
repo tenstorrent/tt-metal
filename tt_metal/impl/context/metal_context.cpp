@@ -191,12 +191,11 @@ void MetalContext::clear_dram_state(chip_id_t device_id) {
 
     auto dram_size_per_channel = cluster_->get_soc_desc(device_id).dram_view_size;
     auto num_dram_channels = cluster_->get_soc_desc(device_id).get_num_dram_views();
-    TT_ASSERT(dram_size_per_channel % sizeof(uint32_t) == 0);
     constexpr uint32_t start_address = 0;
-    std::vector<uint32_t> zero_vec(dram_size_per_channel / sizeof(uint32_t), 0);
+    std::vector<uint8_t> zero_vec(dram_size_per_channel, 0);
     for (int channel = 0; channel < num_dram_channels; ++channel) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-            zero_vec, device_id, channel, start_address);
+            zero_vec.data(), zero_vec.size(), device_id, channel, start_address);
 
         cluster_->dram_barrier(device_id);
     }

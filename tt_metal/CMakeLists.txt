@@ -90,15 +90,12 @@ target_sources(
             api/tt-metalium/sub_device_types.hpp
             api/tt-metalium/system_mesh.hpp
             api/tt-metalium/tile.hpp
-            api/tt-metalium/trace.hpp
-            api/tt-metalium/trace_buffer.hpp
             api/tt-metalium/tt_align.hpp
             api/tt-metalium/tt_backend_api_types.hpp
             api/tt-metalium/tt_memory.h
             api/tt-metalium/tt_metal.hpp
             api/tt-metalium/util.hpp
             api/tt-metalium/utils.hpp
-            api/tt-metalium/work_executor_types.hpp
             api/tt-metalium/work_split.hpp
             api/tt-metalium/distributed_context.hpp
 )
@@ -106,6 +103,13 @@ target_sources(
 # TODO(afuller): this should be self-describing modules.
 #   For now just cherry-pick all the files I discovered empirally by trying to run a test.
 add_library(jitapi INTERFACE)
+# These headers are for the device, not host; will require cross compiling to verify.
+set_target_properties(
+    jitapi
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 target_sources(
     jitapi
     INTERFACE
