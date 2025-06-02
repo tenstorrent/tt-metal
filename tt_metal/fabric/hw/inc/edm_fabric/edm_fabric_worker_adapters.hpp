@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -109,6 +109,7 @@ struct WorkerToFabricEdmSenderImpl {
             write_at_cmd_buf);
     }
 
+    template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
     FORCE_INLINE void init(
         bool connected_to_persistent_fabric,
         uint8_t direction,
@@ -145,11 +146,11 @@ struct WorkerToFabricEdmSenderImpl {
         this->edm_connection_handshake_l1_addr =
             connected_to_persistent_fabric
                 ? edm_connection_handshake_l1_id
-                : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_connection_handshake_l1_id);
+                : get_semaphore<my_core_type>(edm_connection_handshake_l1_id);
         this->edm_worker_location_info_addr = edm_worker_location_info_addr;
         this->edm_copy_of_wr_counter_addr = connected_to_persistent_fabric
                                                 ? edm_buffer_index_id
-                                                : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_buffer_index_id);
+                                                : get_semaphore<my_core_type>(edm_buffer_index_id);
         this->from_remote_buffer_free_slots_ptr = from_remote_buffer_free_slots_ptr;
         this->worker_teardown_addr = worker_teardown_addr;
         this->edm_buffer_base_addr = edm_buffer_base_addr;
@@ -172,6 +173,7 @@ struct WorkerToFabricEdmSenderImpl {
         }
     }
 
+    template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
     WorkerToFabricEdmSenderImpl(
         bool connected_to_persistent_fabric,
         uint8_t direction,
@@ -191,7 +193,7 @@ struct WorkerToFabricEdmSenderImpl {
         StreamId worker_credits_stream_id,
         uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
         uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
-        this->init(
+        this->init<my_core_type>(
             connected_to_persistent_fabric,
             direction,
             edm_worker_x,
