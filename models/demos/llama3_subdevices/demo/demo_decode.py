@@ -530,9 +530,11 @@ def run_llama3_demo(
     if is_ci_env and tokens_per_second_per_user_token127 is not None:
         benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
 
+        run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg_llama_demo_decode",
+            run_type=run_type,
             ml_model_name="llama70b-tg",
         )
 

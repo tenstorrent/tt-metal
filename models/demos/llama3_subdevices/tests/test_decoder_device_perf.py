@@ -6,6 +6,7 @@ from loguru import logger
 import os
 import math
 import ttnn
+import json
 import pandas as pd
 from collections import defaultdict
 from models.demos.llama3_subdevices.tt.llama_common import (
@@ -22,218 +23,6 @@ from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 DECODER_OP_START_INDEX = 4
 DECODER_OP_END_INDEX = -13
-
-perf_targets = {
-    "RMSAllGather_0": {
-        "op_name": "RMS_0",
-        "kernel_duration": 18530.621527777777,
-        "op_to_op": 839.6666666666666,
-        "first_to_last_start": 2484.1111111111113,
-        "non-overlapped-dispatch-time": 8380,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "RMSAllGather_1": {
-        "op_name": "RMS_1",
-        "kernel_duration": 18100.121527777777,
-        "op_to_op": 816.2222222222222,
-        "first_to_last_start": 2509.6666666666665,
-        "non-overlapped-dispatch-time": 8139.7,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "AllGatherConcat_0": {
-        "op_name": "AllGatherConcat",
-        "kernel_duration": 12419.194444444445,
-        "op_to_op": 796.8888888888889,
-        "first_to_last_start": 1866.0,
-        "non-overlapped-dispatch-time": 12541.7,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.5,
-    },
-    "AllGatherAsync_0": {
-        "op_name": "AllGatherAsync_Binary_Mult",
-        "kernel_duration": 11328.694444444445,
-        "op_to_op": 959.5555,
-        "first_to_last_start": 1565.888888888889,
-        "non-overlapped-dispatch-time": 4351.1,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "Matmul_0": {
-        "op_name": "QKV_MM",
-        "kernel_duration": 8556.222222222223,
-        "op_to_op": 716.4444444444445,
-        "first_to_last_start": 2106.0,
-        "non-overlapped-dispatch-time": 5653.2,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
-    },
-    "Matmul_1": {
-        "op_name": "DO_MM",
-        "kernel_duration": 8902,
-        "op_to_op": 723.0,
-        "first_to_last_start": 2207.5555555555557,
-        "non-overlapped-dispatch-time": 5760.2,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
-    },
-    "Matmul_2": {
-        "op_name": "FF1_MM",
-        "kernel_duration": 9483.888888888889,
-        "op_to_op": 711.8888888888889,
-        "first_to_last_start": 2120.6666666666665,
-        "non-overlapped-dispatch-time": 5380.6,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "Matmul_3": {
-        "op_name": "FF3_MM",
-        "kernel_duration": 9435.333333333334,
-        "op_to_op": 688.7777777777778,
-        "first_to_last_start": 2132.3333333333335,
-        "non-overlapped-dispatch-time": 7093.7,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.15,
-    },
-    "Matmul_4": {
-        "op_name": "FF2_MM",
-        "kernel_duration": 15891.0,
-        "op_to_op": 658.7777777777778,
-        "first_to_last_start": 1719.111111111111,
-        "non-overlapped-dispatch-time": 6770.3,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
-    },
-    "AllReduceCreateQkvHeads_0": {
-        "op_name": "AllReduce_Fuse_Createheads",
-        "kernel_duration": 14541.059027777777,
-        "op_to_op": 966.0,
-        "first_to_last_start": 1906.2222222222222,
-        "non-overlapped-dispatch-time": 7932.2,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.4,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "AllReduceAsync_0": {
-        "op_name": "AllReduceAsync_DO",
-        "kernel_duration": 21736.76736111111,
-        "op_to_op": 626.5555555555555,
-        "first_to_last_start": 1660.7777777777778,
-        "non-overlapped-dispatch-time": 8510.2,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.3,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.3,
-    },
-    "AllReduceAsync_1": {
-        "op_name": "AllReduceAsync_FF2",
-        "kernel_duration": 22341.23263888889,
-        "op_to_op": 637.1111111111111,
-        "first_to_last_start": 1785.2222222222222,
-        "non-overlapped-dispatch-time": 7252.4,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "LlamaReduceScatterDeviceOperation_0": {
-        "op_name": "ReduceScatter_FF1",
-        "kernel_duration": 9952.402777777777,
-        "op_to_op": 708.1111111111111,
-        "first_to_last_start": 1993.7777777777778,
-        "non-overlapped-dispatch-time": 8058.9,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.3,
-    },
-    "LlamaReduceScatterDeviceOperation_1": {
-        "op_name": "ReduceScatter_FF3",
-        "kernel_duration": 9817.020833333334,
-        "op_to_op": 812.1111111111111,
-        "first_to_last_start": 2018.2222222222222,
-        "non-overlapped-dispatch-time": 7359.9,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.3,
-    },
-    "RotaryEmbeddingLlamaFusedQK_0": {
-        "op_name": "RotaryEmbeddingLlamaFusedQK",
-        "kernel_duration": 4296,
-        "op_to_op": 606.1111111111111,
-        "first_to_last_start": 2560.8888888888887,
-        "non-overlapped-dispatch-time": 2844.3,
-        "kernel_duration_relative_margin": 0.1,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.35,
-    },
-    "PagedUpdateCacheDeviceOperation_0": {
-        "op_name": "PagedUpdateCache",
-        "kernel_duration": 5963,
-        "op_to_op": 860.2222222222222,
-        "first_to_last_start": 2317.1111111111113,
-        "non-overlapped-dispatch-time": 5890.0,
-        "kernel_duration_relative_margin": 0.2,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "ScaledDotProductAttentionDecode_0": {
-        "op_name": "SDPA",
-        "kernel_duration": 13338,
-        "op_to_op": 652.6666666666666,
-        "first_to_last_start": 2766.222222222222,
-        "non-overlapped-dispatch-time": 9741.5,
-        "kernel_duration_relative_margin": 0.07,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.3,
-    },
-    "BinaryDeviceOperation_0": {
-        "op_name": "Binary_Mult_Silu",
-        "kernel_duration": 2923.5555555555557,
-        "op_to_op": 661.0,
-        "first_to_last_start": 1857.5555555555557,
-        "non-overlapped-dispatch-time": 6111.2,
-        "kernel_duration_relative_margin": 0.1,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.2,
-    },
-    "Untilize_0": {
-        "op_name": "Untilize",
-        "kernel_duration": 1517.3333333333335,
-        "op_to_op": 800,
-        "first_to_last_start": 2043.3333333333333,
-        "non-overlapped-dispatch-time": 3113.6,
-        "kernel_duration_relative_margin": 0.2,
-        "op_to_op_duration_relative_margin": 0.2,
-        "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.5,
-    },
-}
 
 
 @pytest.mark.parametrize(
@@ -477,6 +266,28 @@ def is_collective_op(op_code):
     return "AllGather" in op_code or "ReduceScatter" in op_code or "AllReduce" in op_code
 
 
+def load_perf_targets(galaxy_type):
+    if galaxy_type == "4U":
+        perf_target_json_filename = "models/demos/llama3_subdevices/tests/decoder_perf_targets_4u.json"
+    elif galaxy_type == "6U":
+        perf_target_json_filename = "models/demos/llama3_subdevices/tests/decoder_perf_targets_6u.json"
+    else:
+        raise Exception(f"Unsupported galaxy type: {galaxy_type}. It must be either '4U' or '6U'.")
+
+    try:
+        with open(perf_target_json_filename, "r", encoding="utf-8") as f:
+            perf_targets = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Performance target file '{perf_target_json_filename}' does not exist.")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON format in '{perf_target_json_filename}': {e}")
+
+    if not isinstance(perf_targets, dict):
+        raise ValueError(f"Expected top-level JSON object to be a dictionary in '{perf_target_json_filename}'.")
+
+    return perf_targets
+
+
 @pytest.mark.models_device_performance_bare_metal
 # To update:
 # Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
@@ -488,7 +299,9 @@ def is_collective_op(op_code):
 # Run at least once again to verify the new expected values are correct and margins hold
 def test_llama_TG_perf_device(
     reset_seeds,
+    galaxy_type,
 ):
+    perf_targets = load_perf_targets(galaxy_type)
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = "tg-llama-demo-device-perf-default"
@@ -860,9 +673,11 @@ def test_llama_TG_perf_device(
     benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
     benchmark_data.add_measurement(profiler, 0, step_name, "tsu_estimate", tsu_estimate)
 
+    run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+    # Save the results
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_demo_decode",
+        run_type=run_type,
         ml_model_name="llama70b-tg",
     )
 
@@ -880,7 +695,9 @@ def test_llama_TG_perf_device(
 # Run at least once again to verify the new expected values are correct and margins hold
 def test_llama_TG_perf_device_non_overlapped_dispatch(
     reset_seeds,
+    galaxy_type,
 ):
+    perf_targets = load_perf_targets(galaxy_type)
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = "tg-llama-demo-device-perf-non-overlapped-dispatch"
@@ -983,9 +800,11 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             passing = False
             logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
 
+    run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+    # Save the results
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_demo_decode",
+        run_type=run_type,
         ml_model_name="llama70b-tg",
     )
 
