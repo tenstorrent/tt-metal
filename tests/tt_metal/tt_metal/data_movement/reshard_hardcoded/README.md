@@ -26,3 +26,4 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 1. Reshard Hardcoded Small - A test that reshards a small amount of data using 2 cores.
 2. Reshard Hardcoded Medium - A test that reshards a medium amount of data using 2 cores.
 3. Reshard Hardcoded Many Cores - A test that reshards a medium amount of data using 8 cores.
+4. Reshard Hardcoded 2 Cores to Many Cores - A test that reshards 2 cores to 8 cores.

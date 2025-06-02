@@ -311,4 +311,90 @@ TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketManyCoresSizes) {
     }
 }
 
+TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketSmallCoresToManyCoresSizes) {
+    if (arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Skipping test for non-BH architecture";
+    }
+
+    // Parameters
+    uint32_t test_id = unit_tests::dm::reshard_hardcoded::START_ID + 3;
+    NOC noc_id = NOC::NOC_0;
+    std::set<CoreRange> dest_core_set = {
+        CoreRange(CoreCoord(0, 0)),
+        CoreRange(CoreCoord(1, 0)),
+        CoreRange(CoreCoord(2, 0)),
+        CoreRange(CoreCoord(3, 0)),
+        CoreRange(CoreCoord(4, 0))};
+    CoreRangeSet wrapper_dest_core_set(dest_core_set);
+    std::vector<uint32_t> dest_core_compile_args;
+    std::vector<uint32_t> dest_core_runtime_args;
+
+    dest_core_compile_args.push_back(1558528);  // l1_write_addr
+    dest_core_compile_args.push_back(11);       // num_x_cores
+    dest_core_compile_args.push_back(10);       // num_y_cores
+    dest_core_compile_args.push_back(2048);     // page_size
+    dest_core_compile_args.push_back(
+        1 * (((131328) & 0x0ffff) >>
+             8));  // num_of_transactions = num_ranges * (((stride_size_num_strides_skip)&0x0ffff) >> 8)
+    dest_core_compile_args.push_back(
+        (131328 >> 16) * 2048);  // transaction_size_bytes = (stride_size_num_strides_skip >> 16) * page_size
+    dest_core_compile_args.push_back(test_id);  // test_id
+
+    dest_core_runtime_args.push_back(1);        // 0
+    dest_core_runtime_args.push_back(2);        // 1
+    dest_core_runtime_args.push_back(0);        // 2
+    dest_core_runtime_args.push_back(0);        // 3
+    dest_core_runtime_args.push_back(0);        // 4
+    dest_core_runtime_args.push_back(0);        // 5
+    dest_core_runtime_args.push_back(0);        // 6
+    dest_core_runtime_args.push_back(0);        // 7
+    dest_core_runtime_args.push_back(0);        // 8
+    dest_core_runtime_args.push_back(0);        // 9
+    dest_core_runtime_args.push_back(0);        // 10
+    dest_core_runtime_args.push_back(2);        // 11
+    dest_core_runtime_args.push_back(0);        // 12
+    dest_core_runtime_args.push_back(0);        // 13
+    dest_core_runtime_args.push_back(0);        // 14
+    dest_core_runtime_args.push_back(0);        // 15
+    dest_core_runtime_args.push_back(0);        // 16
+    dest_core_runtime_args.push_back(0);        // 17
+    dest_core_runtime_args.push_back(0);        // 18
+    dest_core_runtime_args.push_back(0);        // 19
+    dest_core_runtime_args.push_back(0);        // 20
+    dest_core_runtime_args.push_back(1562624);  // 21
+    dest_core_runtime_args.push_back(2);        // 22
+    dest_core_runtime_args.push_back(1);        // 23
+    dest_core_runtime_args.push_back(0);        // 24
+    dest_core_runtime_args.push_back(0);        // 25
+    dest_core_runtime_args.push_back(2);        // 26
+    dest_core_runtime_args.push_back(131328);   // 27
+    dest_core_runtime_args.push_back(0);        // 28
+    dest_core_runtime_args.push_back(0);        // 29
+    dest_core_runtime_args.push_back(0);        // 30
+    dest_core_runtime_args.push_back(0);        // 31
+    dest_core_runtime_args.push_back(0);        // 32
+    dest_core_runtime_args.push_back(0);        // 33
+    dest_core_runtime_args.push_back(0);        // 34
+    dest_core_runtime_args.push_back(0);        // 35
+    dest_core_runtime_args.push_back(0);        // 36
+    dest_core_runtime_args.push_back(0);        // 37
+    dest_core_runtime_args.push_back(0);        // 38
+    dest_core_runtime_args.push_back(0);        // 39
+    dest_core_runtime_args.push_back(0);        // 40
+
+    // Test config
+    unit_tests::dm::reshard_hardcoded::ReshardConfig test_config = {
+        .test_id = test_id,
+        .dest_core_set = wrapper_dest_core_set,
+        .dest_core_compile_args = dest_core_compile_args,
+        .dest_core_runtime_args = dest_core_runtime_args,
+        .noc_id = noc_id,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
 }  // namespace tt::tt_metal
