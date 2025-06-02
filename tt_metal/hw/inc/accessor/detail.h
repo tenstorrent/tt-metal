@@ -36,6 +36,10 @@ struct ShapeWrapper {
     // Compiler should optimize out the second call
     static constexpr auto volume = compute_volume_and_strides(shape).first;
     static constexpr auto strides = compute_volume_and_strides(shape).second;
+
+    constexpr explicit ShapeWrapper() = default;
+    constexpr explicit ShapeWrapper(const ShapeBase&) {}
+    constexpr explicit ShapeWrapper(ShapeBase&&) {}
 };
 
 template <size_t Rank>
@@ -54,6 +58,8 @@ struct ShapeWrapperDynamic {
     constexpr explicit ShapeWrapperDynamic(Ts... exts) : shape{static_cast<uint32_t>(exts)...} {
         compute_volume_and_strides(shape);
     }
+
+    constexpr explicit ShapeWrapperDynamic() = default;
 
     constexpr explicit ShapeWrapperDynamic(const ShapeBase& shape) : shape{shape} { compute_volume_and_strides(shape); }
 
@@ -77,14 +83,24 @@ struct BankCoordWrapper {
     static constexpr size_t num_banks = sizeof...(PackedCoords);
     // TODO: Each bank coord is packed as one uint32_t (ie. (16 bits) <x> | (16 bits) <y>)
     // This can be optimized to be 8 bits per coord, so we pack two bank coords in one uint32_t compile time arg
-    static constexpr std::array<uint32_t, num_banks> packed_xy_coords = {PackedCoords...};
+    using PackedCoordsArray = std::array<uint32_t, num_banks>;
+    static constexpr PackedCoordsArray packed_xy_coords = {PackedCoords...};
+    constexpr explicit BankCoordWrapper() = default;
+    constexpr explicit BankCoordWrapper(const PackedCoordsArray&) {}
+    constexpr explicit BankCoordWrapper(PackedCoordsArray&&) {}
 };
 
 template <size_t NumBanks>
 struct BankCoordWrapperDynamic {
     static constexpr bool is_static = false;
     static constexpr size_t num_banks = NumBanks;
-    std::array<uint32_t, NumBanks> packed_xy_coords;
+    using PackedCoordsArray = std::array<uint32_t, num_banks>;
+    PackedCoordsArray packed_xy_coords;
+    constexpr explicit BankCoordWrapperDynamic() = default;
+    constexpr explicit BankCoordWrapperDynamic(const PackedCoordsArray& banks_coords) :
+        packed_xy_coords(banks_coords) {}
+    constexpr explicit BankCoordWrapperDynamic(PackedCoordsArray&& banks_coords) :
+        packed_xy_coords(std::move(banks_coords)) {}
 };
 
 //
@@ -105,10 +121,12 @@ struct DistributionSpec {
     static constexpr auto rank = TensorShape::rank;
     using ShapeBase = typename TensorShape::ShapeBase;
     static_assert(rank > 0, "Tensor and shard shape ranks must be greater than 0!");
+    using PackedCoordsArray = typename BankCoords::PackedCoordsArray;
 
     static constexpr bool all_shapes_static = TensorShape::is_static && ShardShape::is_static;
-
     static constexpr bool bank_coords_static = BankCoords::is_static;
+    static constexpr bool is_static = all_shapes_static && bank_coords_static;
+
     static constexpr size_t num_banks = BankCoords::num_banks;
 
     template <
@@ -139,47 +157,26 @@ struct DistributionSpec {
         }
     }
 
-    // Single constructor that handles all array cases
-    constexpr DistributionSpec(const ShapeBase& shape1_arr, const ShapeBase& shape2_arr = {}) :
-        DistributionSpec(shape1_arr, shape2_arr, select_constructor_tag()) {}
-
-private:
-    struct dynamic_tensor_dynamic_shard_tag {};
-    struct dynamic_tensor_static_shard_tag {};
-    struct static_tensor_dynamic_shard_tag {};
-
-    // Function to select the appropriate tag based on static/dynamic properties
-    static constexpr auto select_constructor_tag() {
-        if constexpr (!TensorShape::is_static && !ShardShape::is_static) {
-            return dynamic_tensor_dynamic_shard_tag{};
-        } else if constexpr (!TensorShape::is_static && ShardShape::is_static) {
-            return dynamic_tensor_static_shard_tag{};
-        } else if constexpr (TensorShape::is_static && !ShardShape::is_static) {
-            return static_tensor_dynamic_shard_tag{};
-        } else {
-            // This case is handled by the tuple constructor, so it shouldn't reach here
-            static_assert(!all_shapes_static, "Static tensor and static shard should use the tuple constructor");
+    template <
+        typename TensorShapeArr = ShapeBase,
+        typename ShardShapeArr = ShapeBase,
+        typename BankCoordsArr = PackedCoordsArray>
+    constexpr DistributionSpec(
+        TensorShapeArr&& tensor_shape_arr, ShardShapeArr&& shard_shape_arr = {}, BankCoordsArr&& bank_coords_arr = {}) :
+        tensor_shape_(std::forward<TensorShapeArr>(tensor_shape_arr)),
+        shard_shape_(std::forward<ShardShapeArr>(shard_shape_arr)),
+        bank_coords_(std::forward<BankCoordsArr>(bank_coords_arr)) {
+        static_assert(!(is_static), "Everything is static, this constructor is obsolete!");
+        if constexpr (!all_shapes_static) {
+            ASSERT(get_tensor_shape().size() == rank, "Tensor shape has bad rank!");
+            ASSERT(get_shard_shape().size() == rank, "Shard shape has bad rank!");
+            compute_shard_grid_and_strides_rt(get_tensor_shape(), get_shard_shape());
+        }
+        if constexpr (!bank_coords_static) {
+            ASSERT(bank_coords_arr.size() == num_banks, "Number of bank coordinates must match the number of banks!");
         }
     }
 
-    // Specializations for each case
-    constexpr DistributionSpec(
-        const ShapeBase& tensor_shape_arr, const ShapeBase& shard_shape_arr, dynamic_tensor_dynamic_shard_tag) :
-        tensor_shape_(tensor_shape_arr), shard_shape_(shard_shape_arr) {
-        compute_shard_grid_and_strides_rt(tensor_shape_.shape, shard_shape_.shape);
-    }
-
-    constexpr DistributionSpec(const ShapeBase& tensor_shape_arr, const ShapeBase&, dynamic_tensor_static_shard_tag) :
-        tensor_shape_(tensor_shape_arr) {
-        compute_shard_grid_and_strides_rt(tensor_shape_.shape, ShardShape::shape);
-    }
-
-    constexpr DistributionSpec(const ShapeBase& shard_shape_arr, const ShapeBase&, static_tensor_dynamic_shard_tag) :
-        shard_shape_(shard_shape_arr) {
-        compute_shard_grid_and_strides_rt(TensorShape::shape, shard_shape_.shape);
-    }
-
-public:
     constexpr const ShapeBase& get_shard_grid() const {
         if constexpr (all_shapes_static) {
             return shard_grid_ct_;
@@ -244,7 +241,7 @@ public:
         }
     }
 
-    constexpr const std::array<uint32_t, num_banks>& get_packed_xy_coords() const {
+    constexpr const PackedCoordsArray& get_packed_xy_coords() const {
         if constexpr (BankCoords::is_static) {
             return BankCoords::packed_xy_coords;
         } else {
