@@ -2275,9 +2275,9 @@ void py_module(py::module& module) {
         module,
         ttnn::round,
         "decimals",
-        "no. of decimal places to round off to [supported range -6 to 7], Defaults to 0",
+        "No. of decimal places to round off to [supported range -6 to 7], Defaults to 0.",
         R"doc(Round the input tensor to `decimals` decimal places.)doc",
-        R"doc(FLOAT32, BFLOAT16. BFLOAT8_B)doc");
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite_int(
         module,
         ttnn::polygamma,
