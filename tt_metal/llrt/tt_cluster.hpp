@@ -376,6 +376,8 @@ private:
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
 
+    bool supports_dma_operations(chip_id_t chip_id) const;
+
     ARCH arch_;
     TargetDevice target_type_;
 
