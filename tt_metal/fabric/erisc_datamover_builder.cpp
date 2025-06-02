@@ -343,6 +343,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->receiver_channels_size_bytes[i] =
             skip_current_channel ? 0 : channel_buffer_size_bytes * num_receiver_buffer_slots;
     }
+    // TODO: change remote receiver channels to be calculated seprately
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+        this->remote_receiver_channels_num_buffers[i] = this->receiver_channels_num_buffers[i];
+    }
 
     uint32_t buffer_addr = buffer_region_start;
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -506,6 +510,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     channel_buffer_size(config.channel_buffer_size_bytes),
     sender_channels_num_buffers(config.sender_channels_num_buffers),
     receiver_channels_num_buffers(config.receiver_channels_num_buffers),
+    remote_receiver_channels_num_buffers(config.remote_receiver_channels_num_buffers),
 
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
     receiver_channels_downstream_flow_control_semaphore_id(receiver_channels_downstream_flow_control_semaphore_id),
@@ -564,7 +569,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     TT_FATAL(sender_channel_num_buffers > 0, "Sender channel num buffers must be greater than 0");
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
-    auto ct_args = std::vector<uint32_t>{
+    auto ct_args_part_1 = std::vector<uint32_t>{
         num_sender_channels,
         num_receiver_channels,
         config.num_fwd_paths,
@@ -577,11 +582,24 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->dateline_connection,
         is_handshake_master,
         this->handshake_address,
-        this->channel_buffer_size,
+        this->channel_buffer_size};
 
-        sender_channel_num_buffers,
-        receiver_channel_num_buffers,
+    ct_args_part_1.insert(
+        ct_args_part_1.end(),
+        this->sender_channels_num_buffers.begin(),
+        this->sender_channels_num_buffers.begin() + num_sender_channels);
 
+    ct_args_part_1.insert(
+        ct_args_part_1.end(),
+        this->receiver_channels_num_buffers.begin(),
+        this->receiver_channels_num_buffers.begin() + num_receiver_channels);
+
+    ct_args_part_1.insert(
+        ct_args_part_1.end(),
+        this->remote_receiver_channels_num_buffers.begin(),
+        this->remote_receiver_channels_num_buffers.begin() + num_receiver_channels);
+
+    auto ct_args_part_2 = std::vector<uint32_t>{
         config.sender_channels_base_address[0],
         config.sender_channels_worker_conn_info_base_address[0],
         config.sender_channels_base_address[1],
@@ -658,6 +676,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
+
+    auto ct_args = std::vector<uint32_t>();
+    ct_args.insert(ct_args.end(), ct_args_part_1.begin(), ct_args_part_1.end());
+    ct_args.insert(ct_args.end(), ct_args_part_2.begin(), ct_args_part_2.end());
 
     for (size_t i = 0; i < num_sender_channels; i++) {
         ct_args.push_back(this->sender_channel_connection_liveness_check_disable_array[i]);
