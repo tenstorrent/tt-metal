@@ -135,21 +135,19 @@ struct EthChannelBufferTuple {
         const size_t buffer_size_bytes,
         const size_t header_size_bytes,
         const size_t eth_transaction_ack_word_addr,
-        const uint8_t channel_base_id) {
+        const size_t channel_base_id) {
+        size_t idx = 0;
+
         std::apply(
-            // <-- note the template<...> here
-            [&]<typename... ChanT>(ChanT&... chans) {
-                size_t idx = 0;
-                (void)std::initializer_list<int>{(
-                    new (&chans) ChanT(
-                        channel_base_address[idx],
-                        buffer_size_bytes,
-                        header_size_bytes,
-                        eth_transaction_ack_word_addr,
-                        channel_base_id + idx),
-                    ++idx,  // increment *after* the read
-                    0       // dummy value
-                    )...};
+            [&](auto&... chans) {
+                ((new (&chans) std::remove_reference_t<decltype(chans)>(
+                      channel_base_address[idx],
+                      buffer_size_bytes,
+                      header_size_bytes,
+                      eth_transaction_ack_word_addr,
+                      static_cast<uint8_t>(channel_base_id + idx)),
+                  ++idx),
+                 ...);
             },
             channel_buffers);
     }

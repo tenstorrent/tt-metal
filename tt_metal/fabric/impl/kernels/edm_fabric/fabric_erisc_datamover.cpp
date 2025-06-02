@@ -1052,13 +1052,11 @@ void run_receiver_channel_step(
 };
 
 template <
-    typename EdmChannelWorkerIFs,
     uint8_t RECEIVER_NUM_BUFFERS,
     size_t NUM_RECEIVER_CHANNELS,
     uint8_t SENDER_NUM_BUFFERS,
     size_t NUM_SENDER_CHANNELS>
 bool all_channels_drained(
-    EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
     std::array<ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& receiver_channel_pointers) {
     bool eth_buffers_drained = get_ptr_val<sender_channel_free_slots_stream_ids[0]>() == SENDER_NUM_BUFFERS_ARRAY[0] &&
                                get_ptr_val<sender_channel_free_slots_stream_ids[1]>() == SENDER_NUM_BUFFERS_ARRAY[1] &&
@@ -1102,10 +1100,6 @@ bool all_channels_drained(
  * channels every iteration unless it is unsafe/undesirable to do so (e.g. for performance reasons).
  */
 template <
-    typename EthSenderChannels,
-    typename EthReceiverChannels,
-    typename RemoteEthReceiverChannels,
-    typename EdmChannelWorkerIFs,
     bool enable_packet_header_recording,
     bool enable_fabric_counters,
     uint8_t RECEIVER_NUM_BUFFERS,
@@ -1113,7 +1107,11 @@ template <
     uint8_t SENDER_NUM_BUFFERS,
     size_t NUM_SENDER_CHANNELS,
     size_t MAX_NUM_SENDER_CHANNELS,
-    size_t MAX_NUM_RECEIVER_CHANNELS>
+    size_t MAX_NUM_RECEIVER_CHANNELS,
+    typename EthSenderChannels,
+    typename EthReceiverChannels,
+    typename RemoteEthReceiverChannels,
+    typename EdmChannelWorkerIFs>
 void run_fabric_edm_main_loop(
     EthReceiverChannels& local_receiver_channels,
     EthSenderChannels& local_sender_channels,
@@ -1156,11 +1154,10 @@ void run_fabric_edm_main_loop(
         if (got_graceful_termination) {
             DPRINT << "EDM Graceful termination\n";
             bool all_drained = all_channels_drained<
-                EdmChannelWorkerIFs,
                 RECEIVER_NUM_BUFFERS,
                 NUM_RECEIVER_CHANNELS,
                 SENDER_NUM_BUFFERS,
-                NUM_SENDER_CHANNELS>(local_sender_channel_worker_interfaces, receiver_channel_pointers);
+                NUM_SENDER_CHANNELS>(receiver_channel_pointers);
 
             if (all_drained) {
                 return;
@@ -1351,7 +1348,7 @@ constexpr size_t get_credits_init_val() {
     }
 };
 
-template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>
+template <size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
 void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
@@ -1936,7 +1933,7 @@ void kernel_main() {
         sender_channel_base_id);
 
     // initialize the local sender channel worker interfaces
-    init_local_sender_channel_worker_interfaces<decltype(local_sender_channel_worker_interfaces), NUM_SENDER_CHANNELS>(
+    init_local_sender_channel_worker_interfaces(
         local_sender_connection_live_semaphore_addresses,
         local_sender_connection_info_addresses,
         local_sender_channel_worker_interfaces,
@@ -2041,10 +2038,6 @@ void kernel_main() {
     //////////////////////////////
     //////////////////////////////
     run_fabric_edm_main_loop<
-        decltype(local_sender_channels),
-        decltype(local_receiver_channels),
-        decltype(remote_receiver_channels),
-        decltype(local_sender_channel_worker_interfaces),
         enable_packet_header_recording,
         enable_fabric_counters,
         RECEIVER_NUM_BUFFERS,
