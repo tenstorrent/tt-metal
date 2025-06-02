@@ -1002,6 +1002,16 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
                         }
                     }
                 }
+                // We want to also add the eth cores that are connected to other chips possibly outside the opened
+                // cluster.
+                const auto& soc_desc = get_soc_desc(chip_id);
+                for (const auto& eth_channel : cluster_desc_->get_active_eth_channels(chip_id)) {
+                    auto eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                    if (this->device_eth_routing_info_.at(chip_id).find(eth_core) ==
+                        this->device_eth_routing_info_.at(chip_id).end()) {
+                        this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
+                    }
+                }
             } else {
                 // Slow dispatch mode
                 for (const auto &[connected_chip_id, active_eth_cores] :
@@ -1031,35 +1041,32 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
 std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     chip_id_t chip_id, bool skip_reserved_tunnel_cores) const {
     std::unordered_set<CoreCoord> active_ethernet_cores;
+    const auto& soc_desc = get_soc_desc(chip_id);
     if (arch_ == ARCH::BLACKHOLE) {
         // Can't just use `get_ethernet_cores_grouped_by_connected_chips` because there are some active ethernet cores
         // without links. Only risc1 on these cores is available for Metal and should not be classified as idle
         // to ensure that Metal does not try to program both riscs.
-        const auto& soc_desc = get_soc_desc(chip_id);
         std::set<uint32_t> logical_active_eth_channels = cluster_desc_->get_active_eth_channels(chip_id);
         for (auto logical_active_eth_channel : logical_active_eth_channels) {
             tt::umd::CoreCoord logical_active_eth =
                 soc_desc.get_eth_core_for_channel(logical_active_eth_channel, CoordSystem::LOGICAL);
             active_ethernet_cores.insert(CoreCoord(logical_active_eth.x, logical_active_eth.y));
         }
-
     } else {
-        const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
-        for (const auto& [other_chip_id, eth_cores] : connected_chips) {
-            for (const auto& eth_core : eth_cores) {
-                const auto& routing_info = this->device_eth_routing_info_.at(chip_id).at(eth_core);
-                if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or
-                     routing_info == EthRouterMode::FABRIC_ROUTER) and
-                    skip_reserved_tunnel_cores) {
-                    continue;
-                }
-                if (this->frequent_retrain_cores_.at(chip_id).find(eth_core) !=
-                    this->frequent_retrain_cores_.at(chip_id).end()) {
-                    continue;
-                }
-
-                active_ethernet_cores.insert(eth_core);
+        std::set<uint32_t> logical_active_eth_channels = cluster_desc_->get_active_eth_channels(chip_id);
+        for (const auto& eth_channel : logical_active_eth_channels) {
+            tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+            const auto& routing_info = this->device_eth_routing_info_.at(chip_id).at(eth_core);
+            if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or routing_info == EthRouterMode::FABRIC_ROUTER) and
+                skip_reserved_tunnel_cores) {
+                continue;
             }
+            if (this->frequent_retrain_cores_.at(chip_id).find(eth_core) !=
+                this->frequent_retrain_cores_.at(chip_id).end()) {
+                continue;
+            }
+
+            active_ethernet_cores.insert(eth_core);
         }
     }
     return active_ethernet_cores;
@@ -1420,6 +1427,39 @@ void Cluster::initialize_control_plane() {
                                                        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
 
     global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(mesh_graph_desc_path.string());
+}
+
+std::uint32_t Cluster::get_ubb_asic_id(chip_id_t physical_chip_id) const {
+    auto unique_chip_id = this->get_unique_chip_ids().at(physical_chip_id);
+    return ((unique_chip_id >> 56) & 0xFF);
+}
+
+bool Cluster::is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) const {
+    auto chan_id = this->get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
+    bool is_external_cable = false;
+    auto board_type = this->get_board_type(physical_chip_id);
+    if (board_type == BoardType::UBB) {
+        auto ubb_asic_id = get_ubb_asic_id(physical_chip_id);
+        if (ubb_asic_id == 1) {
+            // UBB 1 has external cables on channels 0-7
+            is_external_cable = (chan_id >= 0 and chan_id <= 7);
+        } else if (ubb_asic_id >= 2 and ubb_asic_id <= 4) {
+            // UBB 2 to 4 has external cables on channels 0-3
+            is_external_cable = (chan_id >= 0 and chan_id <= 3);
+        } else if (ubb_asic_id == 5) {
+            // UBB 5 has external cables on channels 4-7
+            is_external_cable = (chan_id >= 4 and chan_id <= 7);
+        }
+    } else if (board_type == BoardType::N300) {
+        // N300 has external cables on channels 8-9 on MMIO chips and channels 0-1 on non-MMIO chips
+        auto mmio_device_id = this->get_associated_mmio_device(physical_chip_id);
+        if (mmio_device_id == physical_chip_id) {
+            is_external_cable = (chan_id != 8 and chan_id != 9);
+        } else {
+            is_external_cable = (chan_id != 0 and chan_id != 1);
+        }
+    }
+    return is_external_cable;
 }
 
 }  // namespace tt
