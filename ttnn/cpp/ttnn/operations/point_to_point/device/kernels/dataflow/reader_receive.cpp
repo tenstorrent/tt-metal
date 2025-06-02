@@ -19,7 +19,7 @@ void kernel_main() {
     const auto intermediate_base_addr = get_arg_val<uint32_t>(3);
     const auto packet_size_bytes = get_arg_val<uint32_t>(4);
     const auto page_size_bytes = get_arg_val<uint32_t>(5);
-    const auto semaphore_ptr = get_arg_val<volatile tt_l1_ptr uint32_t*>(6);
+    volatile tt_l1_ptr uint32_t* semaphore_ptr = get_arg_val<volatile tt_l1_ptr uint32_t*>(6);
 
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
@@ -48,11 +48,11 @@ void kernel_main() {
             packet_page_count = 0;
         }
 
-        cb_wait_front(receiver_cb_id, 1);
+        DPRINT << "RESERVE BACK page idx: " << page_idx << "\n";
+        cb_reserve_back(receiver_cb_id, 1);
         const uint32_t page_l1_addr = get_write_ptr(receiver_cb_id);
         uint32_t packet_l1_page_addr = packet_l1_addr + packet_page_count * aligned_page_size_bytes;
-        // tt_memmove<true, true, true, 0>(page_l1_addr, packet_l1_page_addr, page_size_bytes);
-        // noc_async_write_barrier();
+        tt_memmove<true, true, true, 0>(page_l1_addr, packet_l1_page_addr, page_size_bytes);
         DPRINT << "PACKET PAGE CB DONE " << "\n";
         cb_push_back(receiver_cb_id, 1);
     }

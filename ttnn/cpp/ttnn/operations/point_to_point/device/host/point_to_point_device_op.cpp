@@ -45,15 +45,38 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
     const auto&& input_device_ids = input_device->get_device_ids();
     TT_FATAL(input_device_ids.size() == 1, "Point to point expects input tensor MeshDevice of size 1");
 
-    const auto output_device_id = mesh_device->get_device(operation_attributes.receive_coord)->id();
+    const auto&& output_device_ids = operation_attributes.receive_device->get_device_ids();
+    TT_FATAL(input_device_ids.size() == 1, "Point to point expects output tensor MeshDevice of size 1");
+
+    TT_FATAL(
+        operation_attributes.send_coord != operation_attributes.receive_coord, "Can't send/receive to the same device");
 
     // ! TODO make sure this works with any MeshDevice where sender and receiver are subsets
+    // currently let's restrict the MeshDevice to only contain sender/receiver, Maybe can lift that.
     const auto&& vmesh_device_ids = mesh_device->get_device_ids();
-    const std::set<uint32_t> devices{input_device_ids.at(0), output_device_id},
+    const std::set<uint32_t> devices{input_device_ids.at(0), output_device_ids.at(0)},
         mesh_devices(vmesh_device_ids.begin(), vmesh_device_ids.end());
 
-    // currently let's restrict the MeshDevice to only contain sender/receiver, Maybe can lift that.
+    std::cout << "INPUT DEVICE: " << input_device_ids.at(0) << " OUTPUT DEVICE: " << output_device_ids.at(0)
+              << std::endl;
+
+    std::cout << "MESH DEVICES: ";
+    for (auto& i : mesh_devices) {
+        std::cout << i << " ";
+    }
+    std::cout << std::endl;
+
     TT_FATAL(devices == mesh_devices, "Mesh can only contain sender/receiver");
+    TT_FATAL(devices.size() == 2, "point to point requires at least 2 devices");
+
+    auto semaphore_device = dynamic_cast<MeshDevice*>(operation_attributes.receiver_semaphore.device());
+    TT_FATAL(semaphore_device != nullptr, "Point to point expected semaphore on mesh device");
+
+    const auto&& semaphore_device_ids = semaphore_device->get_device_ids();
+    TT_FATAL(semaphore_device_ids.size() == 1, "Point to point expects semaphore MeshDevice of size 1");
+
+    TT_FATAL(
+        output_device_ids.at(0) == semaphore_device_ids.at(0), "Sempaphore must be associated with receiver device");
 };
 
 PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
@@ -73,8 +96,6 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
 
     Shape intermediate_shape{total_packets, packet_page_dim};
 
-    std::cout << "INTERMEDIATE SHAPE: " << intermediate_shape << std::endl;
-
     TensorSpec intermediate_spec(intermediate_shape, final_output_spec.tensor_layout());
 
     return {intermediate_spec, final_output_spec};
@@ -84,11 +105,10 @@ PointToPointOp::tensor_return_value_t PointToPointOp::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 
-    auto dest_submesh_device =
-        operation_attributes.mesh_device()->create_submesh(MeshShape(1, 1), operation_attributes.receive_coord);
+    auto dest_submesh_device = operation_attributes.receive_device;
 
-    const auto intermediate_output_tensor = create_device_tensor(output_specs.at(0), dest_submesh_device.get());
-    const auto final_output_tensor = create_device_tensor(output_specs.at(1), dest_submesh_device.get());
+    const auto intermediate_output_tensor = create_device_tensor(output_specs.at(0), dest_submesh_device);
+    const auto final_output_tensor = create_device_tensor(output_specs.at(1), dest_submesh_device);
 
     return {intermediate_output_tensor, final_output_tensor};
 }
@@ -101,13 +121,14 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    const auto send_coord =
-        device_operation::mesh_device_operation_utils::extract_tensor_coordinates(tensor_args.input_tensor).at(0);
+    const auto send_coord = operation_attributes.send_coord;
+    const auto receive_coord = operation_attributes.receive_coord;
 
     TT_ASSERT(tensor_coords.coords().size() == 2);
 
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, send_coord, tensor_args, tensor_return_value);
+        auto cached_program =
+            create_at(operation_attributes, coord, send_coord, receive_coord, tensor_args, tensor_return_value);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -118,12 +139,14 @@ cached_program_t PointToPointOp::SendReceive::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const ttnn::MeshCoordinate& send_coordinate,
+    const ttnn::MeshCoordinate& receive_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     if (mesh_coordinate == send_coordinate) {
-        return detail::send_program_factory(tensor_args, operation_attributes, send_coordinate, tensor_return_value);
+        return detail::send_program_factory(
+            tensor_args, operation_attributes, send_coordinate, receive_coordinate, tensor_return_value);
 
-    } else if (mesh_coordinate == operation_attributes.receive_coord) {
+    } else if (mesh_coordinate == receive_coordinate) {
         return detail::receive_program_factory(operation_attributes, tensor_return_value);
     }
 
