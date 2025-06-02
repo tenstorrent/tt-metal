@@ -15,13 +15,18 @@ struct PointToPointOp {
     struct operation_attributes_t {
         MeshDevice* mesh_device_;
 
-        const tt::tt_metal::distributed::MeshCoordinate receive_coord;
+        const MeshCoordinate& send_coord;
+        const MeshCoordinate& receive_coord;
+        MeshDevice* receive_device;
         const ccl::Topology topology;
 
         const tt::tt_metal::GlobalSemaphore receiver_semaphore;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("mesh_device", "receive_coord", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(mesh_device_, receive_coord, topology); };
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("mesh_device", "receive_coord", "receive_device", "topology");
+        auto attribute_values() const {
+            return std::forward_as_tuple(mesh_device_, receive_coord, receive_device, topology);
+        };
 
         MeshDevice* mesh_device() const { return mesh_device_; };
     };
@@ -52,6 +57,7 @@ struct PointToPointOp {
             const operation_attributes_t& operation_attributes,
             const ttnn::MeshCoordinate& mesh_coordinate,
             const ttnn::MeshCoordinate& send_coordinate,
+            const ttnn::MeshCoordinate& receive_coordinate,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
@@ -96,10 +102,13 @@ struct PointToPointOp {
         const Tensor& input_tensor,
         MeshDevice* mesh_device,
         const ccl::Topology& topology,
+        const MeshCoordinate& send_coord,
         const MeshCoordinate& receive_coord,
+        MeshDevice* receive_device,
         const tt::tt_metal::GlobalSemaphore& receiver_semaphore) {
         return std::make_tuple(
-            operation_attributes_t{mesh_device, receive_coord, topology, receiver_semaphore},
+            operation_attributes_t{
+                mesh_device, send_coord, receive_coord, receive_device, topology, receiver_semaphore},
             tensor_args_t{input_tensor});
     };
 
@@ -114,7 +123,8 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_packet_dims(
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args,
     const PointToPointOp::operation_attributes_t& operation_attributes,
-    const MeshCoordinate& source_coord,
+    const MeshCoordinate& send_coord,
+    const MeshCoordinate& receive_coord,
     PointToPointOp::tensor_return_value_t& output_tensor);
 
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> receive_program_factory(

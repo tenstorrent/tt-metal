@@ -23,15 +23,27 @@ void py_bind_point_to_point(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::distributed::MeshCoordinate& receive_coord,
+               const MeshCoordinate& send_coord,
+               const MeshCoordinate& receive_coord,
+               MeshDevice& receive_device,
                const ccl::Topology topology,
                MeshDevice& mesh_device,
                const GlobalSemaphore& receiver_semaphore,
                QueueId queue_id) {
-                return self(queue_id, input_tensor, receive_coord, topology, mesh_device, receiver_semaphore);
+                return self(
+                    queue_id,
+                    input_tensor,
+                    send_coord,
+                    receive_coord,
+                    receive_device,
+                    topology,
+                    mesh_device,
+                    receiver_semaphore);
             },
             py::arg("input_tensor").noconvert(),
+            py::arg("send_coord"),
             py::arg("receive_coord"),
+            py::arg("receive_device"),
             py::arg("topology"),
             py::arg("mesh_device"),
             py::arg("receiver_semaphore"),

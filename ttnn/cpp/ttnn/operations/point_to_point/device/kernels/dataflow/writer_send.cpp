@@ -33,7 +33,7 @@ void kernel_main() {
     const auto page_size_bytes = get_arg_val<uint32_t>(4);
     const auto payload_size_bytes = get_arg_val<uint32_t>(5);
     const auto max_pages_per_packet = get_arg_val<uint32_t>(6);
-    const auto receive_semaphore_addr = get_arg_val<uint32_t>(7);
+    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(7);
     const auto this_core_x = get_arg_val<uint32_t>(8);
     const auto this_core_y = get_arg_val<uint32_t>(9);
     const bool dst_is_forward = get_arg_val<uint32_t>(10);
@@ -55,9 +55,10 @@ void kernel_main() {
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     packet_header_ptr->to_chip_unicast(dst_num_hops);
 
-    InterleavedAddrGen<dst_is_dram> dst_buffer_addrgen{
-        .bank_base_address = receiver_base_address, .page_size = payload_size_bytes};
-    //.data_format = get_dataformat(sender_cb_id)
+    InterleavedAddrGenFast<dst_is_dram> dst_buffer_addrgen{
+        .bank_base_address = receiver_base_address,
+        .page_size = payload_size_bytes,
+        .data_format = get_dataformat(sender_cb_id)};
 
     // working memory to hold coalesced packet
     cb_reserve_back(packet_cb_id, 1);
@@ -75,12 +76,12 @@ void kernel_main() {
     for (uint32_t page_idx = page_idx_start, packet_page_count = 0; page_idx < page_idx_end;
          ++page_idx, ++packet_page_count) {
         cb_wait_front(sender_cb_id, 1);
-        // const uint32_t src_page_ptr = get_write_ptr(sender_cb_id);
+        const uint32_t src_page_ptr = get_write_ptr(sender_cb_id);
         DPRINT << "loop page idx: " << page_idx << "\n";
 
         // copy page to packet buffer with offset
         const uint32_t packet_addr = packet_base_addr + packet_page_count * aligned_page_size_bytes;
-        // tt_memmove<true, false, false, 0>(packet_addr, src_page_ptr, page_size_bytes);
+        tt_memmove<true, false, false, 0>(packet_addr, src_page_ptr, page_size_bytes);
 
         // !TODO async copies
         cb_pop_front(sender_cb_id, 1);
@@ -96,7 +97,7 @@ void kernel_main() {
             connection_direction.wait_for_empty_write_slot();
             connection_direction.send_payload_without_header_non_blocking_from_address(
                 packet_base_addr, payload_size_bytes);
-            connection_direction.send_payload_flush_blocking_from_address(
+            connection_direction.send_payload_blocking_from_address(
                 (uint32_t)packet_header_ptr, packet_header_size_bytes);
 
             DPRINT << "DID FABRIC THING \n";
@@ -113,19 +114,20 @@ void kernel_main() {
     const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
-    const uint64_t receive_sem_noc_addr = get_noc_addr(this_core_x, this_core_y, receive_semaphore_addr);
+    const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);
 
     DPRINT << "my_x " << (uint32_t)this_core_x << " my_y " << (uint32_t)this_core_y << " receive_semaphore_addr "
            << receive_semaphore_addr << " receive_sem_noc_addr " << receive_sem_noc_addr << "\n";
     auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
     sem_header_ptr->to_chip_unicast(dst_num_hops);
     sem_header_ptr->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{receive_sem_noc_addr, 1, 32, true});
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{receive_sem_noc_addr, 1, 32});
 
     DPRINT << "4" << "\n";
     connection_direction.wait_for_empty_write_slot();
-    connection_direction.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
+    connection_direction.send_payload_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
     fabric_connection.close();
+
     DPRINT << "DONE" << "\n";
 }

@@ -71,8 +71,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         all_cores,
         tt::tt_metal::WriterDataMovementConfig({output_is_dram, receiver_cb_id}));
 
-    std::cout << "-------- RECEIVE PF------" << std::endl;
-
     uint32_t page_idx_start = 0, page_idx_end = 0;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
         uint32_t increment = 0;
@@ -95,12 +93,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             output_page_size_bytes,
             operation_attributes.receiver_semaphore.address()};
 
-        std::cout << "READER RT ARGS: ";
-        for (auto& a : reader_runtime_args) {
-            std::cout << a << " ";
-        }
-        std::cout << std::endl;
-
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args = {
@@ -110,7 +102,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
         page_idx_start += increment;
     }
-    std::cout << "-------- RECEIVE PF------" << std::endl;
 
     // !TODO
     return {std::move(program), PointToPointOp::SendReceive::shared_variables_t{}};

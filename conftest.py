@@ -420,6 +420,9 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+
+    print(fabric_config)
+
     set_fabric(fabric_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
