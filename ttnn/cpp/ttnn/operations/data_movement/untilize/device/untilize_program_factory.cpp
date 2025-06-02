@@ -1050,11 +1050,19 @@ operation::ProgramWithCallbacks untilize_multi_core(
     } else {
         // Interleaved input
         bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
-        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram};
+        uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_full_core;
+        uint32_t bytes_per_input_tile = tile_volume * a.element_size();
+        std::vector<uint32_t> reader_compile_time_args = {
+            (uint32_t)src0_is_dram,
+            (uint32_t)src0_cb_index,
+            (uint32_t)num_tiles_to_read      // num_tiles to read TODO: (GR) Will need to be run-time for cliff core
+            (uint32_t) bytes_per_input_tile  // bytes per tile
+            (uint32_t)                       // start page id to read -> move to run-time args
+        };
         unary_reader_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-            compute_core_range,
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+            "reader_unary_start_id.cpp" compute_core_range,
             ReaderDataMovementConfig(reader_compile_time_args));
     }
 
@@ -1148,7 +1156,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
         cores_with_run_time_args.push_back(core);
 
-        tile_start_id += num_tiles_per_block * num_blocks_per_full_core;
+        tile_start_id += num_tiles_per_block *
+                         num_blocks_per_full_core;  // Correct for interleaved - if not needed for sharding then rename?
         row_start_id += TILE_HEIGHT * num_blocks_per_full_core;
     }
 
