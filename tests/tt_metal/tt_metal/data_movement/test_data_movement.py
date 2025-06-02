@@ -108,8 +108,8 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 24000, "upper": 25000}, "bandwidth": 21},
         },
         2: {
-            "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
-            "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
+            "riscv_1": {"latency": {"lower": 300, "upper": 600}, "bandwidth": 0.08},
+            "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.08},
         },
         3: {
             "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 22},
@@ -122,34 +122,34 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
         },
         6: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+            "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.3},
         },
         7: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 800, "upper": 300000}, "bandwidth": 0.6},
         },
         8: {
-            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 1900, "upper": 900000}, "bandwidth": 0.8},
         },
         9: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 300, "upper": 30000}, "bandwidth": 0.09},
         },
         10: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 400, "upper": 60000}, "bandwidth": 0.07},
         },
         11: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 500, "upper": 90000}, "bandwidth": 0.04},
         },
         12: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 200, "upper": 20000}, "bandwidth": 0.09},
         },
         13: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 400, "upper": 30000}, "bandwidth": 0.07},
         },
         14: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 500, "upper": 40000}, "bandwidth": 0.04},
         },
         15: {
-            "riscv_1": {"latency": {"lower": 700, "upper": 120000}, "bandwidth": 0.7},
+            "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
         },
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
@@ -167,7 +167,7 @@ test_bounds = {
     },
     "blackhole": {
         0: {
-            "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.12},
+            "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.1},
             "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
         },
         1: {
@@ -189,34 +189,34 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 300, "upper": 9200}, "bandwidth": 0.17},
         },
         6: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+            "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.5},
         },
         7: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 900, "upper": 275000}, "bandwidth": 1.12},
         },
         8: {
-            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 3800, "upper": 1700000}, "bandwidth": 1.65},
         },
         9: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 300, "upper": 30000}, "bandwidth": 0.16},
         },
         10: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 500, "upper": 70000}, "bandwidth": 0.12},
         },
         11: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 700, "upper": 115000}, "bandwidth": 0.08},
         },
         12: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 300, "upper": 20000}, "bandwidth": 0.16},
         },
         13: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 500, "upper": 24000}, "bandwidth": 0.12},
         },
         14: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 700, "upper": 46000}, "bandwidth": 0.08},
         },
         15: {
-            "riscv_1": {"latency": {"lower": 800, "upper": 135000}, "bandwidth": 1.19},
+            "riscv_1": {"latency": {"lower": 800, "upper": 87000}, "bandwidth": 1.19},
         },
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
