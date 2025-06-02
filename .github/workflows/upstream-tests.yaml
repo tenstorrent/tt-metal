@@ -83,7 +83,7 @@ jobs:
         image-config:
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
-            test-command: tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh wh_6u
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
