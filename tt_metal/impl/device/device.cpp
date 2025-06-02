@@ -225,8 +225,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
          .dram_bank_offsets = {},
-         .dram_unreserved_base =
-             hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
+         .dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED),
          .dram_alignment = hal.get_alignment(HalMemType::DRAM),
          .l1_unreserved_base = align(worker_l1_unreserved_start, hal.get_alignment(HalMemType::DRAM)),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
@@ -1292,6 +1291,16 @@ uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) c
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
     return tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(id_).get_dram_channel_from_logical_core(
         logical_core);
+}
+
+uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+    for (uint32_t channel = 0; channel < this->num_dram_channels(); ++channel) {
+        if (soc_desc.get_preferred_worker_core_for_dram_view(channel) == virtual_core) {
+            return channel;
+        }
+    }
+    TT_THROW("Virtual core {} is not a DRAM core", virtual_core.str());
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {

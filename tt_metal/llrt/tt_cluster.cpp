@@ -227,13 +227,6 @@ void Cluster::generate_cluster_descriptor() {
             this->driver_->get_target_device_ids().size(),
             total_num_hugepages);
     }
-
-    if (this->arch_ == tt::ARCH::WORMHOLE_B0 and not this->is_galaxy_cluster()) {
-        // Give UMD Limited access to eth cores 8 and 9 for Non-Galaxy Wormhole Clusters
-        for (const auto& mmio_device_id : driver_->get_target_mmio_device_ids()) {
-            driver_->configure_active_ethernet_cores_for_mmio_device(mmio_device_id, {});
-        }
-    }
 }
 
 void Cluster::validate_harvesting_masks() const {
@@ -357,7 +350,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     barrier_address_params barrier_params;
     barrier_params.tensix_l1_barrier_base =
         hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
-    barrier_params.dram_barrier_base = hal_.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
+    barrier_params.dram_barrier_base = hal_.get_dev_addr(tt_metal::HalDramMemAddrType::BARRIER);
 
     barrier_params.eth_l1_barrier_base =
         hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
@@ -609,7 +602,7 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSof
 }
 
 void Cluster::write_dram_vec(
-    std::vector<uint32_t>& vec, chip_id_t device_id, int dram_view, uint64_t addr, bool small_access) const {
+    const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
         dram_view < desc_to_use.get_num_dram_views(),
@@ -620,21 +613,11 @@ void Cluster::write_dram_vec(
     CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
-    write_core(
-        vec.data(),
-        vec.size() * sizeof(uint32_t),
-        tt_cxy_pair(device_id, dram_core.x, dram_core.y),
-        addr + offset,
-        small_access);
+    write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
 }
 
 void Cluster::read_dram_vec(
-    std::vector<uint32_t>& vec,
-    uint32_t sz_in_bytes,
-    chip_id_t device_id,
-    int dram_view,
-    uint64_t addr,
-    bool small_access) const {
+    void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
         dram_view < desc_to_use.get_num_dram_views(),
@@ -645,11 +628,10 @@ void Cluster::read_dram_vec(
     CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
-    read_core(vec, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, small_access);
+    read_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
 }
 
-void Cluster::write_core(
-    const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool /*small_access*/) const {
+void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
     chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled()) {
@@ -671,8 +653,7 @@ void Cluster::write_core(
     }
 }
 
-void Cluster::read_core(
-    void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool /*small_access*/) const {
+void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
     int chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
@@ -692,10 +673,9 @@ void Cluster::read_core(
     this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
 }
 
-void Cluster::read_core(
-    std::vector<uint32_t> &data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+void Cluster::read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
     data.resize(size_in_bytes / sizeof(uint32_t));
-    read_core(data.data(), size_in_bytes, core, addr, small_access);
+    read_core(data.data(), size_in_bytes, core, addr);
 }
 
 void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {
@@ -1376,16 +1356,14 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
             for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for non-mmio devices
-                write_core(
-                    (void *)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
+                write_core((void*)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
             }
         }
         for (const auto &chip_id : mmio_devices) {
             for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for mmio devices
-                write_core(
-                    (void *)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
+                write_core((void*)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
             }
         }
     } else {
@@ -1398,16 +1376,14 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
             for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for mmio devices
-                write_core(
-                    (void *)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
+                write_core((void*)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
             }
         }
         for (const auto &chip_id : non_mmio_devices) {
             for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for non-mmio devices
-                write_core(
-                    (void *)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
+                write_core((void*)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
             }
         }
     }
@@ -1474,6 +1450,39 @@ void Cluster::initialize_control_plane() {
                                                        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
 
     global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(mesh_graph_desc_path.string());
+}
+
+std::uint32_t Cluster::get_ubb_asic_id(chip_id_t physical_chip_id) const {
+    auto unique_chip_id = this->get_unique_chip_ids().at(physical_chip_id);
+    return ((unique_chip_id >> 56) & 0xFF);
+}
+
+bool Cluster::is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) const {
+    auto chan_id = this->get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
+    bool is_external_cable = false;
+    auto board_type = this->get_board_type(physical_chip_id);
+    if (board_type == BoardType::UBB) {
+        auto ubb_asic_id = get_ubb_asic_id(physical_chip_id);
+        if (ubb_asic_id == 1) {
+            // UBB 1 has external cables on channels 0-7
+            is_external_cable = (chan_id >= 0 and chan_id <= 7);
+        } else if (ubb_asic_id >= 2 and ubb_asic_id <= 4) {
+            // UBB 2 to 4 has external cables on channels 0-3
+            is_external_cable = (chan_id >= 0 and chan_id <= 3);
+        } else if (ubb_asic_id == 5) {
+            // UBB 5 has external cables on channels 4-7
+            is_external_cable = (chan_id >= 4 and chan_id <= 7);
+        }
+    } else if (board_type == BoardType::N300) {
+        // N300 has external cables on channels 8-9 on MMIO chips and channels 0-1 on non-MMIO chips
+        auto mmio_device_id = this->get_associated_mmio_device(physical_chip_id);
+        if (mmio_device_id == physical_chip_id) {
+            is_external_cable = (chan_id != 8 and chan_id != 9);
+        } else {
+            is_external_cable = (chan_id != 0 and chan_id != 1);
+        }
+    }
+    return is_external_cable;
 }
 
 }  // namespace tt

@@ -24,8 +24,12 @@ import torch
     [None, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
-    "activations_dtype",
+    "output_dtype",
     [ttnn.bfloat8_b, ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32],
 )
 @pytest.mark.parametrize(
     "fp32_accum",
@@ -50,7 +54,7 @@ def test_conv_features(
     torch_tensor_map,
     use_program_cache,
     math_fidelity,
-    activations_dtype,
+    output_dtype,
     weights_dtype,
     batch_size,
     output_channels,
@@ -65,21 +69,22 @@ def test_conv_features(
     output_layout,
     fp32_accum,
     packer_l1_acc,
+    input_dtype,
 ):
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and shard_layout == WS:
         pytest.skip("Bug in Width Sharded Row Major Tensor Creation when height%32!=0. #19408")
 
-    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
-    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
         pytest.skip("skipping due to pack_untilize_dst issue!")
 
     run_conv(
         device,
         torch_tensor_map,
         math_fidelity,
-        activations_dtype,
+        output_dtype,
         weights_dtype,
         batch_size,
         output_channels,
@@ -99,7 +104,8 @@ def test_conv_features(
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=True,
         run_twice=True,
-        input_layout=ttnn.TILE_LAYOUT if activations_dtype == ttnn.bfloat8_b else None,
+        input_layout=ttnn.TILE_LAYOUT if input_dtype == ttnn.bfloat8_b else None,
+        input_dtype=input_dtype,
     )
 
 
@@ -109,13 +115,16 @@ SliceWidth = ttnn.Conv2dSliceWidth
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, activations_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
+    "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, output_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
     # fmt: off
     (
+        (2,  13,   31,  313,    71,   SliceWidth,   16,  ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (2, 2), (2, 2), 32 * 4,  ttnn.MathFidelity.LoFi  ),
+        (2,  63,  129,  981,    39,   SliceHeight,  16,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (2, 2), (2, 2), (1, 1),      0,  ttnn.MathFidelity.LoFi  ),
         (2, 512,  512,  128,   128,   SliceWidth,    4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32 * 8,  ttnn.MathFidelity.LoFi  ),
         (2, 64,   64,   384,   64,    SliceHeight,   6,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
         (1, 4,    32,   1024,  1024,  SliceWidth,    4,  ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1), 32,      ttnn.MathFidelity.LoFi  ),
         (1, 64,   128,  992,   992,   SliceWidth,   64,  ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
+
     )
     # fmt: on
 )
@@ -133,7 +142,7 @@ def test_conv_dram(
     input_width,
     has_bias,
     weights_dtype,
-    activations_dtype,
+    output_dtype,
     slice_type,
     num_slices,
     kernel,
@@ -154,7 +163,7 @@ def test_conv_dram(
         device,
         torch_tensor_map,
         math_fidelity,
-        activations_dtype,
+        output_dtype,
         weights_dtype,
         batch_size,
         output_channels,
@@ -173,7 +182,7 @@ def test_conv_dram(
         preprocess_weights_on_device=False,
         transpose_shards=True,
         run_twice=False,
-        fast_compare=False,
+        fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
             slice_type=slice_type,
             num_slices=num_slices,

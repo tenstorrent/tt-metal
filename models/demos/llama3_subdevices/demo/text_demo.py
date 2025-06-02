@@ -53,16 +53,12 @@ def load_and_cache_context(context_url, cache_dir, max_length=None):
 
 
 # load input prompts from json, return as a list
-def load_inputs(user_input, batch, instruct):
+def load_inputs(user_input, len_per_batch, instruct):
     if isinstance(user_input, str):
         with open(user_input, "r") as f:
             user_input = json.load(f)
-
-    if len(user_input) < batch:
-        logger.warning(
-            f"Number of users in the file is less than the provided batch={batch}. Repeating the prompts to match the batch size."
-        )
-        user_input = user_input * batch
+    batch = len(len_per_batch)
+    user_input = user_input * batch
 
     in_prompt = []
     cache_dir = Path("models/tt_transformers/demo/context_cache")
@@ -74,9 +70,7 @@ def load_inputs(user_input, batch, instruct):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
             if "max_length" in user_input[i]:  # Clip the context to the max length provided
-                context_text = load_and_cache_context(
-                    user_input[i]["context"], cache_dir, max_length=user_input[i]["max_length"]
-                )
+                context_text = load_and_cache_context(user_input[i]["context"], cache_dir, max_length=len_per_batch[i])
             else:
                 context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
             if instruct:
@@ -208,7 +202,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -238,7 +232,7 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 62000000,
+            "trace_region_size": 92000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
@@ -335,7 +329,29 @@ def test_demo_text(
     if len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * batch_size
     else:  # Inputs from file
-        input_prompts = load_inputs(input_prompts, batch_size, input_prompts)
+        input_prompts = load_inputs(
+            input_prompts,
+            [
+                2,
+                111,
+                534,
+                1008,
+                1111 * 4,
+                3333 * 4,
+                4444 * 4,
+                5555 * 4,
+                6666 * 4,
+                7777 * 4,
+                8888 * 2,
+                9999 * 2,
+                10000 * 2,
+                11111 * 2,
+                12222 * 2,
+                15384 * 2,
+            ]
+            * 2,
+            input_prompts,
+        )
     profiler.end("loading_inputs")
 
     # Load expected outputs for comparison

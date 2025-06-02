@@ -10,7 +10,6 @@
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
-#include <tt-metalium/work_executor_types.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
@@ -103,6 +102,7 @@ public:
 
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
+    uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
 
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const override;

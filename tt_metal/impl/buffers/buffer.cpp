@@ -12,6 +12,7 @@
 #include <math.hpp>
 #include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <algorithm>
 #include <atomic>
 #include <map>
@@ -281,8 +282,7 @@ Buffer::Buffer(
     DeviceAddr page_size,
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
-    const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
+    const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameters,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id,
     const bool owns_data,
@@ -292,21 +292,29 @@ Buffer::Buffer(
     page_size_(page_size),
     buffer_type_(buffer_type),
     buffer_layout_(buffer_layout),
-    shard_parameters_(shard_parameters),
-    buffer_distribution_spec_(buffer_distribution_spec),
     bottom_up_(bottom_up.value_or(this->is_dram())),
     sub_device_id_(sub_device_id),
     owns_data_(owns_data),
     buffer_page_mapping_(nullptr) {
+    if (shard_parameters) {
+        std::visit(
+            tt::stl::overloaded{
+                [this](const ShardSpecBuffer& shard_spec_buffer) { this->shard_parameters_ = shard_spec_buffer; },
+                [this](const BufferDistributionSpec& buffer_distribution_spec) {
+                    this->buffer_distribution_spec_ = buffer_distribution_spec;
+                }},
+            shard_parameters.value());
+    }
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
     if (this->sub_device_id_.has_value()) {
-        validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_parameters);
+        validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_parameters_);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
         this->allocator_ = device->allocator(*this->sub_device_id_).get();
     } else {
         this->allocator_ = device->allocator().get();
     }
-    validate_buffer_parameters(size, page_size, buffer_type, buffer_layout, shard_parameters, buffer_distribution_spec);
+    validate_buffer_parameters(
+        size, page_size, buffer_type, buffer_layout, shard_parameters_, buffer_distribution_spec_);
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
@@ -316,10 +324,9 @@ std::shared_ptr<Buffer> Buffer::create(
     DeviceAddr page_size,
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameters,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id,
-    const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
+    const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
     auto buffer = std::make_shared<Buffer>(
@@ -329,7 +336,6 @@ std::shared_ptr<Buffer> Buffer::create(
         buffer_type,
         buffer_layout,
         shard_parameters,
-        buffer_distribution_spec,
         bottom_up,
         sub_device_id,
         true /* owns data */,
@@ -353,8 +359,7 @@ std::shared_ptr<Buffer> Buffer::create(
         buffer_layout,
         shard_parameters,
         bottom_up,
-        sub_device_id,
-        buffer_distribution_spec);
+        sub_device_id);
 
     return buffer;
 }
@@ -366,10 +371,9 @@ std::shared_ptr<Buffer> Buffer::create(
     DeviceAddr page_size,
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameters,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id,
-    const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
+    const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     auto buffer = std::make_shared<Buffer>(
         device,
@@ -378,7 +382,6 @@ std::shared_ptr<Buffer> Buffer::create(
         buffer_type,
         buffer_layout,
         shard_parameters,
-        buffer_distribution_spec,
         bottom_up,
         sub_device_id,
         false /* owns data */,
@@ -398,8 +401,7 @@ std::shared_ptr<Buffer> Buffer::create(
         buffer_layout,
         shard_parameters,
         bottom_up,
-        sub_device_id,
-        buffer_distribution_spec);
+        sub_device_id);
 
     return buffer;
 }

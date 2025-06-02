@@ -74,7 +74,7 @@ struct Conv2dConfig {
     // Increased perf, but increased L1 usage.
     bool enable_act_double_buffer = false;
 
-    // Used on for block sharded convolutions
+    // Used on for height and block sharded convolutions
     bool enable_weights_double_buffer = false;
 
     // Only for height sharding.
@@ -342,6 +342,7 @@ conv_op_l1_usage calculate_L1_usage(
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
+    const tt::tt_metal::DataType input_datatype,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     bool enable_bias,
     bool is_1d_depthwise_conv);
