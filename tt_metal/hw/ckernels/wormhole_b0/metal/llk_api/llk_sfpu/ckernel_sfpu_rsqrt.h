@@ -14,7 +14,7 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_rsqrt() {
-    _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS, true>();
+    _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS, true>(ITERATIONS);
 }
 
 template <bool APPROXIMATION_MODE>
