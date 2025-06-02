@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -115,6 +115,8 @@ template struct ExecuteUnary<UnaryOpType::TANH>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
 template struct ExecuteUnary<UnaryOpType::BITWISE_NOT>;
 template struct ExecuteUnary<UnaryOpType::ALT_COMPLEX_ROTATE90>;
+template struct ExecuteUnary<UnaryOpType::CEIL>;
+template struct ExecuteUnary<UnaryOpType::FLOOR>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -305,38 +307,22 @@ Tensor Abs::invoke(const ComplexTensor& input_tensor, const MemoryConfig& output
     return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
 }
 
-Tensor Floor::invoke(
-    QueueId queue_id,
-    const Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    UnaryOpType op_type = UnaryOpType::FLOOR;
-    if (input_tensor.get_dtype() == DataType::FLOAT32) {
-        op_type = UnaryOpType::FLOOR_FLOAT32;
-    }
-
-    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-}
-
-Tensor Ceil::invoke(
-    QueueId queue_id,
-    const Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    UnaryOpType op_type = UnaryOpType::CEIL;
-    if (input_tensor.get_dtype() == DataType::FLOAT32) {
-        op_type = UnaryOpType::CEIL_FLOAT32;
-    }
-
-    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-}
-
 Tensor Mish::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::MISH;
+
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Tanhshrink::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::TANHSHRINK;
 
     return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
@@ -359,10 +345,26 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER, uint32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT, int32_t>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::ROUND, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_OR, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_XOR, int32_t>;
+
+template <UnaryOpType unary_op_type, typename T>
+Tensor ExecuteUnaryWithOptionalIntegerParameter<unary_op_type, T>::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<T>& parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{unary_op_type, static_cast<float>(parameter.value_or(0))}},
+        memory_config,
+        optional_output_tensor);
+}
+
+template struct ExecuteUnaryWithOptionalIntegerParameter<UnaryOpType::ROUND, int32_t>;
 
 template <UnaryOpType unary_op_type, typename T>
 Tensor SymmetricBinop<unary_op_type, T>::invoke(

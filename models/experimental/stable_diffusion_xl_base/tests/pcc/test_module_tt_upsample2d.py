@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -7,6 +7,7 @@ import torch
 import pytest
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_upsample2d import TtUpsample2D
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -28,12 +29,13 @@ def test_upsample2d(
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
-    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
     torch_upsample = unet.up_blocks[up_block_id].upsamplers[0]
     groups = 1
+
+    model_config = ModelOptimisations(conv_w_dtype=conv_weights_dtype)
     tt_upsample = TtUpsample2D(
         device,
         state_dict,
@@ -42,7 +44,7 @@ def test_upsample2d(
         padding,
         dilation,
         groups,
-        conv_weights_dtype=conv_weights_dtype,
+        model_config=model_config,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
@@ -51,7 +53,10 @@ def test_upsample2d(
     ttnn_input_tensor = to_channel_last_ttnn(
         torch_input_tensor, ttnn.bfloat16, device, ttnn.L1_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
     )
+
     ttnn_output_tensor, output_shape = tt_upsample.forward(ttnn_input_tensor)
+    model_config.clear_weight_preprocess()
+
     output_tensor = from_channel_last_ttnn(
         ttnn_output_tensor, [input_shape[0], output_shape[1], output_shape[2], output_shape[0]]
     )

@@ -12,7 +12,6 @@
 #include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include <trace.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
@@ -48,6 +47,7 @@
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
+#include "trace/trace.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dprint_server.hpp"
@@ -63,7 +63,7 @@
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
-#include "trace_buffer.hpp"
+#include "trace/trace_buffer.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
@@ -225,8 +225,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
          .dram_bank_offsets = {},
-         .dram_unreserved_base =
-             hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
+         .dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED),
          .dram_alignment = hal.get_alignment(HalMemType::DRAM),
          .l1_unreserved_base = align(worker_l1_unreserved_start, hal.get_alignment(HalMemType::DRAM)),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
@@ -1294,6 +1293,16 @@ uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) c
         logical_core);
 }
 
+uint32_t Device::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
+    for (uint32_t channel = 0; channel < this->num_dram_channels(); ++channel) {
+        if (soc_desc.get_preferred_worker_core_for_dram_view(channel) == virtual_core) {
+            return channel;
+        }
+    }
+    TT_THROW("Virtual core {} is not a DRAM core", virtual_core.str());
+}
+
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
 }
@@ -1645,12 +1654,6 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
-
-void Device::set_ethernet_core_count_on_dispatcher(uint32_t num_ethernet_cores) {
-    ethernet_core_count_on_dispatcher_ = num_ethernet_cores;
-}
-
-uint32_t Device::get_ethernet_core_count_on_dispatcher() const { return ethernet_core_count_on_dispatcher_; }
 
 }  // namespace tt_metal
 

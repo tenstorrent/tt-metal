@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -33,9 +33,9 @@ TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 475, "max": 510}, 10: {"min": 230, "max": 250}, 80: {"min": 48.5, "max": 53}},
+    "4U": {1: {"min": 520, "max": 545}, 10: {"min": 230, "max": 250}, 80: {"min": 48.5, "max": 53}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 545, "max": 570}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+    "6U": {1: {"min": 600, "max": 635}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
 
 
@@ -530,9 +530,11 @@ def run_llama3_demo(
     if is_ci_env and tokens_per_second_per_user_token127 is not None:
         benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
 
+        run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg_llama_demo_decode",
+            run_type=run_type,
             ml_model_name="llama70b-tg",
         )
 

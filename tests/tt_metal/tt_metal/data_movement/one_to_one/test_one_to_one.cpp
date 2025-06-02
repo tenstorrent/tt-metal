@@ -39,6 +39,8 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // Program
     Program program = CreateProgram();
 
+    size_t element_size_bytes = bfloat16::SIZEOF;
+
     // Sharded L1 buffers
     const size_t total_size_bytes =
         test_config.num_of_transactions * test_config.transaction_size_pages * test_config.page_size_bytes;
@@ -49,9 +51,9 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 
     auto master_shard_parameters = ShardSpecBuffer(
         master_core_set,
-        {1, total_size_bytes / 2},
+        {1, total_size_bytes / element_size_bytes},
         ShardOrientation::ROW_MAJOR,
-        {1, test_config.page_size_bytes / 2},
+        {1, test_config.page_size_bytes / element_size_bytes},
         {1, total_size_pages});
     auto master_l1_buffer = CreateBuffer(ShardedBufferConfig{
         .device = device,
@@ -65,9 +67,9 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 
     auto subordinate_shard_parameters = ShardSpecBuffer(
         subordinate_core_set,
-        {1, total_size_bytes / 2},
+        {1, total_size_bytes / element_size_bytes},
         ShardOrientation::ROW_MAJOR,
-        {1, test_config.page_size_bytes / 2},
+        {1, test_config.page_size_bytes / element_size_bytes},
         {1, total_size_pages});
     auto subordinate_l1_buffer = CreateBuffer(ShardedBufferConfig{
         .device = device,
@@ -88,14 +90,6 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         (uint32_t)test_config.page_size_bytes,
         (uint32_t)test_config.test_id};
 
-    vector<uint32_t> receiver_compile_args = {
-        (uint32_t)master_l1_byte_address,
-        (uint32_t)subordinate_l1_byte_address,
-        (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.transaction_size_pages,
-        (uint32_t)test_config.page_size_bytes,
-        (uint32_t)test_config.test_id};
-
     // Kernels
     auto sender_kernel = CreateKernel(
         program,
@@ -106,24 +100,13 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
             .noc = NOC::RISCV_0_default,
             .compile_args = sender_compile_args});
 
-    auto receiver_kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/receiver.cpp",
-        subordinate_core_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = receiver_compile_args});
-
     // Semaphores
     CoreRangeSet sem_core_set = subordinate_core_set.merge<CoreRangeSet>(master_core_set);
     const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
     CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
 
     // Runtime Arguments
-    SetRuntimeArgs(
-        program, sender_kernel, master_core_set, {sem_id, physical_subordinate_core.x, physical_subordinate_core.y});
-    SetRuntimeArgs(program, receiver_kernel, subordinate_core_set, {sem_id});
+    SetRuntimeArgs(program, sender_kernel, master_core_set, {sem_id, physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
     log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -162,20 +145,21 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 /* ========== Test case for one to one data movement; Test id = 4 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     // Parameters
-    uint32_t max_transactions = 64;
+    uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages = 64;
-    uint32_t page_size_bytes = 32;  // =Flit size: 32 bytes for WH, 64 for BH
-    if (arch_ == tt::ARCH::BLACKHOLE) {
-        page_size_bytes *= 2;
-    }
+    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
+            if (num_of_transactions * transaction_size_pages * page_size_bytes >= 1024 * 1024) {
+                continue;
+            }
+
             // Test config
             unit_tests::dm::core_to_core::OneToOneConfig test_config = {
                 .test_id = 4,
@@ -192,6 +176,65 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
                 EXPECT_TRUE(run_dm(devices_.at(id), test_config));
             }
         }
+    }
+}
+
+/* ========== Test case for one to one data movement; Test id = 50 ========== */  // Arbitrary test id
+
+/*
+    This test case is for directed ideal data movement from one L1 to another L1.
+        1. Largest/most performant transaction size
+        2. Large enough number of transactions to amortize the cycles for initialization
+        3. Core locations with minimal number of hops
+*/
+
+TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
+    uint32_t test_id = 50;  // Arbitrary test ID
+
+    // Parameters
+    /*
+        L1 Capacity: 1.5 MB (I think, might be wrong)
+        - Max transaction size
+            = 4 * 32 pages
+            = 128 pages * 32 (or 64) bytes/page
+            = 4096 bytes for WH; 8192 bytes for BH
+        - Max total transaction size
+            = 128 transactions * 4096 bytes
+            = 524,288 Bytes
+            < 1.25 MB ~= L1 buffer capacity (.25 MB is allocated for the kernel code and other overheads)
+    */
+    uint32_t page_size_bytes, num_of_transactions;
+    uint32_t transaction_size_pages = 4 * 32;
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes = 64;  // (=flit size): 64 bytes for BH
+        num_of_transactions = 64;
+    } else {
+        page_size_bytes = 32;  // (=flit size): 32 bytes for WH
+        num_of_transactions = 128;
+    }
+
+    // Cores
+    /*
+        Any two cores that are next to each other on the torus
+         - May be worth considering the performance of this test with different pairs of adjacent cores
+    */
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    // Test Config
+    unit_tests::dm::core_to_core::OneToOneConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .subordinate_core_coord = subordinate_core_coord,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
 }
 

@@ -77,11 +77,11 @@ const ll_api::memory& get_risc_binary(std::string_view path, ll_api::memory::Loa
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, tt::stl::Span<const uint8_t> hex_vec, uint64_t addr, bool small_access) {
+void write_hex_vec_to_core(chip_id_t chip, const CoreCoord& core, tt::stl::Span<const uint8_t> hex_vec, uint64_t addr) {
     // the API is named "write_core", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size(), tt_cxy_pair(chip, core), addr, small_access);
+        hex_vec.data(), hex_vec.size(), tt_cxy_pair(chip, core), addr);
 }
 
 std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {

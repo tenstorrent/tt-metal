@@ -242,7 +242,8 @@ void create_worker_kernel(
         mux_kernel_config->get_buffer_index_address(channel_type, worker_id),
         mux_kernel_config->get_status_address(),
         worker_test_config.mcast_encoding.has_value(),
-        channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL};
+        channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+        mux_kernel_config->get_channel_credits_stream_id(channel_type, worker_id)};
 
     auto worker_memory_map = worker_test_config.memory_map;
     std::vector<uint32_t> worker_rt_args = {
@@ -337,7 +338,7 @@ int main(int argc, char** argv) {
     auto mesh_id = control_plane->get_user_physical_mesh_ids()[0];
     chip_id_t logical_chip_id = 0;
     auto physical_chip_id =
-        control_plane->get_physical_chip_id_from_mesh_chip_id(std::make_pair(mesh_id, logical_chip_id));
+        control_plane->get_physical_chip_id_from_fabric_node_id(tt::tt_fabric::FabricNodeId(mesh_id, logical_chip_id));
 
     std::map<chip_id_t, tt::tt_metal::IDevice*> devices = tt::tt_metal::detail::CreateDevices({physical_chip_id});
     tt::tt_metal::IDevice* device = devices.at(physical_chip_id);

@@ -90,3 +90,12 @@ tt::stl::SmallVector<uint32_t> compute_strides(const tt::tt_metal::Shape& shape)
 }
 
 }  // namespace tt::tt_metal
+
+nlohmann::json tt::stl::json::to_json_t<tt::tt_metal::Shape>::operator()(const tt::tt_metal::Shape& shape) const {
+    return tt::stl::json::to_json(shape.view());
+}
+
+tt::tt_metal::Shape tt::stl::json::from_json_t<tt::tt_metal::Shape>::operator()(
+    const nlohmann::json& json_object) const {
+    return tt::tt_metal::Shape(tt::stl::json::from_json<tt::tt_metal::ShapeBase::Container>(json_object));
+}

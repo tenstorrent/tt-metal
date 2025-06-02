@@ -9,14 +9,6 @@
 #include <boost/algorithm/string/replace.hpp>
 
 namespace ttnn::graph {
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout) {
-    switch (layout) {
-        case Layout::ROW_MAJOR: return os << "Row Major";
-        case Layout::TILE: return os << "Tile";
-        case Layout::INVALID: return os << "Invalid";
-        default: return os << "Unknown layout";
-    }
-}
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tile& config) {
     tt::stl::reflection::operator<<(os, config);
@@ -44,6 +36,7 @@ std::ostream& operator<<(std::ostream& os, const std::variant<T, U>& variant) {
 std::ostream& operator<<(
     std::ostream& os,
     const std::variant<
+        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,
@@ -195,6 +188,7 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<
         std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>>();
     GraphArgumentSerializer::register_type<std::variant<
+        ttnn::operations::matmul::MatmulMultiCoreProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig,
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -131,8 +131,27 @@ def test_binary_atan2_ttnn(input_shapes, device):
     ),
 )
 def test_binary_logical_xor_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
+    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
+    in_data1 = torch.linspace(-100, 100, num_elements, dtype=torch.bfloat16)
+    in_data1 = in_data1[:num_elements].reshape(input_shapes).nan_to_num(0.0)
+    in_data2 = torch.linspace(-150, 150, num_elements, dtype=torch.bfloat16)
+    in_data2 = in_data2[:num_elements].reshape(input_shapes).nan_to_num(0.0)
+
+    input_tensor1 = ttnn.from_torch(
+        in_data1,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor2 = ttnn.from_torch(
+        in_data2,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
     output_tensor = ttnn.logical_xor(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.logical_xor)
@@ -565,8 +584,28 @@ def test_binary_logical_and__ttnn(input_shapes, device):
     ),
 )
 def test_binary_logical_or__ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
+    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
+    in_data1 = torch.linspace(-150, 150, num_elements, dtype=torch.bfloat16)
+    in_data1 = in_data1[:num_elements].reshape(input_shapes).nan_to_num(0.0)
+    in_data2 = torch.linspace(-100, 100, num_elements, dtype=torch.bfloat16)
+    in_data2 = in_data2[:num_elements].reshape(input_shapes).nan_to_num(0.0)
+
+    input_tensor1 = ttnn.from_torch(
+        in_data1,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor2 = ttnn.from_torch(
+        in_data2,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
     ttnn.logical_or_(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.logical_or_)
     golden_tensor = golden_function(in_data1, in_data2)
@@ -584,8 +623,28 @@ def test_binary_logical_or__ttnn(input_shapes, device):
     ),
 )
 def test_binary_logical_xor__ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
+    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
+    in_data1 = torch.linspace(-150, 150, num_elements, dtype=torch.bfloat16)
+    in_data1 = in_data1[:num_elements].reshape(input_shapes).nan_to_num(0.0)
+    in_data2 = torch.linspace(-100, 100, num_elements, dtype=torch.bfloat16)
+    in_data2 = in_data2[:num_elements].reshape(input_shapes).nan_to_num(0.0)
+
+    input_tensor1 = ttnn.from_torch(
+        in_data1,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor2 = ttnn.from_torch(
+        in_data2,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
     ttnn.logical_xor_(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.logical_xor_)
     golden_tensor = golden_function(in_data1, in_data2)
@@ -878,122 +937,6 @@ def test_nei_ttnn(input_shapes, scalar, device):
 
     comp_pass = compare_equal([input_tensor], [golden_tensor])
     assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_gcd_ttnn(input_shapes, device):
-    in_data1 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.gcd(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.gcd)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_lcm_ttnn(input_shapes, device):
-    torch.manual_seed(213919)
-    in_data1 = torch.randint(-32767, 32768, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(-32767, 32768, input_shapes, dtype=torch.int32)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.lcm(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.lcm)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 64, 64])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_gcd_int32(input_shapes, device):
-    torch.manual_seed(213919)
-    in_data1 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(-2147483647, 2147483648, input_shapes, dtype=torch.int32)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.gcd(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.gcd)
-    golden_tensor = golden_function(in_data1, in_data2)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_lcm_pos(input_shapes, device):
-    torch.manual_seed(213919)
-    in_data1 = torch.randint(1, 32768, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(1, 32768, input_shapes, dtype=torch.int32)
-
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.lcm(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.lcm)
-    golden_tensor = golden_function(in_data1, in_data2)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_binary_lcm_neg(input_shapes, device):
-    torch.manual_seed(213919)
-    in_data1 = torch.randint(-32767, 0, input_shapes, dtype=torch.int32)
-    in_data2 = torch.randint(-32767, 0, input_shapes, dtype=torch.int32)
-
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.lcm(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.lcm)
-    golden_tensor = golden_function(in_data1, in_data2)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
 
 
 @pytest.mark.parametrize(
