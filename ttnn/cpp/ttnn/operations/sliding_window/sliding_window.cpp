@@ -696,7 +696,6 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     std::vector<GatherConfig> ordered_gather_configs0;
     std::vector<GatherConfig> ordered_gather_configs1;
     std::vector<uint16_t> number_of_blocks_per_core;
-    int core = 0;
     for (const auto& config : gather_configs) {
         if (use_blocking) {
             const auto quantized = quantize_transfers_along_block_boundaries(config, block_size);
@@ -869,7 +868,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         }
         max_len += 2;  // account for the null plug
 
-        int core = 0;
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
         for (const auto& data : config) {
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
@@ -887,8 +885,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
 
             flattened_config[0].emplace_back(std::move(flat_data[0]));
             flattened_config[1].emplace_back(std::move(flat_data[1]));
-
-            core++;
         }
         return flattened_config;
     };
@@ -915,7 +911,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
 
-        int core = 0;
         for (const auto& [key, data] : config) {
             auto [nocx, nocy, len] = key;
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
@@ -966,7 +961,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
                 }
             }
 
-            core++;
             flattened_config[0].emplace_back(std::move(flat_data[0]));
             flattened_config[1].emplace_back(std::move(flat_data[1]));
         }
@@ -997,7 +991,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         int num_cores = num_cores_x * num_cores_y;
         CoreCoord noc_00 = core_id_to_noc_coords(0);
         int max_ref_size = 0;
-        int core = 0;
         for (const auto& core_config : config) {
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
             uint32_t idx1 = 0, idx2 = 0;
@@ -1050,7 +1043,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
             flattened_config[0].emplace_back(std::move(flat_data[0]));
             flattened_config[1].emplace_back(std::move(flat_data[1]));
             max_ref_size = std::max(max_ref_size, ref_size);
-            core++;
         }
 
         return std::make_tuple(flattened_config, max_ref_size);

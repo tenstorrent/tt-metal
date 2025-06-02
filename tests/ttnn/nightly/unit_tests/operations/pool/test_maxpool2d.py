@@ -233,6 +233,7 @@ def run_max_pool(
         memory_config=memory_config,
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
+        in_place_halo=True,
     )
 
     output_host = output.cpu()
