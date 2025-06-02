@@ -133,8 +133,7 @@ LlamaReduceScatterDeviceOperation::invoke(
     const uint32_t cluster_axis,
     const uint32_t ring_devices,
     const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    tt::tt_fabric::Topology topology) {
+    const std::optional<ttnn::MemoryConfig>& memory_config) {
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
@@ -144,7 +143,6 @@ LlamaReduceScatterDeviceOperation::invoke(
             .output_mem_config = memory_config,
             .ring_devices = ring_devices,
             .num_links = num_links,
-            .topology = topology,
         },
         tensor_args_t{.input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer}};
 }

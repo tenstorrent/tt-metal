@@ -128,6 +128,7 @@ struct fvc_outbound_push_state_t {
             noc_inline_dw_write_set_state<true>(
                 STREAM_REG_ADDR(
                     STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX),
+                0,
                 0xF,
                 write_at_cmd_buf,
                 1);
@@ -171,7 +172,7 @@ struct fvc_outbound_push_state_t {
             return;
         } else {
             // relay the credits to noc data sender to replenish buffer space in noc sender
-            noc_inline_dw_write_with_state<false, true, true, true>(
+            noc_inline_dw_write_with_state<false, true, true, true, true>(
                 slots_cleared << REMOTE_DEST_BUF_WORDS_FREE_INC, *slots_cleared_ack_addr >> 32, write_at_cmd_buf, 1);
             // clear the credits receied from ethernet receiver.
             *update_sender_slots_cleared = (-slots_cleared) << REMOTE_DEST_BUF_WORDS_FREE_INC;
