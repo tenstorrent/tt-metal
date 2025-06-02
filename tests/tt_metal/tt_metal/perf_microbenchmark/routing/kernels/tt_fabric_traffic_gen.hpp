@@ -227,7 +227,6 @@ inline void fill_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words,
     }
 }
 
-
 inline bool check_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val,
                               uint32_t& mismatch_addr, uint32_t& mismatch_val, uint32_t& expected_val) {
     tt_l1_ptr uint32_t* addr = start_addr + (PACKET_WORD_SIZE_BYTES/4 - 1);

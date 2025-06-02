@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tests/ttnn/unit_tests/gtests/ccl/kernels/test_kernels.common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 struct unicast_mode {
     uint8_t distance;
@@ -102,7 +103,9 @@ void kernel_main() {
         edm_buffer_index_id,
         writer_send_sem_addr,
         worker_teardown_sem_addr,
-        worker_buffer_index_semaphore_addr);
+        worker_buffer_index_semaphore_addr,
+        tt::tt_fabric::WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
+        StreamId{std::numeric_limits<uint32_t>::max()});
 
     sender.open();
 
