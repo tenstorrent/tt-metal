@@ -30,6 +30,7 @@ target_include_directories(
 target_link_libraries(
     wh_hal
     PRIVATE
+        Tracy::TracyClient
         hw
         fmt::fmt-header-only
         umd::device
@@ -56,6 +57,7 @@ target_include_directories(
 target_link_libraries(
     bh_hal
     PRIVATE
+        Tracy::TracyClient
         hw
         fmt::fmt-header-only
         umd::device
