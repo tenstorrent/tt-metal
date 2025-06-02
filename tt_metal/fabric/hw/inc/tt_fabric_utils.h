@@ -93,14 +93,16 @@ inline void notify_master_router(uint32_t master_eth_chan, uint32_t address) {
 }
 
 // !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
+// exclude_eth_chan is normally used for master ethernet channel to avoid sending notification to itself
+// but still can send to itself if the eth core has multiple risc cores (like Blackhole)
 inline void notify_subordinate_routers(
-    uint32_t router_eth_chans_mask, uint32_t master_eth_chan, uint32_t address, uint32_t notification) {
+    uint32_t router_eth_chans_mask, uint32_t exclude_eth_chan, uint32_t address, uint32_t notification) {
     uint32_t remaining_cores = router_eth_chans_mask;
     for (uint32_t i = 0; i < 16; i++) {
         if (remaining_cores == 0) {
             break;
         }
-        if ((remaining_cores & (0x1 << i)) && (master_eth_chan != i)) {
+        if ((remaining_cores & (0x1 << i)) && (exclude_eth_chan != i)) {
             uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][i], address);
             noc_inline_dw_write(dest_addr, notification);
             remaining_cores &= ~(0x1 << i);

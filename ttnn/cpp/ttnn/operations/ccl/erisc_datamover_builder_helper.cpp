@@ -470,7 +470,7 @@ void EdmLineFabricOpInterface::build_kernels() const {
                 direction == FORWARD ? edm_builders_forward_direction : edm_builders_backward_direction;
             if (edm_builders.find(device->id()) != edm_builders.end()) {
                 for (auto& edm_builder : edm_builders.at(device->id())) {
-                    for (uint32_t risc_id = 0; risc_id < edm_builder.config.risc_configs.size(); risc_id++) {
+                    for (uint32_t risc_id = 0; risc_id < edm_builder.get_configured_risc_count(); risc_id++) {
                         log_trace(
                             tt::LogOp,
                             "Building EDM kernel on device {}, logical-core (y={},x={}), noc_core (y={},x={}), risc_id "
