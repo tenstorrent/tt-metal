@@ -436,7 +436,7 @@ ALWI void ltz_tile_init() { MATH((llk_math_eltwise_unary_sfpu_ltz_init<APPROX>()
 
 // clang-format off
 /**
- * Will store in the output of the compute core True if each element of a equal to zero.
+ * Will store in the output of the compute core True if each element of a tile is equal to zero.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only
  * available on the compute engine.
@@ -452,7 +452,7 @@ ALWI void eqz_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_eqz<APPROX
 
 // clang-format off
 /**
- * Will store in the output of the compute core True if each element of a equal to zero.
+ * Will store in the output of the compute core True if each element of a tile is equal to zero.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only
  * available on the compute engine.
@@ -468,7 +468,7 @@ ALWI void eqz_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_eqz_
 
 // clang-format off
 /**
- * Will store in the output of the compute core True if each element of a equal to zero.
+ * Will store in the output of the compute core True if each element of a tile is equal to zero.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only
  * available on the compute engine.
