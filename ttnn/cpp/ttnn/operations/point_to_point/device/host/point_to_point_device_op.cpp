@@ -38,6 +38,10 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(!input_tensor.is_sharded(), "Point to point does not yet support sharded configs");
 
+    const uint32_t max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t page_size = tensor_args.input_tensor.tensor_spec().compute_page_size_bytes();
+    TT_FATAL(page_size < max_packet_size, "Page size too large for P2P");
+
     auto input_device = dynamic_cast<MeshDevice*>(input_tensor.device());
 
     TT_FATAL(input_device != nullptr, "Point to point expected input tensor on mesh device");
@@ -57,15 +61,6 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
     const auto&& vmesh_device_ids = mesh_device->get_device_ids();
     const std::set<uint32_t> devices{input_device_ids.at(0), output_device_ids.at(0)},
         mesh_devices(vmesh_device_ids.begin(), vmesh_device_ids.end());
-
-    std::cout << "INPUT DEVICE: " << input_device_ids.at(0) << " OUTPUT DEVICE: " << output_device_ids.at(0)
-              << std::endl;
-
-    std::cout << "MESH DEVICES: ";
-    for (auto& i : mesh_devices) {
-        std::cout << i << " ";
-    }
-    std::cout << std::endl;
 
     TT_FATAL(devices == mesh_devices, "Mesh can only contain sender/receiver");
     TT_FATAL(devices.size() == 2, "point to point requires at least 2 devices");

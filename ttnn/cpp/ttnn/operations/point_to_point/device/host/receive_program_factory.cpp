@@ -63,7 +63,10 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // And the writer
-    const std::map<std::string, std::string> writer_defines{{"ROWMAJOR", "1"}};
+    std::map<std::string, std::string> writer_defines;
+    if (output_tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) {
+        writer_defines["ROWMAJOR"] = "1";
+    }
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
