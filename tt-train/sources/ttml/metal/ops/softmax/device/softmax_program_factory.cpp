@@ -204,7 +204,7 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // get the number of inner dimension
-    uint32_t num_inner = input.logical_shape()[-1];  // (N, 1, C, H)
+    uint32_t num_inner = input.logical_shape()[-1];
 
     // mask_w - this mask used to avoid calculation of extra data
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;  // width index of first trash value in tile
@@ -242,11 +242,6 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
 
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
     const uint32_t num_output_tiles = twice_block_size;
-
-    fmt::print("Input tiles: {}\n", num_input_tiles);
-    fmt::print("available L1 memory: {} bytes\n", available_L1_in_bytes);
-    fmt::print("required L1 memory: {} bytes\n", required_L1_in_bytes);
-    fmt::print("Is everything fits in L1: {}\n", everything_fits_in_l1);
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
