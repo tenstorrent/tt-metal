@@ -34,7 +34,7 @@ test_id_to_name = {
     14: "One to All Multicast Linked 11x10 Packet Sizes",
     15: "One from All Packet Sizes",
     16: "Loopback Packet Sizes",
-    17: "One from All Directed Ideal",
+    30: "One from All Directed Ideal",
     50: "One to One Directed Ideal",
     51: "One from One Directed Ideal",
     52: "One to All Directed Ideal",
@@ -179,7 +179,7 @@ test_bounds = {
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
-        17: {
+        30: {
             "riscv_1": {"latency": {"lower": 20000, "upper": 22000}, "bandwidth": 29},
         },
         50: {  # One to One Directed Ideal
@@ -261,7 +261,7 @@ test_bounds = {
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
-        17: {"riscv_1": {"latency": {"lower": 10000, "upper": 11500}, "bandwidth": 59}},
+        30: {"riscv_1": {"latency": {"lower": 10000, "upper": 11500}, "bandwidth": 59}},
         50: {  # One to One Directed Ideal
             "riscv_1": {"latency": {"lower": 5000, "upper": 10000}, "bandwidth": 50},  # 9201, 57.0
             "riscv_0": {"latency": {"lower": 5000, "upper": 9500}, "bandwidth": 59},  # 8725, 60.1

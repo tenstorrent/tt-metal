@@ -197,7 +197,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     }
 }
 
-/* ========== Test case for one from all data movement; Test id = 17 (For now) ========== */
+/* ========== Test case for one from all data movement; Test id = 30 (For now) ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneFromAllIdeal) {
     // Parameters
     uint32_t num_of_transactions, page_size_bytes;
@@ -217,7 +217,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllIdeal) {
 
     // Test config
     unit_tests::dm::core_to_core::OneFromAllConfig test_config = {
-        .test_id = 17,  // next available id based on current readme on github
+        .test_id = 30,
         .master_core_coord = master_core_coord,
         .subordinate_core_set = subordinate_core_set,
         .num_of_transactions = num_of_transactions,
