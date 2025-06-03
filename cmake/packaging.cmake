@@ -111,11 +111,18 @@ cpack_add_component(
 cpack_add_component(gtest GROUP metalium-validation)
 
 cpack_add_component_group(nn)
-cpack_add_component(nn GROUP nn DESCRIPTION "TT-NN runtime library")
+cpack_add_component(nn DEPENDS metalium GROUP nn DESCRIPTION "TT-NN runtime library")
 cpack_add_component(ttnn-runtime GROUP nn)
 
 cpack_add_component_group(nn-validation)
-cpack_add_component(nn-validation DEPENDS nn GROUP nn-validation DESCRIPTION "TT-NN validation tools")
+cpack_add_component(
+    nn-validation
+    DEPENDS
+        nn
+        metalium
+    GROUP nn-validation
+    DESCRIPTION "TT-NN validation tools"
+)
 cpack_add_component(ttnn-validation GROUP nn-validation)
 
 include(CPack)
