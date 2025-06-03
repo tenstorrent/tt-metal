@@ -154,7 +154,67 @@ static int run_single_test(TestParams& test_params, const std::string& test_mode
     }
 }
 
-static TestParams parse_test_params_from_string(const std::string& params_str) {
+// Unified parameter parser that works with both command line args and tokenized strings
+template <typename StringProvider>
+static TestParams parse_parameters(StringProvider& provider, bool has_mesh_params) {
+    TestParams test_params;
+
+    test_params.fabric_unicast = std::stoi(provider.next());
+    test_params.message_noc_type = provider.next();
+    test_params.num_messages = std::stoi(provider.next());
+    test_params.params.num_links = std::stoi(provider.next());
+    test_params.params.num_op_invocations = std::stoi(provider.next());
+    test_params.params.line_sync = std::stoi(provider.next());
+    test_params.params.line_size = std::stoi(provider.next());
+    test_params.packet_payload_size_bytes = std::stoi(provider.next());
+    test_params.params.fabric_mode = static_cast<FabricTestMode>(std::stoi(provider.next()));
+    test_params.params.disable_sends_for_interior_workers = std::stoi(provider.next());
+    test_params.params.disable_end_workers_in_backward_direction = std::stoi(provider.next());
+    test_params.params.senders_are_unidirectional = std::stoi(provider.next());
+
+    // Handle mesh parameters if present
+    if (has_mesh_params) {
+        test_params.params.num_fabric_rows = std::stoi(provider.next());
+        test_params.params.num_fabric_cols = std::stoi(provider.next());
+        test_params.params.first_link_offset = std::stoi(provider.next());
+    } else {
+        test_params.params.num_fabric_rows = 0;
+        test_params.params.num_fabric_cols = 0;
+        test_params.params.first_link_offset = 0;
+    }
+
+    return test_params;
+}
+
+// String provider for command line arguments
+class ArgvProvider {
+    char** argv;
+    size_t& idx;
+
+public:
+    ArgvProvider(char** argv, size_t& idx) : argv(argv), idx(idx) {}
+    std::string next() { return std::string(argv[idx++]); }
+};
+
+// String provider for tokenized pipe-separated strings
+class TokenProvider {
+    const std::vector<std::string>& tokens;
+    size_t& idx;
+
+public:
+    TokenProvider(const std::vector<std::string>& tokens, size_t& idx) : tokens(tokens), idx(idx) {}
+    std::string next() { return tokens[idx++]; }
+};
+
+// Helper function to parse command line arguments
+static TestParams parse_command_line_args(char** argv, size_t& arg_idx, const std::string& test_mode, int argc) {
+    ArgvProvider provider(argv, arg_idx);
+    bool has_mesh_params = (test_mode == "1D_fabric_on_mesh" && arg_idx < argc);
+    return parse_parameters(provider, has_mesh_params);
+}
+
+// Helper function to parse pipe-separated string
+static TestParams parse_pipe_separated_params(const std::string& params_str, const std::string& test_mode) {
     std::istringstream iss(params_str);
     std::vector<std::string> tokens;
     std::string token;
@@ -167,30 +227,10 @@ static TestParams parse_test_params_from_string(const std::string& params_str) {
         TT_THROW("Invalid parameter string format");
     }
 
-    TestParams test_params;
     size_t idx = 0;
-
-    test_params.fabric_unicast = std::stoi(tokens[idx++]);
-    test_params.message_noc_type = tokens[idx++];
-    test_params.num_messages = std::stoi(tokens[idx++]);
-    test_params.params.num_links = std::stoi(tokens[idx++]);
-    test_params.params.num_op_invocations = std::stoi(tokens[idx++]);
-    test_params.params.line_sync = std::stoi(tokens[idx++]);
-    test_params.params.line_size = std::stoi(tokens[idx++]);
-    test_params.packet_payload_size_bytes = std::stoi(tokens[idx++]);
-    test_params.params.fabric_mode = static_cast<FabricTestMode>(std::stoi(tokens[idx++]));
-    test_params.params.disable_sends_for_interior_workers = std::stoi(tokens[idx++]);
-    test_params.params.disable_end_workers_in_backward_direction = std::stoi(tokens[idx++]);
-    test_params.params.senders_are_unidirectional = std::stoi(tokens[idx++]);
-
-    // Optional mesh parameters
-    if (tokens.size() > 12) {
-        test_params.params.num_fabric_rows = std::stoi(tokens[idx++]);
-        test_params.params.num_fabric_cols = std::stoi(tokens[idx++]);
-        test_params.params.first_link_offset = std::stoi(tokens[idx++]);
-    }
-
-    return test_params;
+    TokenProvider provider(tokens, idx);
+    bool has_mesh_params = (test_mode == "1D_fabric_on_mesh" && tokens.size() > 12);
+    return parse_parameters(provider, has_mesh_params);
 }
 
 static void run_daemon_mode() {
@@ -233,7 +273,7 @@ static void run_daemon_mode() {
                 std::string params_str = test_params_str.substr(separator_pos + 1);
 
                 try {
-                    TestParams test_params = parse_test_params_from_string(params_str);
+                    TestParams test_params = parse_pipe_separated_params(params_str, test_mode);
 
                     auto rc = baseline_validate_test_environment(test_params.params);
                     int result;
@@ -294,33 +334,8 @@ int main(int argc, char** argv) {
     std::size_t arg_idx = 1;
     std::string test_mode = argv[arg_idx++];
 
-    bool fabric_unicast = std::stoi(argv[arg_idx++]);
-    const std::string& message_noc_type = std::string(argv[arg_idx++]);
-    std::size_t num_messages = std::stoi(argv[arg_idx++]);
-    std::size_t num_links = std::stoi(argv[arg_idx++]);
-    std::size_t num_op_invocations = std::stoi(argv[arg_idx++]);
-    bool line_sync = std::stoi(argv[arg_idx++]);
-    std::size_t line_size = std::stoi(argv[arg_idx++]);
-    std::size_t packet_payload_size_bytes = std::stoi(argv[arg_idx++]);
-    uint32_t fabric_mode = std::stoi(argv[arg_idx++]);
-    bool disable_sends_for_interior_workers = std::stoi(argv[arg_idx++]);
-    bool unidirectional_test = std::stoi(argv[arg_idx++]);
-    bool senders_are_unidirectional = std::stoi(argv[arg_idx++]);
-
-    // WriteThroughputStabilityTestWithPersistentFabricParams params;
-    TestParams test_params;
-    test_params.fabric_unicast = fabric_unicast;
-    test_params.params.line_sync = line_sync;
-    test_params.params.line_size = line_size;
-    test_params.params.num_links = num_links;
-    test_params.num_messages = num_messages;
-    test_params.params.num_op_invocations = num_op_invocations;
-    test_params.packet_payload_size_bytes = packet_payload_size_bytes;
-    test_params.params.fabric_mode = static_cast<FabricTestMode>(fabric_mode);
-    test_params.params.disable_sends_for_interior_workers = disable_sends_for_interior_workers;
-    test_params.params.disable_end_workers_in_backward_direction = unidirectional_test;
-    test_params.params.senders_are_unidirectional = senders_are_unidirectional;
-    test_params.message_noc_type = message_noc_type;
+    // Parse command line arguments directly into TestParams
+    TestParams test_params = parse_command_line_args(argv, arg_idx, test_mode, argc);
 
     auto rc = baseline_validate_test_environment(test_params.params);
     if (rc != 0) {
@@ -331,13 +346,6 @@ int main(int argc, char** argv) {
     TT_FATAL(test_params.params.num_links > 0, "num_links must be greater than 0");
     TT_FATAL(test_params.params.num_op_invocations > 0, "num_op_invocations must be greater than 0");
     TT_FATAL(test_params.params.line_size > 0, "line_size must be greater than 0");
-
-    // Handle mesh parameters if present
-    if (test_mode == "1D_fabric_on_mesh" && arg_idx < argc) {
-        test_params.params.num_fabric_rows = std::stoi(argv[arg_idx++]);
-        test_params.params.num_fabric_cols = std::stoi(argv[arg_idx++]);
-        test_params.params.first_link_offset = std::stoi(argv[arg_idx++]);
-    }
 
     return run_single_test(test_params, test_mode);
 }

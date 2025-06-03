@@ -445,10 +445,7 @@ def run_fabric_edm(
 
     enable_persistent_kernel_cache()
 
-    # Try to use daemon mode first
     use_daemon = os.environ.get("TT_FABRIC_DAEMONIZE_TEST", "false").lower() == "true"
-
-    print(f"------------------------- use_daemon {use_daemon}")
     if use_daemon:
         try:
             # Start daemon if not already running
