@@ -403,7 +403,9 @@ def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, use_pack_
     "tensor_shape",
     [
         [2, 256, 512],
-        [2, 2, 256, 512],
+        [4, 4, 256, 512],  # multiple blocks per core
+        [2080, 512],  # has a cliff core
+        [4128, 512],  # multiple blocks per core, and a cliff core
     ],
 )
 @pytest.mark.parametrize(
@@ -509,7 +511,7 @@ def test_untilize_multi_core_interleaved_to_sharded(
     "tensor_shape",
     [
         [2, 256, 512],
-        [2, 2, 256, 512],
+        [4, 4, 256, 512],
     ],
 )
 @pytest.mark.parametrize(

@@ -963,6 +963,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Handling input block/width sharding, and uneven shards
     // Old stuff for input block sharded
 
+    // TODO: (GR) TEMP all instances of this variable
+    uint32_t input_num_blocks_across_width = 1;
+    // TODO: (GR) TEMP all instances of this variable
+
     // Default values are for interleaved input.
     // Cliff core for interleaved input only, is the only core not processing the
     // same number of rows (blocks) as all other cores.
@@ -982,6 +986,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
         num_tiles_per_block = input_shard_width / tile_width;
         num_blocks_per_full_core = input_shard_height / tile_height;
         num_blocks_per_cliff_core = 0;
+
+        // TODO: (GR) TEMP all instances of this variable
+        input_num_blocks_across_width = a.get_padded_shape()[-1] / input_shard_width;
+        // TODO: (GR) TEMP all instances of this variable
 
         // Old stuff for input block sharded
         // Handling input block/width sharding, and uneven shards
@@ -1179,12 +1187,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
             };
         }
 
-        // TODO: (GR) Cleanup
-        uint32_t output_num_blocks_across_width = num_output_columns;
-
         // Writer run-time args
-        uint32_t block_across_height_start_id = (i / output_num_blocks_across_width) * num_blocks_per_full_core;
-        uint32_t block_accross_width_start_id = i % output_num_blocks_across_width;
+        uint32_t block_across_height_start_id = (i / input_num_blocks_across_width) * num_blocks_per_full_core;
+        uint32_t block_accross_width_start_id = i % input_num_blocks_across_width;
         std::vector<uint32_t> writer_run_time_args = {
             dst_buffer->address(),
             num_blocks_per_full_core,
@@ -1201,8 +1206,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
         // Correct for interleaved - if not needed for sharding then rename?
         tile_start_id += num_tiles_per_block * num_blocks_per_full_core;
-
-        // row_start_id += TILE_HEIGHT * num_blocks_per_full_core;
     }
 
     // Run-time args (cliff core)
