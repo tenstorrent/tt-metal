@@ -34,3 +34,5 @@ RUN set -eux; \
 RUN mkdir /debians
 # Copy all .deb files from host into the image
 COPY .build/default/*.deb /debians/
+COPY personal_cmake_stuff.sh /
+RUN chmod +x /personal_cmake_stuff.sh
