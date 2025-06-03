@@ -9,6 +9,7 @@ from loguru import logger
 import os
 import ttnn
 import pytest
+from conftest import is_6u
 
 from models.demos.llama3_subdevices.tt.llama_common import (
     PagedAttentionConfig,
@@ -436,7 +437,7 @@ def run_llama3_decode_performance(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6u() else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,

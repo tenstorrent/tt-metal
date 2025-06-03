@@ -19,6 +19,7 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from conftest import is_6u
 
 
 @torch.no_grad()
@@ -76,7 +77,7 @@ from models.utility_functions import skip_for_grayskull
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6u() else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,

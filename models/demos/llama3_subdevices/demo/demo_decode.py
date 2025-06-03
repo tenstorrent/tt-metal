@@ -13,6 +13,7 @@ import pytest
 import requests
 from pathlib import Path
 import hashlib
+from conftest import is_6u
 
 from models.demos.llama3_subdevices.tt.llama_common import (
     PagedAttentionConfig,
@@ -129,6 +130,7 @@ def run_llama3_demo(
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
     dtype = ttnn.bfloat8_b
+    num_links = 2 if galaxy_type == "4U" else 4
     assert batch_size <= 32, "Max batch size currently supported is 32"
     assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
 
@@ -324,7 +326,12 @@ def run_llama3_demo(
 
         # Note: Persistent output buffer used, do not deallocate output!
         tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-            tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
+            tt_out[0],
+            dim=3,
+            num_links=num_links,
+            cluster_axis=0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            buffer_key="SAMPLING",
         )
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
         # Run argmax only for user0
@@ -368,7 +375,12 @@ def run_llama3_demo(
 
     # Note: Persistent output buffer used, do not deallocate output!
     tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-        tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
+        tt_out[0],
+        dim=3,
+        num_links=num_links,
+        cluster_axis=0,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        buffer_key="SAMPLING",
     )
     tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
     tt_out_rm = ttnn.reshape(tt_out_rm, (1, 1, 1, tt_out_rm.shape[3]), (1, 1, tt_out_rm.shape[2], tt_out_rm.shape[3]))
@@ -687,7 +699,7 @@ def run_llama3_demo(
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6u() else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,

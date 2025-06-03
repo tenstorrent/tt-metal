@@ -6,6 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from conftest import is_6u
 
 
 class TtLlamaAttention(LightweightModule):
@@ -285,7 +286,7 @@ class TtLlamaAttention(LightweightModule):
         ) = self.tt_ccl.llama_rs_create_heads(
             xqkv_fused_sharded,
             cluster_axis=1,
-            num_links=3,
+            num_links=4 if is_6u() else 3,
             dim=3,
             qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
         )
@@ -376,7 +377,7 @@ class TtLlamaAttention(LightweightModule):
             attn_output_1G4D_sharded_rm,
             dim=1,
             cluster_axis=1,
-            num_links=3,
+            num_links=4 if is_6u() else 3,
             memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
             num_heads=self.n_local_heads,
         )
@@ -397,7 +398,10 @@ class TtLlamaAttention(LightweightModule):
         # print("done matmul")
 
         dense_out_reduced = self.tt_ccl.line_all_reduce(
-            dense_out_ttnn, cluster_axis=0, num_links=3, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            dense_out_ttnn,
+            cluster_axis=0,
+            num_links=4 if is_6u() else 3,
+            memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
         ttnn.deallocate(dense_out_ttnn)
 

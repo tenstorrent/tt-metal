@@ -14,7 +14,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
-
+from conftest import is_6u
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
 
 
@@ -84,7 +84,12 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6u() else ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
     indirect=True,
 )
 def test_llama_sampling_inference(dtype, batch_size, mesh_device, use_program_cache, reset_seeds):
