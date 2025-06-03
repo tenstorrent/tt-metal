@@ -115,8 +115,10 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     size_t num_targets_backward = 0;
     if (topology == ccl::Topology::Linear) {
         ccl::LineTopology line_topology(ring_size, ring_index);
-        num_targets_forward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
-        num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
+        num_targets_forward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+        num_targets_backward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
         num_targets_forward = tt::div_up(ring_size - 1, 2);
         num_targets_backward = ring_size - 1 - num_targets_forward;
