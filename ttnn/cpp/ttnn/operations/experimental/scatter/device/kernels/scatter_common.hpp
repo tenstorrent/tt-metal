@@ -84,8 +84,8 @@ get_width_scalar_index(const uint32_t& tile_id, const uint32_t& face_x, const ui
     return tile_id * tt::constants::TILE_WIDTH + face_x * (tt::constants::TILE_WIDTH >> 1) + scalar_x;
 }
 
-FORCE_INLINE uint32_t get_height_scalar_index(const uint32_t& h, const uint32_t& face_y, const uint32_t& scalar_y) {
-    return h * tt::constants::TILE_HEIGHT + face_y * (tt::constants::TILE_HEIGHT >> 1) + scalar_y;
+FORCE_INLINE uint32_t get_height_scalar_index_inside_tile(const uint32_t& face_y, const uint32_t& scalar_y) {
+    return face_y * (tt::constants::TILE_HEIGHT >> 1) + scalar_y;
 }
 
 template <bool is_dram>
@@ -112,7 +112,10 @@ struct ScatterCTAs {
     const uint32_t Wt_input;
     const uint32_t logical_index_width;
     const uint32_t logical_index_height;
+    const uint32_t face_num_x;
+    const uint32_t face_num_y;
     const uint32_t Wt_index;
+    const uint32_t pad_scalar_offset;
     const uint32_t Ht;
     const uint32_t total_number_of_cores;
     const uint32_t compute_with_storage_grid_size_x;
@@ -130,5 +133,6 @@ constexpr ScatterCTAs get_ctas() {
             get_compile_time_arg_val(12),     get_compile_time_arg_val(13),     get_compile_time_arg_val(14),
             get_compile_time_arg_val(15),     get_compile_time_arg_val(16),     get_compile_time_arg_val(17),
             get_compile_time_arg_val(18),     get_compile_time_arg_val(19),     get_compile_time_arg_val(20),
-            get_compile_time_arg_val(21),     get_compile_time_arg_val(22)};
+            get_compile_time_arg_val(21),     get_compile_time_arg_val(22),     get_compile_time_arg_val(23),
+            get_compile_time_arg_val(24),     get_compile_time_arg_val(25)};
 }

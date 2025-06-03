@@ -111,7 +111,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
          Wt_input,
          index_tensor.get_logical_shape()[-1],
          logical_index_height,
+         tile_spec.get_width() / tile_spec.get_face_shape()[1],
+         tile_spec.get_height() / tile_spec.get_face_shape()[0],
          Wt_index,
+         input_tensor.get_logical_shape()[-2],
          Ht,
          total_number_of_cores,
          compute_with_storage_grid_size.x,
@@ -139,18 +142,9 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
             TT_THROW("Core not in any predefined core range.");
         }
 
-        SetRuntimeArgs(program, reader_kernel, core, {tile_offset, ht_per_core});
+        SetRuntimeArgs(program, reader_kernel, core, {tile_offset, ht_per_core, tile_offset % total_number_of_cores});
 
         SetRuntimeArgs(program, writer_kernel, core, {tile_offset, ht_per_core});
-
-        // if (core_group_1.contains(core)) {
-        //     SetRuntimeArgs(program, cumprod_compute_sc_kernel_id, core, {num_tiles_per_core, tiles_per_row});
-        // } else if (core_group_2.contains(core)) {
-        //     TT_ASSERT(compute_kernel_2_id.has_value());
-        //     SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_tiles_per_core, tiles_per_row});
-        // } else {
-        //     TT_THROW("Core not in any predefined core range.");
-        // }
 
         tile_offset += ht_per_core;
     }

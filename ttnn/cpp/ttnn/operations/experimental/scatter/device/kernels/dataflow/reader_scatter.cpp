@@ -41,10 +41,14 @@ FORCE_INLINE void scatter_along_whole_axis(
     const uint32_t& logical_index_width,
     const uint32_t& logical_index_height,
     const uint32_t& Wt_index,
+    const uint32_t& counter,
+    const uint32_t& pad_scalar_offset,
     const uint32_t& tile_height,
     const uint32_t& tile_width,
     const uint32_t& face_height,
     const uint32_t& face_width,
+    const uint32_t& face_num_x,
+    const uint32_t& face_num_y,
     const uint32_t& input_cb,
     const uint32_t& index_cb,
     const uint32_t& source_cb,
@@ -53,8 +57,8 @@ FORCE_INLINE void scatter_along_whole_axis(
     const IAGF<index_tensor_is_dram>& index_addr_gtor,
     const IAGF<source_tensor_is_dram>& source_addr_gtor) {
     // for each tile along the scatter axis (Wt_input, or input_shape[scatter_axis]) in the input tensor...
-    const uint32_t FACE_NUM_X = tile_width / face_width;
-    const uint32_t FACE_NUM_Y = tile_height / face_height;
+    const uint32_t ht_pad = ((pad_scalar_offset + 31) >> 5);
+    const uint32_t residue_rows = (pad_scalar_offset & 31);
     for (uint32_t tile_input = 0; tile_input < Wt_input; ++tile_input) {
         cb_reserve_back(output_cb, ONE_TILE);
         // read an input tile + get fresh pointers
@@ -84,8 +88,8 @@ FORCE_INLINE void scatter_along_whole_axis(
             volatile tt_l1_ptr number_type* source_l1_ptr =
                 reinterpret_cast<volatile tt_l1_ptr number_type*>(source_l1_read_addr);
             // gut the tiles
-            for (uint32_t face_x = 0; face_x < FACE_NUM_X; ++face_x) {
-                for (uint32_t face_y = 0; face_y < FACE_NUM_Y; ++face_y) {
+            for (uint32_t face_x = 0; face_x < face_num_x; ++face_x) {
+                for (uint32_t face_y = 0; face_y < face_num_y; ++face_y) {
                     for (uint32_t scalar_x = 0; scalar_x < face_width; ++scalar_x) {
                         const uint32_t width_scalar_index = get_width_scalar_index(tile_index_w, face_x, scalar_x);
                         // break sooner if the pointer went past logical width
@@ -94,10 +98,13 @@ FORCE_INLINE void scatter_along_whole_axis(
                         }
                         for (uint32_t scalar_y = 0; scalar_y < face_height; ++scalar_y) {
                             // get global coords + assert
-                            const uint32_t height_scalar_index = get_height_scalar_index(ht_offset, face_y, scalar_y);
                             // break sooner if the pointer went past logical height
-                            if (height_scalar_index >= logical_index_height) {
-                                break;
+                            if (counter == ht_pad - 1) {
+                                const uint32_t height_scalar_index =
+                                    get_height_scalar_index_inside_tile(face_y, scalar_y);
+                                if (height_scalar_index >= residue_rows) {
+                                    break;
+                                }
                             }
 
                             // get scatter info
@@ -152,22 +159,34 @@ void kernel_main() {
     using input_std_type = std_type_t<get_dataformat(ctas.input_tensor_cb)>;
     using index_std_type = std_type_t<get_dataformat(ctas.index_tensor_cb)>;
 
-    for (uint32_t h = start_ht_id; h < start_ht_id + ht_per_core; ++h) {
+    uint32_t counter = get_arg_val<uint32_t>(2);
+
+    constexpr uint32_t ht_pad = ((ctas.pad_scalar_offset + 31) >> 5);
+    constexpr uint32_t residue_rows = ctas.pad_scalar_offset & 31;
+
+    for (uint32_t ht = start_ht_id; ht < start_ht_id + ht_per_core; ++ht) {
+        if (counter == ht_pad) {
+            counter = 0;
+        }
         scatter_along_whole_axis<
             input_std_type,
             index_std_type,
             ctas.input_tensor_is_dram,
             ctas.index_tensor_is_dram,
             ctas.source_tensor_is_dram>(
-            h,
+            ht,
             ctas.Wt_input,
             ctas.logical_index_width,
             ctas.logical_index_height,
             ctas.Wt_index,
+            counter,
+            ctas.pad_scalar_offset,
             ctas.tile_height,
             ctas.tile_width,
             ctas.face_height,
             ctas.face_width,
+            ctas.face_num_x,
+            ctas.face_num_y,
             ctas.input_tensor_cb,
             ctas.index_tensor_cb,
             ctas.source_tensor_cb,
@@ -175,5 +194,6 @@ void kernel_main() {
             input_addr_gtor,
             index_addr_gtor,
             source_addr_gtor);
+        ++counter;
     }
 }
