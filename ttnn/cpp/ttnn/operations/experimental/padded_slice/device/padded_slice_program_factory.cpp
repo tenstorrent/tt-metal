@@ -424,13 +424,17 @@ get_padded_slice_runtime_args_tile_sharded_output(
     num_output_sticks_per_dim[1] = tt::div_up(actual_output_shape[-2], TILE_HEIGHT);
 
     num_input_sticks_per_dim[0] = 0;
+    num_input_sticks_per_dim[1] =
+        (tt::div_up(input_shape[-2], TILE_HEIGHT) - num_output_sticks_per_dim[1]) * num_output_sticks_per_dim[0];
+
     accumulated_total_per_dim[0] = num_output_sticks_per_dim[0];
-    accumulated_total_per_dim[1] = num_output_sticks_per_dim[0] * num_output_sticks_per_dim[1];
+    accumulated_total_per_dim[1] = tt::div_up(input_shape[-2], TILE_HEIGHT) * num_output_sticks_per_dim[0];
 
     tt::log_debug("Output Shape : {}, Input Shape : {}", actual_output_shape, input_shape);
     for (int32_t i = 2; i < num_dims; i++) {
         uint32_t num_output_dim = actual_output_shape[-(i + 1)];
         uint32_t num_total_dim = input_shape[-(i + 1)];
+        tt::log_debug("i = {}, num_output_dim: {}, num_total_dim: {}", i, num_output_dim, num_total_dim);
         uint32_t num_input_dim = (num_total_dim - num_output_dim) * accumulated_total_per_dim[i - 1];
         num_output_sticks_per_dim[i] = num_output_dim;
         num_input_sticks_per_dim[i] = num_input_dim;
@@ -507,6 +511,12 @@ get_padded_slice_runtime_args_tile_sharded_output(
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = output_written % num_output_sticks_per_dim[j];
             output_written = output_written / num_output_sticks_per_dim[j];
+            tt::log_debug(
+                "j = {}, id_per_dim[j]: {}, output_written: {}, accumulated_total_per_dim[j - 1]: {}",
+                j,
+                id_per_dim[j],
+                output_written,
+                accumulated_total_per_dim[j - 1]);
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
         tt::log_debug("For Core {}, Start Offset: {}", core, start_id);
