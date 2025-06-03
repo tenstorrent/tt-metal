@@ -11,7 +11,7 @@
 namespace ttnn::operations::experimental::reduction::sort::program {
 
 // Single row - single core
-SortProgramFactorySRSC::cached_program_t SortProgramFactorySRSC::create(
+SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingleRowSingleCore::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
     // Program config
     tt::tt_metal::Program program{};
@@ -157,7 +157,8 @@ SortProgramFactorySRSC::cached_program_t SortProgramFactorySRSC::create(
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/reader.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
+        "reader_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     SetRuntimeArgs(
@@ -178,7 +179,8 @@ SortProgramFactorySRSC::cached_program_t SortProgramFactorySRSC::create(
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/writer.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
+        "writer_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
     SetRuntimeArgs(
@@ -200,7 +202,7 @@ SortProgramFactorySRSC::cached_program_t SortProgramFactorySRSC::create(
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -242,7 +244,7 @@ SortProgramFactorySRSC::cached_program_t SortProgramFactorySRSC::create(
         std::move(program), {reader_kernel_id, compute_kernel_id, writer_kernel_id, compute_with_storage_grid_size}};
 }
 
-void SortProgramFactorySRSC::override_runtime_arguments(
+void SortProgramFactorySingleRowSingleCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
@@ -285,7 +287,7 @@ void SortProgramFactorySRSC::override_runtime_arguments(
 }
 
 // Single row - multi core
-SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
+SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleRowMultiCore::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
     // Program config
     tt::tt_metal::Program program{};
@@ -454,7 +456,8 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
         static_cast<uint32_t>(value_tensor_is_dram),
         static_cast<uint32_t>(index_tensor_is_dram)};
     const std::string coordinator_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/coordinator_srmc.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
+        "coordinator_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle coordinator_kernel_id = tt::tt_metal::CreateKernel(
         program,
         coordinator_kernel_path,
@@ -487,7 +490,7 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
         compute_with_storage_grid_size.y,
         number_of_available_cores};
     const std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/reader_srmc.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     SetRuntimeArgs(
@@ -513,7 +516,7 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
         compute_with_storage_grid_size.y,
         number_of_available_cores};
     const std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/writer_srmc.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
     SetRuntimeArgs(
@@ -542,7 +545,7 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
         static_cast<uint32_t>(attributes.descending),
         static_cast<uint32_t>(attributes.stable)};
     const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_srmc.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -554,7 +557,7 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
         {coordinator_kernel_id, reader_kernel_id, compute_kernel_id, writer_kernel_id, coordinator_core, core_range}};
 }
 
-void SortProgramFactorySRMC::override_runtime_arguments(
+void SortProgramFactorySingleRowMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,

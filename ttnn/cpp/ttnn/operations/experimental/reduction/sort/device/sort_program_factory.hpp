@@ -15,7 +15,7 @@
 namespace ttnn::operations::experimental::reduction::sort::program {
 using namespace tt::tt_metal;
 // Single row - single core
-struct SortProgramFactorySRSC {
+struct SortProgramFactorySingleRowSingleCore {
     struct shared_variables_t {
         KernelHandle reader_kernel_id;
         KernelHandle compute_kernel_id;
@@ -31,7 +31,7 @@ struct SortProgramFactorySRSC {
 };
 
 // Single row - multi core
-struct SortProgramFactorySRMC {
+struct SortProgramFactorySingleRowMultiCore {
     struct shared_variables_t {
         KernelHandle coordinator_kernel_id;
         KernelHandle reader_kernel_id;

@@ -12,7 +12,42 @@
 #include "sort_common.hpp"
 
 namespace NAMESPACE {
+/*
+This sorting algorithm implements a parallel Bitonic Merge Sort for a single row of tiles, leveraging multiple cores for
+efficiency.
 
+### Overview:
+- The row to be sorted consists of `Wt` tiles. Sorting is performed in pairs, requiring `Wt/2` work units per stage.
+- Multiple cores are used to process these pairs in parallel. If the number of available cores is less than `Wt/2`, some
+cores will process multiple pairs.
+- One core acts as a coordinator, managing synchronization between stages and coordinating access to DRAM.
+
+### Algorithm Steps:
+1. **Stage Iteration**:
+    - The algorithm proceeds in stages, as required by Bitonic sort.
+    - In each stage, the necessary pairs of tiles are identified for sorting.
+
+2. **Work Distribution**:
+    - Each core is assigned one or more pairs to process, depending on the number of available cores.
+    - For each assigned pair, the core:
+        - Reads the appropriate pair of tiles from DRAM.
+        - Performs the sorting operation on the pair.
+        - Writes the sorted tiles back to DRAM.
+
+3. **Synchronization**:
+    - After processing all assigned pairs in a stage, each core increments a coordinator semaphore to signal completion.
+    - The coordinator core waits for all cores to finish the current stage.
+    - Once all cores are done, the coordinator updates the semaphore to allow all cores to proceed to the next stage.
+
+4. **Completion**:
+    - The process repeats for all stages of the Bitonic sort until the row is fully sorted.
+
+### Notes:
+- The algorithm ensures efficient utilization of all cores, with dynamic work assignment if there are fewer cores than
+work units.
+- Synchronization between stages is managed using semaphores, ensuring correct ordering and data consistency.
+- The coordinator core is responsible for orchestrating stage transitions and DRAM access coordination.
+*/
 void MAIN {
     // Compile time args
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);

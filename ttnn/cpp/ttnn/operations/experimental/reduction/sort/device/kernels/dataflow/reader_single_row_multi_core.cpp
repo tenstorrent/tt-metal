@@ -49,8 +49,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(coordinator_to_cores_semaphore_id);
     noc_semaphore_set(semaphore_ptr, VALID);  // Reset the semaphore (Valid - we wait for 0)
-    const uint64_t coordinator_core_addr =
-        get_noc_addr(coordinator_core_physical_coord_x, coordinator_core_physical_coord_y, cores_to_coordinator_semaphore_id);
+    const uint64_t coordinator_core_addr = get_noc_addr(
+        coordinator_core_physical_coord_x, coordinator_core_physical_coord_y, cores_to_coordinator_semaphore_id);
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Get core start value
