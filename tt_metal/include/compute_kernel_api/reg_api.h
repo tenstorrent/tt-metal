@@ -8,6 +8,34 @@
 
 namespace ckernel {
 
+#if 0 
+
+/**
+ * Acquire an exclusive lock on the DST register for the UNPACK thread.
+ * This register is an array of 16 tiles of 32x32 elements each.
+ * This is a blocking function, i.e. this function will wait until the lock is acquired.
+ */
+ALWI void tile_regs_acquire_st() { UNPACK((llk_math_wait_for_dest_available())); }
+
+/**
+ * Release lock on DST register by UNPACK thread. The lock had to be previously acquired with tile_regs_acquire.
+ */
+ALWI void tile_regs_commit_st() { UNPACK((llk_math_dest_section_done())); }
+
+/**
+ * Acquire an exclusive lock on the DST register for the UNPACK thread.
+ * It waits for the UNPACK thread to commit the DST register.
+ * This is a blocking function, i.e. this function will wait until the lock is acquired.
+ */
+ALWI void tile_regs_wait_st() { UNPACK((llk_packer_wait_for_math_done())); }
+
+/**
+ * Release lock on DST register by UNPACK thread. The lock had to be previously acquired with tile_regs_wait.
+ */
+ALWI void tile_regs_release_st() { UNPACK((llk_pack_dest_section_done())); }
+
+#endif
+
 /**
  * @deprecated This function is deprecated, please use `tile_regs_acquire()` instead.
  * See https://github.com/tenstorrent/tt-metal/issues/5868#issuecomment-2101726935
