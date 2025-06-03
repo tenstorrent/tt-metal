@@ -76,7 +76,7 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
                 // Avoid evicting something that was last used recently, as that can cause a stall that is very bad for
                 // performance. This is critical for avoiding gaps between ops, so it's given a very high cost (the
                 // highest cost for a program is normally around 10,000).
-                constexpr uint32_t desired_write_ahead = std::min(launch_msg_buffer_num_entries, 4u);
+                constexpr uint32_t desired_write_ahead = std::min(launch_msg_buffer_num_entries, 7u);
                 constexpr uint32_t stall_badness = 100000000;
                 static_assert(
                     max_stall_history_size > desired_write_ahead,
