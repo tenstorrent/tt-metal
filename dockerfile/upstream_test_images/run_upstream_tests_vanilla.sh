@@ -35,6 +35,11 @@ test_suite_wh_6u_metal_unit_tests() {
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 }
 
+test_suite_wh_6u_metal_2d_torus_health_check_tests() {
+    echo "[upstream-tests] Checking for 2D Torus topology on WH 6U"
+    ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_2D
+}
+
 test_suite_wh_6u_model_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream model unit tests"
     pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
@@ -95,7 +100,7 @@ declare -A hw_topology_test_suites
 
 hw_topology_test_suites["blackhole"]="test_suite_bh_single_pcie_python_unit_tests test_suite_bh_single_pcie_metal_unit_tests test_suite_bh_single_pcie_small_ml_model_tests"
 hw_topology_test_suites["blackhole_no_models"]="test_suite_bh_single_pcie_python_unit_tests test_suite_bh_single_pcie_metal_unit_tests"
-hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests test_suite_wh_6u_llama_demo_tests test_suite_wh_6u_metal_unit_tests"
+hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests test_suite_wh_6u_llama_demo_tests test_suite_wh_6u_metal_unit_tests test_suite_wh_6u_metal_2d_torus_health_check_tests"
 
 # Function to display help
 show_help() {
