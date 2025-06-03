@@ -918,6 +918,7 @@ bool RunLocalTestWithMultiInputReaders(
     std::optional<ttnn::ccl::SyncModeSpec> sync_details;
     std::optional<CoreCoord> teardown_worker_core;
     std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> teardown_command_stream;
+    TT_FATAL(enable_persistent_fabric, "Non-persistent fabric is not supported for this test");
     if (fabric_enabled && !enable_persistent_fabric) {
         teardown_worker_core = worker_core;
 
@@ -2820,6 +2821,8 @@ void Run1DFabricPacketSendTest(
                                              size_t link,
                                              bool is_connected_in_direction,
                                              IDevice* connected_device,
+                                             // not updated to CCL line direction because this is a metal/fabric level
+                                             // test
                                              ttnn::ccl::EdmLineFabricOpInterface::Direction direction,
                                              std::vector<uint32_t>& rt_args_out) {
                 rt_args_out.push_back(is_connected_in_direction);
