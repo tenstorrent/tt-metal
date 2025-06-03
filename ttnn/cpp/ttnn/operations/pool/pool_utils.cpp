@@ -52,7 +52,7 @@ std::map<std::string, std::string> get_defines(Pool2DType pool_type) {
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
-std::optional<ParallelConfig> determine_parallel_config(
+std::optional<ParallelConfig> determine_valid_parallel_config(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
     uint32_t channels,
@@ -249,7 +249,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     };
 
     auto calc_l1_usage_inner = [&](TensorMemoryLayout layout, ShardOrientation orientation) -> l1_usage_config {
-        auto input_parallel_config = pool::determine_parallel_config(
+        auto input_parallel_config = pool::determine_valid_parallel_config(
             layout,
             batch_size,
             channels,

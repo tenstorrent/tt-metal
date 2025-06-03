@@ -64,7 +64,7 @@ Tensor Pool2DOp<pool_type>::invoke(
                     (applied_shard_scheme.value() == TensorMemoryLayout::BLOCK_SHARDED),
                 "Only height, width, or block sharding strategies are supported.");
             shard_layout = applied_shard_scheme.value();
-            parallel_config = pool::determine_parallel_config(
+            parallel_config = pool::determine_valid_parallel_config(
                 shard_layout,
                 batch_size,
                 channels,

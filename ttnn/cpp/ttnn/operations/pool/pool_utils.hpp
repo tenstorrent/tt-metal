@@ -25,7 +25,7 @@ uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw);
 uint32_t get_bf16_pool_init_value(Pool2DType pool_type);
 std::map<std::string, std::string> get_defines(Pool2DType pool_type);
 
-std::optional<sliding_window::ParallelConfig> determine_parallel_config(
+std::optional<sliding_window::ParallelConfig> determine_valid_parallel_config(
     const tt::tt_metal::TensorMemoryLayout shard_layout,
     uint32_t batch_size,
     uint32_t channels,
