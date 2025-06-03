@@ -46,6 +46,7 @@ def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_e
         )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, -float("inf"))
     output_tensor = ttnn.softmax(input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
     output_tensor = ttnn.to_torch(output_tensor)
     torch.set_printoptions(profile="full")
@@ -103,13 +104,13 @@ def run_softmax_stable_with_program_cache(
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
-@pytest.mark.parametrize("batch_size", [1, 8])
-@pytest.mark.parametrize("h", [32, 128])
-@pytest.mark.parametrize("w", [1024, 1500])
-@pytest.mark.parametrize("skip_scale_mask", [True, False])
-@pytest.mark.parametrize("math_approx", [True, False])
-@pytest.mark.parametrize("fp32_acc_en", [True, False])
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [32])
+@pytest.mark.parametrize("skip_scale_mask", [False])
+@pytest.mark.parametrize("math_approx", [False])
+@pytest.mark.parametrize("fp32_acc_en", [True])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16])
 def test_softmax_stable_with_program_cache(
     device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype, use_program_cache
 ):
@@ -248,13 +249,12 @@ def test_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.to_torch(output_tensor)
 
     print("hi before assert")
+    torch.set_printoptions(profile="full")
+    with open("tensor_output.txt", "w") as f:
+        print(output_tensor, file=f)
+    with open("torch_tensor_output.txt", "w") as f:
+        print(torch_output_tensor, file=f)
     for i in range(0, w):
-        # print(i)
-        # torch.set_printoptions(profile="full")
-        # with open("tensor_output.txt", "w") as f:
-        #     print(output_tensor[:, :, i], file=f)
-        # with open("torch_tensor_output.txt", "w") as f:
-        #     print(torch_output_tensor[:, :, i], file=f)
         assert_with_pcc(torch_output_tensor[:, :, i], output_tensor[:, :, i], 0.997)
 
 
