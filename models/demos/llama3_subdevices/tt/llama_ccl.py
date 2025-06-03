@@ -542,7 +542,6 @@ class TT_CCL:
             program_config=program_config,
             memory_config_mm=memory_config,
             global_cb=global_cb,
-            sub_device_id=sub_device_id,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
