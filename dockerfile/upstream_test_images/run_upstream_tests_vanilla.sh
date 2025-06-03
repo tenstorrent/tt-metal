@@ -64,6 +64,29 @@ test_suite_wh_6u_llama_demo_tests() {
     pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick"
     pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py
     pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat"
+    pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
+    pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "mini-stress-test"
+}
+
+test_suite_wh_6u_llama_long_stress_tests() {
+    echo "[upstream-tests] running WH 6U upstream Llama long stress tests"
+
+    if [ -z "${LLAMA_DIR}" ]; then
+        echo "[upstream-tests] Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
+        exit 1
+    fi
+
+    if [ -d "$LLAMA_DIR" ] && [ "$(ls -A $LLAMA_DIR)" ]; then
+        echo "[upstream-tests] Llama weights exist, continuing"
+    else
+        echo "[upstream-tests] Error: Llama weights do not seem to exist in $LLAMA_DIR, exiting" >&2
+        exit 1
+    fi
+
+    # TODO: to remove...
+    pip install -r models/tt_transformers/requirements.txt
+    # This will take almost 3 hours. Ensure that the tensors are cached in the LLAMA_DIR.
+    pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test and not mini-stress-test"
 }
 
 # Define test suite mappings for different hardware topologies
