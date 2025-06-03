@@ -1616,7 +1616,8 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
     bool untilize_out,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool ignore_subdevice) {
     const auto b = b_tensors[0];
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
@@ -1628,17 +1629,20 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
     constexpr bool row_major = true;
     CoreRangeSet all_worker_cores = a.shard_spec().value().grid;
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
-    auto subdevice_cores = device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
-    std::vector<CoreRange> non_idle_cores_vec;
-    for (auto& cr : subdevice_cores.ranges()) {
-        auto intersection = non_idle_cores.intersection(cr);
-        if (intersection.size() > 0) {
-            non_idle_cores_vec.push_back(intersection.bounding_box());
+    CoreRangeSet all_cores = non_idle_cores;
+    if (!ignore_subdevice) {
+        std::vector<CoreRange> non_idle_cores_vec;
+        auto subdevice_cores = device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX,
+            sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        for (auto& cr : subdevice_cores.ranges()) {
+            auto intersection = non_idle_cores.intersection(cr);
+            if (intersection.size() > 0) {
+                non_idle_cores_vec.push_back(intersection.bounding_box());
+            }
         }
+        all_cores = CoreRangeSet(non_idle_cores_vec);
     }
-    CoreRangeSet all_cores = CoreRangeSet(non_idle_cores_vec);
     std::vector<CoreRange> ring_list = all_worker_cores.ranges();
     std::vector<CoreRange> hop_list = hop_cores.ranges();
     ring_list.insert(ring_list.end(), hop_list.begin(), hop_list.end());
@@ -2433,7 +2437,8 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    uint32_t start_cb_index) {
+    uint32_t start_cb_index,
+    bool ignore_subdevice) {
     const auto b = b_tensors[0];
     const auto output = output_tensors[0];
 
@@ -2574,7 +2579,8 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
             untilize_out,
             global_cb,
             num_global_cb_receivers,
-            sub_device_id);
+            sub_device_id,
+            ignore_subdevice);
     }
     TT_FATAL(start_cb_index == tt::CBIndex::c_0, "mcast does not support a non-zero start cb index");
     if (mcast_in0) {
@@ -2712,7 +2718,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         global_cb,
         num_global_cb_receivers,
         sub_device_id,
-        tt::CBIndex::c_0);
+        tt::CBIndex::c_0,
+        false);
     auto override_runtime_arguments_callback =
         [shared_vars](
             const void* operation,
@@ -2740,7 +2747,8 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    uint32_t start_cb_index) {
+    uint32_t start_cb_index,
+    bool ignore_subdevice) {
     MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
@@ -2770,7 +2778,8 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
         global_cb,
         config.num_global_cb_receivers,
         sub_device_id,
-        start_cb_index);
+        start_cb_index,
+        ignore_subdevice);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
@@ -2800,7 +2809,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             fused_op_signaler,
             global_cb,
             sub_device_id,
-            tt::CBIndex::c_0);
+            tt::CBIndex::c_0,
+            false);
     auto override_runtime_arguments_callback =
         [shared_vars](
             const void* operation,

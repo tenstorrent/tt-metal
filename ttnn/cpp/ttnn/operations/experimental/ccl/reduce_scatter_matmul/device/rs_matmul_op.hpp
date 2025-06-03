@@ -101,7 +101,8 @@ struct AllGatherRS {
         const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear);
 };
 
 }  // namespace ttnn::operations::experimental::ccl

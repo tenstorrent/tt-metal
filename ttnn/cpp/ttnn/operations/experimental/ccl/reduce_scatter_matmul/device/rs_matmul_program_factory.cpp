@@ -59,8 +59,9 @@ AllGatherRS::Matmul_RS_PF::create_at(
                 operation_attributes.matmul.untilize_out,
                 empty_fused_op_signaler,
                 operation_attributes.matmul.global_cb,
-                operation_attributes.matmul.sub_device_id,
-                tt::CBIndex::c_6)}};
+                std::nullopt,
+                tt::CBIndex::c_6,
+                true)}};
 }
 
 void AllGatherRS::Matmul_RS_PF::override_runtime_arguments(

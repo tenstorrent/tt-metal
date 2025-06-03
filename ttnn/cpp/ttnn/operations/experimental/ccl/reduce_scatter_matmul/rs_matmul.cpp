@@ -9,15 +9,16 @@ namespace ttnn::operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> ExecuteReduceScatterMatmul::invoke(
     QueueId queue_id,
-    const ttnn::Tensor& input_tensor,                           // mm0 used
-    const ttnn::Tensor& weight_tensor,                          // mm1 used
-    const ttnn::Tensor& rs_tensor,                              // rs1
-    ttnn::Tensor& intermediate_packet_buffer,                   // rs2
-    int32_t dim,                                                // rs3
-    const GlobalSemaphore& cross_device_semaphore,              // rs4
-    const uint32_t cluster_axis,                                // rs 5
-    const MeshDevice& mesh_device,                              // rs 6
-    const uint32_t num_links,                                   // rs 7 default 1
+    const ttnn::Tensor& input_tensor,               // mm0 used
+    const ttnn::Tensor& weight_tensor,              // mm1 used
+    const ttnn::Tensor& rs_tensor,                  // rs1
+    ttnn::Tensor& intermediate_packet_buffer,       // rs2
+    int32_t dim,                                    // rs3
+    const GlobalSemaphore& cross_device_semaphore,  // rs4
+    const uint32_t cluster_axis,                    // rs 5
+    const MeshDevice& mesh_device,                  // rs 6
+    const uint32_t num_links,                       // rs 7 default 1
+    tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config_rs,  // rs 8 default std::nullopt
     const std::optional<ttnn::MemoryConfig>& memory_config_mm,  // mm4 used but default std::nullopt
     const std::optional<const ttnn::DeviceComputeKernelConfig>
@@ -58,7 +59,8 @@ std::vector<ttnn::Tensor> ExecuteReduceScatterMatmul::invoke(
         program_config,
         activation,
         output_tile,
-        optional_output_tensor);
+        optional_output_tensor,
+        topology);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

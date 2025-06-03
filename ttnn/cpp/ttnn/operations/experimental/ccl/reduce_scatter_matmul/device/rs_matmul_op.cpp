@@ -76,8 +76,8 @@ std::tuple<AllGatherRS::operation_attributes_t, AllGatherRS::tensor_args_t> AllG
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,  // default std::nullopt
     const std::optional<const std::string>& activation,                                  // default std::nullopt
     const std::optional<const tt::tt_metal::Tile>& output_tile,                          // default std::nullopt
-    const std::optional<Tensor>& optional_output_tensor                                  // default std::nullopt
-) {
+    const std::optional<Tensor>& optional_output_tensor,                                 // default std::nullopt
+    tt::tt_fabric::Topology topology) {
     LlamaReduceScatterDeviceOperation rs_struct{};
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
@@ -95,7 +95,7 @@ std::tuple<AllGatherRS::operation_attributes_t, AllGatherRS::tensor_args_t> AllG
                 .output_mem_config = memory_config_rs,
                 .ring_devices = ring_devices,
                 .num_links = num_links,
-            },
+                .topology = topology},
             operations::matmul::create_matmul_struct(
                 input_tensor,
                 weight_tensor,
