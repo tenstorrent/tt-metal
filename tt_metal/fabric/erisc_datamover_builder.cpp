@@ -1037,6 +1037,8 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
 
 eth_chan_directions FabricEriscDatamoverBuilder::get_direction() const { return this->direction; }
 
+size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
+
 size_t FabricEriscDatamoverBuilder::get_noc_x() const { return this->my_noc_x; }
 
 size_t FabricEriscDatamoverBuilder::get_noc_y() const { return this->my_noc_y; }
