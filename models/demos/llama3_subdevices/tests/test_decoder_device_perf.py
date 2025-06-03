@@ -320,25 +320,27 @@ def verify_value_within_margin(value, target, margin, op_code_with_id, perf_type
     upper_limit = target + margin * target
     lower_limit = target - margin * target
 
+    passing = True
+
     if value > upper_limit:
         passing = False
-        logger.info(
+        logger.warning(
             f"{op_code_with_id} {perf_type}: {value} ns is larger than target "
             f"({target}) ns, difference: "
             f"{abs(value - upper_limit)} ns, margin: "
             f"{margin}, "
             f"relative margin to pass would be: "
-            f"{abs(target - value) / target}"
+            f"{(abs(target - value) / target) if target != 0 else -1}"
         )
     elif value < lower_limit:
         passing = False
-        logger.info(
+        logger.warning(
             f"{op_code_with_id} {perf_type}: {value} ns is smaller than target "
             f"({target}) ns, difference: "
             f"{abs(value - lower_limit)} ns, margin: "
             f"{margin}, "
             f"relative margin to pass would be: "
-            f"{abs(target - value) / target}"
+            f"{(abs(target - value) / target) if target != 0 else -1}"
         )
     return passing
 
@@ -346,7 +348,7 @@ def verify_value_within_margin(value, target, margin, op_code_with_id, perf_type
 def add_benchmark_measurement(profiler, benchmark_data, step_name, op_name, value, prefix, measure_type, stats_type):
     name = f"{op_name}-{prefix}-{measure_type}-{stats_type}"
     benchmark_data.add_measurement(profiler, 0, step_name, name, value)
-    print(f"Uploading: {name}: {value} ns")
+    print(f"{name}: {value} ns")
 
 
 def load_perf_targets(galaxy_type):
@@ -451,7 +453,6 @@ def test_llama_TG_perf_device(
         _,
         _,
         _,
-        _,
     ) = process_measurements(df_mid_layers_compilation, num_layers - 1)
     (
         avg_kernel_duration_mid_layers_trace,
@@ -466,15 +467,27 @@ def test_llama_TG_perf_device(
     ) = process_measurements(df_mid_layers_trace, num_layers - 1)
 
     # Get model tail compilation and trace measurements
-    avg_kernel_duration_model_tail_compilation, _, _, _, _, _ = process_measurements(df_model_tail_compilation, 1)
-    avg_kernel_duration_model_tail_trace, _, _, avg_dispatch_duration_model_tail_trace, _, _ = process_measurements(
-        df_model_tail_trace, 1
+    avg_kernel_duration_model_tail_compilation, _, _, _, _, _, _, _, _ = process_measurements(
+        df_model_tail_compilation, 1
     )
+    (
+        avg_kernel_duration_model_tail_trace,
+        _,
+        _,
+        avg_dispatch_duration_model_tail_trace,
+        _,
+        _,
+        _,
+        _,
+        _,
+    ) = process_measurements(df_model_tail_trace, 1)
 
     # Prints
     ## targets
     if len(avg_kernel_duration_mid_layers_compilation) != len(perf_targets["decoder"]):
-        print(f"perf_targets: {perf_targets}")
+        print_dict(perf_targets["decoder"], "perf_targets['decoder']")
+    if len(avg_kernel_duration_model_tail_trace) != len(perf_targets["model_tail"]):
+        print_dict(perf_targets["model_tail"], "perf_targets['model_tail']")
 
     ## decoder mid layers
     print_dict(avg_kernel_duration_mid_layers_compilation, "avg_kernel_duration_mid_layers_compilation")
@@ -489,9 +502,13 @@ def test_llama_TG_perf_device(
     assert len(avg_kernel_duration_mid_layers_compilation) == len(
         perf_targets["decoder"]
     ), f"Expected {len(perf_targets['decoder'])} operations, got {len(avg_kernel_duration_mid_layers_compilation)}. If the number or type of operations changed, expected times must be updated."
+    assert len(avg_dispatch_duration_model_tail_trace) == len(
+        perf_targets["model_tail"]
+    ), f"Expected {len(perf_targets['model_tail'])} operations, got {len(avg_dispatch_duration_model_tail_trace)}. If the number or type of operations changed, expected times must be updated."
 
-    passing = True
+    all_passing = True
     # Verify decoder layer (mid layers)
+    print(f"Decoder layer")
     for op_code_with_id in avg_kernel_duration_mid_layers_compilation.keys():
         if op_code_with_id in perf_targets["decoder"]:
             op_name = perf_targets["decoder"][op_code_with_id]["op_name"]
@@ -596,35 +613,39 @@ def test_llama_TG_perf_device(
             )
 
             # Verify kernel duration is within tolerance
-            passing = passing and verify_value_within_margin(
+            passing = verify_value_within_margin(
                 avg_kernel_duration,
                 perf_targets["decoder"][op_code_with_id]["kernel_duration"],
                 perf_targets["decoder"][op_code_with_id]["kernel_duration_relative_margin"],
                 op_code_with_id,
                 "kernel",
             )
+            all_passing = all_passing and passing
             # Verify op_to_op latency is within tolerance
-            passing = passing and verify_value_within_margin(
+            passing = verify_value_within_margin(
                 avg_dispatch_duration,
                 perf_targets["decoder"][op_code_with_id]["op_to_op"],
                 perf_targets["decoder"][op_code_with_id]["op_to_op_duration_relative_margin"],
                 op_code_with_id,
                 "op_to_op",
             )
+            all_passing = all_passing and passing
             # Verify first_to_last_start is within tolerance
-            passing = passing and verify_value_within_margin(
+            passing = verify_value_within_margin(
                 avg_first_to_last_start,
                 perf_targets["decoder"][op_code_with_id]["first_to_last_start"],
                 perf_targets["decoder"][op_code_with_id]["first_to_last_start_relative_margin"],
                 op_code_with_id,
                 "first_to_last_start",
             )
+            all_passing = all_passing and passing
 
         else:
-            passing = False
+            all_passing = False
             logger.info(f"Warning: {op_code_with_id} not found in perf_targets")
 
     # Verify model tail ops
+    print(f"Model tail ops")
     for op_code_with_id in avg_kernel_duration_model_tail_compilation.keys():
         if op_code_with_id in perf_targets["model_tail"]:
             op_name = perf_targets["model_tail"][op_code_with_id]["op_name"]
@@ -659,24 +680,26 @@ def test_llama_TG_perf_device(
             )
 
             # Verify kernel duration is within tolerance
-            passing = passing and verify_value_within_margin(
+            passing = verify_value_within_margin(
                 kernel_duration,
                 perf_targets["model_tail"][op_code_with_id]["kernel_duration"],
                 perf_targets["model_tail"][op_code_with_id]["kernel_duration_relative_margin"],
                 op_code_with_id,
                 "kernel",
             )
+            all_passing = all_passing and passing
             # Verify op_to_op latency is within tolerance
-            passing = passing and verify_value_within_margin(
+            passing = verify_value_within_margin(
                 dispatch_duration,
                 perf_targets["model_tail"][op_code_with_id]["op_to_op"],
                 perf_targets["model_tail"][op_code_with_id]["op_to_op_duration_relative_margin"],
                 op_code_with_id,
                 "op_to_op",
             )
+            all_passing = all_passing and passing
         else:
-            passing = False
-            logger.info(f"Warning: {op_code_with_id} not found in perf_targets")
+            all_passing = False
+            logger.warning(f"Warning: {op_code_with_id} not found in perf_targets")
 
     # Calculate e2e performance
     e2e_estimate_80l = 0
@@ -713,8 +736,6 @@ def test_llama_TG_perf_device(
         if op_to_op_latency < 0:
             op_to_op_latency = 0
 
-        print(f"op_id: {op_id}, kernel_duration: {kernel_duration}, op_to_op_latency: {op_to_op_latency}")
-
         model_tail_e2e_estimate += kernel_duration + op_to_op_latency
 
     # Estimated T/s/u is 1000000 / (80L-duration + ~2100 lmhead+sampling+embeddings + ~300 python-overhead
@@ -735,7 +756,7 @@ def test_llama_TG_perf_device(
         ml_model_name="llama70b-tg",
     )
 
-    assert passing
+    assert all_passing
 
 
 @pytest.mark.models_device_performance_bare_metal
@@ -778,6 +799,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     assert len(df_layers) % num_layers == 0
+    df_layers = df_layers[int(len(df_layers) / num_layers) :]  # Exclude first layer
+
     df_model_tail = df_model[DECODER_OP_END_INDEX:]
 
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
@@ -791,7 +814,10 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         avg_dispatch_duration_mid_layers,
         min_dispatch_duration_mid_layers,
         max_dispatch_duration_mid_layers,
-    ) = process_measurements(df_layers, num_layers)
+        _,
+        _,
+        _,
+    ) = process_measurements(df_layers, num_layers - 1)
     (
         _,
         _,
@@ -799,17 +825,25 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         avg_dispatch_duration_model_tail,
         min_dispatch_duration_model_tail,
         max_dispatch_duration_model_tail,
+        _,
+        _,
+        _,
     ) = process_measurements(df_model_tail, 1)
 
-    print(f"avg_dispatch_duration_mid_layers: {avg_dispatch_duration_mid_layers}")
-    print(f"avg_dispatch_duration_model_tail: {avg_dispatch_duration_model_tail}")
+    if len(avg_dispatch_duration_mid_layers) != len(perf_targets["decoder"]):
+        print_dict(perf_targets["decoder"], "perf_targets['decoder']")
+    if len(avg_dispatch_duration_model_tail) != len(perf_targets["model_tail"]):
+        print_dict(perf_targets["model_tail"], "perf_targets['model_tail']")
+
+    print_dict(avg_dispatch_duration_mid_layers, "avg_dispatch_duration_mid_layers")
+    print_dict(avg_dispatch_duration_model_tail, "avg_dispatch_duration_model_tail")
 
     assert len(avg_dispatch_duration_mid_layers) == len(
         perf_targets["decoder"]
-    ), f"Expected {len(perf_targets)} operations in decoder, got {len(avg_dispatch_duration_mid_layers)}. If the number or type of operations changed, expected times must be updated."
+    ), f"Expected {len(perf_targets['decoder'])} operations in decoder, got {len(avg_dispatch_duration_mid_layers)}. If the number or type of operations changed, expected times must be updated."
     assert len(avg_dispatch_duration_model_tail) == len(
         perf_targets["model_tail"]
-    ), f"Expected {len(perf_targets)} operations in model tail, got {len(avg_dispatch_duration_model_tail)}. If the number or type of operations changed, expected times must be updated."
+    ), f"Expected {len(perf_targets['model_tail'])} operations in model tail, got {len(avg_dispatch_duration_model_tail)}. If the number or type of operations changed, expected times must be updated."
 
     passing = True
     for op_code_with_id, avg_dispatch_duration in avg_dispatch_duration_mid_layers.items():
@@ -859,6 +893,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             passing = False
             logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
 
+    all_passing = True
     for op_code_with_id, avg_dispatch_duration in avg_dispatch_duration_model_tail.items():
         if op_code_with_id in perf_targets["model_tail"]:
             op_name = perf_targets["model_tail"][op_code_with_id]["op_name"]
@@ -895,15 +930,16 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             )
 
             # Verify dispatch latency is within tolerance
-            passing = passing and verify_value_within_margin(
+            passing = verify_value_within_margin(
                 avg_dispatch_duration,
                 perf_targets["model_tail"][op_code_with_id]["non-overlapped-dispatch-time"],
                 perf_targets["model_tail"][op_code_with_id]["dispatch_duration_relative_margin"],
                 op_code_with_id,
                 "dispatch",
             )
+            all_passing = all_passing and passing
         else:
-            passing = False
+            all_passing = False
             logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
 
     run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
@@ -914,4 +950,4 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         ml_model_name="llama70b-tg",
     )
 
-    assert passing
+    assert all_passing

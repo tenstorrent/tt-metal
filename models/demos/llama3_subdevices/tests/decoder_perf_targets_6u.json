@@ -209,19 +209,19 @@
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "RMSAllGather_1": {
-            "op_name": "RMSAllGather_1",
-            "kernel_duration": 4754.1875,
-            "op_to_op": 0,
+        "ReshardDeviceOperation_0": {
+            "op_name": "Reshard_0",
+            "kernel_duration": 1401.0,
+            "op_to_op": 832.0,
             "non-overlapped-dispatch-time": 0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "ReshardDeviceOperation_0": {
-            "op_name": "Reshard_0",
-            "kernel_duration": 1576.0,
-            "op_to_op": 0,
+        "ReshardDeviceOperation_1": {
+            "op_name": "Reshard_1",
+            "kernel_duration": 3436.0,
+            "op_to_op":  662.0,
             "non-overlapped-dispatch-time": 0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
@@ -309,9 +309,18 @@
             "dispatch_duration_relative_margin": 0.5
         },
         "BinaryDeviceOperation_0": {
-            "op_name": "BinaryDeviceOperation_0",
+            "op_name": "BinaryDeviceOperation_Last_Residual",
+            "kernel_duration": 958.0,
+            "op_to_op": 731.0,
+            "non-overlapped-dispatch-time": 0,
+            "kernel_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.2,
+            "dispatch_duration_relative_margin": 0.5
+        },
+        "BinaryDeviceOperation_1": {
+            "op_name": "BinaryDeviceOperation_Indices_Correction",
             "kernel_duration": 3229.0,
-            "op_to_op": 0,
+            "op_to_op": 722.0,
             "non-overlapped-dispatch-time": 0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
