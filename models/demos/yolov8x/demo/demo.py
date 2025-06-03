@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,10 +12,9 @@ from loguru import logger
 from ultralytics import YOLO
 
 import ttnn
-from models.demos.yolov8x.demo.demo_utils import LoadImages, postprocess, preprocess
+from models.demos.yolov8x.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
 from models.demos.yolov8x.reference import yolov8x
-from models.demos.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel
-from models.demos.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
+from models.demos.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrace2CQ
 from models.utility_functions import disable_persistent_kernel_cache
 
 
@@ -53,7 +52,9 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     logger.info(f"Predictions saved to {output_path}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
 @pytest.mark.parametrize(
     "source, model_type",
     [
@@ -66,9 +67,8 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     [True],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo(device, source, model_type, res, use_weights_from_ultralytics):
+def test_demo(device, source, model_type, res, use_weights_from_ultralytics, use_program_cache):
     disable_persistent_kernel_cache()
-
     if use_weights_from_ultralytics:
         torch_model = YOLO("yolov8x.pt")
         torch_model = torch_model.model
@@ -77,10 +77,11 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics):
         model = yolov8x.DetectionModel()
 
     if model_type == "tt_model":
-        state_dict = torch_model.state_dict()
-        parameters = custom_preprocessor(device, state_dict, inp_h=res[0], inp_w=res[1])
-        model = TtYolov8xModel(device=device, parameters=parameters)
-        logger.info("Inferencing using ttnn Model")
+        yolov8x_trace_2cq = Yolov8xTrace2CQ()
+        yolov8x_trace_2cq.initialize_yolov8x_trace_2cqs_inference(
+            device,
+            1,
+        )
 
     save_dir = "models/demos/yolov8x/demo/runs"
 
@@ -89,110 +90,28 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics):
     model_save_dir = os.path.join(save_dir, model_type)
     os.makedirs(model_save_dir, exist_ok=True)
 
-    names = {
-        0: "person",
-        1: "bicycle",
-        2: "car",
-        3: "motorcycle",
-        4: "airplane",
-        5: "bus",
-        6: "train",
-        7: "truck",
-        8: "boat",
-        9: "traffic light",
-        10: "fire hydrant",
-        11: "stop sign",
-        12: "parking meter",
-        13: "bench",
-        14: "bird",
-        15: "cat",
-        16: "dog",
-        17: "horse",
-        18: "sheep",
-        19: "cow",
-        20: "elephant",
-        21: "bear",
-        22: "zebra",
-        23: "giraffe",
-        24: "backpack",
-        25: "umbrella",
-        26: "handbag",
-        27: "tie",
-        28: "suitcase",
-        29: "frisbee",
-        30: "skis",
-        31: "snowboard",
-        32: "sports ball",
-        33: "kite",
-        34: "baseball bat",
-        35: "baseball glove",
-        36: "skateboard",
-        37: "surfboard",
-        38: "tennis racket",
-        39: "bottle",
-        40: "wine glass",
-        41: "cup",
-        42: "fork",
-        43: "knife",
-        44: "spoon",
-        45: "bowl",
-        46: "banana",
-        47: "apple",
-        48: "sandwich",
-        49: "orange",
-        50: "broccoli",
-        51: "carrot",
-        52: "hot dog",
-        53: "pizza",
-        54: "donut",
-        55: "cake",
-        56: "chair",
-        57: "couch",
-        58: "potted plant",
-        59: "bed",
-        60: "dining table",
-        61: "toilet",
-        62: "TV",
-        63: "laptop",
-        64: "mouse",
-        65: "remote",
-        66: "keyboard",
-        67: "cell phone",
-        68: "microwave",
-        69: "oven",
-        70: "toaster",
-        71: "sink",
-        72: "refrigerator",
-        73: "book",
-        74: "clock",
-        75: "vase",
-        76: "scissors",
-        77: "teddy bear",
-        78: "hair drier",
-        79: "toothbrush",
-    }
-
+    names = load_coco_class_names()
     for batch in dataset:
         paths, im0s, s = batch
 
         im = preprocess(im0s, res=res)
 
-        # pad input channels to 16 to avoid slow interleaved2sharded codepath for 3/8 channels
-        ttnn_input = torch.nn.functional.pad(im, (0, 0, 0, 0, 0, 13, 0, 0), value=0)
-        ttnn_input = ttnn_input.permute((0, 2, 3, 1))
-        ttnn_input = ttnn_input.reshape(
-            1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], ttnn_input.shape[3]
-        )
-        ttnn_input = ttnn.from_torch(ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
         if model_type == "torch_model":
             preds = model(im)
         else:
-            preds = model(x=ttnn_input)
-            preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
-
+            ttnn_im = im.clone()
+            n, c, h, w = ttnn_im.shape
+            ttnn_im = ttnn_im.permute(0, 2, 3, 1)
+            ttnn_im = ttnn_im.reshape(1, 1, h * w * n, c)
+            ttnn_im = ttnn.from_torch(ttnn_im, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            ttnn_im = ttnn.pad(ttnn_im, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+            preds = yolov8x_trace_2cq.execute_yolov8x_trace_2cqs_inference(ttnn_im)
+            preds = ttnn.to_torch(preds, dtype=torch.float32)
         results = postprocess(preds, im, im0s, batch, names)[0]
 
         save_yolo_predictions_by_model(results, save_dir, source, model_type)
+
+    if model_type == "tt_model":
+        yolov8x_trace_2cq.release_yolov8x_trace_2cqs_inference()
 
     logger.info("Inference done")
