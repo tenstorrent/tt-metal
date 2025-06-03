@@ -29,6 +29,9 @@ daemon_pipe_path = "/tmp/tt_metal_fabric_edm_daemon"
 daemon_result_pipe_path = "/tmp/tt_metal_fabric_edm_daemon_result"
 daemon_lock = threading.Lock()
 
+# Global daemon mode setting (determined once per test session)
+_daemon_mode_enabled = None
+
 
 def start_fabric_edm_daemon():
     """Start the fabric EDM daemon if not already running"""
@@ -140,6 +143,15 @@ def send_test_to_daemon(test_mode, test_params_str):
     with open(daemon_result_pipe_path, "r") as result_pipe:
         result_line = result_pipe.readline().strip()
         return int(result_line)
+
+
+def get_daemon_mode():
+    return _daemon_mode_enabled
+
+
+def set_daemon_mode(enabled):
+    global _daemon_mode_enabled
+    _daemon_mode_enabled = enabled
 
 
 def update_machine_type_suffix(machine_type: str):
@@ -445,7 +457,8 @@ def run_fabric_edm(
 
     enable_persistent_kernel_cache()
 
-    use_daemon = os.environ.get("TT_FABRIC_DAEMONIZE_TEST", "false").lower() == "true"
+    use_daemon = get_daemon_mode()
+
     if use_daemon:
         try:
             # Start daemon if not already running
@@ -463,8 +476,7 @@ def run_fabric_edm(
         except Exception as e:
             logger.warning(f"Daemon mode failed: {e}, falling back to direct execution")
             use_daemon = False
-
-    if not use_daemon:
+    else:
         # Fallback to original direct execution
         cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
                 {os.environ['TT_METAL_HOME']}/build/test/ttnn/unit_tests_ttnn_fabric_edm \
@@ -528,19 +540,23 @@ def run_fabric_edm(
     reset_machine_type_suffix()
 
 
-# Pytest fixture to manage daemon lifecycle
 @pytest.fixture(scope="session", autouse=True)
-def fabric_edm_daemon_session():
-    """Automatically start daemon at session start and stop at session end"""
-    use_daemon = os.environ.get("TT_FABRIC_DAEMONIZE_TEST", "false").lower() == "true"
+def initialize_daemon_mode(request):
+    """Initialize global daemon mode setting once per test session"""
+    # Check pytest command line option first, then fall back to environment variable
+    daemon_enabled = hasattr(request.config.option, "use_daemon") and request.config.option.use_daemon
 
-    if use_daemon:
-        logger.info("Starting fabric EDM daemon for test session")
+    # Set global daemon mode
+    set_daemon_mode(daemon_enabled)
+
+    if daemon_enabled:
+        logger.info("Fabric EDM daemon mode enabled for this test session")
         start_fabric_edm_daemon()
         yield
         logger.info("Stopping fabric EDM daemon after test session")
         stop_fabric_edm_daemon()
     else:
+        logger.info("Fabric EDM daemon mode disabled, using direct execution")
         yield
 
 

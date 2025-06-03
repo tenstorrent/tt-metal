@@ -15,10 +15,8 @@
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 
 // Global state for daemon mode
-static bool daemon_mode = false;
 static bool daemon_running = true;
 static std::string daemon_pipe_path = "/tmp/tt_metal_fabric_edm_daemon";
-static FILE* debug_log = nullptr;
 
 // Signal handler for graceful shutdown
 void signal_handler(int signum) { daemon_running = false; }
@@ -316,16 +314,11 @@ static void run_daemon_mode() {
     // Cleanup
     unlink(daemon_pipe_path.c_str());
     unlink((daemon_pipe_path + "_result").c_str());
-    if (debug_log) {
-        fclose(debug_log);
-        debug_log = nullptr;
-    }
     tt::log_info("Daemon shutdown complete");
 }
 
 int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "daemon_mode") {
-        daemon_mode = true;
         run_daemon_mode();
         return 0;
     }
