@@ -143,9 +143,9 @@ void RunAsyncWriteTest(
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
     CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    FabricNodeId start_fabric_node_id(0, 0);
+    FabricNodeId start_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_start_device_id;
-    FabricNodeId end_fabric_node_id(0, 0);
+    FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
@@ -219,7 +219,7 @@ void RunAsyncWriteTest(
         receiver_noc_encoding,
         receiver_buffer->address(),
         data_size,
-        end_fabric_node_id.mesh_id,
+        *end_fabric_node_id.mesh_id,
         end_fabric_node_id.chip_id,
         tt_metal::MetalContext::instance().hal().noc_xy_encoding(router_virtual_core.x, router_virtual_core.y),
         outbound_eth_channels.begin()->first};
@@ -260,9 +260,9 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
     CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    FabricNodeId start_fabric_node_id(0, 0);
+    FabricNodeId start_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_start_device_id;
-    FabricNodeId end_fabric_node_id(0, 0);
+    FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
@@ -328,7 +328,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
         receiver_buffer->address(),
         atomic_inc,
         wrap_boundary,
-        end_fabric_node_id.mesh_id,
+        *end_fabric_node_id.mesh_id,
         end_fabric_node_id.chip_id,
         tt_metal::MetalContext::instance().hal().noc_xy_encoding(router_virtual_core.x, router_virtual_core.y),
         outbound_eth_channels.begin()->first};
@@ -360,9 +360,9 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
     CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    FabricNodeId start_fabric_node_id(0, 0);
+    FabricNodeId start_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_start_device_id;
-    FabricNodeId end_fabric_node_id(0, 0);
+    FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
@@ -448,7 +448,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
         receiver_atomic_buffer->address(),
         data_size,
         atomic_inc,
-        end_fabric_node_id.mesh_id,
+        *end_fabric_node_id.mesh_id,
         end_fabric_node_id.chip_id,
         tt_metal::MetalContext::instance().hal().noc_xy_encoding(router_virtual_core.x, router_virtual_core.y),
         outbound_eth_channels.begin()->first};
@@ -486,7 +486,7 @@ void RunAsyncWriteMulticastTest(
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
     CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    FabricNodeId start_fabric_node_id(0, 0);
+    FabricNodeId start_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_start_device_id;
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
@@ -626,11 +626,11 @@ void RunAsyncWriteMulticastTest(
             receiver_noc_encoding,
             receiver_buffer_addr,
             data_size,
-            end_fabric_node_ids_by_dir[RoutingDirection::E][0].mesh_id,
+            *end_fabric_node_ids_by_dir[RoutingDirection::E][0].mesh_id,
             end_fabric_node_ids_by_dir[RoutingDirection::E][0].chip_id,
             mcast_hops[RoutingDirection::E],
             sender_router_noc_xys[RoutingDirection::E],
-            end_fabric_node_ids_by_dir[RoutingDirection::W][0].mesh_id,
+            *end_fabric_node_ids_by_dir[RoutingDirection::W][0].mesh_id,
             end_fabric_node_ids_by_dir[RoutingDirection::W][0].chip_id,
             mcast_hops[RoutingDirection::W],
             sender_router_noc_xys[RoutingDirection::W],
@@ -642,7 +642,7 @@ void RunAsyncWriteMulticastTest(
             receiver_noc_encoding,
             receiver_buffer_addr,
             data_size,
-            end_fabric_node_ids_by_dir[routing_direction][0].mesh_id,
+            *end_fabric_node_ids_by_dir[routing_direction][0].mesh_id,
             end_fabric_node_ids_by_dir[routing_direction][0].chip_id,
             mcast_hops[routing_direction],
             sender_router_noc_xys[routing_direction],
