@@ -45,6 +45,13 @@ install(
         add_2_integers_in_riscv
         eltwise_binary
         matmul_multi_core
+        eltwise_sfpu
+        loopback
+        matmul_multicore_reuse
+        matmul_common
+        matmul_single_core
+        pad
+        sharding
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into /usr/share/doc on a default Docker image.
     #                 Speculation: some dependency for magic doc handling is missing.
@@ -64,6 +71,13 @@ install(
         add_2_integers_in_riscv
         eltwise_binary
         matmul_multi_core
+        eltwise_sfpu
+        loopback
+        matmul_multicore_reuse
+        matmul_common
+        matmul_single_core
+        pad
+        sharding
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING
