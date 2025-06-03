@@ -720,96 +720,26 @@ tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
     }
 }
 
-struct CoreTensorWork {
+// Program cache safe structures - no dynamic allocation inside
+// Add these definitions at the top of the file, before the function
+// Add these definitions at the top of the file, before the function
+constexpr uint32_t MAX_SEGMENTS_PER_CORE = 8;  // Should handle most workload distributions
+
+struct CoreTensorWorkFlat {
     uint32_t tensor_id;
     uint32_t start_page_in_tensor;
     uint32_t num_pages_from_tensor;
     uint32_t tensor_src_addr;
-    bool tensor_is_dram;
+    uint32_t tensor_is_dram;    // bool as uint32_t
     uint32_t tensor_page_size;  // for RM layout
 };
 
-struct CoreWorkload {
-    std::vector<CoreTensorWork> tensor_segments;
+struct CoreWorkloadFlat {
+    uint32_t num_segments;  // How many segments are actually used
     uint32_t total_pages;
     uint32_t output_start_page;
+    CoreTensorWorkFlat segments[MAX_SEGMENTS_PER_CORE];  // Fixed-size array
 };
-
-static std::vector<CoreWorkload> compute_per_core_workloads(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<uint32_t>& num_pages_per_block,
-    const std::vector<uint32_t>& src_addr,
-    const std::vector<bool>& is_dram,
-    const std::vector<uint32_t>& page_size_per_tensor,
-    uint32_t num_output_pages_per_block,
-    uint32_t total_output_pages,
-    uint32_t num_cores,
-    uint32_t num_tiles_per_core_group_1,
-    uint32_t num_tiles_per_core_group_2,
-    uint32_t g1_num_cores,
-    bool rm_layout) {
-    std::vector<CoreWorkload> workloads(num_cores);
-    uint32_t num_pages_written = 0;
-
-    for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
-        uint32_t num_pages_per_core =
-            (core_id < g1_num_cores) ? num_tiles_per_core_group_1 : num_tiles_per_core_group_2;
-
-        workloads[core_id].total_pages = num_pages_per_core;
-        workloads[core_id].output_start_page = num_pages_written;
-
-        uint32_t pages_remaining = num_pages_per_core;
-        uint32_t current_output_page = num_pages_written;
-
-        while (pages_remaining > 0) {
-            // Find which block and position we're in
-            uint32_t block_id = current_output_page / num_output_pages_per_block;
-            uint32_t pos_in_block = current_output_page % num_output_pages_per_block;
-
-            // Find which tensor within this block
-            uint32_t tensor_id = 0;
-            uint32_t pos_in_tensor = pos_in_block;
-            for (uint32_t t = 0; t < input_tensors.size(); ++t) {
-                if (pos_in_tensor < num_pages_per_block[t]) {
-                    tensor_id = t;
-                    break;
-                }
-                pos_in_tensor -= num_pages_per_block[t];
-                tensor_id = t + 1;
-            }
-
-            if (tensor_id >= input_tensors.size()) {
-                // We've gone past the last tensor in this block, move to next block
-                current_output_page = (block_id + 1) * num_output_pages_per_block;
-                continue;
-            }
-
-            // Calculate how many pages we can read from this tensor
-            uint32_t pages_available_in_tensor = num_pages_per_block[tensor_id] - pos_in_tensor;
-            uint32_t pages_to_read = std::min(pages_remaining, pages_available_in_tensor);
-
-            // Add this segment to the workload
-            CoreTensorWork work;
-            work.tensor_id = tensor_id;
-            work.start_page_in_tensor = block_id * num_pages_per_block[tensor_id] + pos_in_tensor;
-            work.num_pages_from_tensor = pages_to_read;
-            work.tensor_src_addr = src_addr[tensor_id];
-            work.tensor_is_dram = is_dram[tensor_id];
-            if (rm_layout) {
-                work.tensor_page_size = page_size_per_tensor[tensor_id];
-            }
-
-            workloads[core_id].tensor_segments.push_back(work);
-
-            pages_remaining -= pages_to_read;
-            current_output_page += pages_to_read;
-        }
-
-        num_pages_written += num_pages_per_core;
-    }
-
-    return workloads;
-}
 
 tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     const std::vector<Tensor>& input_tensors, const uint32_t dim, const Tensor& output) {
@@ -917,18 +847,8 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
             num_output_pages_per_block += num_accum_pages * dim_pages;
         }
     }
-    std::vector<uint32_t> common_reader_kernel_args = {0, 0, 0};
-    common_reader_kernel_args.insert(common_reader_kernel_args.end(), src_addr.begin(), src_addr.end());
-    common_reader_kernel_args.insert(common_reader_kernel_args.end(), is_dram.begin(), is_dram.end());
-    common_reader_kernel_args.insert(
-        common_reader_kernel_args.end(), num_pages_per_block.begin(), num_pages_per_block.end());
-    if (rm_layout) {
-        common_reader_kernel_args.insert(
-            common_reader_kernel_args.end(), page_size_per_tensor.begin(), page_size_per_tensor.end());
-    }
 
     // Reader compile-time args
-    // Data is 32 byte aligned
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
@@ -941,13 +861,9 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         concat_defines["WIDTH_CONCAT"] = "1";
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)src0_cb_index,
-                                                      (std::uint32_t)dst_is_dram,
-                                                      0,
-                                                      0};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram, 0, 0};
 
-    // Tilized reader
+    // Create kernels
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         rm_layout ? "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
@@ -969,39 +885,121 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
     uint32_t g1_num_cores = core_group_1.num_cores();
 
-    // Compute workload distribution
-    auto per_core_workloads = compute_per_core_workloads(
-        input_tensors,
-        num_pages_per_block,
-        src_addr,
-        is_dram,
-        page_size_per_tensor,
-        num_output_pages_per_block,
-        num_output_pages,
-        cores.size(),
-        num_tiles_per_core_group_1,
-        num_tiles_per_core_group_2,
-        g1_num_cores,
-        rm_layout);
+    // Compute workload distribution (convert original logic to flat structures)
+    std::vector<CoreWorkloadFlat> flat_workloads(cores.size());
 
-    // Set arguments for each core
+    for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
+        const CoreCoord& core = cores[i];
+        uint32_t num_pages_per_core = 0;
+        if (i < g1_num_cores) {
+            num_pages_per_core = num_tiles_per_core_group_1;
+        } else {
+            num_pages_per_core = num_tiles_per_core_group_2;
+        }
+
+        // Initialize flat workload for this core
+        auto& flat_workload = flat_workloads[i];
+        flat_workload.total_pages = num_pages_per_core;
+        flat_workload.output_start_page = num_pages_written;
+        flat_workload.num_segments = 0;
+
+        if (num_pages_per_core == 0) {
+            num_pages_written += num_pages_per_core;
+            continue;
+        }
+
+        // Calculate starting position (original logic)
+        uint32_t block_id = num_pages_written / num_output_pages_per_block;
+        uint32_t id_within_block = num_pages_written % num_output_pages_per_block;
+        uint32_t curr_tensor = 0;
+        uint32_t curr_tensor_id = 0;
+
+        // Compute page_id_per_tensor for this core (original logic)
+        for (uint32_t j = 0; j < num_input_tensors; j++) {
+            page_id_per_tensor[j] = block_id * num_pages_per_block[j];
+            if (id_within_block == 0) {
+                continue;
+            } else if (id_within_block >= num_pages_per_block[j]) {
+                page_id_per_tensor[j] += num_pages_per_block[j];
+                id_within_block -= num_pages_per_block[j];
+                curr_tensor = j + 1;
+            } else {
+                page_id_per_tensor[j] += id_within_block;
+                curr_tensor = j;
+                curr_tensor_id = id_within_block;
+                id_within_block = 0;
+            }
+        }
+
+        // Convert to flat workload structure
+        // For simplicity, we'll create one segment per tensor that this core reads from
+        // This is a conservative approach that may create more segments than optimal
+        uint32_t segment_count = 0;
+
+        for (uint32_t j = 0; j < num_input_tensors && segment_count < MAX_SEGMENTS_PER_CORE; j++) {
+            // Check if this core needs to read from tensor j
+            uint32_t pages_from_this_tensor = 0;
+
+            if (j == curr_tensor) {
+                // This is the starting tensor, figure out how many pages
+                pages_from_this_tensor = std::min(num_pages_per_core, num_pages_per_block[j] - curr_tensor_id);
+            } else if (j > curr_tensor) {
+                // This tensor comes after the starting tensor
+                uint32_t pages_consumed = 0;
+                if (curr_tensor < num_input_tensors) {
+                    pages_consumed = num_pages_per_block[curr_tensor] - curr_tensor_id;
+                }
+
+                for (uint32_t k = curr_tensor + 1; k < j; k++) {
+                    pages_consumed += num_pages_per_block[k];
+                }
+
+                if (pages_consumed < num_pages_per_core) {
+                    pages_from_this_tensor = std::min(num_pages_per_core - pages_consumed, num_pages_per_block[j]);
+                }
+            }
+
+            if (pages_from_this_tensor > 0) {
+                flat_workload.segments[segment_count] = {
+                    .tensor_id = j,
+                    .start_page_in_tensor = page_id_per_tensor[j],
+                    .num_pages_from_tensor = pages_from_this_tensor,
+                    .tensor_src_addr = src_addr[j],
+                    .tensor_is_dram = is_dram[j] ? 1u : 0u,
+                    .tensor_page_size = rm_layout ? page_size_per_tensor[j] : single_page_size};
+                segment_count++;
+            }
+        }
+
+        flat_workload.num_segments = segment_count;
+
+        // Zero out unused segments
+        for (uint32_t j = segment_count; j < MAX_SEGMENTS_PER_CORE; ++j) {
+            flat_workload.segments[j] = {};
+        }
+
+        num_pages_written += num_pages_per_core;
+    }
+
+    // Set arguments for each core using flat workloads
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
-        const auto& workload = per_core_workloads[i];
+        const auto& flat_workload = flat_workloads[i];
 
-        if (workload.tensor_segments.empty()) {
+        if (flat_workload.num_segments == 0) {
             continue;  // Core has no work
         }
 
-        // Build reader args: [num_pages, num_tensor_segments, ...]
+        // Build reader args using flat data
         std::vector<uint32_t> reader_kernel_args;
-        reader_kernel_args.push_back(workload.total_pages);
-        reader_kernel_args.push_back(workload.tensor_segments.size());
+        reader_kernel_args.push_back(flat_workload.total_pages);
+        reader_kernel_args.push_back(flat_workload.num_segments);
 
-        // Add tensor metadata for only the tensors this core needs
-        for (const auto& segment : workload.tensor_segments) {
+        // Add tensor metadata for segments
+        for (uint32_t j = 0; j < flat_workload.num_segments; ++j) {
+            const auto& segment = flat_workload.segments[j];
             reader_kernel_args.push_back(segment.tensor_src_addr);
-            reader_kernel_args.push_back(segment.tensor_is_dram ? 1 : 0);
+            reader_kernel_args.push_back(segment.tensor_is_dram);
             reader_kernel_args.push_back(segment.start_page_in_tensor);
             reader_kernel_args.push_back(segment.num_pages_from_tensor);
             if (rm_layout) {
@@ -1009,21 +1007,25 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
             }
         }
 
-        // Writer args remain the same
+        // Writer args
         std::vector<uint32_t> writer_kernel_args;
         if (rm_layout) {
             writer_kernel_args = {
-                dst_buffer->address(), output.buffer()->page_size(), workload.total_pages, workload.output_start_page};
+                dst_buffer->address(),
+                output.buffer()->page_size(),
+                flat_workload.total_pages,
+                flat_workload.output_start_page};
         } else {
-            writer_kernel_args = {dst_buffer->address(), workload.total_pages, workload.output_start_page};
+            writer_kernel_args = {dst_buffer->address(), flat_workload.total_pages, flat_workload.output_start_page};
         }
 
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
     }
 
+    // Program cache safe callback
     auto override_runtime_args_callback =
-        [per_core_workloads, cores, rm_layout, unary_reader_kernel_id, unary_writer_kernel_id](
+        [flat_workloads, cores, rm_layout, unary_reader_kernel_id, unary_writer_kernel_id](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -1033,27 +1035,20 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
             for (uint32_t i = 0; i < cores.size(); ++i) {
                 const CoreCoord& core = cores[i];
-                const auto& workload = per_core_workloads[i];
+                const auto& flat_workload = flat_workloads[i];
 
-                if (workload.tensor_segments.empty()) {
-                    continue;  // Core has no work
+                if (flat_workload.num_segments == 0) {
+                    continue;
                 }
 
-                // Update reader args with new tensor addresses
                 auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                uint32_t arg_idx = 2;  // Start after num_pages and num_tensor_segments
 
-                for (const auto& segment : workload.tensor_segments) {
-                    reader_runtime_args[arg_idx++] = input_tensors[segment.tensor_id].buffer()->address();
-                    arg_idx++;  // Skip is_dram (doesn't change)
-                    arg_idx++;  // Skip start_page_in_tensor (doesn't change)
-                    arg_idx++;  // Skip num_pages_from_tensor (doesn't change)
-                    if (rm_layout) {
-                        arg_idx++;  // Skip tensor_page_size (doesn't change)
-                    }
+                for (uint32_t seg_idx = 0; seg_idx < flat_workload.num_segments; ++seg_idx) {
+                    const auto& segment = flat_workload.segments[seg_idx];
+                    uint32_t addr_index = 2 + seg_idx * (rm_layout ? 5 : 4);
+                    reader_runtime_args[addr_index] = input_tensors[segment.tensor_id].buffer()->address();
                 }
 
-                // Update writer args with new output address
                 auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 writer_runtime_args[0] = dst_buffer->address();
             }
@@ -1061,5 +1056,4 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     return {std::move(program), override_runtime_args_callback};
 }
-
 }  // namespace ttnn::operations::data_movement::detail
