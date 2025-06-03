@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,6 +32,8 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     using namespace tt;
+
+    std::cout << "Calling Factory::create()" << std::endl;
 
     // Device setup
     Program program;
@@ -117,10 +119,12 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     constexpr uint32_t cb_intermed_index = CBIndex::c_3;
 
     auto grid = device->compute_with_storage_grid_size();
-    // const CoreCoord single_core_grid = {1, 1};
-    //  auto grid = CoreCoord(1, 3);
+    const uint32_t num_cores_y = grid.y;
+
     auto [num_cores, all_cores, busy_cores, lazy_cores, busy_work_units, lazy_work_units] =
         tt_metal::split_work_to_cores(grid, num_rows);
+
+    std::cout << "num cores = " << num_cores << ", num cores y = " << num_cores_y << std::endl;
 
     // std::cout << "all cores = " << all_cores.num_cores() << ", busy cores = " << busy_cores.num_cores() << " ["
     //           << busy_work_units << "]"
@@ -132,6 +136,9 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
 
     uint32_t total_cb_size = 4 * single_tile_size;
 
+    ////////////////////////////////////////////////////////////////////////////
+    //                         CircularBuffer Setup
+    ////////////////////////////////////////////////////////////////////////////
     CircularBufferConfig cb_in_config =
         CircularBufferConfig(total_cb_size, {{cb_in_index, in_df}}).set_page_size(cb_in_index, single_tile_size);
 
@@ -153,7 +160,9 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     std::vector<uint32_t> reader_kernel_compile_args = {flip};
     std::vector<uint32_t> writer_kernel_compile_args = {flip};
 
-    // Create kernels
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Data Movement Kernel Setup
+    ////////////////////////////////////////////////////////////////////////////
     KernelHandle cumsum_reader_handle_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/dataflow/cumsum_reader.cpp",
@@ -172,6 +181,9 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
             .noc = NOC::RISCV_0_default,
             .compile_args = writer_kernel_compile_args});
 
+    ////////////////////////////////////////////////////////////////////////////
+    //                      ComputeKernel SetUp
+    ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> compute_kernel_args = {};
     std::map<std::string, std::string> defines_kernel_args = {};
 
@@ -191,8 +203,11 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
             .compile_args = compute_kernel_args,
             .defines = defines_kernel_args});
 
-    std::cout << "flip = " << flip << std::endl;
     std::cout << "num cores = " << num_cores << std::endl;
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      RuntimeArgs SetUp
+    ////////////////////////////////////////////////////////////////////////////
     uint32_t start_row = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / grid.y, i % grid.y};
@@ -247,7 +262,7 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
 
         start_row += rows_per_core;
     }
-    return {std::move(program), {cumsum_reader_handle_id, cumsum_writer_handle_id, grid}};
+    return {std::move(program), {cumsum_reader_handle_id, cumsum_writer_handle_id, num_cores, num_cores_y}};
 }
 
 void CumSumDeviceOperation::ProgramFactory::override_runtime_arguments(
@@ -263,19 +278,23 @@ void CumSumDeviceOperation::ProgramFactory::override_runtime_arguments(
     auto& cumsum_reader_kernel_id = cached_program.shared_variables.cumsum_reader_kernel_id;
     auto& cumsum_writer_kernel_id = cached_program.shared_variables.cumsum_writer_kernel_id;
 
-    auto& grid = cached_program.shared_variables.compute_grid;
-    auto num_cores = grid.x * grid.y;
+    auto num_cores = cached_program.shared_variables.num_cores;
+    auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
     auto& program = cached_program.program;
 
-    uint32_t input_buffer_addr = 0;
-    uint32_t output_buffer_addr = 0;
+    auto input_buffer_addr = input_tensor.buffer()->address();
+    auto output_buffer_addr = tensor_return_value.buffer()->address();
+
+    std::cout << "Calling override_runtime_arguments: num_cores = " << num_cores << ", " << num_cores_y << std::endl;
+
+    // TT_ASSERT(false, "override_runtime_arguments called");
 
     // Note: do not use full grid => we can't override program if we are not running
     // program on the specified core
     // This is why we must specify where the program is running
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / grid.x, i % grid.x};
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
             auto& runtime_args = GetRuntimeArgs(program, cumsum_reader_kernel_id, core);
