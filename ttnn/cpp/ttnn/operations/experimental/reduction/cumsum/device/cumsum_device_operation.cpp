@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -77,16 +77,6 @@ CumSumDeviceOperation::tensor_return_value_t CumSumDeviceOperation::create_outpu
     }
 
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
-}
-
-tt::stl::hash::hash_t CumSumDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(args, tensor_args);
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<CumSumDeviceOperation>(
-        program_factory.index()  // TODO: Add other arguments
-    );
-
-    return hash;
 }
 
 std::tuple<CumSumDeviceOperation::operation_attributes_t, CumSumDeviceOperation::tensor_args_t>

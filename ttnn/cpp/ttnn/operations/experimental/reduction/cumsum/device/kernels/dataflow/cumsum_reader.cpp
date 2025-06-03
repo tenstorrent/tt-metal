@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -49,8 +49,6 @@ void kernel_main() {
     }
 
     fill_cb_with_value(cb_zero, scaler.u);
-
-    // const uint32_t total_num_rows = product_low_dims * product_high_dims * HtWt;
 
     DPRINT << "[Cumsum Reader] start_row = " << start_row << ", num rows = " << num_rows << ENDL();
     for (uint32_t i = start_row; i < start_row + num_rows; i++) {
