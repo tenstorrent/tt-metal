@@ -16,6 +16,7 @@
 
 // Global state for daemon mode
 static bool daemon_running = true;
+// NOTE: This path need to be same as the one written in test_fabric_edm_bandwidth.py
 static std::string daemon_pipe_path = "/tmp/tt_metal_fabric_edm_daemon";
 
 // Signal handler for graceful shutdown
@@ -270,6 +271,16 @@ static void run_daemon_mode() {
                 std::string test_mode = test_params_str.substr(0, separator_pos);
                 std::string params_str = test_params_str.substr(separator_pos + 1);
 
+                // Lambda to write result to pipe
+                auto write_result_to_pipe = [](int result) {
+                    std::string result_pipe_path = daemon_pipe_path + "_result";
+                    std::ofstream result_pipe(result_pipe_path);
+                    if (result_pipe.is_open()) {
+                        result_pipe << result << std::endl;
+                        result_pipe.close();
+                    }
+                };
+
                 try {
                     TestParams test_params = parse_pipe_separated_params(params_str, test_mode);
 
@@ -282,26 +293,12 @@ static void run_daemon_mode() {
                         result = run_single_test(test_params, test_mode);
                     }
 
-                    // Write result back to a result pipe
-                    std::string result_pipe_path = daemon_pipe_path + "_result";
-                    std::ofstream result_pipe(result_pipe_path);
-                    if (result_pipe.is_open()) {
-                        result_pipe << result << std::endl;
-                        result_pipe.close();
-                    }
-
+                    write_result_to_pipe(result);
                     tt::log_info("Test completed with result: {}", result);
 
                 } catch (const std::exception& e) {
                     tt::log_error("Error running test: {}", e.what());
-
-                    // Write error result
-                    std::string result_pipe_path = daemon_pipe_path + "_result";
-                    std::ofstream result_pipe(result_pipe_path);
-                    if (result_pipe.is_open()) {
-                        result_pipe << 1 << std::endl;
-                        result_pipe.close();
-                    }
+                    write_result_to_pipe(1);  // Write error result
                 }
             }
         }

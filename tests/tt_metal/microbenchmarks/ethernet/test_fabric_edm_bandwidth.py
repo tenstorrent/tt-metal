@@ -25,6 +25,7 @@ machine_type_suffix = None
 
 # Global daemon management variables
 daemon_process = None
+# NOTE: This paths need to be same as the one written in test_fabric_edm.cpp
 daemon_pipe_path = "/tmp/tt_metal_fabric_edm_daemon"
 daemon_result_pipe_path = "/tmp/tt_metal_fabric_edm_daemon_result"
 daemon_lock = threading.Lock()
