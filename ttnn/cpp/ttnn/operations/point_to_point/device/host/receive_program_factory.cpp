@@ -16,16 +16,15 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     // basic accounting
     const uint32_t output_num_pages = data_movement::get_num_pages(output_tensor);
     const uint32_t output_page_size_bytes = output_tensor.tensor_spec().compute_page_size_bytes();
+    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     // figure out packets
     // !TODO see what happens if page size is larger than packet size.
     const auto [packet_size_bytes, num_pages_per_packet, total_packets] =
-        compute_packet_dims(output_tensor.get_dtype(), output_page_size_bytes, output_num_pages);
+        compute_aligned_packet_dims(output_tensor.get_dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
 
     // distribute work
-    // !TODO debug
-    // const auto use_cores = mesh_device->compute_with_storage_grid_size();
-    CoreCoord use_cores = {1, 1};
+    const auto use_cores = mesh_device->compute_with_storage_grid_size();
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(use_cores, total_packets);
@@ -53,7 +52,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     tt::tt_metal::CBHandle cb_sender_handle = CreateCircularBuffer(program, all_cores, cb_receiver_config);
 
     const bool intermediate_is_dram = output_tensors.at(0).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const std::vector<uint32_t> reader_ct_args = {intermediate_is_dram, packet_cb_id, receiver_cb_id, l1_alignment};
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -65,11 +63,12 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // And the writer
+    const std::map<std::string, std::string> writer_defines{{"ROWMAJOR", "1"}};
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig({output_is_dram, receiver_cb_id}));
+        tt::tt_metal::WriterDataMovementConfig({output_is_dram, receiver_cb_id}, writer_defines));
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
@@ -96,7 +95,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.buffer()->address(), increment, page_idx_start};
+            output_tensor.buffer()->address(), increment, page_idx_start, packet_size_bytes};
 
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
 

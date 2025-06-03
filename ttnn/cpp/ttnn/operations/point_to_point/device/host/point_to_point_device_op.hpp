@@ -117,8 +117,8 @@ private:
 };
 
 namespace detail {
-std::tuple<uint32_t, uint32_t, uint32_t> compute_packet_dims(
-    const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages);
+std::tuple<uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
+    const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment);
 
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args,
@@ -132,11 +132,9 @@ device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t>
     PointToPointOp::tensor_return_value_t& output_tensor);
 
 }  // namespace detail
-
 }  // namespace operations::point_to_point
 
 namespace prim {
-// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
 constexpr auto point_to_point =
     ttnn::register_operation<"ttnn::prim::point_to_point", ttnn::operations::point_to_point::PointToPointOp>();
 }  // namespace prim
