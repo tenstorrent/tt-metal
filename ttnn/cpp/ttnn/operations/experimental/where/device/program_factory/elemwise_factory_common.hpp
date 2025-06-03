@@ -13,7 +13,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::experimental::where {
+namespace ttnn::operations::ternary::experimental {
 
 template <bool initialize_args>
 inline void set_eltwise_ternary_runtime_args(
@@ -125,4 +125,4 @@ inline void set_eltwise_ternary_runtime_args(
     }
 }
 
-}  // namespace ttnn::operations::experimental::where
+}  // namespace ttnn::operations::ternary::experimental

@@ -14,12 +14,12 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
-namespace ttnn::operations::experimental::where {
+namespace ttnn::operations::ternary::experimental {
 
 ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProgram::create(
-    const operation_attributes_type& operation_attributes,
-    const tensor_args_type& tensor_args,
-    tensor_return_value_type& tensor_return_value) {
+    const where_ttt_args::operation_attributes_type& operation_attributes,
+    const where_ttt_args::tensor_args_type& tensor_args,
+    where_ttt_args::tensor_return_value_type& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::constants;
@@ -162,7 +162,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
 
 void ElementWiseMultiCoreWhereProgram::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_type& operation_attributes,
-    const tensor_args_type& tensor_args,
-    tensor_return_value_type& tensor_return_value) {};
-}  // namespace ttnn::operations::experimental::where
+    const where_ttt_args::operation_attributes_type& operation_attributes,
+    const where_ttt_args::tensor_args_type& tensor_args,
+    where_ttt_args::tensor_return_value_type& tensor_return_value) {};
+}  // namespace ttnn::operations::ternary::experimental

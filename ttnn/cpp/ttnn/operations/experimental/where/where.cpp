@@ -14,7 +14,7 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn {
-namespace operations::experimental::where {
+namespace operations::ternary::experimental {
 
 // where - ternary operator y = (predicate) ? value_true : value_false; elementwise
 // y = (predicate >= 0)*value_true + (predicate < 0)*value_false
@@ -37,7 +37,7 @@ Tensor where_impl(
     }
 
     if constexpr (std::is_same_v<T, Tensor> and std::is_same_v<U, Tensor>) {
-        // no need to have invoke name anymore
+        // TODO: no need to have invoke name anymore
         auto [operation_attributes, tensor_args] = WhereDeviceOperation::invoke(
             predicate, value_true, value_false, output_dtype, output_mem_config, std::move(output_tensor));
         return ttnn::device_operation::detail::invoke<WhereDeviceOperation>(
@@ -50,8 +50,8 @@ Tensor where_impl(
 }
 }  // namespace details
 
-}  // namespace operations::experimental::where
-Tensor operations::experimental::where::WhereOperation::invoke(
+}  // namespace operations::ternary::experimental
+Tensor operations::ternary::experimental::WhereOperation::invoke(
     QueueId queue_id,
     const Tensor& predicate,
     const Tensor& value_true,
@@ -69,7 +69,7 @@ Tensor operations::experimental::where::WhereOperation::invoke(
         std::move(output_tensor));
 }
 
-Tensor operations::experimental::where::WhereOperation::invoke(
+Tensor operations::ternary::experimental::WhereOperation::invoke(
     QueueId queue_id,
     const Tensor& predicate,
     const float value_true,
@@ -87,7 +87,7 @@ Tensor operations::experimental::where::WhereOperation::invoke(
         std::move(output_tensor));
 }
 
-Tensor operations::experimental::where::WhereOperation::invoke(
+Tensor operations::ternary::experimental::WhereOperation::invoke(
     QueueId queue_id,
     const Tensor& predicate,
     const Tensor& value_true,
@@ -105,7 +105,7 @@ Tensor operations::experimental::where::WhereOperation::invoke(
         std::move(output_tensor));
 }
 
-Tensor operations::experimental::where::WhereOperation::invoke(
+Tensor operations::ternary::experimental::WhereOperation::invoke(
     QueueId queue_id,
     const Tensor& predicate,
     const float value_true,

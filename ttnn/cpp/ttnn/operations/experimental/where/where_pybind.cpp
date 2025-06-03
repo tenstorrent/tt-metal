@@ -7,12 +7,11 @@
 #include "ttnn/operations/experimental/where/where_pybind.hpp"
 #include "ttnn/operations/experimental/where/where.hpp"
 
-namespace ttnn::operations::experimental::where::detail {
+namespace ttnn::operations::ternary::experimental::detail {
 
 void bind_where(pybind11::module& module) {
-    //(py::module& module, const ternary_operation_t& operation, const std::string& description)
-    auto operation = ttnn::operations::experimental::where::where_op;
-    using OperationType = decltype(ttnn::operations::experimental::where::where_op);
+    auto operation = ttnn::operations::ternary::experimental::where;
+    using OperationType = decltype(ttnn::operations::ternary::experimental::where);
     std::string description =
         R"doc(Computes Where on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc";
     auto doc = fmt::format(
@@ -166,4 +165,4 @@ void bind_where(pybind11::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::where::detail
+}  // namespace ttnn::operations::ternary::experimental::detail

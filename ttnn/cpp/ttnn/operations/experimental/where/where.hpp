@@ -11,7 +11,7 @@
 
 namespace ttnn {
 
-namespace operations::experimental::where {
+namespace operations::ternary::experimental {
 
 struct WhereOperation {
     static Tensor invoke(
@@ -95,7 +95,7 @@ struct WhereOperation {
     }
 };
 
-constexpr auto where_op = ttnn::register_operation<"ttnn::experimental::where", WhereOperation>();
-}  // namespace operations::experimental::where
+constexpr auto where = ttnn::register_operation<"ttnn::experimental::where", WhereOperation>();
+}  // namespace operations::ternary::experimental
 
 }  // namespace ttnn
