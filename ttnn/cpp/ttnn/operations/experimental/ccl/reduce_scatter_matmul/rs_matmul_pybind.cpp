@@ -66,12 +66,10 @@ void py_bind_rs_matmul(pybind11::module& module) {
                const std::optional<const ttnn::DeviceComputeKernelConfig>&
                    compute_kernel_config,                                   // mm8 used but default std::nullopt
                const std::optional<const GlobalCircularBuffer>& global_cb,  // mm12 used but default std::nullopt
-               const std::optional<tt::tt_metal::SubDeviceId>&
-                   sub_device_id,                               // rs and mm13 used same but default std::nullopt
-               std::optional<const ttnn::CoreGrid>& core_grid,  // mm9 may use but default std::nullopt
-               const bool transpose_a,                          // mm2 set false
-               const bool transpose_b,                          // mm3 set false
-               const std::optional<const DataType>& dtype,      // mm5 set false
+               std::optional<const ttnn::CoreGrid>& core_grid,              // mm9 may use but default std::nullopt
+               const bool transpose_a,                                      // mm2 set false
+               const bool transpose_b,                                      // mm3 set false
+               const std::optional<const DataType>& dtype,                  // mm5 set false
                const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,  // mm6 std::nullopt
                const std::optional<const std::string>& activation,                                  // mm7 set false
                const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 std::nullopt
@@ -95,7 +93,6 @@ void py_bind_rs_matmul(pybind11::module& module) {
                     memory_config_mm,
                     compute_kernel_config,
                     global_cb,
-                    sub_device_id,
                     core_grid,
                     transpose_a,
                     transpose_b,
@@ -120,7 +117,6 @@ void py_bind_rs_matmul(pybind11::module& module) {
             py::arg("memory_config_mm") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("global_cb") = std::nullopt,
-            py::arg("sub_device_id") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("transpose_a") = false,
             py::arg("transpose_b") = false,

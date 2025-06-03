@@ -29,7 +29,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-struct AllGatherRS {
+struct Matmul_RS {
     using spec_return_value_t = std::vector<ttnn::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     struct matmul_tensor_args_t {
@@ -86,7 +86,6 @@ struct AllGatherRS {
         ttnn::Tensor& intermediate_packet_buffer,
         const int32_t dim,
         const GlobalSemaphore& semaphore,
-        const tt::tt_metal::SubDeviceId subdevice_id,
         const uint32_t cluster_axis,
         const uint32_t ring_devices,
         const uint32_t num_links,
@@ -108,5 +107,5 @@ struct AllGatherRS {
 }  // namespace ttnn::operations::experimental::ccl
 namespace ttnn::prim {
 constexpr auto rs_matmul =
-    ttnn::register_operation<"ttnn::prim::rs_matmul", ttnn::operations::experimental::ccl::AllGatherRS>();
+    ttnn::register_operation<"ttnn::prim::rs_matmul", ttnn::operations::experimental::ccl::Matmul_RS>();
 }

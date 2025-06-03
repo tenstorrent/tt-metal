@@ -30,9 +30,7 @@ struct ExecuteReduceScatterMatmul {
         const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config =
             std::nullopt,  // mm8 used but default std::nullopt
         const std::optional<const GlobalCircularBuffer>& global_cb =
-            std::nullopt,  // mm12 used but default std::nullopt
-        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id =
-            std::nullopt,  // rs and mm13 used same but default std::nullopt
+            std::nullopt,                                                    // mm12 used but default std::nullopt
         const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,  // mm9 may use but default std::nullopt
         const bool transpose_a = false,                                      // mm2 set false
         const bool transpose_b = false,                                      // mm3 set false

@@ -15,10 +15,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
 namespace ttnn::operations::experimental::ccl {
-AllGatherRS::Matmul_RS_PF::cached_mesh_workload_t AllGatherRS::Matmul_RS_PF::create_mesh_workload(
+Matmul_RS::Matmul_RS_PF::cached_mesh_workload_t Matmul_RS::Matmul_RS_PF::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
@@ -33,8 +32,7 @@ AllGatherRS::Matmul_RS_PF::cached_mesh_workload_t AllGatherRS::Matmul_RS_PF::cre
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-ttnn::device_operation::CachedProgram<AllGatherRS::Matmul_RS_PF::shared_variables_t>
-AllGatherRS::Matmul_RS_PF::create_at(
+ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_t> Matmul_RS::Matmul_RS_PF::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
@@ -64,7 +62,7 @@ AllGatherRS::Matmul_RS_PF::create_at(
                 true)}};
 }
 
-void AllGatherRS::Matmul_RS_PF::override_runtime_arguments(
+void Matmul_RS::Matmul_RS_PF::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
