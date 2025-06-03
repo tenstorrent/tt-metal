@@ -91,9 +91,9 @@ def run_argmax(device, tensor_shape, dim, keepdim, use_multicore) -> list:
     # Note: torch does not have uint32
     int32_torch_result = torch_result.to(torch.int32)
     atol = rtol = 0.1
-    allclose = (torch.allclose(int32_torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True),)
+    allclose = (torch.allclose(int32_torch_result, output_tensor, atol=atol, rtol=rtol, equal_nan=True),)
     if not allclose:
-        return [(False, f"mismatch in allclose: torch: {int32_torch_result}, ttnn: {ttnn_result}"), e2e_perf]
+        return [(False, f"mismatch in allclose: torch: {int32_torch_result}, ttnn: {output_tensor}"), e2e_perf]
 
     expected_pcc = 0.99
     tensors = [ttnn_tensor, op_output_tensor]
@@ -108,7 +108,7 @@ def test_argmax(
     keepdim,
     use_multicore,
 ):
-    result, error_msg, _ = run_argmax(
+    (result, error_msg), e2e_perf = run_argmax(
         device,
         tensor_shape,
         dim,

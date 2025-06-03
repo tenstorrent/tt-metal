@@ -92,9 +92,9 @@ def run_reduction(device, tensor_shape, dim, keepdim, op) -> list:
     elif op == "var":
         atol, rtol = sys.maxsize, 0.1 + 2
 
-    allclose = torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True)
+    allclose = torch.allclose(torch_result, output_tensor, atol=atol, rtol=rtol, equal_nan=True)
     if not allclose:
-        return [(False, f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}"), e2e_perf]
+        return [(False, f"mismatch in allclose: torch: {torch_result}, ttnn: {output_tensor}"), e2e_perf]
     expected_pcc = 0.99
     tensors = [ttnn_tensor, op_output_tensor]
     return get_run_return(torch_result, output_tensor, expected_pcc, tensors, e2e_perf)

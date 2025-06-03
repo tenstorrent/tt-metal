@@ -14,7 +14,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range_batch_norm
@@ -123,16 +123,17 @@ def run_batch_norm(
         momentum=momentum,
     )
 
+    expected_pcc = 0.99
     if training:
         channels = input_shape[1]
         if check_mean:
             tt_updated_mean = ttnn.to_torch(mean_tensor)
-            passed_, output_string_ = check_with_pcc(tt_updated_mean, mean_data.view(1, channels, 1, 1), 0.99)
+            passed_, output_string_ = check_with_pcc(tt_updated_mean, mean_data.view(1, channels, 1, 1), expected_pcc)
             if not passed_:
                 return [(passed_, output_string_), e2e_perf]
         if check_var:
             tt_updated_var = ttnn.to_torch(var_tensor)
-            passed_, output_string_ = check_with_pcc(tt_updated_var, var_data.view(1, channels, 1, 1), 0.99)
+            passed_, output_string_ = check_with_pcc(tt_updated_var, var_data.view(1, channels, 1, 1), expected_pcc)
             if not passed_:
                 return [(passed_, output_string_), e2e_perf]
 
