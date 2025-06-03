@@ -64,7 +64,7 @@ void kernel_main() {
                 noc_async_read_barrier();
                 if constexpr (in0_last_ktile_w > 0) {
                     if (kt == Kt - 1) {
-                        pad_last_ktile<in0_data_format>(in0_last_ktile_w, l1_write_addr_in0);
+                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
                     }
                 }
                 cb_push_back(cb_id_in0, onetile);
