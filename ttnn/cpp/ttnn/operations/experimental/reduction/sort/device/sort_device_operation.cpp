@@ -8,17 +8,17 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::reduction::sort {
 
-constexpr uint32_t WT_THRESHOLD = 60;
+constexpr uint32_t WT_THRESHOLD = 64;
 
 SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto input_tensor_shape = tensor_args.input_tensor.get_padded_shape();
     const uint32_t Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
-    // if (Wt > WT_THRESHOLD) {
+    if (Wt > WT_THRESHOLD) {
         // Multi-core implementation
         return sort::program::SortProgramFactorySRMC{};
-    // }
-    // return sort::program::SortProgramFactorySRSC{};
+    }
+    return sort::program::SortProgramFactorySRSC{};
 }
 
 void SortDeviceOperation::validate_on_program_cache_hit(

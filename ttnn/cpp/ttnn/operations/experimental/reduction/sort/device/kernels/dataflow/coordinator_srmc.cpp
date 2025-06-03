@@ -105,11 +105,11 @@ void kernel_main() {
         end_core_physical_coord_y,
         coordinator_to_cores_semaphore_id);
 
-    const auto number_of_confirmations = Wt / 2;
+    const uint32_t number_of_confirmations = Wt / 2;
 
     // Copy input data to output and generate index tiles
     for (uint32_t h = 0; h < Ht; h++) {
-        // Process each row
+        // Prepare and move data
         for (uint32_t w = 0; w < Wt; w++) {
             // Generate indexes
             generate_index_tile(index_tensor_cb_index, w);
@@ -134,17 +134,16 @@ void kernel_main() {
             noc_async_write_tile(h * Wt + w, output_tensor_addr_gen, l1_write_addr_output_tensor_cb);
             noc_async_write_barrier();
             cb_pop_front(input_tensor_cb_index, one_tile);
-            
+
         }  // Wt loop
 
         // Wait until all cores are ready to start
-        noc_semaphore_wait(semaphore_ptr, number_of_confirmations);
+        noc_semaphore_wait(semaphore_ptr, number_of_dest);
         noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
 
         // Set signal to start processing
         noc_semaphore_set_multicast(coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
 
-DPRINT << "COORDINATOR: Signaled to start" << ENDL();
         // Calculate sorting stages
         uint32_t stages = 0;
         for (uint32_t i = Wt; i > 1; i >>= 1) {
@@ -157,14 +156,10 @@ DPRINT << "COORDINATOR: Signaled to start" << ENDL();
                 noc_semaphore_set_multicast(
                     coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
 
-DPRINT << "COORDINATOR: Signaled to start sub-stage: " << U32(sub) << ENDL();
                 // Wait until cores will process and save data
                 noc_semaphore_wait(semaphore_ptr, number_of_confirmations);
                 noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
-DPRINT << "COORDINATOR: Cores finished processing sub-stage: " << U32(sub) << ENDL();
-
             }  // sub loop
         }  // stage loop
-        DPRINT << "COORDINATOR: Finished processing row: " << U32(h) << ENDL();
     }  // Ht loop
 }

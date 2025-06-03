@@ -11,51 +11,6 @@
 
 #include "sort_common.hpp"
 
-#include "debug/dprint.h"
-
-inline void print_loop(uint32_t count) {
-    UNPACK(DPRINT << "U-LOOP:" << (uint32_t)count << ENDL());
-    // MATH(DPRINT << "M-LOOP:" << (uint32_t)count << ENDL());
-    // PACK(DPRINT << "P-LOOP:" << (uint32_t)count << ENDL());
-}
-
-inline void print_full_tile_column0(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    UNPACK(DPRINT << "U=====!" << ENDL());
-    // MATH(DPRINT << "M=====!" << ENDL());
-    // PACK(DPRINT << "P=====!" << ENDL());
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
-        UNPACK(DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " ");
-        // MATH(DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " ");
-        // PACK(DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " ");
-    }
-    UNPACK(DPRINT << ENDL() << "U+++++!" << ENDL());
-    // MATH(DPRINT << ENDL() << "M+++++!" << ENDL());
-    // PACK(DPRINT << ENDL() << "P+++++!" << ENDL());
-}
-
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    // UNPACK(DPRINT << "U=====!" << ENDL());
-    // MATH(DPRINT << "M=====!" << ENDL());
-    // PACK(DPRINT << "P=====!" << ENDL());
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-        // UNPACK(
-        //     DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-        //            << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL());
-        // MATH(
-        //     DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-        //            << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL());
-        PACK(
-            DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-                   << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL());
-    }
-    // UNPACK(DPRINT << "U+++++!" << ENDL());
-    // MATH(DPRINT << "M+++++!" << ENDL());
-    // PACK(DPRINT << "P+++++!" << ENDL());
-}
-
 namespace NAMESPACE {
 
 void MAIN {
@@ -116,19 +71,17 @@ void MAIN {
                             const uint32_t left_tile_id = i;
                             const uint32_t right_tile_id = j;
 
-                            UNPACK(
-                                DPRINT << "COMPUTE: Processing pair id: " << U32(pair_id) << " left_tile_id: "
-                                       << U32(left_tile_id) << " right_tile_id: " << U32(right_tile_id)
-                                       << " ascending: " << U32((uint32_t)dir) << ENDL());
-
+                            // Wait for data from reader
                             cb_wait_front(input_tensor_cb_index, 2 * one_tile);
                             cb_wait_front(index_tensor_cb_index, 2 * one_tile);
 
+                            // Reserve space for temporary buffers
                             cb_reserve_back(input_tensor_transposed_cb_index, 2 * one_tile);
                             cb_reserve_back(index_tensor_transposed_cb_index, 2 * one_tile);
 
-                            acquire_dst();
+                            tile_regs_acquire();
 
+                            // Transpose and copy data to registers
                             reconfig_data_format_srca(input_tensor_cb_index);
                             transpose_wh_init_short(input_tensor_cb_index);
                             transpose_wh_tile(input_tensor_cb_index, 0, input_dest_start);
@@ -142,12 +95,14 @@ void MAIN {
                             // llk_topk_sort -> inplace
                             ckernel::topk_local_sort(0, (int)dir, 5);
 
+                            tile_regs_commit();
+                            tile_regs_wait();
+
                             // pack value tiles into transposed buffer
                             pack_reconfig_data_format(input_tensor_transposed_cb_index);
                             pack_tile(input_dest_start, input_tensor_transposed_cb_index);
                             pack_tile(input_dest_end, input_tensor_transposed_cb_index);
 
-                            // pack index tiles into index transposed buffer
                             pack_reconfig_data_format(index_tensor_transposed_cb_index);
                             pack_tile(index_dest_start, index_tensor_transposed_cb_index);
                             pack_tile(index_dest_end, index_tensor_transposed_cb_index);
@@ -158,13 +113,12 @@ void MAIN {
                             cb_push_back(input_tensor_transposed_cb_index, 2 * one_tile);
                             cb_push_back(index_tensor_transposed_cb_index, 2 * one_tile);
 
-                            release_dst();
+                            tile_regs_release();
 
-                            // ---------- Values tensor ------------
+                            // Pack and push sorted values tensor tiles
                             acquire_dst();
 
                             cb_wait_front(input_tensor_transposed_cb_index, 2 * one_tile);
-
                             reconfig_data_format_srca(input_tensor_transposed_cb_index);
                             transpose_wh_init_short(input_tensor_transposed_cb_index);
                             transpose_wh_tile(input_tensor_transposed_cb_index, 0, input_dest_start);
@@ -180,11 +134,10 @@ void MAIN {
 
                             release_dst();
 
-                            // ---------- Index tensor ------------
+                            // Pack and push adjusted index tensor tiles
                             acquire_dst();
 
                             cb_wait_front(index_tensor_transposed_cb_index, 2 * one_tile);
-
                             reconfig_data_format_srca(index_tensor_transposed_cb_index);
                             transpose_wh_init_short(index_tensor_transposed_cb_index);
                             transpose_wh_tile(index_tensor_transposed_cb_index, 0, input_dest_start);
@@ -200,7 +153,6 @@ void MAIN {
 
                             release_dst();
 
-                            DPRINT << "COMPUTE: Finished processing pair id: " << U32(pair_id) << ENDL();
                             processing_pair_id += number_of_available_cores;
                         }  // if pair_id == processing_pair_id
                         pair_id++;
@@ -208,8 +160,6 @@ void MAIN {
                 }  // i loop
             }  // sub loop
         }  // stage loop
-
-        DPRINT << "COMPUTE: Finished processing row: " << U32(h) << ENDL();
     }  // h loop
 }
 }  // namespace NAMESPACE

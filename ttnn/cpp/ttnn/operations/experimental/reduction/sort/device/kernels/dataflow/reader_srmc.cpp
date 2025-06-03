@@ -2,33 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-#include <cstdint>
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
+#include <cstdint>
 
-inline void print_loop(uint32_t count) {
-    // UNPACK(DPRINT << "U-LOOP:" << (uint32_t)count << ENDL());
-    // MATH(DPRINT << "M-LOOP:" << (uint32_t)count << ENDL());
-    // PACK(DPRINT << "P-LOOP:" << (uint32_t)count << ENDL());
-}
-
-inline void print_full_tile_column0(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
-        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " ";
-    }
-}
-
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-            DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-                   << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
-    }
-}
 void kernel_main() {
     // Runtime args
     const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(0);
@@ -71,7 +48,7 @@ void kernel_main() {
     // Sempahore setup
     volatile tt_l1_ptr uint32_t* semaphore_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(coordinator_to_cores_semaphore_id);
-    noc_semaphore_set(semaphore_ptr, VALID);  // Reset the semaphore
+    noc_semaphore_set(semaphore_ptr, VALID);  // Reset the semaphore (Valid - we wait for 0)
     const uint64_t coordinator_core_addr =
         get_noc_addr(coordinator_core_physical_coord_x, coordinator_core_physical_coord_y, cores_to_coordinator_semaphore_id);
 
@@ -80,6 +57,7 @@ void kernel_main() {
         const uint32_t core_start =
             get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
 
+        // Indicate to the coordinator that the core is ready
         noc_semaphore_inc(coordinator_core_addr, 1);
         noc_semaphore_wait(semaphore_ptr, 0);     // Wait for coordinator to signal to start
         noc_semaphore_set(semaphore_ptr, VALID);  // Reset the semaphore
@@ -108,16 +86,12 @@ void kernel_main() {
                             // Get indexes of tiles to compare
                             const uint32_t left_tile_id = i;
                             const uint32_t right_tile_id = j;
-                            
-DPRINT << "READER: Processing pair id: " << U32(pair_id) <<  " left_tile_id: " << U32(left_tile_id) << " right_tile_id: " << U32(right_tile_id) << ENDL();
 
                             // Read input value data
                             cb_reserve_back(input_tensor_cb_index, one_tile);
                             const uint32_t l1_input_left_tile = get_write_ptr(input_tensor_cb_index);
                             noc_async_read_tile(h * Wt + left_tile_id, input_tensor_addr_gen, l1_input_left_tile);
                             noc_async_read_barrier();
-// DPRINT << "Reader:" << ENDL();
-// print_full_tile(input_tensor_cb_index, 0);
                             cb_push_back(input_tensor_cb_index, one_tile);
 
                             cb_reserve_back(input_tensor_cb_index, one_tile);
@@ -146,6 +120,5 @@ DPRINT << "READER: Processing pair id: " << U32(pair_id) <<  " left_tile_id: " <
                 }  // i loop
             }  // sub loop
         }  // stage loop
-        DPRINT << "READER: Finished processing row: " << U32(h) << ENDL();
     }  // h loop
 }

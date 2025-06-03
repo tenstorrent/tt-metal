@@ -4,30 +4,6 @@
 
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
-
-inline void print_loop(uint32_t count) {
-    // UNPACK(DPRINT << "U-LOOP:" << (uint32_t)count << ENDL());
-    // MATH(DPRINT << "M-LOOP:" << (uint32_t)count << ENDL());
-    // PACK(DPRINT << "P-LOOP:" << (uint32_t)count << ENDL());
-}
-
-inline void print_full_tile_column0(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
-        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " ";
-    }
-}
-
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-            DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-                   << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
-    }
-}
-
 void kernel_main() {
     // Runtime args
     const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(0);
@@ -75,6 +51,7 @@ void kernel_main() {
         // Get core start value
         const uint32_t core_start =
             get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
+
         // Processing each row
         uint32_t stages = 0;
         for (uint32_t temp = Wt; temp > 1; temp >>= 1) {
@@ -95,8 +72,6 @@ void kernel_main() {
                             const uint32_t left_tile_id = i;
                             const uint32_t right_tile_id = j;
 
-DPRINT << "WRITER: Writing data for pair: " << U32(pair_id) << " left_tile_id: " << U32(left_tile_id) << " right_tile_id: " << U32(right_tile_id) << ENDL();
-
                             // Save index data
                             cb_wait_front(index_tensor_output_cb_index, one_tile);
                             const uint32_t l1_write_addr_index_output_tensor_cb_i =
@@ -116,24 +91,23 @@ DPRINT << "WRITER: Writing data for pair: " << U32(pair_id) << " left_tile_id: "
 
                             // Save output data
                             cb_wait_front(input_tensor_output_cb_index, one_tile);
-// print_full_tile(input_tensor_output_cb_index, 0);
                             const uint32_t l1_write_addr_output_tensor_cb_i =
                                 get_read_ptr(input_tensor_output_cb_index);
-                            noc_async_write_tile(h * Wt + left_tile_id, input_tensor_addr_gen, l1_write_addr_output_tensor_cb_i);
+                            noc_async_write_tile(
+                                h * Wt + left_tile_id, input_tensor_addr_gen, l1_write_addr_output_tensor_cb_i);
                             noc_async_write_barrier();
                             cb_pop_front(input_tensor_output_cb_index, one_tile);
 
                             cb_wait_front(input_tensor_output_cb_index, one_tile);
                             const uint32_t l1_write_addr_output_tensor_cb_j =
                                 get_read_ptr(input_tensor_output_cb_index);
-                            noc_async_write_tile(h * Wt + right_tile_id, input_tensor_addr_gen, l1_write_addr_output_tensor_cb_j);
+                            noc_async_write_tile(
+                                h * Wt + right_tile_id, input_tensor_addr_gen, l1_write_addr_output_tensor_cb_j);
                             noc_async_write_barrier();
                             cb_pop_front(input_tensor_output_cb_index, one_tile);
 
                             // Signalize readiness to the coordinator
                             noc_semaphore_inc(coordinator_core_addr, 1);
-
-DPRINT << "WRITER: DATA WRITING FINISHED for pair: " << U32(pair_id) << ENDL();
 
                             processing_pair_id += number_of_available_cores;
                         }  // if pair_id == processing_pair_id
@@ -142,6 +116,5 @@ DPRINT << "WRITER: DATA WRITING FINISHED for pair: " << U32(pair_id) << ENDL();
                 }  // i loop
             }  // sub loop
         }  // stage loop
-DPRINT << "WRITER: Finished processing row: " << U32(h) << ENDL();
     }  // h loop
 }

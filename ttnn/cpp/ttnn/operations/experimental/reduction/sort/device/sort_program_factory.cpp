@@ -4,7 +4,6 @@
 
 #include "sort_program_factory.hpp"
 
-#include <iostream>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
@@ -310,10 +309,13 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
     const bool value_tensor_is_dram = value_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool index_tensor_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
+    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
+
     const auto input_shape = tensor_args.input_tensor.get_padded_shape();
-    const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
-    const uint32_t Wt = input_shape[3] / tt::constants::TILE_WIDTH;
-    std::cout << "Input shape: " << input_shape << " Ht: " << Ht << " Wt: " << Wt << std::endl;
+    const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
+    const uint32_t Wt = input_shape[3] / tile_width;
+
     // Calculate the number of cores available for computation
     auto device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -323,24 +325,44 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
     // We process pairs of tiles - need Wt / 2 work units
     const uint32_t total_work_units = Wt / 2;
     const uint32_t number_of_available_cores = total_number_of_cores - 1;  // One core for coordinator
-    std::cout << "Total work units: " << total_work_units << " Number of available cores: " << number_of_available_cores
-              << std::endl;
-    const uint32_t all_core_utilization_loop_count = total_work_units / number_of_available_cores;
-    const uint32_t all_core_utilization_loop_residuum = total_work_units & number_of_available_cores;
-    std::cout << "All core utilization loop count: " << all_core_utilization_loop_count
-              << " All core utilization loop residuum: " << all_core_utilization_loop_residuum << std::endl;
 
-    // TODO: Write desc
+    const uint32_t all_core_utilization_loop_count = total_work_units / number_of_available_cores;
+    const uint32_t all_core_utilization_loop_residuum = total_work_units % number_of_available_cores;
+
+    /**
+     * Calculates the core range based on the input tensor shape (Wt) and the total number of cores available
+     * in the device's compute grid (minus one reserved for coordinator). The core range determines which
+     * cores will be utilized for computation.
+     *
+     * The calculation works as follows:
+     * 1. The coordinator core is set to the last core in the compute grid.
+     *
+     * 2. If the width (Wt) of the input tensor is greater than or equal to the total number of available cores,
+     *    all cores in the compute grid are utilized. The core range is set to cover the entire grid.
+     *
+     * 3. If Wt is smaller than the total number of cores:
+     *    - The number of rows (`core_grid_calculated_rows_number`) and columns (`core_grid_calculated_columns_number`)
+     *      required to cover Wt are calculated based on the grid dimensions.
+     *    - If both rows and columns are zero, only a single core is used.
+     *    - If only rows are zero, the core range is set to cover the required number of columns in the first row.
+     *    - Otherwise, the core range is set to cover the required rows, and if there are remaining columns,
+     *      an additional range is added to cover those columns in the next row.
+     *
+     * The resulting core range is represented as a `CoreRangeSet`, which may consist of one or more `CoreRange`
+     * objects depending on the configuration.
+     */
     CoreCoord coordinator_core = {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1};
     CoreRangeSet core_range;
     if (all_core_utilization_loop_count > 0) {
         core_range = CoreRangeSet(
-            CoreRange({0, 0}, {compute_with_storage_grid_size.x - 2, compute_with_storage_grid_size.y - 1}));
+            CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 2}));
+        core_range = core_range.merge<CoreRangeSet>(CoreRangeSet(CoreRange(
+            {0, compute_with_storage_grid_size.y - 1},
+            {compute_with_storage_grid_size.x - 2, compute_with_storage_grid_size.y - 1})));
     } else {
         const uint32_t core_grid_calculated_rows_number = total_work_units / compute_with_storage_grid_size.x;
         const uint32_t core_grid_calculated_columns_number = total_work_units % compute_with_storage_grid_size.x;
-        std::cout << "Core grid calculated rows number: " << core_grid_calculated_rows_number
-                  << " Core grid calculated columns number: " << core_grid_calculated_columns_number << std::endl;
+
         if (core_grid_calculated_rows_number == 0 && core_grid_calculated_columns_number == 0) {
             core_range = CoreRangeSet(CoreCoord({0, 0}));
         } else if (core_grid_calculated_rows_number == 0) {
@@ -356,13 +378,11 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
             }
         }
     }
-    std::cout << "Core range: " << core_range.str() << std::endl;
     CoreRangeSet all_core_set({CoreRange(coordinator_core)});
     all_core_set = all_core_set.merge<CoreRangeSet>(core_range);
-    std::cout << "All core set: " << all_core_set.str() << std::endl;
 
     // Circular buffers
-    constexpr uint32_t buffer_scale_factor = 4;
+    constexpr uint32_t buffer_scale_factor = 2;
 
     constexpr uint32_t input_tensor_cb_index = tt::CBIndex::c_0;
     const tt::tt_metal::CircularBufferConfig input_tensor_cb_config =
@@ -415,16 +435,11 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
     const uint32_t coordinator_to_cores_semaphore_id = CreateSemaphore(program, all_core_set, 0);
     const uint32_t cores_to_coordinator_semaphore_id = CreateSemaphore(program, all_core_set, 0);
     const auto coordinator_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
-    std::cout << "Coordinator core logical coord: " << coordinator_core.str() << std::endl;
-    std::cout << "Coordinator core physical coord: " << coordinator_core_physical_coord.str() << std::endl;
 
     const auto start_core_logical = core_range.ranges()[0].start_coord;
     const auto end_core_logical = core_range.ranges()[core_range.ranges().size() - 1].end_coord;
     const auto start_core_physical_coord = device->worker_core_from_logical_core(start_core_logical);
-    const auto end_core_physical_coord = device->worker_core_from_logical_core(end_core_logical);
-
-    std::cout << "Start core logical: " << start_core_logical.str() << " End core logical: " << end_core_logical.str()
-              << std::endl;
+    const auto end_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
 
     // Kernels
     const std::vector<uint32_t> coordinator_compile_time_args = {
