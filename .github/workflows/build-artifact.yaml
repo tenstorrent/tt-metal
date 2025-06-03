@@ -322,7 +322,7 @@ jobs:
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
-          CIBW_ENVIRONMENT: "IN_CIBW_ENV=ON"
+          CIBW_ENVIRONMENT: "CIBW_ENABLE_TRACY=${{ inputs.tracy == 'true' && 'ON' || 'OFF' }}"
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
 
       - name: Set wheel artifact name

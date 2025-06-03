@@ -178,27 +178,34 @@ class CMakeBuild(build_ext):
             # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
             build_script_args = ["--build-static-libs", "--release"]
 
-            if "CIBW" in os.environ:
-                subprocess.check_call(
-                    [
-                        "cmake",
-                        "-B",
-                        build_dir,
-                        "-G",
-                        "Ninja",
-                        "-DCMAKE_BUILD_TYPE=Release",
-                        "-DCMAKE_INSTALL_PREFIX=build_Release",
-                        "-DBUILD_SHARED_LIBS=OFF",
-                        "-DTT_INSTALL=OFF",
-                        "-DTT_UNITY_BUILDS=ON",
-                        "-DTT_ENABLE_LIGHT_METAL_TRACE=ON",
-                        "-DWITH_PYTHON_BINDINGS=ON",
-                        "-DTT_USE_SYSTEM_SFPI=ON",
-                        "-DENABLE_TRACY=ON",
-                        "-S",
-                        source_dir,
-                    ]
-                )
+            if "CIBUILDWHEEL" in os.environ:
+                cmake_args = [
+                    "cmake",
+                    "-B",
+                    build_dir,
+                    "-G",
+                    "Ninja",
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DCMAKE_INSTALL_PREFIX=build_Release",
+                    "-DBUILD_SHARED_LIBS=OFF",
+                    "-DTT_INSTALL=OFF",
+                    "-DTT_UNITY_BUILDS=ON",
+                    "-DTT_ENABLE_LIGHT_METAL_TRACE=ON",
+                    "-DWITH_PYTHON_BINDINGS=ON",
+                    "-DTT_USE_SYSTEM_SFPI=ON",
+                ]
+
+                # Add Tracy flags if enabled
+                if os.environ.get("CIBW_ENABLE_TRACY") == "ON":
+                    cmake_args.extend(
+                        [
+                            "-DENABLE_TRACY=ON",
+                        ]
+                    )
+
+                cmake_args.extend(["-S", source_dir])
+
+                subprocess.check_call(cmake_args)
                 subprocess.check_call(
                     [
                         "cmake",
