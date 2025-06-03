@@ -9,7 +9,9 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 #include "ttnn/operations/math.hpp"
+#include <cstdint>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
@@ -21,49 +23,11 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 const uint32_t cb_buffer_size = 3;
+const uint32_t cb_input_index = 0;
+const uint32_t cb_untilized_index = 1;
+const uint32_t cb_output_index = 2;
 
 namespace ttnn::operations::experimental::detail {
-
-static uint32_t get_upper_dims_compressed(const ttnn::Shape& shape) {
-    return std::accumulate(shape.cbegin(), shape.cend() - 2, 1, std::multiplies<uint32_t>{});
-}
-
-static uint32_t get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_start) {
-    // offset for every dim except last 2
-    uint32_t start_offset = 0;
-    const auto& shape = tensor.padded_shape();
-
-    uint32_t num_pages = tensor.physical_volume();
-    if (tensor.layout() == Layout::TILE) {
-        num_pages /= tt::constants::TILE_HW;
-    } else {
-        uint32_t page_width = shape[-1];
-        num_pages /= page_width;
-    }
-
-    for (uint32_t dim_outer = 0; dim_outer < shape.rank() - 2; dim_outer++) {
-        uint32_t compressed_dims = 1;
-        for (uint32_t dim_inner = 0; dim_inner <= dim_outer; dim_inner++) {
-            compressed_dims *= shape[dim_inner];
-        }
-        start_offset += (num_pages / compressed_dims) * padded_slice_start[dim_outer];
-    }
-    return start_offset;
-}
-
-static uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_start) {
-    uint32_t start_offset = 0;
-
-    if (tensor.padded_shape().rank() >= 2) {
-        const auto& shape = tensor.padded_shape();
-        uint32_t num_pages = tensor.physical_volume() / shape[-1];
-        uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
-        start_offset = get_upper_start_offset(tensor, padded_slice_start);
-        start_offset += padded_slice_start[-2];
-    }
-
-    return start_offset;
-}
 
 static std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>
 get_padded_slice_runtime_args_rm_sharded_output(
@@ -180,7 +144,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
         num_sticks_per_core_read,
         num_read_per_barrier);
 
-    uint32_t start_offset = get_rm_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
+
     uint32_t core_index = 0;
     for (const auto& core : cores) {
         uint32_t core_w_index = 0;
@@ -426,11 +391,23 @@ get_padded_slice_runtime_args_tile_sharded_output(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    uint32_t num_tiles_per_channel = input_padded_shape[3] / tt::constants::TILE_WIDTH;
-    num_tiles_per_channel = num_tiles_per_channel / num_cores_channels;
-
     uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];
+
+    uint32_t num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
+    num_tiles_per_channel = num_tiles_per_channel / num_cores_channels;
+    TT_FATAL(
+        num_tiles_per_channel == tt::div_up(output_shard_shape[1], tt::constants::TILE_WIDTH),
+        "Number of tiles per channel {} should be equal to number of output shard width in tiles {}",
+        num_tiles_per_channel,
+        tt::div_up(output_shard_shape[1], tt::constants::TILE_WIDTH));
+    uint32_t num_tiles_height_per_core = tt::div_up(output_shard_spec.shape[0], tt::constants::TILE_HEIGHT);
+    uint32_t num_tiles_per_core = num_tiles_per_channel * num_tiles_height_per_core;
+    tt::log_debug(
+        "num_tiles_per_core: {}, num_tiles_per_channel: {}, num_tiles_height_per_core: {}",
+        num_tiles_per_core,
+        num_tiles_per_channel,
+        num_tiles_height_per_core);
 
     tt::log_debug(
         "Tiled Input input_tile_size: {}, output_pagesize_bytes: {}", input_single_tile_size, output_row_size_bytes);
@@ -483,14 +460,10 @@ get_padded_slice_runtime_args_tile_sharded_output(
     uint32_t start_addr = input_tensor.buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address
-        input_single_tile_size,
-        input_single_tile_size,
-        output_row_size_bytes_offset,
         num_dims,
         0,
-        0,
-        0,
-        0};
+        num_tiles_per_core,
+        num_tiles_per_channel};
 
     common_reader_kernel_args.insert(
         common_reader_kernel_args.end(), num_output_sticks_per_dim.begin(), num_output_sticks_per_dim.end());
@@ -512,7 +485,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
         num_sticks_per_core_read,
         num_read_per_barrier);
 
-    uint32_t start_offset = get_rm_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_offset = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, output_tensor_start);
+    tt::log_debug("Start Offset: {}", start_offset);
     uint32_t core_index = 0;
     for (const auto& core : cores) {
         uint32_t core_w_index = 0;
@@ -523,29 +497,28 @@ get_padded_slice_runtime_args_tile_sharded_output(
         }
 
         const uint32_t num_sticks_written = core_h_index * num_sticks_per_core;
+        const uint32_t num_tiles_written = num_tiles_height_per_core * core_h_index * num_tiles_per_channel;
+
         const uint32_t width_offset = core_w_index * output_row_size_bytes_offset;
 
-        id_per_dim[0] = num_sticks_written % num_output_sticks_per_dim[0];
-        uint32_t output_written = num_sticks_written / num_output_sticks_per_dim[0];
+        id_per_dim[0] = num_tiles_written % num_output_sticks_per_dim[0];
+        uint32_t output_written = num_tiles_written / num_output_sticks_per_dim[0];
         uint32_t start_id = id_per_dim[0] + start_offset;
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = output_written % num_output_sticks_per_dim[j];
             output_written = output_written / num_output_sticks_per_dim[j];
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
+        tt::log_debug("For Core {}, Start Offset: {}", core, start_id);
 
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] += width_offset;
 
-        uint32_t addr_offset = 5;
+        uint32_t addr_offset = 2;
         reader_kernel_args[addr_offset++] = start_id;
-        reader_kernel_args[addr_offset++] = num_sticks_per_core;
-        reader_kernel_args[addr_offset++] = num_sticks_per_core;
-        reader_kernel_args[addr_offset] = num_sticks_per_core;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
-        std::vector<uint32_t> writer_kernel_args = {
-            num_sticks_per_core, output_row_size_elems, input_single_tile_size, output_row_size_bytes};
+        std::vector<uint32_t> writer_kernel_args = {num_tiles_per_core, num_tiles_per_channel};
         ret_val[core_index] = {reader_kernel_args, writer_kernel_args};
         core_index++;
     }
@@ -647,26 +620,42 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     uint32_t cb_page_size = tt::round_up(output_row_size_bytes, alignment);
 
     auto cb_input_tuple = tt::tt_metal::create_cb(
-        0, program, total_cores, input_single_tile_size, cb_buffer_size * num_tiles_per_channel, input_cb_data_format);
+        cb_input_index,
+        program,
+        total_cores,
+        input_single_tile_size,
+        cb_buffer_size * num_tiles_per_channel,
+        input_cb_data_format);
+
     auto cb_untilized_tuple = tt::tt_metal::create_cb(
-        1,
+        cb_untilized_index,
         program,
         total_cores,
         output_single_tile_size,
         cb_buffer_size * num_tiles_per_channel,
         output_cb_data_format);
+
+    tt::log_debug(
+        "output_row_size_bytes: {}, num_output_sticks_per_core: {}", output_row_size_bytes, num_output_sticks_per_core);
     auto cb_output_tuple = tt::tt_metal::create_cb(
-        2, program, total_cores, output_row_size_bytes, num_output_sticks_per_core, output_cb_data_format);
+        2,
+        program,
+        total_cores,
+        output_row_size_bytes,
+        num_output_sticks_per_core,
+        output_cb_data_format,
+        output.buffer());
+
     tt::log_debug(
         tt::LogOp,
         "num_tiles_height_per_core: {}, num_tiles_per_channel: {}",
         num_tiles_height_per_core,
         num_tiles_per_channel);
     std::vector<uint32_t> compute_args = {
-        num_tiles_height_per_core,       // per_core_block_cnt
-        num_tiles_per_channel,           // per_block_ntiles
-        std::get<1>(cb_input_tuple),     // src0_cb_index
-        std::get<1>(cb_untilized_tuple)  // untilized_cb_index
+        num_tiles_height_per_core,  // per_core_block_cnt
+        num_tiles_per_channel,      // per_block_ntiles
+        cb_input_index,             // src0_cb_index
+        cb_untilized_index          // untilized_cb_index
     };
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -681,7 +670,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     auto untilize_compute_kernel_id = CreateKernel(
         program, compute_kernel, total_cores, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = compute_args});
 
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args_vec = {cb_untilized_index, cb_output_index};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram, misalignment};
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -691,7 +680,6 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
 
-    writer_compile_time_args_vec.push_back((std::uint32_t)temp_pad_cb_index);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
@@ -703,6 +691,8 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         a, output, output_tensor_start, actual_output_shape, iter_cores, max_read_size);
 
     uint32_t i = 0;
+    tt::log_debug("Reader args : {}", all_runtime_args[i].first);
+    tt::log_debug("Writer args : {}", all_runtime_args[i].second);
     for (const auto& core : iter_cores) {
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
@@ -725,7 +715,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         auto src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
         TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
-        UpdateDynamicCircularBufferAddress(program, std::get<1>(cb_output_tuple), *src_tensor.buffer());
+        UpdateDynamicCircularBufferAddress(program, std::get<1>(cb_output_tuple), *dst_tensor.buffer());
 
         auto all_runtime_args = get_padded_slice_runtime_args_tile_sharded_output(
             src_tensor, dst_tensor, output_tensor_start, actual_output_shape, iter_cores, max_read_size);

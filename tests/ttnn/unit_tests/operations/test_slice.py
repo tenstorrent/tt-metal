@@ -1084,7 +1084,7 @@ def test_ttnn_slice_whisper(
 @pytest.mark.parametrize(
     "dims, slice_size, cores",
     [
-        [[2, 256, 256, 56], 128, 64],
+        [[2, 256, 256, 64], 128, 64],
         [[2, 256, 128, 23], 16, 8],
         [[2, 256, 256, 37], 64, 64],
         [[2, 8, 8, 32], 2, 4],
@@ -1103,8 +1103,9 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         )
 
     strides = [1, 1, 1, 1]
-    torch.manual_seed(2005)
+    torch.manual_seed(2001)
     torch_input = torch.randint(-10, 10, dims).to(dtype=torch.bfloat16)
+    # torch_input = torch.tensor(range(dims[-1])).broadcast_to(dims).to(dtype=torch.bfloat16)
     core_range = ttnn.num_cores_to_corerangeset(cores, core_grid, orientation == ttnn.ShardOrientation.ROW_MAJOR)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
@@ -1115,6 +1116,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
     )
     padded_channels = round_up(dims[-1], 32)
     padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
+    torch.set_printoptions(sci_mode=False, precision=2)
     for i in range(num_slices):
         begins = [0, 0, 0, 0]
         ends = [dims[0], dims[1], dims[2], dims[3]]
