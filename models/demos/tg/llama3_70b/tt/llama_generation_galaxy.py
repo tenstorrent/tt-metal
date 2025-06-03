@@ -8,7 +8,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy as TtLlamaModel
 from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL
 from models.demos.tg.llama3_70b.tt.llama_common import upper_pad_sequence_length
 from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy as TtLlamaModel

@@ -8,11 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    BASE_URL,
-    check_mesh_device,
-    should_skip_model_load,
-)
+from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL, check_mesh_device, should_skip_model_load
 from models.demos.tg.llama3_70b.tt.llama_common import PytorchLlamaModel, setup_llama_env
 from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy
 from models.utility_functions import enable_persistent_kernel_cache, profiler, skip_for_grayskull

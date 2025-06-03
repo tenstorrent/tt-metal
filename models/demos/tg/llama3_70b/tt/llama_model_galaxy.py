@@ -11,11 +11,11 @@ from tqdm import tqdm
 import ttnn
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     freqs_to_rotation_matrix,
-    get_rotation_mat,
-    precompute_freqs,
-    get_rot_transformation_mat,
-    num_to_corerange,
     gather_cos_sin,
+    get_rot_transformation_mat,
+    get_rotation_mat,
+    num_to_corerange,
+    precompute_freqs,
 )
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,

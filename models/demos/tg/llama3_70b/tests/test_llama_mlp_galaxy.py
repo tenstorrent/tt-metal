@@ -15,8 +15,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     MAX_SEQ_LEN,
     UNIT_TEST_LAYER_NUM,
     UNIT_TEST_N_LAYER,
-    ConcatMesh2DToTensor,
-    ShardTensor2dMesh,
     check_mesh_device,
     comp_pcc,
     should_skip_model_load,
