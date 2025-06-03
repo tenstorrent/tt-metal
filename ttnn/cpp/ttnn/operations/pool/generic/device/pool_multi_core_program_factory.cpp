@@ -307,31 +307,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_one_cb_id,
         clear_value_cb_id};
 
-    std::vector<uint32_t> reader1_ct_args = {
-        out_nhw_per_core,
-        kernel_size_h,
-        kernel_size_w,
-        pad_w,
-        in_nbytes_c,
-        in_w,
-        input_shape[3] / num_shards_c,
-        split_reader,  // enable split reader
-        1,             // split reader id
-        bf16_scalar,
-        bf16_one_u32,
-        bf16_init_value,
-        in_nblocks_c,
-        in_cb_sz,
-        max_rows_for_reduction,
-        ceil_pad_w,
-        in_cb_id_0,
-        in_cb_id_1,
-        raw_in_cb_id,
-        in_reader_indices_cb_id,
-        in_scalar_cb_id,
-        max_pool_partials_cb_id,
-        in_one_cb_id,
-        clear_value_cb_id};
+    std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
+    reader1_ct_args[8] = 1;  // split reader id for reader1
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {

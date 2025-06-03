@@ -21,7 +21,9 @@ template <
     bool is_partial_tile,
     uint32_t split_reader,
     uint32_t unpA_face_r_dim,
-    uint32_t num_faces_in_tile>
+    uint32_t num_faces_in_tile,
+    bool neginf_srca_maxpool,
+    bool zero_srca_avgpool>
 inline void reduce_h_fused(
     const uint32_t in_cb_id_0,
     const uint32_t in_cb_id_1,
@@ -34,7 +36,7 @@ inline void reduce_h_fused(
     const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
     cb_wait_front(curr_in_cb_id, 1);
     tile_regs_acquire();
-    unpack_tilizeA_B_block<false, true, false, true>(
+    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
         curr_in_cb_id, in_scalar_cb_id, num_output_tiles, 0, num_faces_in_tile, unpA_face_r_dim);
     for (uint32_t c_i = 0; c_i < num_output_tiles; ++c_i) {
         reduce_tile_math(c_i, num_faces_in_tile);
@@ -106,8 +108,14 @@ void MAIN {
                 in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, num_faces_in_tile, face_r_dim, 1)));
         }
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
-            reduce_h_fused<max_tiles_per_iter, is_partial_tile, split_reader, face_r_dim, num_faces_in_tile>(
-                in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
+            reduce_h_fused<
+                max_tiles_per_iter,
+                is_partial_tile,
+                split_reader,
+                face_r_dim,
+                num_faces_in_tile,
+                neginf_srca_maxpool,
+                zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
         }
 
         if constexpr (tilize_reconfig_needed) {
@@ -115,8 +123,14 @@ void MAIN {
                 in_cb_id_0, in_scalar_cb_id, partial_iter_output_tiles, num_faces_in_tile, face_r_dim, 1)));
         }
         // perform the reduction over the either whole or partial chunk N
-        reduce_h_fused<partial_iter_output_tiles, is_partial_tile, split_reader, face_r_dim, num_faces_in_tile>(
-            in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
+        reduce_h_fused<
+            partial_iter_output_tiles,
+            is_partial_tile,
+            split_reader,
+            face_r_dim,
+            num_faces_in_tile,
+            neginf_srca_maxpool,
+            zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
     }
     cb_pop_front(in_scalar_cb_id, 1);
 }
