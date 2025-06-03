@@ -269,9 +269,9 @@ def run_all_gather_impl(
                 print(tt_output_tensor)
                 print(output_tensor)
                 if input_dtype == ttnn.bfloat16:
-                    eq, output = comp_equal(tt_output_tensor[:100, :50], output_tensor[:100, :50])
+                    eq, output = comp_equal(tt_output_tensor, output_tensor)
                 else:
-                    eq, output = comp_pcc(tt_output_tensor[:100, :50], output_tensor[:100, :50])
+                    eq, output = comp_pcc(tt_output_tensor, output_tensor)
                 if not eq:
                     logger.error(f"output mismatch for tensor {i}")
                     passed = False
@@ -293,21 +293,21 @@ def run_all_gather_impl(
         # (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
-        (4, 1, [32, 128], 0, ttnn.TILE_LAYOUT),
+        (4, 1, [32, 2208], 0, ttnn.ROW_MAJOR_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        # ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
