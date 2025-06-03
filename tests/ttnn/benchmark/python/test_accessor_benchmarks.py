@@ -35,11 +35,29 @@ def test_accessors():
 
     setup = device_post_proc_config.default_setup()
     setup.timerAnalysis = {
-        "SHARDED_ACCESSOR_GET_NOC_ADDR": {
+        "SHARDED_ACCESSOR_CTA_GET_NOC_ADDR": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "BRISC", "zone_name": "SHARDED_ACCESSOR"},
-            "end": {"risc": "BRISC", "zone_name": "SHARDED_ACCESSOR"},
+            "start": {"risc": "BRISC", "zone_name": "SHARDED_ACCESSOR_CTA"},
+            "end": {"risc": "BRISC", "zone_name": "SHARDED_ACCESSOR_CTA"},
+        },
+        "SHARDED_ACCESSOR_CRTA_DDS_GET_NOC_ADDR": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "BRISC", "zone_name": "SHARDED_ACCESSOR_CRTA_DDS"},
+            "end": {"risc": "BRISC", "zone_name": "SHARDED_ACCESSOR_CRTA_DDS"},
+        },
+        "SHARDED_ACCESSOR_CRTA_SSD_GET_NOC_ADDR": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "BRISC", "zone_name": "SHARDED_ACCESSOR_CRTA_SSD"},
+            "end": {"risc": "BRISC", "zone_name": "SHARDED_ACCESSOR_CRTA_SSD"},
+        },
+        "SHARDED_ACCESSOR_CRTA_DDD_GET_NOC_ADDR": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "BRISC", "zone_name": "SHARDED_ACCESSOR_CRTA_DDD"},
+            "end": {"risc": "BRISC", "zone_name": "SHARDED_ACCESSOR_CRTA_DDD"},
         },
         "INTERLEAVED_ACCESSOR_GET_NOC_ADDR": {
             "across": "core",
@@ -59,15 +77,30 @@ def test_accessors():
 
         stats = import_log_run_stats(setup)
         core = [key for key in stats["devices"][0]["cores"].keys() if key != "DEVICE"][0]
-        sharded_stats = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"][
-            "SHARDED_ACCESSOR_GET_NOC_ADDR"
+        sharded_stats_cta = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"][
+            "SHARDED_ACCESSOR_CTA_GET_NOC_ADDR"
+        ]["stats"]
+        sharded_stats_crta_dds = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"][
+            "SHARDED_ACCESSOR_CRTA_DDS_GET_NOC_ADDR"
+        ]["stats"]
+        sharded_stats_crta_ssd = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"][
+            "SHARDED_ACCESSOR_CRTA_SSD_GET_NOC_ADDR"
+        ]["stats"]
+        sharded_stats_crta_ddd = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"][
+            "SHARDED_ACCESSOR_CRTA_DDD_GET_NOC_ADDR"
         ]["stats"]
         interleaved_stats = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"][
             "INTERLEAVED_ACCESSOR_GET_NOC_ADDR"
         ]["stats"]
 
         logger.info(f"Results for {test_dir}:")
-        logger.info(f"Sharded Stats: {sharded_stats}")
-        logger.info(f"Sharded Average: {sharded_stats['Average']} (cycles)")
+        logger.info(f"Sharded Stats: {sharded_stats_cta}")
+        logger.info(f"Sharded CRTA DDS Stats: {sharded_stats_crta_dds}")
+        logger.info(f"Sharded CRTA SSD Stats: {sharded_stats_crta_ssd}")
+        logger.info(f"Sharded CRTA DDD Stats: {sharded_stats_crta_ddd}")
         logger.info(f"Interleaved Stats: {interleaved_stats}")
+        logger.info(f"Sharded Average: {sharded_stats_cta['Average']} (cycles)")
+        logger.info(f"Sharded CRTA DDS Average: {sharded_stats_crta_dds['Average']} (cycles)")
+        logger.info(f"Sharded CRTA SSD Average: {sharded_stats_crta_ssd['Average']} (cycles)")
+        logger.info(f"Sharded CRTA DDD Average: {sharded_stats_crta_ddd['Average']} (cycles)")
         logger.info(f"Interleaved Average: {interleaved_stats['Average']} (cycles)")
