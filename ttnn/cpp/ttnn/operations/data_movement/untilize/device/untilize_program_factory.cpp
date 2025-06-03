@@ -1066,15 +1066,31 @@ operation::ProgramWithCallbacks untilize_multi_core(
             ReaderDataMovementConfig(reader_compile_time_args));
     }
 
-    // Writer compile-time args
-    KernelHandle unary_writer_kernel_id;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    uint32_t num_output_columns = 1;
+    if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        num_output_columns = a.get_padded_shape()[-1] / output.shard_spec().value().shape[1];
+    }
 
     // TODO: (GR) Add/write actual kernel
-    // Writer kernel
-    unary_writer_kernel_id = tt::tt_metal::CreateKernel(
+    // Writer compile-time args and kernel
+    bool output_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    uint32_t output_stick_size = a.get_padded_shape()[-1] * output.element_size() / num_output_columns;
+    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(output_stick_size);
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(output_stick_size) - 1) : 0;
+    std::vector<uint32_t> writer_compile_time_args = {
+        (uint32_t)output_is_dram,
+        (uint32_t)output_cb_index,
+        (uint32_t)output_stick_size,
+        (uint32_t)stick_size_is_power_of_two,
+        (uint32_t)log2_stick_size,
+        (uint32_t)tile_height,
+        (uint32_t)num_output_columns,
+    };
+    KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+        "writer_unary_stick_layout_split_rows_single_core.cpp",
         compute_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -1094,8 +1110,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Note: This condition is always true for sharded input
     if (full_compute_core_range.ranges().size() > 0) {
         std::vector<uint32_t> compute_compile_time_args = {
-            (uint32_t)num_blocks_per_full_core,  // per_core_block_cnt
-            (uint32_t)num_tiles_per_block,       // per_block_ntiles
+            (uint32_t)num_blocks_per_full_core,
+            (uint32_t)num_tiles_per_block,
             (uint32_t)src0_cb_index,
             (uint32_t)output_cb_index};
         KernelHandle untilize_kernel_id = CreateKernel(
@@ -1147,8 +1163,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
         }
 
         // Writer run-time args
-        std::vector<uint32_t> writer_run_time_args;
         // TODO: (GR) Set after figuring out kernel
+        std::vector<uint32_t> writer_run_time_args = {
+            dst_buffer->address(), num_blocks_per_full_core,
+            // block_across_height_start_id
+        };
 
         // Set run-time arg
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
@@ -1176,8 +1195,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
         };
 
         // Writer run-time args
-        std::vector<uint32_t> writer_run_time_args;
         // TODO: (GR) Set after figuring out kernel
+        std::vector<uint32_t> writer_run_time_args = {
+            dst_buffer->address(), num_blocks_per_cliff_core,
+            // block_across_height_start_id
+
+        };
 
         // Set run-time args
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, cliff_core, reader_run_time_args);
@@ -1336,6 +1359,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)output_is_dram,
         (uint32_t)output_cb_index,
+        (uint32_t)output_stick_size,
         (uint32_t)stick_size_is_power_of_two,
         (uint32_t)log2_stick_size,
         (uint32_t)tile_height,
@@ -1344,7 +1368,6 @@ operation::ProgramWithCallbacks untilize_single_core(
         (uint32_t)num_blocks_per_column_row,
         (uint32_t)num_tiles_per_block,
         (uint32_t)output_single_block_width_size,
-        (uint32_t)output_stick_size,
     };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
