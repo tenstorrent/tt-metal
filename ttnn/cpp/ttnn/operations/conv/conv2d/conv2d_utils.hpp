@@ -135,6 +135,17 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
     bool is_mm_conv);
 
 template <typename DeviceType>
+std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
+    const Conv2dConfig& conv_config,
+    uint32_t batch_size,
+    ttnn::Shape input_tensor_shape,
+    ttnn::Shape output_tensor_shape,
+    bool is_mm_conv,
+    DeviceType* device,
+    Layout input_tensor_layout,
+    const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt);
+
+template <typename DeviceType>
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(DeviceType* device);
 
 Conv2dConfig determine_conv_config_for_auto_shard(

@@ -295,9 +295,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t num_blocks_per_shard = num_blocks / all_storage_cores_vec.size();
     log_debug("num_blocks_per_shard: {}", num_blocks_per_shard);
     if (per_core_M > 1) {
-        TT_ASSERT(
+        TT_FATAL(
             num_blocks_per_shard == 1,
-            "currently not support per_core_M larger than 1, while split one shard into multiple blocks");
+            "currently not support per_core_M larger than 1, while split one shard into multiple blocks (per_core_M "
+            "{}, num_blocks_per_shard {})",
+            per_core_M,
+            num_blocks_per_shard);
     }
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
@@ -842,7 +845,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
     }
 
-    TT_ASSERT(
+    TT_FATAL(
         total_tensor_width_written_back <= expected_max_total_width,
         "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}",
         expected_max_total_width,
@@ -855,8 +858,14 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            TT_FATAL(input_tensors.size() + optional_input_tensors.size() == 3, "Error");
-            TT_FATAL(output_tensors.size() == 1, "Error");
+            TT_FATAL(
+                input_tensors.size() + optional_input_tensors.size() == 3,
+                "Total number of input tensors (required + optional) must be 3, but got {} + {} = {}",
+                input_tensors.size(),
+                optional_input_tensors.size(),
+                input_tensors.size() + optional_input_tensors.size());
+            TT_FATAL(
+                output_tensors.size() == 1, "Number of output tensors must be 1, but got {}", output_tensors.size());
 
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();
