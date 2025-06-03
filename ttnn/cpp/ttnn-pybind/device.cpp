@@ -1,38 +1,42 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device.hpp"
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
-#include <tt-metalium/persistent_kernel_cache.hpp>
-#include <tt-metalium/memory_reporter.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal.hpp>
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "tools/profiler/op_profiler.hpp"
-
-using namespace tt::tt_metal;
+#include "ttnn/device.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace py = pybind11;
+using namespace tt::tt_metal;
 
 namespace {
 void DumpDeviceProfiler(IDevice* device) {
     ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
     tt::tt_metal::detail::DumpDeviceProfileResults(device, ProfilerDumpState::NORMAL, prof_metadata);
 }
-}  // namespace
-
-namespace ttnn {
-namespace device {
-namespace detail {
 
 void ttnn_device(py::module& module) {
     module.def(
@@ -65,15 +69,20 @@ void ttnn_device(py::module& module) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    module.def("close_device", [](MeshDevice& device) { ttnn::close_device(device); }, py::arg("device"));
+    module.def("close_device", [](ttnn::MeshDevice& device) { ttnn::close_device(device); }, py::arg("device"));
 
     module.def(
-        "deallocate_buffers", [](MeshDevice* device) { ttnn::deallocate_buffers(device); }, py::arg("device"), R"doc(
+        "deallocate_buffers",
+        [](ttnn::MeshDevice* device) { ttnn::deallocate_buffers(device); },
+        py::arg("device"),
+        R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
 }
 
-}  // namespace detail
+}  // namespace
+
+namespace ttnn::device {
 
 void py_device_module_types(py::module& m_device) {
     py::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
@@ -529,9 +538,8 @@ void device_module(py::module& m_device) {
 }
 
 void py_device_module(py::module& module) {
-    detail::ttnn_device(module);
+    ttnn_device(module);
     device_module(module);
 }
 
-}  // namespace device
-}  // namespace ttnn
+}  // namespace ttnn::device

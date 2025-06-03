@@ -21,7 +21,9 @@ template <
     bool is_partial_tile,
     uint32_t max_rows_for_reduction,
     uint32_t split_reader,
-    uint32_t unpA_face_r_dim>
+    uint32_t unpA_face_r_dim,
+    bool neginf_srca_maxpool,
+    bool zero_srca_avgpool>
 inline void reduce_h_fused_interm(
     const uint32_t in_cb_id_0,
     const uint32_t in_cb_id_1,
@@ -36,7 +38,7 @@ inline void reduce_h_fused_interm(
     const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
     cb_wait_front(curr_in_cb_id, 1);
     tile_regs_acquire();
-    unpack_tilizeA_B_block(
+    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
         curr_in_cb_id,
         in_scalar_cb_id,
         num_output_tiles,
@@ -58,7 +60,12 @@ inline void reduce_h_fused_interm(
     tile_regs_release();
 }
 
-template <uint32_t num_output_tiles, bool is_partial_tile, uint32_t max_rows_for_reduction>
+template <
+    uint32_t num_output_tiles,
+    bool is_partial_tile,
+    uint32_t max_rows_for_reduction,
+    bool neginf_srca_maxpool,
+    bool zero_srca_avgpool>
 inline void reduce_h_fused(const uint32_t interm_cb_id, const uint32_t in_scalar_cb_id, const uint32_t out_cb_id) {
     constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
@@ -67,7 +74,7 @@ inline void reduce_h_fused(const uint32_t interm_cb_id, const uint32_t in_scalar
     cb_reserve_back(out_cb_id, num_output_tiles);
     cb_wait_front(interm_cb_id, 1);
     tile_regs_acquire();
-    unpack_tilizeA_B_block(
+    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
         interm_cb_id,
         in_scalar_cb_id,
         num_output_tiles,
@@ -149,14 +156,21 @@ void MAIN {
                     is_partial_tile,
                     max_rows_for_reduction,
                     split_reader,
-                    max_rows_for_reduction>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, h, interm_cb_id);
+                    max_rows_for_reduction,
+                    neginf_srca_maxpool,
+                    zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, h, interm_cb_id);
             }
             cb_push_back(interm_cb_id, 1);
 
             // perform the final reduction over the first N - 1 whole chunks // Reduction of final 2 sticks.
             pack_untilize_uninit(out_cb_id);
             pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_output_tile);
-            reduce_h_fused<max_tiles_per_iter, is_partial_tile, max_rows_for_reduction>(
+            reduce_h_fused<
+                max_tiles_per_iter,
+                is_partial_tile,
+                max_rows_for_reduction,
+                neginf_srca_maxpool,
+                zero_srca_avgpool>(
                 interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
         }
 
@@ -171,15 +185,21 @@ void MAIN {
                 is_partial_tile,
                 max_rows_for_reduction,
                 split_reader,
-                max_rows_for_reduction>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, h, interm_cb_id);
+                max_rows_for_reduction,
+                neginf_srca_maxpool,
+                zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, h, interm_cb_id);
         }
         cb_push_back(interm_cb_id, 1);
 
         // perform the reduction over the either whole or partial chunk N
         pack_untilize_uninit(out_cb_id);
         pack_untilize_dst_init_short<partial_iter_output_tiles>(out_cb_id, num_out_rows, num_faces_in_output_tile);
-        reduce_h_fused<partial_iter_output_tiles, is_partial_tile, max_rows_for_reduction>(
-            interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
+        reduce_h_fused<
+            partial_iter_output_tiles,
+            is_partial_tile,
+            max_rows_for_reduction,
+            neginf_srca_maxpool,
+            zero_srca_avgpool>(interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
     }
     cb_pop_front(in_scalar_cb_id, 1);
 }

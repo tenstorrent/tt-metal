@@ -589,6 +589,10 @@ class ModelArgs:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
+        if self.base_model_name in ["Llama3.1-8B", "Llama3.2-11B", "Mistral-7B"] and self.device_name == "N150":
+            logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
+            self.prefill_len_cutoff = 512
+
         if callable(optimizations):
             self.optimizations = optimizations(self)
         else:

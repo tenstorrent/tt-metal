@@ -106,9 +106,9 @@ public:
     virtual void UpdateArgsForFabric(
         const CoreCoord& fabric_router_virtual,
         uint32_t outbound_eth_chan,
-        tt::tt_fabric::mesh_id_t upstream_mesh_id,
+        tt::tt_fabric::MeshId upstream_mesh_id,
         chip_id_t upstream_chip_id,
-        tt::tt_fabric::mesh_id_t downstream_mesh_id,
+        tt::tt_fabric::MeshId downstream_mesh_id,
         chip_id_t downstream_chip_id) {}
 
     // Generator function to create a kernel of a given type. New kernels need to be added here.
@@ -119,6 +119,15 @@ public:
         uint8_t cq_id,
         noc_selection_t noc_selection,
         tt::tt_metal::DispatchWorkerType type);
+
+    // Translate DispatchCoreType to programmable core type index
+    static uint32_t get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core = false);
+
+    // Translate core coord using the chip_id from the logical_cxy
+    //
+    // IDevice::virtual_core_from_logical_core uses the chip_id of the device instance whereas this function uses the
+    // chip_id specified in the logical coordinate.
+    static CoreCoord get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const CoreType& core_type);
 
     // Register another kernel as upstream/downstream of this one
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
