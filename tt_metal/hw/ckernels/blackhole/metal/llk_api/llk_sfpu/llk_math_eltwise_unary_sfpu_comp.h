@@ -27,7 +27,7 @@ inline void llk_math_eltwise_unary_sfpu_eqz_int32(uint dst_index, int vector_mod
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_eqz_uint16(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_comp_uint16<APPROXIMATE, SfpuType::equal_zero>, dst_index, vector_mode);
 }
 
@@ -51,7 +51,7 @@ inline void llk_math_eltwise_unary_sfpu_nez_int32(uint dst_index, int vector_mod
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_nez_uint16(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_comp_uint16<APPROXIMATE, SfpuType::not_equal_zero>, dst_index, vector_mode);
 }
 
