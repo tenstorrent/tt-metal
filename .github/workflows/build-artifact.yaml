@@ -81,7 +81,7 @@ on:
         value: ${{ jobs.build-artifact.outputs.build_artifact_name }}
       wheel-artifact-name:
         description: "Name of the published wheel artifact"
-        value: ${{ jobs.build-artifact.outputs.wheel_artifact_name }}
+        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name }}
 
   workflow_dispatch:
     inputs:
@@ -146,7 +146,6 @@ jobs:
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
-      wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}
       env:
