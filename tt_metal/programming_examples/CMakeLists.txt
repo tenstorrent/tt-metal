@@ -42,6 +42,9 @@ install(
         hello_world_compute_kernel
         hello_world_datatypes_kernel
         hello_world_datamovement_kernel
+        add_2_integers_in_riscv
+        eltwise_binary
+        matmul_multi_core
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into /usr/share/doc on a default Docker image.
     #                 Speculation: some dependency for magic doc handling is missing.
@@ -58,6 +61,9 @@ install(
         hello_world_compute_kernel
         hello_world_datatypes_kernel
         hello_world_datamovement_kernel
+        add_2_integers_in_riscv
+        eltwise_binary
+        matmul_multi_core
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING
