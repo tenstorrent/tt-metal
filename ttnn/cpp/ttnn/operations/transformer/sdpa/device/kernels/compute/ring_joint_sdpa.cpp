@@ -10,6 +10,7 @@
 #include "compute_kernel_api.h"
 #include "compute_common.hpp"
 #include "debug/dprint.h"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -50,6 +51,8 @@ void MAIN {
     const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
 
+    RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
+
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -80,12 +83,13 @@ void MAIN {
     // The last iteration will concatenate L, which contains the masked portion of the joint tensor.
     constexpr uint32_t L_mask_ring_id = ring_size - 1;
 
-    UNPACK(DPRINT << "COMPUTE: N_mask_ring_id: " << N_mask_ring_id << ENDL());
-    UNPACK(DPRINT << "COMPUTE: L_mask_ring_id: " << L_mask_ring_id << ENDL());
+    // UNPACK(DPRINT << "COMPUTE: N_mask_ring_id: " << N_mask_ring_id << ENDL());
+    // UNPACK(DPRINT << "COMPUTE: L_mask_ring_id: " << L_mask_ring_id << ENDL());
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
-    for (uint32_t ring_id = 0; ring_id < ring_size; ++ring_id) {
+    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const uint32_t iter_k_num_chunks =
             ring_id == ring_size - 1 ? (N_k_num_chunks_local + L_k_num_chunks) : N_k_num_chunks_local;
         const uint32_t iter_k_chunk_start = ring_id * N_k_num_chunks_local;
@@ -109,11 +113,11 @@ void MAIN {
                     cb_wait_front(cb_q_in, q_chunk_tiles);
 
                     for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
-                        UNPACK(DPRINT << "COMPUTE: k_chunk: " << k_chunk << ENDL());
+                        // UNPACK(DPRINT << "COMPUTE: k_chunk: " << k_chunk << ENDL());
                         if (k_chunk >= global_logical_NK_chunks && k_chunk < global_padded_NK_chunks) {
                             // This is a KV chunk on spatial input beyond the chunk-padded length of the spatial input.
                             // If k_chunk >= global_padded_NK_chunks, then this is a joint KV chunk.
-                            UNPACK(DPRINT << "COMPUTE: Skipping joint KV chunk: " << k_chunk << ENDL());
+                            // UNPACK(DPRINT << "COMPUTE: Skipping joint KV chunk: " << k_chunk << ENDL());
                             continue;
                         }
                         /* QK = Q_CHUNK @ K_CHUNK */
@@ -220,7 +224,7 @@ void MAIN {
                     /* cb_out_accumulate_im *= cb_cur_sum */
                     mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum);
 
-                    if (ring_id > 0) {
+                    if (ring_iter > 0) {
                         // Update output according to previous and current LSE
                         /**
                          * sig = torch.sigmoid(cur_lse - prev_lse)

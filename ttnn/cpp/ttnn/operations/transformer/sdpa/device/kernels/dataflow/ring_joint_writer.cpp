@@ -8,6 +8,7 @@
 #include "dataflow_common.hpp"
 #include "debug/dprint.h"
 #include <tt-metalium/constants.hpp>
+#include "fused_op_receiver.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -41,8 +42,8 @@ void kernel_main() {
     // The last iteration will concatenate L, which contains the masked portion of the joint tensor.
     constexpr uint32_t L_mask_ring_id = ring_size - 1;
 
-    DPRINT << "WRITER: N_mask_ring_id: " << N_mask_ring_id << ENDL();
-    DPRINT << "WRITER: L_mask_ring_id: " << L_mask_ring_id << ENDL();
+    // DPRINT << "WRITER: N_mask_ring_id: " << N_mask_ring_id << ENDL();
+    // DPRINT << "WRITER: L_mask_ring_id: " << L_mask_ring_id << ENDL();
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -54,6 +55,10 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
+
+    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
+        false, /* wait_for_op_signal */
+        argidx);
 
     constexpr bool is_dram = true;
     constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;
@@ -85,7 +90,8 @@ void kernel_main() {
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
 
-    for (uint32_t ring_id = 0; ring_id < ring_size; ++ring_id) {
+    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         DPRINT << "WRITER: ring_id: " << ring_id << ENDL();
         for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
             for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
@@ -99,13 +105,13 @@ void kernel_main() {
                         */
                         if (ring_id == N_mask_ring_id) {
                             if (mask_chunk_0 != (uint32_t)(-1)) {
-                                DPRINT << "WRITER: N_mask_ring_id: " << ring_id << ENDL();
+                                // DPRINT << "WRITER: N_mask_ring_id: " << ring_id << ENDL();
                                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_N);
                             }
                         }
                         if (ring_id == L_mask_ring_id) {
                             if (mask_chunk_1 != (uint32_t)(-1)) {
-                                DPRINT << "WRITER: L_mask_ring_id: " << ring_id << ENDL();
+                                // DPRINT << "WRITER: L_mask_ring_id: " << ring_id << ENDL();
                                 generate_noncausal_padded_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, logical_L);
                             }
                         }
@@ -117,16 +123,16 @@ void kernel_main() {
                     // If ring_id > 0, read LSE input and previous output chunk.
                     // No race condition because writer kernel writes previous output before reading it again
 
-                    if (ring_id > 0) {
+                    if (ring_iter > 0) {
                         // Read previous output for this Q chunk
                         read_block(cat_out_generator, dst_slice, cb_prev_out, tile_bytes, barrier_threshold, false);
 
                         // Read previous LSE for this Q chunk
                         cb_reserve_back(cb_lse_in, Sq_chunk_t);
                         // DEBUG: logging each LSE to different element in batch. Remove
-                        uint32_t lse_tile_id = (ring_id - 1) * B * NH * (local_Nt + logical_Lt) +
-                                               nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) +
-                                               q_chunk * Sq_chunk_t;
+                        // BUG: (ring_id - 1) is wrong now that we iterate over ring_id in different order
+                        uint32_t lse_tile_id =  //(ring_id - 1) * B * NH * (local_Nt + logical_Lt) +
+                            nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) + q_chunk * Sq_chunk_t;
                         uint32_t lse_addr = get_write_ptr(cb_lse_in);
                         // Don't write beyond the end of the LSE in sequence length
                         uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
@@ -147,9 +153,8 @@ void kernel_main() {
 
                     cb_wait_front(cb_lse_out, Sq_chunk_t);
                     // DEBUG: logging each LSE to different element in batch. Remove
-                    uint32_t lse_tile_id = ring_id * B * NH * (local_Nt + logical_Lt) +
-                                           nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) +
-                                           q_chunk * Sq_chunk_t;
+                    uint32_t lse_tile_id =  // ring_id * B * NH * (local_Nt + logical_Lt) +
+                        nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) + q_chunk * Sq_chunk_t;
                     uint32_t lse_addr = get_read_ptr(cb_lse_out);
                     uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
                     uint32_t lse_seq_end = lse_seq_start + Sq_chunk_t;

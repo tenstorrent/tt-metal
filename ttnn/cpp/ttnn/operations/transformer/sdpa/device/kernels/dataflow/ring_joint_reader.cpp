@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "dataflow_common.hpp"
 #include "debug/dprint.h"
+#include "fused_op_receiver.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -38,6 +39,10 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
+
+    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
+        true, /* wait_for_op_signal */
+        argidx);
 
     constexpr bool is_dram = true;
 
@@ -77,7 +82,22 @@ void kernel_main() {
     const auto cat_v_generator =
         CatAddrGenerator(v_reader, kv_input_tile_logical, global_Nt, joint_v_reader, joint_tile_logical, padded_Lkt);
 
-    for (uint32_t ring_id = 0; ring_id < ring_size; ++ring_id) {
+    // DEBUG: Wait for all signals to be sent before progressing at all
+    DPRINT << "READER: Waiting for all signals to be sent before progressing at all" << ENDL();
+    DPRINT << "READER: Ring size: " << fused_op_receiver.ring_size << ENDL();
+    DPRINT << "READER: ring index: " << fused_op_receiver.ring_index << ENDL();
+    DPRINT << "READER: num_inputs_forward: " << fused_op_receiver.expected_inputs[1] << ENDL();
+    DPRINT << "READER: num_inputs_backward: " << fused_op_receiver.expected_inputs[0] << ENDL();
+    // uint32_t current_ring_id = 0;
+    // for (uint32_t r = 0; r < ring_size; ++r) {
+    //     // TODO: how is this supposed to be used?
+    //     current_ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+    //     DPRINT << "READER: Synced with ring_id: " << current_ring_id << ENDL();
+    // }
+
+    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        // find out which is the latest ring_id that synchronized
+        uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         // Iterate over KV blocks gathered on ring.
         // Only the last iteration will append joint_K, joint_V to K, V.
         const uint32_t iter_k_num_chunks =
@@ -101,11 +121,11 @@ void kernel_main() {
                     );
 
                     for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
-                        DPRINT << "READER: k_chunk: " << k_chunk << ENDL();
+                        // DPRINT << "READER: k_chunk: " << k_chunk << ENDL();
                         if (k_chunk >= global_logical_NK_chunks && k_chunk < global_padded_NK_chunks) {
                             // This is a KV chunk on spatial input beyond the chunk-padded length of the spatial input.
                             // If k_chunk >= global_padded_NK_chunks, then this is a joint KV chunk.
-                            DPRINT << "READER: Skipping joint KV chunk: " << k_chunk << ENDL();
+                            // DPRINT << "READER: Skipping joint KV chunk: " << k_chunk << ENDL();
                             continue;
                         }
 

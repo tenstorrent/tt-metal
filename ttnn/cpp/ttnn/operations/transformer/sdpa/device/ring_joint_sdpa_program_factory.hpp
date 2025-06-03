@@ -7,6 +7,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ring_fusion.hpp"
 
 namespace ttnn::operations::transformer::detail {
 
@@ -27,6 +29,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_joint_sdpa(
     std::size_t k_chunk_size,
     std::size_t ring_size,
     DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config);
+    std::optional<SDPAProgramConfig> program_config,
+    std::optional<RingSDPAFusedOpSignaler>& sdpa_fused_op_signaler);
 
 }  // namespace ttnn::operations::transformer::detail

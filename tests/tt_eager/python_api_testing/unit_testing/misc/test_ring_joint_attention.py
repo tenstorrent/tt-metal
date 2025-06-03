@@ -228,8 +228,14 @@ def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, ttnn.Topology.Ring),
-        ({"trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear),
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            ttnn.Topology.Ring,
+        ),
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
     ],
     indirect=["device_params"],
     ids=["ring", "line"],

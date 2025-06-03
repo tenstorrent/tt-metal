@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
 
 using namespace tt::tt_metal;
@@ -312,40 +313,6 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
     auto& lse_output_tensor = output_tensors.at(2);
 
     tt::tt_metal::Program program{};
-    // TODO: Initialize fused op signaler
-    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
-
-    std::vector<Tensor> all_gather_input_tensors = {
-        input_tensor_k,
-        input_tensor_v,
-    };
-    std::vector<Tensor> all_gather_intermediate_tensors = {
-        persistent_intermediate_buffer_k,
-        persistent_intermediate_buffer_v,
-    };
-    std::vector<Tensor> all_gather_output_tensors = {
-        persistent_output_buffer_k,
-        persistent_output_buffer_v,
-    };
-    auto all_gather_program = ring_attention_all_gather_async_multi_core_with_workers_helper(
-        program,
-        all_gather_input_tensors,
-        all_gather_intermediate_tensors,
-        target_device,
-        forward_device,
-        backward_device,
-        all_gather_output_tensors,
-        this->all_gather_struct.dim,
-        this->all_gather_struct.num_links,
-        this->all_gather_struct.ring_size,
-        device_index,
-        this->all_gather_struct.topology,
-        this->all_gather_struct.semaphore,
-        this->all_gather_struct.sub_device_id,
-        empty_fused_op_signaler,
-        this->ccl_core_grid_offset);
-
-    const auto all_gather_callback = all_gather_program.override_runtime_arguments_callback;
 
     auto scale = this->scale;
     if (not scale.has_value()) {
@@ -355,8 +322,27 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
     std::size_t q_chunk_size = this->get_q_chunk_size();
     std::size_t k_chunk_size = this->get_k_chunk_size();
 
+    std::optional<detail::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = detail::RingSDPAFusedOpSignaler();
+
+    auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ccl::get_forward_backward_configuration(
+        this->all_gather_struct.ring_size, device_index, this->all_gather_struct.topology);
+
+    // This is how ring_joint_sdpa expects the number of forward and backward writes
+    uint32_t forward_writes_expected, backward_writes_expected;
+    if (this->all_gather_struct.topology == ttnn::ccl::Topology::Linear) {
+        forward_writes_expected = num_targets_backward;
+        backward_writes_expected = num_targets_forward;
+    } else {
+        TT_FATAL(this->all_gather_struct.topology == ttnn::ccl::Topology::Ring, "Topology must be Linaer or Ring");
+        forward_writes_expected = num_targets_forward - 1;
+        backward_writes_expected = num_targets_backward - 1;
+    }
+    // Minimally use matmul fused op signaler
+    sdpa_fused_op_signaler->init_all_gather(
+        this->all_gather_struct.ring_size, device_index, forward_writes_expected, backward_writes_expected);
+
     auto ring_joint_sdpa_program = detail::ring_joint_sdpa(
-        all_gather_program.program,  // Can't pass program, must pass allgather's program
+        program,  // Can't pass program, must pass allgather's program
         input_tensor_q,
         persistent_output_buffer_k,
         persistent_output_buffer_v,
@@ -372,9 +358,49 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         k_chunk_size,
         this->ring_size,
         this->compute_kernel_config,
-        this->program_config);
+        this->program_config,
+        sdpa_fused_op_signaler);
 
     const auto ring_attention_callback = ring_joint_sdpa_program.override_runtime_arguments_callback;
+
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> all_gather_fused_op_signaler =
+        ttnn::experimental::ccl::AllGatherFusedOpSignaler();
+    all_gather_fused_op_signaler->init_fused_op(
+        sdpa_fused_op_signaler->fused_op_receiver_cores_noc,
+        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
+        sdpa_fused_op_signaler->fused_op_signaler_mode);
+
+    std::vector<Tensor> all_gather_input_tensors = {
+        input_tensor_k,
+        input_tensor_v,
+    };
+    std::vector<Tensor> all_gather_intermediate_tensors = {
+        persistent_intermediate_buffer_k,
+        persistent_intermediate_buffer_v,
+    };
+    std::vector<Tensor> all_gather_output_tensors = {
+        persistent_output_buffer_k,
+        persistent_output_buffer_v,
+    };
+    auto all_gather_program = ring_attention_all_gather_async_multi_core_with_workers_helper(
+        ring_joint_sdpa_program.program,
+        all_gather_input_tensors,
+        all_gather_intermediate_tensors,
+        target_device,
+        forward_device,
+        backward_device,
+        all_gather_output_tensors,
+        this->all_gather_struct.dim,
+        this->all_gather_struct.num_links,
+        this->all_gather_struct.ring_size,
+        device_index,
+        this->all_gather_struct.topology,
+        this->all_gather_struct.semaphore,
+        this->all_gather_struct.sub_device_id,
+        all_gather_fused_op_signaler,
+        this->ccl_core_grid_offset);
+
+    const auto all_gather_callback = all_gather_program.override_runtime_arguments_callback;
 
     auto override_runtime_args = [all_gather_callback, ring_attention_callback](
                                      const void* operation,
@@ -421,8 +447,8 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         );
     };
 
-    ring_joint_sdpa_program.override_runtime_arguments_callback = override_runtime_args;
-    return ring_joint_sdpa_program;
+    all_gather_program.override_runtime_arguments_callback = override_runtime_args;
+    return all_gather_program;
 }
 
 // operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_program(

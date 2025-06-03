@@ -39,7 +39,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     std::size_t k_chunk_size,
     std::size_t ring_size,
     DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config) {
+    std::optional<SDPAProgramConfig> program_config,
+    std::optional<RingSDPAFusedOpSignaler>& sdpa_fused_op_signaler) {
     /*
     Q: B x NH x N/num_devices x DH
     K: B x NH x N x DH
@@ -156,6 +157,10 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
+
+    // Init fused op signaler
+    TT_FATAL(sdpa_fused_op_signaler.has_value(), "SDPA fused op signaler must be provided");
+    sdpa_fused_op_signaler->init_fused_op(program, device, core_grid);
 
     tt::log_info("num_cores: {}", num_cores);
     tt::log_info("device->compute_with_storage_grid_size(): {}", device->compute_with_storage_grid_size());
@@ -593,44 +598,43 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         tt::log_debug("local_q_start: {}", local_q_start);
         tt::log_debug("local_q_end: {}", local_q_end);
 
-        SetRuntimeArgs(
-            program,
-            reader_kernels_id,
-            core,
-            {q_addr,
-             k_addr,
-             v_addr,
-             joint_q_addr,
-             joint_k_addr,
-             joint_v_addr,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end});
+        std::vector<uint32_t> reader_args = {
+            q_addr,
+            k_addr,
+            v_addr,
+            joint_q_addr,
+            joint_k_addr,
+            joint_v_addr,
+            local_batch_start,
+            local_batch_end,
+            local_nh_start,
+            local_nh_end,
+            local_q_start,
+            local_q_end};
+
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
+
+        SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
         // Writer args
-        SetRuntimeArgs(
-            program,
-            writer_kernels_id,
-            core,
-            {out_addr,
-             joint_out_addr,
-             lse_addr,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end});
+        std::vector<uint32_t> writer_args = {
+            out_addr,
+            joint_out_addr,
+            lse_addr,
+            local_batch_start,
+            local_batch_end,
+            local_nh_start,
+            local_nh_end,
+            local_q_start,
+            local_q_end};
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
+        SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
 
         // Compute args
-        SetRuntimeArgs(
-            program,
-            compute_kernels_id,
-            core,
-            {local_batch_start, local_batch_end, local_nh_start, local_nh_end, local_q_start, local_q_end});
+        std::vector<uint32_t> compute_args = {
+            local_batch_start, local_batch_end, local_nh_start, local_nh_end, local_q_start, local_q_end};
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
+        SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
 
     auto override_runtime_arguments_callback =
