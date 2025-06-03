@@ -121,6 +121,9 @@ TEST(Cluster, TestMeshFullConnectivity) {
     } else if (cluster_type == tt::ClusterType::GALAXY) {
         num_expected_chips = 32;
         num_connections_per_side = 4;
+    } else if (cluster_type == tt::ClusterType::P150_X4) {
+        num_expected_chips = 4;
+        num_connections_per_side = 4;
     } else {
         GTEST_SKIP() << "Mesh check not supported for system type " << magic_enum::enum_name(cluster_type);
     }
