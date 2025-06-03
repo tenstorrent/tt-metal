@@ -28,6 +28,7 @@ daemon_process = None
 daemon_pipe_path = "/tmp/tt_metal_fabric_edm_daemon"
 daemon_result_pipe_path = "/tmp/tt_metal_fabric_edm_daemon_result"
 daemon_lock = threading.Lock()
+binary_path = os.environ.get("TT_METAL_HOME", "") + "/build/test/ttnn/unit_tests_ttnn_fabric_edm"
 
 # Global daemon mode setting (determined once per test session)
 _daemon_mode_enabled = None
@@ -55,7 +56,7 @@ def start_fabric_edm_daemon():
 
         # Start daemon process
         cmd = [
-            f"{os.environ['TT_METAL_HOME']}/build/test/ttnn/unit_tests_ttnn_fabric_edm",
+            binary_path,
             "daemon_mode",
         ]
 
@@ -479,7 +480,7 @@ def run_fabric_edm(
     else:
         # Fallback to original direct execution
         cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
-                {os.environ['TT_METAL_HOME']}/build/test/ttnn/unit_tests_ttnn_fabric_edm \
+                    {binary_path} \
                     {test_mode} \
                     {int(is_unicast)} \
                     {noc_message_type} \
