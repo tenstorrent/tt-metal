@@ -51,10 +51,10 @@ void kernel_main() {
     const InterleavedAddrGenFast<stats_is_dram> src_stats = {
         .bank_base_address = stats_addr, .page_size = stats_tile_bytes, .data_format = stats_data_format};
 
+#ifdef FUSE_GAMMA
     constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(6) == 1;
     ASSERT(stick_size_is_pow2);
     const uint32_t log_base_2_of_page_size = get_compile_time_arg_val(7);
-#ifdef FUSE_GAMMA
     const InterleavedPow2AddrGen<gamma_is_dram> addrg = {
         .bank_base_address = gamma_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
