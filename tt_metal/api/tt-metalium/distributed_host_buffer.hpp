@@ -34,8 +34,11 @@ public:
         const distributed::MeshShape& local_shape,
         const distributed::MeshCoordinate& local_offset);
 
+    // Shorhand for creating a distributed buffer for a single host.
+    static DistributedHostBuffer create(const distributed::MeshShape& shape);
+
     // Returns the shard at the specified `coord`.
-    // Returns `std::nullopt` if the index is out of local bounds.
+    // Returns `std::nullopt` if the index is out of local bounds or if the shard is not populated.
     // Throws if the index is out of global bounds.
     std::optional<HostBuffer> get_shard(const distributed::MeshCoordinate& coord) const;
 
@@ -44,38 +47,49 @@ public:
     // Throws if the index is out of global bounds.
     void emplace_shard(const distributed::MeshCoordinate& coord, const std::function<HostBuffer()>& produce_buffer);
 
+    // Helper class to provide a parallelization in `transform` and `apply` functions.
+    // TODO: #22045 - Use OMP parallel for.
+    class ParallelForAdaptor {
+    public:
+        virtual ~ParallelForAdaptor() = default;
+        virtual void add_task(std::function<void()>&& task) = 0;
+        virtual void wait() = 0;
+    };
+
     // `transform` and `apply` functions abstract away the details of the underlying data storage.
-    // `linear_index` will be supplied by `DistributedHostBuffer` to indicate the position of the buffer.
-    // For global multi-host buffers, these functions will only be invoked for the local shards.
-    //
-    // TODO: provide an optional way to parallelize the operation.
+    // For global multi-host buffers, these functions will only be invoked for the local populated shards.
     using TransformFn = std::function<HostBuffer(const HostBuffer& buffer)>;
-    DistributedHostBuffer transform(const TransformFn& fn) const;
+    DistributedHostBuffer transform(const TransformFn& fn, ParallelForAdaptor* parallel_for = nullptr) const;
 
     using ApplyFn = std::function<void(const HostBuffer& buffer)>;
-    void apply(const ApplyFn& fn) const;
+    void apply(const ApplyFn& fn, ParallelForAdaptor* parallel_for = nullptr) const;
 
     // Returns the global shape of the buffer.
     distributed::MeshShape shape() const;
 
     // Returns the coordinates of populated shards in the buffer.
-    const std::unordered_set<distributed::MeshCoordinate>& shard_coords() const;
+    const std::set<distributed::MeshCoordinate>& shard_coords() const;
 
 private:
     std::optional<distributed::MeshCoordinate> global_to_local(const distributed::MeshCoordinate& coord) const;
 
+    struct Shard {
+        HostBuffer buffer;
+        bool is_populated = false;
+    };
+
     DistributedHostBuffer(
         distributed::MeshShape global_shape,
         distributed::MeshCoordinate local_offset,
-        distributed::MeshContainer<HostBuffer> local_buffers) :
+        distributed::MeshContainer<Shard> local_shards) :
         global_shape_(std::move(global_shape)),
         local_offset_(std::move(local_offset)),
-        local_buffers_(std::move(local_buffers)) {}
+        local_shards_(std::move(local_shards)) {}
 
     distributed::MeshShape global_shape_;
     distributed::MeshCoordinate local_offset_;
-    distributed::MeshContainer<HostBuffer> local_buffers_;
-    std::unordered_set<distributed::MeshCoordinate> populated_shards_;
+    distributed::MeshContainer<Shard> local_shards_;
+    std::set<distributed::MeshCoordinate> populated_shards_;
 };
 
 }  // namespace tt::tt_metal

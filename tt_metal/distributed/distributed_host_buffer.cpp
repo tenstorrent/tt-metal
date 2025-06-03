@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/span.hpp>
+#include <tt_stl/indestructible.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/assert.hpp>
@@ -10,6 +11,21 @@
 #include <vector>
 
 namespace tt::tt_metal {
+namespace {
+
+// `ParallelForAdaptor` implementation that executes added tasks immediately on the same thread.
+class InlineParallelForAdaptor : public DistributedHostBuffer::ParallelForAdaptor {
+public:
+    void add_task(std::function<void()>&& task) override { task(); }
+    void wait() override {}
+};
+
+DistributedHostBuffer::ParallelForAdaptor* get_inline_parallel_for_adaptor() {
+    static tt::stl::Indestructible<InlineParallelForAdaptor> adaptor;
+    return &(adaptor.get());
+}
+
+}  // namespace
 
 DistributedHostBuffer DistributedHostBuffer::create(
     const distributed::MeshShape& global_shape,
@@ -38,12 +54,16 @@ DistributedHostBuffer DistributedHostBuffer::create(
     return DistributedHostBuffer(
         std::move(global_shape),
         std::move(local_offset),
-        distributed::MeshContainer<HostBuffer>(local_shape, HostBuffer()));
+        distributed::MeshContainer<Shard>(local_shape, Shard{.is_populated = false}));
+}
+
+DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshShape& shape) {
+    return DistributedHostBuffer::create(shape, shape, distributed::MeshCoordinate::zero_coordinate(shape.dims()));
 }
 
 std::optional<distributed::MeshCoordinate> DistributedHostBuffer::global_to_local(
     const distributed::MeshCoordinate& coord) const {
-    const auto& local_shape = local_buffers_.shape();
+    const auto& local_shape = local_shards_.shape();
     tt::stl::SmallVector<uint32_t> local_coord(coord.dims());
     for (size_t dim = 0; dim < coord.dims(); ++dim) {
         if (coord[dim] < local_offset_[dim] || coord[dim] >= local_offset_[dim] + local_shape[dim]) {
@@ -62,7 +82,8 @@ std::optional<HostBuffer> DistributedHostBuffer::get_shard(const distributed::Me
         global_shape_);
 
     auto local_coord_opt = global_to_local(coord);
-    return local_coord_opt.has_value() ? std::optional<HostBuffer>(local_buffers_.at(*local_coord_opt)) : std::nullopt;
+    return local_coord_opt.has_value() ? std::optional<HostBuffer>(local_shards_.at(*local_coord_opt).buffer)
+                                       : std::nullopt;
 }
 
 void DistributedHostBuffer::emplace_shard(
@@ -76,33 +97,45 @@ void DistributedHostBuffer::emplace_shard(
     populated_shards_.insert(coord);
     auto local_coord_opt = global_to_local(coord);
     if (local_coord_opt.has_value()) {
-        local_buffers_.at(*local_coord_opt) = produce_buffer();
+        local_shards_.at(*local_coord_opt) = Shard{.buffer = produce_buffer(), .is_populated = true};
     }
 }
 
-DistributedHostBuffer DistributedHostBuffer::transform(const TransformFn& fn) const {
-    std::vector<HostBuffer> transformed_buffers;
-    transformed_buffers.reserve(local_buffers_.shape().mesh_size());
-    for (const auto& local_buffer : local_buffers_.values()) {
-        transformed_buffers.push_back(fn(local_buffer));
+DistributedHostBuffer DistributedHostBuffer::transform(const TransformFn& fn, ParallelForAdaptor* parallel_for) const {
+    parallel_for = parallel_for ? parallel_for : get_inline_parallel_for_adaptor();
+
+    std::vector<Shard> transformed_shards;
+    transformed_shards.reserve(local_shards_.shape().mesh_size());
+    for (const auto& local_shard : local_shards_.values()) {
+        if (local_shard.is_populated) {
+            parallel_for->add_task(
+                [&]() { transformed_shards.push_back(Shard{.buffer = fn(local_shard.buffer), .is_populated = true}); });
+        } else {
+            transformed_shards.push_back(local_shard);
+        }
     }
+    parallel_for->wait();
+
     DistributedHostBuffer transformed_buffer(
         global_shape_,
         local_offset_,
-        distributed::MeshContainer<HostBuffer>(local_buffers_.shape(), std::move(transformed_buffers)));
+        distributed::MeshContainer<Shard>(local_shards_.shape(), std::move(transformed_shards)));
     return transformed_buffer;
 }
 
-void DistributedHostBuffer::apply(const ApplyFn& fn) const {
-    for (const auto& local_buffer : local_buffers_.values()) {
-        fn(local_buffer);
+void DistributedHostBuffer::apply(const ApplyFn& fn, ParallelForAdaptor* parallel_for) const {
+    parallel_for = parallel_for ? parallel_for : get_inline_parallel_for_adaptor();
+
+    for (const auto& local_buffer : local_shards_.values()) {
+        if (local_buffer.is_populated) {
+            parallel_for->add_task([&]() { fn(local_buffer.buffer); });
+        }
     }
+    parallel_for->wait();
 }
 
 distributed::MeshShape DistributedHostBuffer::shape() const { return global_shape_; }
 
-const std::unordered_set<distributed::MeshCoordinate>& DistributedHostBuffer::shard_coords() const {
-    return populated_shards_;
-}
+const std::set<distributed::MeshCoordinate>& DistributedHostBuffer::shard_coords() const { return populated_shards_; }
 
 }  // namespace tt::tt_metal
