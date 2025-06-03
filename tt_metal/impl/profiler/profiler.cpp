@@ -1148,9 +1148,7 @@ void DeviceProfiler::dumpResults(
                 issueFastDispatchReadFromProfilerBuffer(device);
             }
         } else {
-            if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                issueSlowDispatchReadFromProfilerBuffer(device);
-            }
+            issueSlowDispatchReadFromProfilerBuffer(device);
         }
         for (const auto& worker_core : worker_cores) {
             resetControlBuffers(device, worker_core, state);

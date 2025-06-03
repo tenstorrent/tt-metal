@@ -665,6 +665,7 @@ void InitDeviceProfiler(IDevice* device) {
                 tt_metal_device_profiler_map.emplace(device_id, DeviceProfiler(device, false));
             }
         }
+        device->mark_profiler_as_active();
 
         auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
@@ -796,6 +797,10 @@ void DumpDeviceProfileResults(
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
                 tt_metal_device_profiler_map.at(device_id).pushTracyDeviceResults();
             }
+        }
+
+        if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
+            device->mark_profiler_as_inactive();
         }
     }
 #endif

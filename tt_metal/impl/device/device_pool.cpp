@@ -730,6 +730,13 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         }
     }
 
+    for (const chip_id_t device_id : devices_to_close) {
+        IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
+        if (device->is_profiler_active()) {
+            detail::DumpDeviceProfileResults(device, ProfilerDumpState::LAST_CLOSE_DEVICE);
+        }
+    }
+
     dispatch_firmware_active_ = false;
     teardown_fd(std::unordered_set<chip_id_t>(devices_to_close.begin(), devices_to_close.end()));
     // Terminate sent to each device. Wait for dispatch to finish. MMIO only to prevent clogging SD path.
