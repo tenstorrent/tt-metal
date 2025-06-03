@@ -2,14 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "downsample.hpp"
+#include "downsample_pybind.hpp"
 
+#include <optional>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "downsample.hpp"
 #include "ttnn-pybind/decorators.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::downsample {
-namespace detail {
+namespace {
 
 void bind_downsample(py::module& module, const char* doc) {
     ttnn::bind_registered_operation(
@@ -20,7 +24,7 @@ void bind_downsample(py::module& module, const char* doc) {
             py::arg("input_tensor"), py::arg("downsample_params"), py::arg("dtype") = std::nullopt});
 }
 
-}  // namespace detail
+}  // namespace
 void py_bind_downsample(py::module& module) {
     const auto doc = R"doc(
         Downsamples a given multi-channel 2D (spatial) data.
@@ -41,7 +45,7 @@ void py_bind_downsample(py::module& module) {
 
 
         )doc";
-    detail::bind_downsample(module, doc);
+    bind_downsample(module, doc);
 }
 
 }  // namespace ttnn::operations::downsample

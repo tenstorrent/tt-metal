@@ -6,10 +6,11 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace ttnn::operations::core {
+namespace ttnn::tensor {
 
 namespace py = pybind11;
-void py_module_types(py::module& module);
-;
-void py_module(py::module& module);
-}  // namespace ttnn::operations::core
+void pytensor_module_types(py::module& m_tensor);
+
+void pytensor_module(py::module& m_tensor);
+
+}  // namespace ttnn::tensor

@@ -6,10 +6,9 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::profiler {
 
+namespace py = pybind11;
 void py_module(py::module& module);
 
 }  // namespace ttnn::profiler
