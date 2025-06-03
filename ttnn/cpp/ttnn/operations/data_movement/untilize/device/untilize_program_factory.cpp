@@ -1059,9 +1059,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
         std::vector<uint32_t> reader_compile_time_args = {
             (uint32_t)src0_is_dram,
             (uint32_t)src0_cb_index,
-            (uint32_t)num_tiles_to_read,     // num_tiles to read TODO: (GR) Will need to be run-time for cliff core
-            (uint32_t)bytes_per_input_tile,  // bytes per tile -> no longer here
-            (uint32_t)5                      // start page id to read -> move to run-time args
         };
         unary_reader_kernel_id = CreateKernel(
             program,
@@ -1322,12 +1319,9 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    uint32_t start_page_id = 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src0_is_dram,
         (uint32_t)src0_cb_index,
-        (uint32_t)num_tiles,
-        (uint32_t)start_page_id,
     };
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(a, reader_compile_time_args);
@@ -1397,7 +1391,12 @@ operation::ProgramWithCallbacks untilize_single_core(
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
 
     // Reader run-time args
-    std::vector<uint32_t> reader_run_time_args = {src0_buffer->address()};
+    uint32_t start_page_id = 0;
+    std::vector<uint32_t> reader_run_time_args = {
+        src0_buffer->address(),
+        num_tiles,
+        start_page_id,
+    };
     if (input_is_sharded) {
         shard_builder::extend_sharding_run_time_args(a, reader_run_time_args);
     }
