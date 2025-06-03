@@ -194,6 +194,10 @@ run_t3000_qwen3_perplexity_tests() {
   fail=0
   start_time=$(date +%s)
 
+  echo "LOG_METAL: Warning: updating transformers version. Make sure this is the last-run test."
+  echo "LOG_METAL: Remove this when https://github.com/tenstorrent/tt-metal/pull/22608 merges."
+  pip install -r models/tt_transformers/requirements.txt
+
   echo "LOG_METAL: Running run_t3000_qwen3_perplexity_tests"
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
