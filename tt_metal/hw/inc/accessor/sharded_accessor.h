@@ -4,30 +4,61 @@
 
 #pragma once
 
+#include <type_traits>
 #include "detail.h"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "dataflow_api.h"
 #endif
 
-template <size_t BASE, size_t RANK, size_t NUM_BANKS>
-using distribution_spec_t = typename detail::DistributionSpecWrapper<BASE, RANK, NUM_BANKS>::dspec;
+template <
+    size_t BASE,
+    size_t RANK,
+    size_t NUM_BANKS,
+    bool TensorShapeDynamic = false,
+    bool ShardShapeDynamic = false,
+    bool BankCoordsDynamic = false>
+using distribution_spec_t = typename detail::
+    DistributionSpecWrapper<BASE, RANK, NUM_BANKS, TensorShapeDynamic, ShardShapeDynamic, BankCoordsDynamic>::dspec;
 
 template <typename DSpec>
-constexpr auto compile_time_args_skip = DSpec::rank * 2 + DSpec::num_banks;
+constexpr auto compile_time_args_skip =
+    (DSpec::rank * DSpec::TensorShapeT::is_static) + (DSpec::rank * DSpec::TensorShapeT::is_static) +
+    (DSpec::num_banks * DSpec::BankCoordsT::is_static);
 
-template <typename DSpec, size_t PageSize>
+template <typename DSpec>
+constexpr auto runtime_args_skip =
+    (DSpec::rank * !DSpec::TensorShapeT::is_static) + (DSpec::rank * !DSpec::ShardShapeT::is_static) +
+    (DSpec::num_banks * !DSpec::BankCoordsT::is_static);
+
+template <typename DSpec, size_t PageSize, size_t RTA_BASE = static_cast<size_t>(-1)>
 struct ShardedAccessor {
     static constexpr auto rank = DSpec::rank;
     static constexpr auto page_size = PageSize;
     static constexpr DSpec static_dspec{};  // Used only if DSpec is static
 
-    std::conditional_t<DSpec::is_static, std::monostate, DSpec> dspec_instance;  // Used only if DSpec is not static
     const size_t bank_base_address;
+    std::conditional_t<DSpec::is_static, std::monostate, DSpec> dspec_instance;  // Used only if DSpec is not static
 
-    ShardedAccessor(const size_t bank_base_address_in = 0) : bank_base_address(bank_base_address_in) {}
-    ShardedAccessor(const DSpec& dspec, const size_t bank_base_address_in = 0) :
+    constexpr explicit ShardedAccessor(const DSpec& dspec, const size_t bank_base_address_in) :
         dspec_instance(dspec), bank_base_address(bank_base_address_in) {}
+
+    constexpr explicit ShardedAccessor(DSpec&& dspec, const size_t bank_base_address_in) :
+        dspec_instance(std::move(dspec)), bank_base_address(bank_base_address_in) {}
+
+    template <
+        typename DSpec_ = DSpec,
+        size_t RTA_BASE_ = RTA_BASE,
+        std::enable_if_t<(DSpec_::is_static or RTA_BASE_ == static_cast<size_t>(-1)), int> = 0>
+    ShardedAccessor(const size_t bank_base_address_in = 0) : bank_base_address(bank_base_address_in) {}
+
+    template <
+        typename DSpec_ = DSpec,
+        size_t RTA_BASE_ = RTA_BASE,
+        std::enable_if_t<(!DSpec_::is_static and RTA_BASE_ != static_cast<size_t>(-1)), int> = 0>
+    constexpr explicit ShardedAccessor(const size_t bank_base_address_in) :
+        bank_base_address(bank_base_address_in),
+        dspec_instance(detail::build_dspec_from_runtime_args<RTA_BASE, DSpec>()) {}
 
     // Helper to get the appropriate DSpec instance
     constexpr auto& get_dspec() const {

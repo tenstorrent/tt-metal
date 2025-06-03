@@ -112,15 +112,30 @@ template <template <size_t...> class Wrapper, size_t base, size_t rank>
 using struct_sequence_wrapper_t =
     decltype(make_struct_from_sequence_wrapper<Wrapper, base>(std::make_index_sequence<rank>{}));
 
+// Helper to generate array using index sequence
+template <std::size_t Base, std::size_t... Is>
+constexpr std::array<uint32_t, sizeof...(Is)> make_runtime_array_from_sequence(std::index_sequence<Is...>) {
+    return {get_arg_val<uint32_t>(Base + Is)...};
+}
+
+// Public interface
+template <std::size_t Base, std::size_t Size>
+constexpr auto runtime_array_sequence_wrapper() {
+    return make_runtime_array_from_sequence<Base>(std::make_index_sequence<Size>{});
+}
+
 template <typename TensorShape, typename ShardShape, typename BankCoords>
 struct DistributionSpec {
     static_assert(TensorShape::rank == ShardShape::rank, "Tensor and shard shapes must have the same rank!");
     static_assert(
         std::is_same_v<typename TensorShape::ShapeBase, typename ShardShape::ShapeBase>,
         "Tensor and shard shapes bases must be the same");
+    static_assert(TensorShape::rank > 0, "Tensor and shard shape ranks must be greater than 0!");
     static constexpr auto rank = TensorShape::rank;
+    using TensorShapeT = TensorShape;
+    using ShardShapeT = ShardShape;
+    using BankCoordsT = BankCoords;
     using ShapeBase = typename TensorShape::ShapeBase;
-    static_assert(rank > 0, "Tensor and shard shape ranks must be greater than 0!");
     using PackedCoordsArray = typename BankCoords::PackedCoordsArray;
 
     static constexpr bool all_shapes_static = TensorShape::is_static && ShardShape::is_static;
@@ -129,33 +144,12 @@ struct DistributionSpec {
 
     static constexpr size_t num_banks = BankCoords::num_banks;
 
-    template <
-        class... Ts1,
-        class... Ts2,
-        std::enable_if_t<
-            (sizeof...(Ts1) == (TensorShape::is_static ? 0 : rank) &&
-             sizeof...(Ts2) == (ShardShape::is_static ? 0 : rank)),
-            int> = 0>
-    constexpr DistributionSpec(
-        std::tuple<Ts1...> tensor_shape = {},  // empty tuple == “nothing to pass”
-        std::tuple<Ts2...> shard_shape = {}) :
-        tensor_shape_{std::make_from_tuple<TensorShape>(tensor_shape)},
-        shard_shape_{std::make_from_tuple<ShardShape>(shard_shape)} {
-        // Check that the number of shards is greater than or equal to the number of banks
-        // Here, shard_grid_strides[0] * shard_grid[0] is the total number of shards
-        if constexpr (!all_shapes_static) {
-            compute_shard_grid_and_strides_rt(tensor_shape_.shape, shard_shape_.shape);
-            ASSERT(
-                shard_grid_rt[0] * shard_grid_strides_rt[0] >= num_banks,
-                "Number of shards must be greater than or equal to number of banks!");
-        } else {
-            static_assert(
-                shard_grid_ct(TensorShape::shape, ShardShape::shape)[0] *
-                        shard_grid_strides_ct(TensorShape::shape, ShardShape::shape)[0] >=
-                    num_banks,
-                "Number of shards must be greater than or equal to number of banks!");
-        }
-    }
+    constexpr DistributionSpec() {
+        static_assert(is_static, "Cannot use default constructor for non-static DistributionSpec!");
+        static_assert(
+            shard_grid_ct_[0] * shard_grid_strides_ct_[0] >= num_banks,
+            "Number of shards must be greater than or equal to number of banks!");
+    };
 
     template <
         typename TensorShapeArr = ShapeBase,
@@ -168,12 +162,15 @@ struct DistributionSpec {
         bank_coords_(std::forward<BankCoordsArr>(bank_coords_arr)) {
         static_assert(!(is_static), "Everything is static, this constructor is obsolete!");
         if constexpr (!all_shapes_static) {
-            ASSERT(get_tensor_shape().size() == rank, "Tensor shape has bad rank!");
-            ASSERT(get_shard_shape().size() == rank, "Shard shape has bad rank!");
+            // Tensor shape has bad rank!
+            ASSERT(get_tensor_shape().size() == rank);
+            // Shard shape has bad rank!
+            ASSERT(get_shard_shape().size() == rank);
             compute_shard_grid_and_strides_rt(get_tensor_shape(), get_shard_shape());
         }
         if constexpr (!bank_coords_static) {
-            ASSERT(bank_coords_arr.size() == num_banks, "Number of bank coordinates must match the number of banks!");
+            // Number of bank coordinates must match the number of banks!"
+            ASSERT(bank_coords_arr.size() == num_banks);
         }
     }
 
@@ -284,9 +281,7 @@ struct DistributionSpec {
             stride *= shard_grid_rt[i];
         }
         // Check that the number of shards is greater than or equal to the number of banks
-        ASSERT(
-            shard_grid_rt[0] * shard_grid_strides_rt[0] >= num_banks,
-            "Number of shards must be greater than or equal to number of banks!");
+        ASSERT(shard_grid_rt[0] * shard_grid_strides_rt[0] >= num_banks);
     }
 
     std::conditional_t<all_shapes_static, std::monostate, ShapeBase> shard_grid_rt{};
@@ -302,12 +297,56 @@ struct DistributionSpec {
     // static constexpr auto packed_xy_coords = BankCoords::packed_xy_coords;
 };
 
-template <size_t BASE, size_t RANK, size_t NUM_BANKS>
+template <
+    size_t CTA_BASE,
+    size_t RANK,
+    size_t NUM_BANKS,
+    bool TensorShapeDynamic = false,
+    bool ShardShapeDynamic = false,
+    bool BankCoordsDynamic = false>
 struct DistributionSpecWrapper {
     using dspec = DistributionSpec<
-        struct_sequence_wrapper_t<ShapeWrapper, BASE, RANK>,
-        struct_sequence_wrapper_t<ShapeWrapper, BASE + RANK, RANK>,
-        struct_sequence_wrapper_t<BankCoordWrapper, BASE + 2 * RANK, NUM_BANKS>>;
+        std::conditional_t<
+            TensorShapeDynamic,
+            ShapeWrapperDynamic<RANK>,
+            struct_sequence_wrapper_t<ShapeWrapper, CTA_BASE, RANK>>,
+        std::conditional_t<
+            ShardShapeDynamic,
+            ShapeWrapperDynamic<RANK>,
+            struct_sequence_wrapper_t<ShapeWrapper, CTA_BASE + RANK * !TensorShapeDynamic, RANK>>,
+        std::conditional_t<
+            BankCoordsDynamic,
+            BankCoordWrapperDynamic<RANK>,
+            struct_sequence_wrapper_t<
+                BankCoordWrapper,
+                CTA_BASE + RANK * !TensorShapeDynamic + RANK * !ShardShapeDynamic,
+                NUM_BANKS>>>;
 };
+
+template <size_t RTA_BASE, typename DSpec>
+auto build_dspec_from_runtime_args() {
+    static constexpr bool TensorShapeDynamic = !DSpec::TensorShapeT::is_static;
+    static constexpr bool ShardShapeDynamic = !DSpec::ShardShapeT::is_static;
+    static constexpr bool BankCoordsDynamic = !DSpec::BankCoordsT::is_static;
+    static constexpr size_t RANK = DSpec::rank;
+    static constexpr size_t NUM_BANKS = DSpec::num_banks;
+
+    std::array<uint32_t, RANK> tensor_shape_array;
+    std::array<uint32_t, RANK> shard_shape_array;
+    std::array<uint32_t, NUM_BANKS> bank_coord_array;
+    if constexpr (TensorShapeDynamic) {
+        tensor_shape_array = runtime_array_sequence_wrapper<RTA_BASE, RANK>();
+    }
+    if constexpr (ShardShapeDynamic) {
+        shard_shape_array = runtime_array_sequence_wrapper<RTA_BASE + RANK * TensorShapeDynamic, RANK>();
+    }
+    if constexpr (BankCoordsDynamic) {
+        bank_coord_array = runtime_array_sequence_wrapper<
+            RTA_BASE + RANK * TensorShapeDynamic + RANK * ShardShapeDynamic,
+            NUM_BANKS>();
+    }
+
+    return DSpec(std::move(tensor_shape_array), std::move(shard_shape_array), std::move(bank_coord_array));
+}
 
 }  // namespace detail

@@ -94,12 +94,16 @@ namespace sharded_accessor_utils {
 struct ShardedAccessorArgs {
     size_t rank;
     size_t num_banks;
-    std::vector<uint32_t> shapes_and_bank_coords;
+    std::vector<uint32_t> compile_time_args;
+    std::vector<uint32_t> runtime_args;
 };
 ShardedAccessorArgs get_sharded_accessor_args(
     const distributed::MeshDevice& mesh_device,
     const BufferDistributionSpec& buffer_distribution_spec,
-    const CoreType& bank_type);
+    const CoreType& bank_type,
+    bool runtime_tensor_shape = false,
+    bool runtime_shard_shape = false,
+    bool runtime_bank_coords = false);
 
 }  // namespace sharded_accessor_utils
 

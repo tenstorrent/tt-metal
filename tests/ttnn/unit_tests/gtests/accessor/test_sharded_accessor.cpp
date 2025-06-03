@@ -22,9 +22,17 @@ template <int N>
 constexpr auto get_ct_arg();
 #define get_compile_time_arg_val(arg_idx) get_ct_arg<arg_idx>()
 
+template <typename T>
+constexpr T get_arg_val(size_t idx);
+
 #define noc_index 0
 #define ASSERT(condition, ...)
 #define FORCE_INLINE inline __attribute__((always_inline))
+#define DPRINT std::cout
+#define ENDL() std::endl
+#define DPRINT_DATA0(x) x
+#define DPRINT_DATA1(x) x
+#define DPRINT_MATH(x) x
 #endif
 
 #include "tt_metal/hw/inc/accessor/sharded_accessor.h"
@@ -32,6 +40,11 @@ constexpr auto get_ct_arg();
 #undef get_compile_time_arg_val
 #undef noc_index
 #undef ASSERT
+#undef DPRINT
+#undef END
+#undef DPRINT_DATA0
+#undef DPRINT_DATA1
+#undef DPRINT_MATH
 #undef FORCE_INLINE
 
 // If inputs are passed as constexpr arrays, we can use this style to directly create the structs
