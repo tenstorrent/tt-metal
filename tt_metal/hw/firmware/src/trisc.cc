@@ -68,16 +68,12 @@ uint32_t tt_l1_ptr *cb_l1_base __attribute__((used));
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 #endif
 
-#if defined(UCK_CHLKC_UNPACK)
+// These were conditionally set to true/false
+// do avoid writing, but both being true should
+// work, as read and write initializes read and
+// write pointers respectively.
 constexpr bool cb_init_read = true;
-#else
-constexpr bool cb_init_read = false;
-#endif
-#if defined(UCK_CHLKC_PACK)
 constexpr bool cb_init_write = true;
-#else
-constexpr bool cb_init_write = false;
-#endif
 
 using namespace ckernel;
 
