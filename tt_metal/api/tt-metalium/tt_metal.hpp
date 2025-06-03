@@ -18,6 +18,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <umd/device/tt_core_coordinates.h>
@@ -227,6 +228,24 @@ void InitDeviceProfiler(IDevice* device);
  * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
  * */
 void ProfilerSync(ProfilerSyncState state);
+
+/**
+ * Read device side profiler data for all devices in the mesh device and dump results into device side CSV log
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                           | Type                     | Valid Range |
+ * Required |
+ * |---------------|-------------------------------------------------------|--------------------------|------------------|----------|
+ * | mesh_device   | The mesh device containing the devices to be profiled | distributed::MeshDevice* | | True     | |
+ * state         | Profiler dump various states                          | ProfilerDumpState        |                  |
+ * False    | | metadata      | Optional metadata to be added to the profiler results | ProfilerOptionalMetadata | |
+ * False    |
+ * */
+void DumpMeshDeviceProfileResults(
+    distributed::MeshDevice* mesh_device,
+    ProfilerDumpState state = ProfilerDumpState::NORMAL,
+    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 /**
  * Read device side profiler data and dump results into device side CSV log
