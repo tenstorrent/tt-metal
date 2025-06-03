@@ -14,7 +14,9 @@
  */
 
 using namespace tt::tt_metal;
-
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
 int main() {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
@@ -39,7 +41,7 @@ int main() {
 
         KernelHandle dram_copy_kernel_id = CreateKernel(
             program,
-            "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
+            OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
