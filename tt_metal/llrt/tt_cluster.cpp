@@ -613,8 +613,12 @@ bool Cluster::supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) c
         return false;
     }
 
+    // Currently, DMA reads/writes hang for small sizes. As a safety measure, we disable DMA for small sizes.
+    // TODO: Remove this once we have a proper fix for small DMA sizes.
+    constexpr uint32_t min_dma_size_bytes = 32;
+
     return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->cluster_desc_->is_chip_mmio_capable(chip_id) &&
-           sz_in_bytes >= 8;
+           sz_in_bytes >= min_dma_size_bytes;
 }
 
 void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
