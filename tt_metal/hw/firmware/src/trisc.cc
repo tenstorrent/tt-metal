@@ -137,7 +137,7 @@ int main(int argc, char *argv[]) {
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
         uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
-        setup_local_cb_read_write_interfaces(cb_l1_base, 0, local_cb_mask, cb_init_read, cb_init_write, cb_init_write);
+        setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write>(cb_l1_base, 0, local_cb_mask);
 
         cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
         uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;

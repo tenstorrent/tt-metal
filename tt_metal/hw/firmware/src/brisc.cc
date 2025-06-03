@@ -446,7 +446,7 @@ int main() {
             WAYPOINT("R");
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
                 uint32_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
-                setup_local_cb_read_write_interfaces(cb_l1_base, 0, local_cb_mask, true, true, false);
+                setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
                 cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
