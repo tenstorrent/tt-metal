@@ -5,6 +5,9 @@
 #include <fmt/format.h>
 #include <optional>
 
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include "tt-metalium/memory_pin.hpp"
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
@@ -25,6 +28,26 @@
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
+
+namespace {
+
+// Threshold for switch for mmap-based allocations to regular allocations.
+constexpr size_t kMmapThresholdBytes = 8 << 20;  // 8MB
+
+// Allocates memory on the host in batch; using either mmap for large allocations or std::vector for small allocations.
+std::shared_ptr<void> allocate_host_data(size_t size_bytes) {
+    if (size_bytes >= kMmapThresholdBytes) {
+        ZoneScopedN("AllocateBufferMmap");
+        void* ptr = mmap(nullptr, size_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        TT_FATAL(ptr != MAP_FAILED, "Failed to allocate {} bytes of memory", size_bytes);
+        return std::shared_ptr<void>(ptr, [size_bytes](void* p) { munmap(p, size_bytes); });
+    } else {
+        auto vec = std::make_shared<std::vector<std::byte>>(size_bytes);
+        return std::shared_ptr<void>(vec, vec->data());
+    }
+}
+
+}  // unnamed namespace
 
 namespace tt {
 
@@ -561,15 +584,18 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     specs.reserve(num_buffers);
     shard_data_transfers.reserve(num_buffers);
 
-    // Batch a single allocation, and split it across shards using host buffer borrowing.
+    // For performance, batch host-side allocations, then split the memory chunk across shards using host buffer
+    // borrowing.
     {
         ZoneScopedN("AllocateBuffer");
         const size_t shard_size = tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T);
-        auto batch_allocation = std::make_shared<std::vector<T>>(num_buffers * shard_size);
-        MemoryPin allocation_pin(batch_allocation);
+        std::shared_ptr<void> batch_memory = allocate_host_data(num_buffers * shard_size * sizeof(T));
+        MemoryPin allocation_pin(batch_memory);
+
         for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
             buffers[shard_idx] = HostBuffer(
-                tt::stl::Span<T>(batch_allocation->data() + shard_idx * shard_size, shard_size), allocation_pin);
+                tt::stl::Span<T>(static_cast<T*>(batch_memory.get()) + shard_idx * shard_size, shard_size),
+                allocation_pin);
         }
     }
 
