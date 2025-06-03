@@ -1,6 +1,7 @@
 set(BENCHMARK_SRCS
     "host_tilizer_untilizer/tilizer_untilizer.cpp"
     "padding/pad_rm.cpp"
+    "operations/ternary/benchmark_where.cpp"
 )
 
 foreach(TEST_SRC ${BENCHMARK_SRCS})
