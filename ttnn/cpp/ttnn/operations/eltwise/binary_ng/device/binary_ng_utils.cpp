@@ -373,12 +373,42 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB: return {"rsub_binary_tile_init();", "rsub_binary_tile"};
-        case EQ: return {"eq_binary_tile_init();", "eq_binary_tile"};
-        case NE: return {"ne_binary_tile_init();", "ne_binary_tile"};
-        case LT: return {"lt_binary_tile_init();", "lt_binary_tile"};
-        case LTE: return {"le_binary_tile_init();", "le_binary_tile"};
-        case GT: return {"gt_binary_tile_init();", "gt_binary_tile"};
-        case GTE: return {"ge_binary_tile_init();", "ge_binary_tile"};
+        case EQ:
+            if (dtype == DataType::INT32) {
+                return {"eq_int32_tile_init();", "eq_int32_tile"};
+            } else {
+                return {"eq_binary_tile_init();", "eq_binary_tile"};
+            }
+        case NE:
+            if (dtype == DataType::INT32) {
+                return {"ne_int32_tile_init();", "ne_int32_tile"};
+            } else {
+                return {"ne_binary_tile_init();", "ne_binary_tile"};
+            }
+        case LT:
+            if (dtype == DataType::INT32) {
+                return {"lt_int32_tile_init();", "lt_int32_tile"};
+            } else {
+                return {"lt_binary_tile_init();", "lt_binary_tile"};
+            }
+        case LTE:
+            if (dtype == DataType::INT32) {
+                return {"le_int32_tile_init();", "le_int32_tile"};
+            } else {
+                return {"le_binary_tile_init();", "le_binary_tile"};
+            }
+        case GT:
+            if (dtype == DataType::INT32) {
+                return {"gt_int32_tile_init();", "gt_int32_tile"};
+            } else {
+                return {"gt_binary_tile_init();", "gt_binary_tile"};
+            }
+        case GTE:
+            if (dtype == DataType::INT32) {
+                return {"ge_int32_tile_init();", "ge_int32_tile"};
+            } else {
+                return {"ge_binary_tile_init();", "ge_binary_tile"};
+            }
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT: return {"binary_shift_tile_init();", "binary_left_shift_tile"};

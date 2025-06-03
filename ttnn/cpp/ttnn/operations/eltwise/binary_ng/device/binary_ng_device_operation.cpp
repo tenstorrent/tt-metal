@@ -28,13 +28,14 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case LOGICAL_AND:
         case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
         case LOGICAL_OR:
-        case LOGICAL_XOR:
+        case LOGICAL_XOR: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
         case GT:
         case LT:
         case GTE:
         case LTE:
         case EQ:
-        case NE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
+        case NE:
+            return ((a == FLOAT32 && b == FLOAT32) || (a == BFLOAT16 && b == BFLOAT16) || (a == INT32 && b == INT32));
         case LCM:
         case GCD:
         case LEFT_SHIFT:
