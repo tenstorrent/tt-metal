@@ -51,7 +51,9 @@ public:
         uint8_t num_hw_cqs,
         const BankMapping& l1_bank_remap,
         size_t worker_l1_size,
-        bool minimal = false);
+        bool minimal = false,
+        bool force_reinit = false);
+    void reinitialize();
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;

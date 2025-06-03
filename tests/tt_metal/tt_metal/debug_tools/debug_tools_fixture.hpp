@@ -19,7 +19,6 @@ class DebugToolsFixture : public DispatchFixture {
 
     void TearDown() override {
         DispatchFixture::TearDown();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
     }
 
     template <typename T>
@@ -73,6 +72,12 @@ protected:
         // Parent class tears down devices
         DebugToolsFixture::TearDown();
 
+        // If test induced a watcher error, re-initialize the context.
+        if (DPrintServerHangDetected()) {
+            MetalContext::instance().reinitialize();
+        }
+
+
         // Reset DPrint settings
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);
@@ -85,6 +90,7 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
             tt::llrt::RunTimeDebugFeatureDprint, true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
     }
 
     void RunTestOnDevice(
@@ -170,6 +176,11 @@ protected:
         // Parent class tears down devices
         DebugToolsFixture::TearDown();
 
+        // If test induced a watcher error, re-initialize the context.
+        if (watcher_server_killed_due_to_error()) {
+            MetalContext::instance().reinitialize();
+        }
+
         // Reset watcher settings to their previous values
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_interval(watcher_previous_interval);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_dump_all(watcher_previous_dump_all);
@@ -177,6 +188,7 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_auto_unpause(watcher_previous_auto_unpause);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(watcher_previous_noinline);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(test_mode_previous);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
         tt::watcher_server_set_error_flag(false);
     }
 

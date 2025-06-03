@@ -33,12 +33,17 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
         max_worker_l1_size);
 }
 
+void MetalContext::reinitialize() {
+    initialize(dispatch_core_config_, num_hw_cqs_, l1_bank_remap_, worker_l1_size_, false, true);
+}
+
 void MetalContext::initialize(
     const DispatchCoreConfig& dispatch_core_config,
     uint8_t num_hw_cqs,
     const BankMapping& l1_bank_remap,
     size_t worker_l1_size,
-    bool minimal) {
+    bool minimal,
+    bool force_reinit) {
     // Settings that affect FW build can also trigger a re-initialization
     auto fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, *hal_);
@@ -49,8 +54,13 @@ void MetalContext::initialize(
             log_warning("Closing and re-initializing MetalContext with new parameters.");
             teardown();
         } else {
-            // Re-init request with the same parameters, do nothing
-            return;
+            // Re-init request with the same parameters, do nothing unless force re-init requested.
+            if (force_reinit) {
+                log_warning("Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
+                teardown();
+            } else {
+                return;
+            }
         }
     }
 

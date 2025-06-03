@@ -922,6 +922,36 @@ void Device::init_command_queue_device() {
     this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs_[0];
 
+    // Write 0 to all workers launch message read pointer. Need to do this since dispatch cores are written new on each
+    // Device init. TODO: remove this once dispatch init moves to one-shot.
+    auto reset_launch_message_rd_ptr = [&](const CoreCoord& logical_core, const CoreType& core_type) {
+        CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            id_, logical_core, core_type);
+        auto programmable_core_type = get_programmable_core_type(virtual_core);
+        uint64_t launch_msg_buffer_read_ptr_addr = MetalContext::instance().hal().get_dev_addr(
+            programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+        uint32_t zero = 0;
+        MetalContext::instance().get_cluster().write_core(
+            &zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), launch_msg_buffer_read_ptr_addr);
+    };
+    const auto& storage_only_cores = tt::get_logical_storage_cores(
+        id_, num_hw_cqs_, MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config());
+    auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
+    for (uint32_t y = 0; y < logical_grid_size().y; y++) {
+        for (uint32_t x = 0; x < logical_grid_size().x; x++) {
+            CoreCoord logical_core(x, y);
+            if (!storage_only_cores_set.count(logical_core)) {
+                reset_launch_message_rd_ptr(logical_core, CoreType::WORKER);
+            }
+        }
+    }
+    for (const auto& logical_core : this->get_active_ethernet_cores()) {
+        reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
+    }
+    for (const auto& logical_core : this->get_inactive_ethernet_cores()) {
+        reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
+    }
+
     // TODO: should get a const ref
     std::vector<std::vector<CoreCoord>>logical_cores = command_queue_program.logical_cores();
     const auto& hal = MetalContext::instance().hal();
