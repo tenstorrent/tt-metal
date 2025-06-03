@@ -54,6 +54,7 @@ ttnn_dtype_to_torch_dtype = {
     ttnn.int32: torch.int32,
     ttnn.bfloat16: torch.float32,
     ttnn.bfloat8_b: torch.bfloat16,
+    ttnn.float32: torch.float32,
 }
 
 
@@ -74,10 +75,10 @@ ttnn_dtype_to_torch_dtype = {
     ],
 )
 @pytest.mark.parametrize("fill_value", [1.5, float("inf"), float("-inf")])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
-def test_fill_pad_bfloat16(
+def test_fill_pad_float(
     device,
     shape,
     fill_value,
@@ -98,6 +99,8 @@ def test_fill_pad_bfloat16(
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
     padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
+    print(padded_torch_tensor)
+    print(padded_torch_output_tensor)
     assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
 
 
