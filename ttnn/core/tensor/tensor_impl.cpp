@@ -5,6 +5,7 @@
 #include <fmt/format.h>
 #include <optional>
 
+#include "tt-metalium/memory_pin.hpp"
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
@@ -560,28 +561,24 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     specs.reserve(num_buffers);
     shard_data_transfers.reserve(num_buffers);
 
-    const auto tensor_size_bytes = tensor.get_tensor_spec().compute_packed_buffer_size_bytes();
-    for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
-        const auto& coord = storage.coords[shard_idx];
-        // Multithreaded memory allocation on host. This is a bottleneck for models with large outputs
-        // and must thus be parallelized across devices.
-        tensor.mesh_device()->enqueue_to_thread_pool([shard_idx, &buffers, tensor_size_bytes]() {
-            ZoneScopedN("AllocateBuffer");
-            std::vector<T> host_buffer(tensor_size_bytes / sizeof(T));
-            {
-                // Track the buffer index, since the order of shards matters
-                buffers[shard_idx] = HostBuffer(std::move(host_buffer));
-            }
-        });
-        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = coord, .region = BufferRegion(0, tensor_size_bytes)});
+    // Batch a single allocation, and split it across shards using host buffer borrowing.
+    {
+        ZoneScopedN("AllocateBuffer");
+        const size_t shard_size = tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T);
+        auto batch_allocation = std::make_shared<std::vector<T>>(num_buffers * shard_size);
+        MemoryPin allocation_pin(batch_allocation);
+        for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
+            buffers[shard_idx] = HostBuffer(
+                tt::stl::Span<T>(batch_allocation->data() + shard_idx * shard_size, shard_size), allocation_pin);
+        }
     }
-    // Wait for allocations to complete
-    tensor.mesh_device()->wait_for_thread_pool();
-    // Point shard_data_transfers to their associated host memory, which was allocated
-    // through the thread-pool.
+
     for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
-        shard_data_transfers[shard_idx].host_data = buffers[shard_idx].view_bytes().data();
+        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
+            .shard_coord = storage.coords[shard_idx],
+            .host_data = buffers[shard_idx].view_bytes().data(),
+            .region = BufferRegion(0, buffers[shard_idx].view_bytes().size()),
+        });
     }
 
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
