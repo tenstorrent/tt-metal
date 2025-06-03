@@ -217,4 +217,12 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(uint format, uint datum_count)
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
 #define UPPER_HALFWORD(x) ((x) >> 16)
 
+enum class ActivationType
+{
+    Celu     = 0,
+    Elu      = 1,
+    Gelu     = 2,
+    Hardtanh = 3,
+};
+
 } // namespace ckernel

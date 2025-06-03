@@ -52,6 +52,7 @@ enum class SfpuType
     erf,
     erfc,
     rsqrt,
+    celu,
     isfinite,
     isinf,
     isposinf,
