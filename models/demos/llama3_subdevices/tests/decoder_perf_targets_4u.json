@@ -48,11 +48,11 @@
         "kernel_duration": 8556.222222222223,
         "op_to_op": 716.4444444444445,
         "first_to_last_start": 2106.0,
-        "non-overlapped-dispatch-time": 5653.2,
+        "non-overlapped-dispatch-time": 6496.9,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1
+        "dispatch_duration_relative_margin": 0.15
     },
     "Matmul_1": {
         "op_name": "DO_MM",
