@@ -103,7 +103,7 @@ std::map<FabricNodeId, chip_id_t> get_physical_chip_mapping_from_eth_coords_mapp
         for (std::uint32_t chip_id = 0; chip_id < mesh_graph_eth_coords[mesh_id].size(); chip_id++) {
             const auto& eth_coord = mesh_graph_eth_coords[mesh_id][chip_id];
             physical_chip_ids_mapping.insert(
-                {FabricNodeId(mesh_id, chip_id), cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+                {FabricNodeId(MeshId{mesh_id}, chip_id), cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
         }
     }
     return physical_chip_ids_mapping;

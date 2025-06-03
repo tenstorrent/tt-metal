@@ -484,7 +484,7 @@ int main(int argc, char** argv) {
                 (device_map[test_device_id_l]->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
                 0x410,                                                                  // 1: dest_noc_offset
                 routing_plane,
-                (dev_r_mesh_id << 16 | dev_r_chip_id)};
+                (*dev_r_mesh_id << 16 | dev_r_chip_id)};
 
             if (ASYNC_WR == fabric_command) {
                 runtime_args.push_back(target_address);
@@ -527,7 +527,7 @@ int main(int argc, char** argv) {
                 (rx_queue_size_bytes >> 4),                            // 13: queue_size_words
             };
 
-            std::vector<uint32_t> runtime_args = {(dev_l_mesh_id << 16 | dev_l_chip_id)};
+            std::vector<uint32_t> runtime_args = {(*dev_l_mesh_id << 16 | dev_l_chip_id)};
 
             log_info(LogTest, "run socket rx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(

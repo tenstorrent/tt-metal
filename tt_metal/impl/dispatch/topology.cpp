@@ -992,7 +992,7 @@ void configure_dispatch_cores(IDevice* device) {
 bool check_dateline(
     const tt_fabric::ControlPlane& control_plane,
     tt_fabric::Topology topology,
-    tt_fabric::mesh_id_t mesh_id,
+    tt_fabric::MeshId mesh_id,
     chip_id_t chip0,
     chip_id_t chip1,
     bool wrap_around_mesh) {
@@ -1148,16 +1148,12 @@ void build_tt_fabric_program(
             auto eth_chans_dir1 = active_fabric_eth_channels.at(dir1);
             auto eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
 
-            auto eth_chans_dir1_it = eth_chans_dir1.begin();
-            auto eth_chans_dir2_it = eth_chans_dir2.begin();
-
             // since tunneling cores are not guaraneteed to be reserved on the same routing plane, iterate through
             // the ordered eth channels in both directions
             uint32_t num_links = std::min(eth_chans_dir1.size(), eth_chans_dir2.size());
-            uint32_t link = 0;
-            while (eth_chans_dir1_it != eth_chans_dir1.end() && eth_chans_dir2_it != eth_chans_dir2.end()) {
-                auto eth_chan_dir1 = *eth_chans_dir1_it;
-                auto eth_chan_dir2 = *eth_chans_dir2_it;
+            for (uint32_t link = 0; link < num_links; link++) {
+                auto eth_chan_dir1 = eth_chans_dir1[link];
+                auto eth_chan_dir2 = eth_chans_dir2[link];
 
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
@@ -1168,14 +1164,10 @@ void build_tt_fabric_program(
                 auto edm_noc_vc = link & edm_builder1.config.MAX_EDM_NOC_VC;
                 edm_builder1.config.edm_noc_vc = edm_noc_vc;
                 edm_builder2.config.edm_noc_vc = edm_noc_vc;
-                link++;
 
                 if (is_galaxy) {
                     get_optimal_noc_for_edm(edm_builder1, edm_builder2, num_links, topology);
                 }
-
-                eth_chans_dir1_it++;
-                eth_chans_dir2_it++;
             }
         }
     };
