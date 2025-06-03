@@ -7,6 +7,30 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
+#include "debug/dprint.h"
+
+// inline void print_loop(uint32_t count) {
+//     // UNPACK(DPRINT << "U-LOOP:" << (uint32_t)count << ENDL());
+//     // MATH(DPRINT << "M-LOOP:" << (uint32_t)count << ENDL());
+//     // PACK(DPRINT << "P-LOOP:" << (uint32_t)count << ENDL());
+// }
+
+// inline void print_full_tile_column0(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+//     for (uint8_t r = 0; r < 32; ++r) {
+//         SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
+//         DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " ";
+//     }
+// }
+
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+        break;
+    }
+}
 
 // TODO: improve with a more efficient implementation
 // using noc_async_writes
@@ -109,7 +133,6 @@ void kernel_main() {
         cb_reserve_back(cb_rms_a_idx, onetile);
         uint32_t l1_rms_a_write_addr = get_write_ptr(cb_rms_a_idx);
         noc_async_read_tile(start_row + i, rms_a_address_generator, l1_rms_a_write_addr);
-        l1_rms_a_write_addr += tile_bytes;
         noc_async_read_barrier();
         cb_push_back(cb_rms_a_idx, onetile);
 
@@ -118,11 +141,15 @@ void kernel_main() {
         cb_reserve_back(cb_dL_out_idx, Wt);
         uint32_t l1_dL_out_write_addr = get_write_ptr(cb_dL_out_idx);
         for (uint32_t j = 0; j < Wt; j++) {
-            noc_async_write_tile(idx + j, dL_out_address_generator, l1_dL_out_write_addr);
+            noc_async_read_tile(idx + j, dL_out_address_generator, l1_dL_out_write_addr);
             l1_dL_out_write_addr += tile_bytes;
         }
         noc_async_read_barrier();
         cb_push_back(cb_dL_out_idx, Wt);
+        if (i == 0) {
+            DPRINT << "Print from reader" << ENDL();
+            print_full_tile(cb_dL_out_idx, 0, true);
+        }
     }
 #elif defined(SOME_OTHER_OPTIONS_TBD)
         // TODO

@@ -12,7 +12,7 @@ void kernel_main() {
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
     constexpr uint32_t cb_dx_idx =
-        tt::CBIndex::c_4;  // Warning: those numbers may change once compute kernel will be implemented
+        tt::CBIndex::c_4;  // NOTE: those numbers may change once compute kernel will be implemented
     constexpr uint32_t cb_dgamma_idx = tt::CBIndex::c_5;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);

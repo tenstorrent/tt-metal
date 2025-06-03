@@ -215,7 +215,7 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     auto cb_mask_w = create_circular_buffer(program, all_cores, kMaskWCbIndex, data_format, single_tile_size_bytes, Wt);
     auto cb_scaler = create_circular_buffer(program, all_cores, kScalerCbIndex, data_format, single_tile_size_bytes, 1);
     auto cb_gamma = create_circular_buffer(program, all_cores, kGammaCbIndex, data_format, single_tile_size_bytes, Wt);
-    auto cb_rms_a = create_circular_buffer(program, all_cores, kRmsACbIndex, data_format, single_tile_size_bytes, 1);
+    auto cb_rms_a = create_circular_buffer(program, all_cores, kRmsACbIndex, data_format, single_tile_size_bytes, 2);
     auto cb_dLdout = create_circular_buffer(program, all_cores, kDLoutCbIndex, data_format, single_tile_size_bytes, Wt);
     auto cb_dL_da = create_circular_buffer(program, all_cores, kDLdaCbIndex, data_format, single_tile_size_bytes, Wt);
     auto cb_dL_dgamma =

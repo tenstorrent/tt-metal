@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
@@ -144,6 +145,8 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     autograd::GradFunction grad = [tensor, gamma, out, rms_a, epsilon]() {
         auto dL_dout = out->get_grad();
 
+        dL_dout.print();
+
         auto grads = ttml::metal::rmsnorm_bw(tensor->get_value(), gamma->get_value(), rms_a, dL_dout, epsilon);
 
         if (grads.size() != 2U) {
@@ -230,6 +233,10 @@ autograd::TensorPtr rmsnorm_composite(
         // c is the number of activations; in the RMS1orm paper they call this
         // "n". it is renamed here to avoid confusion with 1.
         auto c = static_cast<float>(a.logical_shape()[-1]);
+        std::cout << "g: " << std::endl;
+        g.print();
+        std::cout << "rms_a: " << std::endl;
+        rms_a.print();
 
         auto dL_dout = out->get_grad();  // Grad w.r.t normalized arctivations, hence [B,1,S,C]
 
@@ -245,6 +252,12 @@ autograd::TensorPtr rmsnorm_composite(
             /*input_tensor_a_activations*/ none,
             /*input_tensor_b_activations*/ none,
             /*use_legacy*/ false);  // [1,1,1,C] x [B,1,S,1] -> [B,1,S,C] (bcast)
+        std::cout << "scaled_gain: " << std::endl;
+        scaled_gain.print();
+
+        std::cout << "dL_dout: " << std::endl;
+        dL_dout.print();
+
         auto gained_dL_dout = ttnn::multiply(
             scaled_gain,
             dL_dout,
@@ -255,6 +268,8 @@ autograd::TensorPtr rmsnorm_composite(
             none,
             none,
             false);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
+        std::cout << "gained_dL_dout: " << std::endl;
+        gained_dL_dout.print();
 
         // notation:
         // _ · _ <- usual dot product
