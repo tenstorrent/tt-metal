@@ -296,7 +296,7 @@ class TtTransformer(LightweightModule):
         rot_current_pos = torch.maximum(
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
-        rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
+        rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
         current_pos_tt = ttnn.from_torch(
             current_pos,
             device=None,
@@ -332,7 +332,7 @@ class TtTransformer(LightweightModule):
         Embed tokens
         """
         # print("tokens", tokens.shape, tokens.memory_config)
-        tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
+        tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
@@ -432,7 +432,7 @@ class TtTransformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
+        rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
         x_embd = self.embd(x)
         tt_logits = self.forward(
             x_embd,
