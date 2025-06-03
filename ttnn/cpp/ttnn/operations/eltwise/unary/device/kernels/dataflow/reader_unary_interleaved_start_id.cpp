@@ -54,8 +54,6 @@ void kernel_main() {
 
         detail::noc_async_read(i, s, l1_write_addr);
         noc_async_read_barrier();
-        // tt::data_movement::common::print_bf16_pages(l1_write_addr, page_bytes/2, 1);
-
         cb_push_back(cb_id_in0, onetile);
     }
 }

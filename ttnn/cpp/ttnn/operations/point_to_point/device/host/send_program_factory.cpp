@@ -83,7 +83,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             .set_page_size(sender_cb_id, input_page_size_bytes);
     tt::tt_metal::CBHandle cb_sender_handle = CreateCircularBuffer(program, all_cores, cb_sender_config);
 
-    // allocate space for packet headers for payload and maybe sempahore ?
+    // allocate space for packet headers for payload sempahore
     constexpr auto packet_header_cb_id = tt::CBIndex::c_6;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;
@@ -104,7 +104,10 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    const std::map<std::string, std::string> reader_defines{{"ROWMAJOR", "1"}};
+    std::map<std::string, std::string> reader_defines;
+    if (input_tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) {
+        reader_defines["ROWMAJOR"] = "1";
+    }
     // basic reader kernel set up
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
