@@ -9,11 +9,32 @@
 
 template <uint32_t NumTiles, uint32_t TileSizeBytes>
 FORCE_INLINE void copy_weights_from_dram(
-    uint32_t bank_id, uint32_t dram_base_read_addr, uint32_t l1_base_write_addr, uint32_t offset = 0) {
+    uint32_t bank_id,
+    uint32_t dram_base_read_addr,
+    uint32_t l1_base_write_addr,
+    uint32_t read_offset,
+    uint32_t write_offset) {
     constexpr uint32_t size = NumTiles * TileSizeBytes;
-    const uint64_t dram_read_addr = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr + offset);
-    DPRINT << "read=" << dram_read_addr << " write=offset=" << offset << " size=" << size << ENDL();
-    noc_async_read(dram_read_addr, l1_base_write_addr + offset, size);
+    const uint64_t dram_read_addr = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr + read_offset);
+    noc_async_read(dram_read_addr, l1_base_write_addr + write_offset, size);
+}
+
+template <uint32_t NumberOfBanks, uint32_t TransactionSize, uint32_t WeightSizeBytes>
+FORCE_INLINE void fetch_dram_sharded_weights(uint32_t dram_base_read_addr, uint32_t l1_base_write_addr) {
+    constexpr uint32_t num_reads = WeightSizeBytes / TransactionSize / NumberOfBanks;
+    uint32_t read_offset = 0;
+    uint32_t write_offset = 0;
+    for (uint32_t bank_id = 0; bank_id < NumberOfBanks; bank_id++) {
+        const uint32_t read_base_addr =
+            noc_async_read_tile_dram_sharded_set_state<true>(dram_base_read_addr, TransactionSize, bank_id);
+        read_offset = 0;
+        write_offset = l1_base_write_addr;
+        for (uint32_t i = 0; i < num_reads; i++) {
+            noc_async_read_tile_dram_sharded_with_state(read_base_addr, read_offset, write_offset);
+            read_offset += TransactionSize;
+            write_offset += TransactionSize;
+        }
+    }
 }
 
 void kernel_main() {
@@ -146,18 +167,7 @@ void kernel_main() {
         start_reader_idx = act_block_h_datums_first_reader / 2;
     }
 
-    constexpr uint32_t number_of_banks = 1;
-    constexpr uint32_t total_weight_tiles = weight_block_num_tiles * num_blocks_weight_h;
-    constexpr uint32_t tiles_per_bank = total_weight_tiles / number_of_banks;
-    constexpr uint32_t weight_bytes_per_bank = tiles_per_bank * weight_tile_nbytes;
     const uint32_t weights_l1_base_write_addr = get_read_ptr(cb_id_weight);
-    DPRINT << "tiles per bank = " << tiles_per_bank << " bytes per bank = " << weight_bytes_per_bank
-           << " weight tile nbytes = " << weight_tile_nbytes << ENDL();
-    copy_weights_from_dram<tiles_per_bank, weight_tile_nbytes>(0, weight_addr_dram_base, weights_l1_base_write_addr, 0);
-    noc_async_read_barrier();
-    copy_weights_from_dram<tiles_per_bank, weight_tile_nbytes>(
-        1, weight_addr_dram_base, weights_l1_base_write_addr, weight_bytes_per_bank);
-    noc_async_read_barrier();
 
     for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
         // READ WEIGHTS + MCAST SEND WEIGHTS
@@ -201,15 +211,49 @@ void kernel_main() {
             if (bh == 0) {
                 // mcast args
                 const uint32_t weights_start_address = get_write_ptr(cb_id_weight);
-                const uint32_t weights_block_size_bytes =
-                    weight_tile_nbytes * weight_block_height_ntiles * weight_block_width_ntiles;
+                constexpr uint32_t weights_block_size_bytes = weight_tile_nbytes * weight_block_num_tiles;
                 DPRINT << "weights block size bytes " << weights_block_size_bytes << ENDL();
+
+                /*
+                uint64_t dram_read_addr = get_noc_addr_from_bank_id<true>(0, weight_addr_dram_base);
+                noc_async_read(dram_read_addr, weights_l1_base_write_addr, 2 * weights_block_size_bytes);
+                dram_read_addr = get_noc_addr_from_bank_id<true>(0, weight_addr_dram_base);
+                noc_async_read(dram_read_addr, weights_l1_base_write_addr, weights_block_size_bytes);
+                noc_async_read_barrier();
+                */
+
+                /*
+                const uint32_t block_num_tiles = weight_block_height_ntiles * weight_block_width_ntiles;
+
+                uint32_t read_base_addr =
+                    noc_async_read_tile_dram_sharded_set_state<true>(weight_addr_dram_base, weight_tile_nbytes, 0);
+                uint32_t read = 0;
+                uint32_t write = weights_l1_base_write_addr;
+                for (uint32_t w = 0; w < block_num_tiles; w++) {
+                    noc_async_read_tile_dram_sharded_with_state(read_base_addr, read, write);
+                    read += weight_tile_nbytes;
+                    write += weight_tile_nbytes;
+                }
+
+                read = 0;
+                read_base_addr =
+                    noc_async_read_tile_dram_sharded_set_state<true>(weight_addr_dram_base, weight_tile_nbytes, 1);
+                for (uint32_t w = 0; w < block_num_tiles; w++) {
+                    noc_async_read_tile_dram_sharded_with_state(read_base_addr, read, write);
+                    read += weight_tile_nbytes;
+                    write += weight_tile_nbytes;
+                }
+                noc_async_read_barrier();
+                */
+
+                fetch_dram_sharded_weights<8, 8192, weights_block_size_bytes>(
+                    weight_addr_dram_base, weights_l1_base_write_addr);
+                noc_async_read_barrier();
 
 #ifndef SKIP_MCAST
                 // wait until all weights mcast destinations have atomically incremented the weights
                 // semaphore_addr (i.e. its value should be weights_mcast_num_dests), then reset the
                 // semaphore_addr value back to zero for the next block
-                noc_async_read_barrier();
                 noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
                 noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
 
