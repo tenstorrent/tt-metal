@@ -103,6 +103,16 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();
 
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward;
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_backward;
+
+    if (fuse_op) {
+        fused_op_signaler_sender_workers = fused_op_signaler.value();
+        fused_op_signaler_forward = fused_op_signaler.value();
+        fused_op_signaler_backward = fused_op_signaler.value();
+    }
+
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = input_tensor;
     std::vector<Tensor> output_tensors = output_tensor;
@@ -354,6 +364,15 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
         }
 
+        /* All gather fusion */
+        if (fuse_op) {
+            auto sender_workers = corerange_to_cores(sender_worker_core_range, std::nullopt, true);
+            fused_op_signaler_forward->init_all_gather(program, mesh_device, sender_worker_core_range, sender_workers);
+            fused_op_signaler_backward->init_all_gather(program, mesh_device, sender_worker_core_range, sender_workers);
+            fused_op_signaler_sender_workers->init_all_gather(
+                program, mesh_device, sender_worker_core_range, sender_workers);
+        }
+
         // Set Sender Reader runtime args
         uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
         uint32_t remainder = input_tensor_num_pages % num_links;
@@ -443,6 +462,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
+        if (fuse_op) {
+            fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_rt_args, 1, 0, 1);
+        }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
 
         // Set Receiver runtime args
@@ -502,6 +524,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             forward_receiver_writer_rt_args.push_back(output_tensor[input_idx].buffer()->address());
         }
+        if (fuse_op) {
+            fused_op_signaler_forward->push_all_gather_fused_op_rt_args(forward_receiver_writer_rt_args, 1, 0, 1);
+        }
         tt::tt_metal::SetRuntimeArgs(
             program,
             worker_forward_receiver_writer_kernel_id,
@@ -519,6 +544,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         };
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             backward_receiver_writer_rt_args.push_back(output_tensor[input_idx].buffer()->address());
+        }
+        if (fuse_op) {
+            fused_op_signaler_backward->push_all_gather_fused_op_rt_args(backward_receiver_writer_rt_args, 1, 0, 0);
         }
         tt::tt_metal::SetRuntimeArgs(
             program,
