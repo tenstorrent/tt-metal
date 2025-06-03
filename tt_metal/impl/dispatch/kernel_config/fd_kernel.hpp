@@ -119,7 +119,8 @@ public:
         chip_id_t servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
-        tt::tt_metal::DispatchWorkerType type);
+        tt::tt_metal::DispatchWorkerType type,
+        int tunnel_index = -1);
 
     // Translate DispatchCoreType to programmable core type index
     static uint32_t get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core = false);

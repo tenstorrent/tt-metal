@@ -49,7 +49,7 @@ chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     auto tunnels = tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-    if (tunnel < -1 || tunnel >= tunnels.size()) {
+    if (tunnel < -1 || tunnel >= static_cast<int>(tunnels.size())) {
         TT_THROW("Tunnel {} is out of range. {} tunnels exist", tunnel, tunnels.size());
     }
 
@@ -92,7 +92,8 @@ FDKernel* FDKernel::Generate(
     chip_id_t servicing_device_id,
     uint8_t cq_id,
     noc_selection_t noc_selection,
-    DispatchWorkerType type) {
+    DispatchWorkerType type,
+    int tunnel_index) {
     switch (type) {
         case PREFETCH_HD:
             return new PrefetchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true, true);
@@ -118,9 +119,11 @@ FDKernel* FDKernel::Generate(
         case PACKET_ROUTER_DEMUX:
             return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
         case FABRIC_MUX:
-            return new tt::tt_metal::FabricMux(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
+            return new tt::tt_metal::FabricMux(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, false, tunnel_index);
         case RETURN_FABRIC_MUX:
-            return new tt::tt_metal::FabricMux(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
+            return new tt::tt_metal::FabricMux(
+                node_id, device_id, servicing_device_id, cq_id, noc_selection, true, tunnel_index);
         default: TT_FATAL(false, "Unrecognized dispatch kernel type: {}.", type); return nullptr;
     }
 }

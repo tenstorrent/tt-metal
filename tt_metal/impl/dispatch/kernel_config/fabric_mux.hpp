@@ -70,10 +70,9 @@ public:
         chip_id_t servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
-        bool d2h) :
-        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection),
-        d2h_{d2h},
-        tunnel_id_{servicing_device_id_} {
+        bool d2h,
+        int tunnel_index) :
+        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection), d2h_{d2h}, tunnel_id_{tunnel_index} {
         kernel_type_ = FDKernelType::ROUTING;
     }
 
