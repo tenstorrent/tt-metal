@@ -686,6 +686,22 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
             this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
             break;
         }
+        case DebugAssertNCriscNOCLinked0TransactionTripped:
+        case DebugAssertNCriscNOCLinked1TransactionTripped:
+        case DebugAssertNCriscNOCLinked2TransactionTripped:
+        case DebugAssertNCriscNOCLinked3TransactionTripped: {
+            uint32_t cmd_buf_index = assert_status->tripped - DebugAssertNCriscNOCLinked0TransactionTripped;
+            const string error_msg = fmt::format(
+                "{}: {} detected an attempt to send a non-mcast transaction while command buffer {} is linked. "
+                "Current kernel: {}.",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which),
+                cmd_buf_index,
+                GetKernelName(core, launch_msg, assert_status->which).c_str());
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+
         case DebugAssertOK: {
             if (assert_status->line_num != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
                 assert_status->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {

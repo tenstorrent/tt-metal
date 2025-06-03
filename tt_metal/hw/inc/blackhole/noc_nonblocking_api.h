@@ -132,6 +132,26 @@ inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint3
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }
 
+#if WATCHER_ASSERT_ENABLED
+void validate_no_linked_transactions(uint32_t noc) {
+    // Submitting a non-mcast transaction if there's a linked transaction on any cmd_buf will cause a deadlock.
+    ASSERT(
+        !(NOC_CMD_BUF_READ_REG(noc, 0, NOC_CMD_CTRL) & NOC_CMD_VC_LINKED),
+        DebugAssertNCriscNOCLinked0TransactionTripped);
+    ASSERT(
+        !(NOC_CMD_BUF_READ_REG(noc, 1, NOC_CMD_CTRL) & NOC_CMD_VC_LINKED),
+        DebugAssertNCriscNOCLinked1TransactionTripped);
+    ASSERT(
+        !(NOC_CMD_BUF_READ_REG(noc, 2, NOC_CMD_CTRL) & NOC_CMD_VC_LINKED),
+        DebugAssertNCriscNOCLinked2TransactionTripped);
+    ASSERT(
+        !(NOC_CMD_BUF_READ_REG(noc, 3, NOC_CMD_CTRL) & NOC_CMD_VC_LINKED),
+        DebugAssertNCriscNOCLinked3TransactionTripped);
+}
+#else
+inline void validate_no_linked_transactions(uint32_t noc) {}
+#endif  // WATCHER_ASSERT_ENABLED
+
 inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr(uint32_t noc, uint64_t dst_noc_addr) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
@@ -149,6 +169,7 @@ inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
+    validate_no_linked_transactions(noc);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
@@ -199,6 +220,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     bool multicast_path_reserve,
     bool posted = false,
     uint32_t trid = 0) {
+    if (!mcast) {
+        validate_no_linked_transactions(noc);
+    }
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -248,6 +272,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     bool linked,
     uint32_t num_dests,
     bool multicast_path_reserve) {
+    if (!mcast) {
+        validate_no_linked_transactions(noc);
+    }
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
@@ -285,6 +312,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_exclude_region(
     uint32_t num_dests,
     bool multicast_path_reserve,
     uint32_t exclude_region) {
+    if (!mcast) {
+        validate_no_linked_transactions(noc);
+    }
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
@@ -655,6 +685,9 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t static_vc,
     bool mcast,
     bool posted = false) {
+    if (!mcast) {
+        validate_no_linked_transactions(noc);
+    }
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -704,6 +737,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     bool linked,
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
+    validate_no_linked_transactions(noc);
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate force atomics to
@@ -750,6 +784,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_ptr_update = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid) {
+    validate_no_linked_transactions(noc);
     if constexpr (noc_mode == DM_DYNAMIC_NOC && !skip_ptr_update) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }

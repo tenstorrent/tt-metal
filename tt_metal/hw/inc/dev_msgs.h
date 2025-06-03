@@ -247,7 +247,11 @@ enum debug_assert_type_t {
     DebugAssertNCriscNOCReadsFlushedTripped = 4,
     DebugAssertNCriscNOCNonpostedWritesSentTripped = 5,
     DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped = 6,
-    DebugAssertNCriscNOCPostedWritesSentTripped = 7
+    DebugAssertNCriscNOCPostedWritesSentTripped = 7,
+    DebugAssertNCriscNOCLinked0TransactionTripped = 8,
+    DebugAssertNCriscNOCLinked1TransactionTripped = 9,
+    DebugAssertNCriscNOCLinked2TransactionTripped = 10,
+    DebugAssertNCriscNOCLinked3TransactionTripped = 11,
 };
 
 // XXXX TODO(PGK): why why why do we not have this standardized
