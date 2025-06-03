@@ -11,9 +11,10 @@ import itertools
 import ttnn
 import pytest
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range_batch_norm
@@ -122,34 +123,29 @@ def run_batch_norm(
         momentum=momentum,
     )
 
-    passed = []
-    output_string = ""
-    passed_, output_string_ = check_with_pcc(torch_result, output_tensor, 0.99)
-    passed.append(passed_)
-    output_string += output_string_ + ", "
-
     if training:
         channels = input_shape[1]
         if check_mean:
             tt_updated_mean = ttnn.to_torch(mean_tensor)
             passed_, output_string_ = check_with_pcc(tt_updated_mean, mean_data.view(1, channels, 1, 1), 0.99)
-            passed.append(passed_)
-            output_string += output_string_ + ", "
+            if not passed_:
+                return [(passed_, output_string_), e2e_perf]
         if check_var:
             tt_updated_var = ttnn.to_torch(var_tensor)
             passed_, output_string_ = check_with_pcc(tt_updated_var, var_data.view(1, channels, 1, 1), 0.99)
-            passed.append(passed_)
-            output_string += output_string_ + ", "
+            if not passed_:
+                return [(passed_, output_string_), e2e_perf]
 
-    if all(passed):
-        passed = True
-    else:
-        passed = False
-
-    output_string = output_string[:-2]
-    e2e_perf = stop_measuring_time(start_time)
-
-    return [(passed, output_string), e2e_perf]
+    tensors = [input_tensor, result]
+    if mean_tensor is not None:
+        tensors.append(mean_tensor)
+    if var_tensor is not None:
+        tensors.append(var_tensor)
+    if weight_tensor is not None:
+        tensors.append(weight_tensor)
+    if bias_tensor is not None:
+        tensors.append(bias_tensor)
+    return get_run_return(torch_result, output_tensor, expected_pcc, tensors, e2e_perf)
 
 
 def run(
