@@ -19,7 +19,7 @@ std::tuple<uint32_t, bool, IDevice*> calculate_fabric_connection(
         std::find_if(begin_it, devices.cend(), [&](auto& d) { return d == mesh_device->get_device(dest_coord); }) -
         begin_it;
 
-    // sign indicates direction
+    // sign indicates direction, however fabrics' forward/backward concept is reversed
     int line_hops = dest_idx - src_idx;
 
     TT_ASSERT(line_hops != 0);
@@ -31,14 +31,14 @@ std::tuple<uint32_t, bool, IDevice*> calculate_fabric_connection(
             bool dst_is_forward = (ring_hops > 0);
             auto next_device = devices.at(src_idx + (dst_is_forward ? 1 : -1));
             TT_ASSERT(next_device != nullptr);
-            return std::make_tuple(std::abs(ring_hops), dst_is_forward, next_device);
+            return std::make_tuple(std::abs(ring_hops), !dst_is_forward, next_device);
         }
     }
 
     bool dst_is_forward = (line_hops > 0);
     auto next_device = devices.at(src_idx + (dst_is_forward ? 1 : -1));
     TT_ASSERT(next_device != nullptr);
-    return std::make_tuple(std::abs(line_hops), dst_is_forward, next_device);
+    return std::make_tuple(std::abs(line_hops), !dst_is_forward, next_device);
 }
 
 ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(
@@ -55,16 +55,16 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     // basic accounting
     const uint32_t input_num_pages = data_movement::get_num_pages(input_tensor);
     const uint32_t input_page_size_bytes = input_tensor.tensor_spec().compute_page_size_bytes();
+    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     // figure out packets
     // !TODO see what happens if page size is larger than packet size.
+    // Note: this is computed in terms of aligned page sizes
     const auto [packet_size_bytes, num_pages_per_packet, total_packets] =
-        compute_packet_dims(input_tensor.get_dtype(), input_page_size_bytes, input_num_pages);
+        compute_aligned_packet_dims(input_tensor.get_dtype(), input_page_size_bytes, input_num_pages, l1_alignment);
 
     // distribute work
-    // !TODO debug
-    // auto use_cores = mesh_device->compute_with_storage_grid_size()
-    CoreCoord use_cores = {1, 1};
+    auto use_cores = mesh_device->compute_with_storage_grid_size();
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(use_cores, total_packets);
@@ -75,7 +75,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     // CB for sender reader->writer kernels
     // Note this ID is hardcoded in the reader kernel
     constexpr auto sender_cb_id = tt::CBIndex::c_0;
-    constexpr auto cb_num_pages = 1;
+    constexpr auto cb_num_pages = 2;
 
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_sender_config =
@@ -85,8 +85,8 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     // allocate space for packet headers for payload and maybe sempahore ?
     constexpr auto packet_header_cb_id = tt::CBIndex::c_6;
-    constexpr auto buffering_factor = 2;             // ?
-    constexpr auto num_packet_headers_storable = 8;  // ?
+    constexpr auto buffering_factor = 2;  // this is in other fabric kernels
+    constexpr auto num_packet_headers_storable = 2;
     constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_header_config =
         tt::tt_metal::CircularBufferConfig(
@@ -104,22 +104,20 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
+    const std::map<std::string, std::string> reader_defines{{"ROWMAJOR", "1"}};
     // basic reader kernel set up
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig({input_is_dram}));
+        tt::tt_metal::ReaderDataMovementConfig({input_is_dram}, reader_defines));
 
     auto this_device = mesh_device->get_device(send_coord);
 
-    //! debug
-    auto [num_hops, dst_is_forward, next_device] =
+    const auto [num_hops, dst_is_forward, next_device] =
         calculate_fabric_connection(mesh_device, send_coord, receive_coord, topology);
-    dst_is_forward = !dst_is_forward;
 
     const bool output_is_dram = output_tensors.at(0).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const std::vector<uint32_t> writer_ct_args = {
         sender_cb_id, packet_cb_id, packet_header_cb_id, output_is_dram, l1_alignment};
@@ -145,7 +143,8 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         increment = std::min(increment, input_num_pages - page_idx_start);
         page_idx_end += increment;
 
-        const std::vector<uint32_t> reader_runtime_args = {input_tensor.buffer()->address(), increment, page_idx_start};
+        const std::vector<uint32_t> reader_runtime_args = {
+            input_tensor.buffer()->address(), increment, page_idx_start, input_page_size_bytes};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
         std::vector<uint32_t> writer_runtime_args = {
@@ -157,8 +156,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             packet_size_bytes,
             num_pages_per_packet,
             receiver_semaphore.address(),
-            c.x,
-            c.y,
             dst_is_forward,
         };
 

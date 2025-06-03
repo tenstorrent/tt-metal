@@ -4,10 +4,11 @@
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
+#include "dprint_pages.h"
+
 using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
 
-// !TODO maybe we set up a ring topology and alternate directions
 inline auto& connection_direction_collection(const bool dst_is_forward, FabricConnectionManager& fabric_connection) {
     if (dst_is_forward) {
         return fabric_connection.get_forward_connection();
@@ -34,16 +35,12 @@ void kernel_main() {
     const auto payload_size_bytes = get_arg_val<uint32_t>(5);
     const auto max_pages_per_packet = get_arg_val<uint32_t>(6);
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(7);
-    const auto this_core_x = get_arg_val<uint32_t>(8);
-    const auto this_core_y = get_arg_val<uint32_t>(9);
-    const bool dst_is_forward = get_arg_val<uint32_t>(10);
+    const bool dst_is_forward = get_arg_val<uint32_t>(8);
 
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
-    DPRINT << "0" << "\n";
-
     // reusing the last arg for fabric setup, therefore index overlaps.
-    size_t conn_arg_idx = 10;
+    size_t conn_arg_idx = 8;
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
 
@@ -55,10 +52,8 @@ void kernel_main() {
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     packet_header_ptr->to_chip_unicast(dst_num_hops);
 
-    InterleavedAddrGenFast<dst_is_dram> dst_buffer_addrgen{
-        .bank_base_address = receiver_base_address,
-        .page_size = payload_size_bytes,
-        .data_format = get_dataformat(sender_cb_id)};
+    InterleavedAddrGen<dst_is_dram> dst_buffer_addrgen{
+        .bank_base_address = receiver_base_address, .page_size = payload_size_bytes};
 
     // working memory to hold coalesced packet
     cb_reserve_back(packet_cb_id, 1);
@@ -71,26 +66,22 @@ void kernel_main() {
 
     fabric_connection.open_finish();
     auto& connection_direction = connection_direction_collection(dst_is_forward, fabric_connection);
-    DPRINT << "1" << "\n";
 
-    for (uint32_t page_idx = page_idx_start, packet_page_count = 0; page_idx < page_idx_end;
-         ++page_idx, ++packet_page_count) {
+    for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end;
+         ++page_idx, ++packet_page_idx) {
         cb_wait_front(sender_cb_id, 1);
-        const uint32_t src_page_ptr = get_write_ptr(sender_cb_id);
-        DPRINT << "loop page idx: " << page_idx << "\n";
+        const uint32_t src_page_ptr = get_read_ptr(sender_cb_id);
 
         // copy page to packet buffer with offset
-        const uint32_t packet_addr = packet_base_addr + packet_page_count * aligned_page_size_bytes;
-        tt_memmove<true, false, false, 0>(packet_addr, src_page_ptr, page_size_bytes);
+        const uint32_t packet_addr = packet_base_addr + packet_page_idx * aligned_page_size_bytes;
+        tt_memmove<false, false, false, 0>(packet_addr, src_page_ptr, page_size_bytes);
 
-        // !TODO async copies
+        // !TODO better use of async copies
         cb_pop_front(sender_cb_id, 1);
-        if (packet_page_count == curr_pages_per_packet || page_idx == page_idx_end - 1) {
+
+        if (packet_page_idx == curr_pages_per_packet - 1) {
             const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
-            DPRINT << "DOING FABRIC THING PACKET: " << packet_idx << " dst noc addr: " << dst_noc_addr
-                   << " receiver_base_address: " << receiver_base_address << " payload_size_bytes "
-                   << payload_size_bytes << "\n";
             packet_header_ptr->to_noc_unicast_write(
                 tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, payload_size_bytes);
 
@@ -100,15 +91,12 @@ void kernel_main() {
             connection_direction.send_payload_blocking_from_address(
                 (uint32_t)packet_header_ptr, packet_header_size_bytes);
 
-            DPRINT << "DID FABRIC THING \n";
-
             // reset counters
-            packet_page_count = 0;
+            packet_page_idx = 0;
             ++packet_idx;
-            curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx + 1);
+            curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx);
         }
     }
-    DPRINT << "3" << "\n";
 
     cb_reserve_back(packet_header_cb_id, 1);
     const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
@@ -116,18 +104,13 @@ void kernel_main() {
 
     const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);
 
-    DPRINT << "my_x " << (uint32_t)this_core_x << " my_y " << (uint32_t)this_core_y << " receive_semaphore_addr "
-           << receive_semaphore_addr << " receive_sem_noc_addr " << receive_sem_noc_addr << "\n";
     auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
     sem_header_ptr->to_chip_unicast(dst_num_hops);
     sem_header_ptr->to_noc_unicast_atomic_inc(
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{receive_sem_noc_addr, 1, 32});
 
-    DPRINT << "4" << "\n";
     connection_direction.wait_for_empty_write_slot();
     connection_direction.send_payload_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
     fabric_connection.close();
-
-    DPRINT << "DONE" << "\n";
 }
