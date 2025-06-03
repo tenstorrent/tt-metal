@@ -186,6 +186,10 @@ public:
     SystemMemoryManager& sysmem_manager() override;
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
+    void mark_profiler_as_active() override;
+    void mark_profiler_as_inactive() override;
+    bool is_profiler_active() const override;
+
     // Trace APIs
     void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
     void end_trace(const uint8_t cq_id, const uint32_t tid) override;
