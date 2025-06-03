@@ -125,8 +125,8 @@ TEST(Cluster, TestMeshFullConnectivity) {
             magic_enum::enum_names<tt::ClusterType>());
         log_info(
             LogTest,
-            "  --min-connections: target minimum number of connections between chips (default depends on system "
-            "type) ");
+            "  --min-connections: target minimum number of connections between connected chips (default depends on "
+            "system type).");
         log_info(
             LogTest,
             "  --system-topology: system topology to check (defaults to no topology check) Valid values: {}",
@@ -209,8 +209,8 @@ TEST(Cluster, TestMeshFullConnectivity) {
             if (*target_system_topology == FabricType::TORUS_2D) {
                 static constexpr std::uint32_t num_expected_chip_connections = 4;
                 EXPECT_EQ(num_connections_to_chip.size(), num_expected_chip_connections)
-                    << chip_ss.str() << " has " << num_connections_to_chip.size()
-                    << " connections to other chips, expected " << num_expected_chip_connections << " for "
+                    << chip_ss.str() << " is connected to " << num_connections_to_chip.size()
+                    << " other chips, expected " << num_expected_chip_connections << " chips for "
                     << magic_enum::enum_name(*target_system_topology) << " topology";
             }
         }
