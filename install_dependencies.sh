@@ -18,12 +18,13 @@ usage()
 }
 
 FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+ID_LIKE=`grep '^ID_LIKE=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 MAJOR=${VERSION%.*}
 ARCH=`uname -m`
 
-if [ $FLAVOR != "ubuntu" ]; then
-    echo "Error: Only Ubuntu is supported"
+if [[ "$FLAVOR" != "ubuntu" && "$ID_LIKE" != *ubuntu* ]]; then
+    echo "Error: Only Ubuntu and Ubuntu-based distributions are supported"
     exit 1
 fi
 
@@ -205,23 +206,48 @@ install_llvm() {
 }
 
 install_gcc() {
-    case "$VERSION" in
-        "22.04")
-            GCC_VER=12
+    local GCC_VER=""
+    case "$FLAVOR" in
+        linuxmint)
+            case "$VERSION" in
+                21.*)
+                    GCC_VER=12
+                    ;;
+                22.*)
+                    GCC_VER=14
+                    ;;
+                *)
+                    GCC_VER=""
+                    ;;
+            esac
             ;;
-        "24.04")
-            GCC_VER=14
+        ubuntu|kubuntu|xubuntu|lubuntu)
+            case "$VERSION" in
+                "22.04")
+                    GCC_VER=12
+                    ;;
+                "24.04")
+                    GCC_VER=14
+                    ;;
+                *)
+                    GCC_VER=""
+                    ;;
+            esac
             ;;
         *)
-            echo "Unknown or unsupported Ubuntu version: $VERSION"
-            echo "Falling back to installing default g++..."
-            apt-get install -y --no-install-recommends g++
-            echo "Using g++ version: $(g++ --version | head -n1)"
-            return
+            GCC_VER=""
             ;;
     esac
 
-    echo "Detected Ubuntu $VERSION, installing g++-$GCC_VER..."
+    if [ -z "$GCC_VER" ]; then
+        echo "Unknown or unsupported $FLAVOR version: $VERSION"
+        echo "Falling back to installing default g++..."
+        apt-get install -y --no-install-recommends g++
+        echo "Using g++ version: $(g++ --version | head -n1)"
+        return
+    fi
+
+    echo "Detected $FLAVOR $VERSION, installing g++-$GCC_VER..."
 
     apt-get install -y --no-install-recommends g++-$GCC_VER gcc-$GCC_VER
 
