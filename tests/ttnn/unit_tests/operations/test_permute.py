@@ -13,13 +13,15 @@ import itertools
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import is_blackhole, skip_for_blackhole
 
+
 def random_torch_tensor(dtype, shape):
     if dtype == ttnn.int32:
-        return torch.randint(-2**31, 2**31, shape, dtype=torch.int32)
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
     if dtype == ttnn.float32:
         return torch.rand(shape, dtype=torch.float32)
     if dtype == ttnn.bfloat16:
         return torch.rand(shape, dtype=torch.bfloat16)
+
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
