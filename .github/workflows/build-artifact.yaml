@@ -319,10 +319,20 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Determine Tracy build setting
+        run: |
+          if [ "${{ inputs.tracy }}" = "true" ]; then
+            echo "ENABLE_TRACY_BUILD=ON" >> $GITHUB_ENV
+            echo "Building with Tracy profiler enabled"
+          else
+            echo "ENABLE_TRACY_BUILD=OFF" >> $GITHUB_ENV
+            echo "Building without Tracy profiler"
+          fi
+
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
-          CIBW_ENVIRONMENT: "CIBW_ENABLE_TRACY=${{ inputs.tracy == 'true' && 'ON' || 'OFF' }}"
+          CIBW_ENVIRONMENT: "CIBW_ENABLE_TRACY=${{ env.ENABLE_TRACY_BUILD }}"
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
 
       - name: Set wheel artifact name
