@@ -1157,7 +1157,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Run-time arg assignment
     bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;
     uint32_t tile_start_id = 0;
-    // uint32_t row_start_id = 0;
 
     // Run-time args (full cores)
     // Note: For sharded input, these are the only cores used
@@ -1221,13 +1220,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
             tile_start_id,
         };
 
-        // TODO: (GR) Cleanup and fix "i"
-        uint32_t i = 0;
-        uint32_t output_num_blocks_across_width = num_output_columns;
-
         // Writer run-time args
-        uint32_t block_across_height_start_id = (i / output_num_blocks_across_width) * num_blocks_per_cliff_core;
-        uint32_t block_accross_width_start_id = i % output_num_blocks_across_width;
+        uint32_t block_across_height_start_id = full_cores.size() * num_blocks_per_full_core;
+        uint32_t block_accross_width_start_id = 0;
         std::vector<uint32_t> writer_run_time_args = {
             dst_buffer->address(),
             num_blocks_per_cliff_core,
