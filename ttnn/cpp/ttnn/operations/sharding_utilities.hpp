@@ -91,6 +91,11 @@ ShardingConfig get_specs_for_sharding_partition(
 
 namespace sharded_accessor_utils {
 
+struct CRTAConfig {
+    bool runtime_tensor_shape = false;
+    bool runtime_shard_shape = false;
+    bool runtime_bank_coords = false;
+};
 struct ShardedAccessorArgs {
     size_t rank;
     size_t num_banks;
@@ -101,9 +106,7 @@ ShardedAccessorArgs get_sharded_accessor_args(
     const distributed::MeshDevice& mesh_device,
     const BufferDistributionSpec& buffer_distribution_spec,
     const CoreType& bank_type,
-    bool runtime_tensor_shape = false,
-    bool runtime_shard_shape = false,
-    bool runtime_bank_coords = false);
+    const CRTAConfig& crta_config = CRTAConfig{});
 
 }  // namespace sharded_accessor_utils
 
