@@ -118,7 +118,7 @@ void kernel_main() {
                         out_l1_write_addr = get_write_ptr(in_cb_id);
                         // If next is last chunk, fill whole buffer with the init_value.
                         if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
-                            fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
+                            // fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
                         }
                     }
                 }
