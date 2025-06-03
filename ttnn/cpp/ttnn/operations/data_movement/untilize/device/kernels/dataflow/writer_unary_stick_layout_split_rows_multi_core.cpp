@@ -10,7 +10,8 @@ void kernel_main() {
     // run-time args
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_blocks = get_arg_val<uint32_t>(1);
-    const uint32_t block_across_height_start_id = get_arg_val<uint32_t>(2);
+    const uint32_t block_across_height_start_id = get_arg_val<uint32_t>(2);  // wrt input
+    const uint32_t block_across_width_start_id = get_arg_val<uint32_t>(3);   // wrt input
 
     // compile-time args
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
@@ -20,11 +21,12 @@ void kernel_main() {
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(4);
     constexpr uint32_t tile_height = get_compile_time_arg_val(5);
     constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(6);  // TODO: run-time to handle uneven shard
-    constexpr uint32_t num_output_columns = get_compile_time_arg_val(7);
+    constexpr uint32_t output_element_size = get_compile_time_arg_val(7);
 
-    constexpr uint32_t num_columns_of_blocks = get_compile_time_arg_val(8);
-    constexpr uint32_t num_blocks_per_column_row = get_compile_time_arg_val(9);
-    constexpr uint32_t single_block_width_size = get_compile_time_arg_val(10);
+    constexpr uint32_t input_num_cols_per_block = get_compile_time_arg_val(8);
+    constexpr uint32_t output_num_cols_per_block = get_compile_time_arg_val(9);
+
+    constexpr uint32_t output_num_blocks_across_width = get_compile_time_arg_val(10);
 
 #ifdef SHARDED
     using tensor_shard_info = ShardedInfo<
@@ -37,7 +39,7 @@ void kernel_main() {
         get_compile_time_arg_val(17)>;  // pages_per_shard_y
 
     const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(1));
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(4));
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 #else
     const auto s = get_interleaved_addr_gen<dst_is_dram, stick_size_is_power_of_two>(
@@ -49,18 +51,38 @@ void kernel_main() {
 
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         for (uint32_t j = 0; j < tile_height; ++j) {
-            uint32_t num_complete_rows_already_processed =
-                (block_across_height_id * tile_height + j) * num_output_columns;
+            uint32_t num_complete_rows_already_processed = block_across_height_id * tile_height + j;
 
             // The input row may need to be broken up into different output columns.
             // And/or we may be writing to the middle of a page.
-            for (/*each output column we need to write to*/) {
-                uint32_t page_id;
-                uint32_t offset_within_page_in_bytes;
-                uint32_t num_bytes_to_write;
+            uint32_t num_cols_processed = 0;
+            while (num_cols_processed < input_num_cols_per_block) {
+                // global column id at the start of the row we're going to read/write
+                uint32_t current_global_col_id =
+                    block_across_width_start_id * input_num_cols_per_block + num_cols_processed;
 
-                uint64_t dst_noc_addr = get_noc_addr(page_id, s, offset_within_page_in_bytes);
+                // page_id to write to
+                uint32_t output_page_id_within_row =
+                    current_global_col_id / output_num_cols_per_block;  // integer division -> round down
+                uint32_t output_page_id =
+                    num_complete_rows_already_processed * output_num_blocks_across_width + output_page_id_within_row;
+
+                // offset within page we're writing to
+                uint32_t cols_already_processed_in_output_block = current_global_col_id % output_num_cols_per_block;
+                uint32_t output_offset_within_page_in_bytes =
+                    cols_already_processed_in_output_block * output_element_size;
+
+                // how much to write
+                uint32_t num_cols_to_write =
+                    std::min(input_num_cols_per_block - num_cols_processed, output_num_cols_per_block);
+                uint32_t num_bytes_to_write = num_cols_to_write * output_element_size;
+
+                // do the write
+                uint64_t dst_noc_addr = get_noc_addr(output_page_id, s, output_offset_within_page_in_bytes);
                 noc_async_write(l1_read_addr, dst_noc_addr, num_bytes_to_write);
+
+                // update number of columns processed and move the read ptr
+                num_cols_processed += num_cols_to_write;
                 l1_read_addr += num_bytes_to_write;
             }
         }
