@@ -468,8 +468,10 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
         tt::stl::overloaded{
             [](const HostStorage& storage) { return storage.buffer; },
             [](const MultiDeviceHostStorage& storage) {
-                TT_FATAL(storage.num_buffers() == 1, "Can't get a single buffer from multi device host storage");
-                return storage.get_buffer(0);
+                TT_FATAL(
+                    storage.distributed_buffer().shape().mesh_size() == 1,
+                    "Can't get a single buffer from multi device host storage");
+                return *storage.get_shard_at_origin();
             },
             [&tt_tensor](auto&&) -> HostBuffer {
                 TT_THROW(
