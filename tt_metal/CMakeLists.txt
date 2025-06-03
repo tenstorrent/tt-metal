@@ -312,7 +312,7 @@ target_link_libraries(
     PUBLIC
         umd::device
         magic_enum::magic_enum
-        fmt::fmt-header-only
+        fmt::fmt
         span
         small_vector
         TracyClient

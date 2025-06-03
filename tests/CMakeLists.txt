@@ -9,7 +9,7 @@ target_link_libraries(
         gmock_main
         nlohmann_json::nlohmann_json
         magic_enum::magic_enum
-        fmt::fmt-header-only
+        fmt::fmt
         span
         small_vector
         Boost::algorithm
