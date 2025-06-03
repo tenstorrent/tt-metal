@@ -339,31 +339,38 @@ void DevicePool::initialize_active_devices() const {
         return;
     }
 
-    for (auto dev : active_devices) {
-        // For Galaxy init, we only need to loop over mmio devices
-        const auto& mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
-        if (mmio_device_id != dev->id()) {
-            continue;
-        }
+    auto iterate_required_active_devices = [&](const std::function<void(IDevice * device)>&& func) {
+        for (auto dev : active_devices) {
+            const auto& mmio_device_id =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
+            if (mmio_device_id != dev->id()) {
+                return;
+            }
 
-        auto tunnels_from_mmio =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-        populate_cq_static_args(dev);
-        dev->init_command_queue_device();
-        if (not this->skip_remote_devices) {
-            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+            auto tunnels_from_mmio =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(dev->id());
+
+            std::forward<const std::function<void(IDevice*)>>(func)(dev);
+
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); ++t) {
                 // Need to create devices from farthest to the closest.
-                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; --ts) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto device = get_device(mmio_controlled_device_id);
-                    populate_cq_static_args(device);
-                    device->init_command_queue_device();
+
+                    if (!this->skip_remote_devices) {
+                        std::forward<const std::function<void(IDevice*)>>(func)(device);
+                    }
                 }
             }
         }
-    }
-    _inst->dispatch_firmware_active_ = true;
+    };
+
+    // 1. Generate static args
+    iterate_required_active_devices([](IDevice* remote_device) { populate_cq_static_args(remote_device); });
+
+    // 2. Init / compile programs
+    iterate_required_active_devices([](IDevice* remote_device) { remote_device->init_command_queue_device(); });
 }
 
 void DevicePool::activate_device(chip_id_t id) {
