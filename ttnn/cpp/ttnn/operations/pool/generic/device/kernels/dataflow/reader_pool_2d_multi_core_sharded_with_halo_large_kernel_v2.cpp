@@ -67,15 +67,15 @@ void kernel_main() {
     if constexpr (reader_id == 0) {
         constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
         // fill interm buffer with init_value
-        fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, bf16_init_value);
+        fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, bf16_init_value, true);
         if constexpr (one_scalar_per_core) {
             cb_reserve_back(in_scalar_cb_id_0, 1);
-            fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
+            fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16, true);
             cb_push_back(in_scalar_cb_id_0, 1);
         }
         if (bf16_scalar != bf16_one_u32 || !one_scalar_per_core) {
             // Pool operation is not maxpool
-            fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
+            fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16, true);
         }
     }
 
@@ -147,7 +147,7 @@ void kernel_main() {
                         out_l1_write_addr = get_write_ptr(in_cb_id);
                         // If next is last chunk, fill whole buffer with the init_value.
                         if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
-                            fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
+                            fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value, true);
                         }
                     }
                 }
