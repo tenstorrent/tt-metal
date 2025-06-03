@@ -11,6 +11,7 @@
 #include "ckernel_globals.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_abs.h"
+#include "sfpu/ckernel_sfpu_activations.h"
 #include "sfpu/ckernel_sfpu_add_int32.h"
 #include "sfpu/ckernel_sfpu_binary.h"
 #include "sfpu/ckernel_sfpu_binary_bitwise.h"
