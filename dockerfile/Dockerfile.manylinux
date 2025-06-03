@@ -13,6 +13,8 @@ RUN dnf update -y && \
     automake \
     bison \
     ca-certificates \
+    capstone \
+    capstone-devel \
     clang \
     cmake3 \
     expat-devel \
@@ -35,6 +37,7 @@ RUN dnf update -y && \
     pkgconf-pkg-config \
     pmix-devel \
     python3 \
+    tbb-devel \
     texinfo \
     wget \
     zlib-devel \
