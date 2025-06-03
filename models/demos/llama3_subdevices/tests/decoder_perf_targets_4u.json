@@ -103,7 +103,7 @@
         "kernel_duration": 9801.145,
         "op_to_op": 966.0,
         "first_to_last_start": 1843.22,
-        "non-overlapped-dispatch-time": 7932.2,
+        "non-overlapped-dispatch-time": 6101.6,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.4,
         "first_to_last_start_relative_margin": 0.2,
