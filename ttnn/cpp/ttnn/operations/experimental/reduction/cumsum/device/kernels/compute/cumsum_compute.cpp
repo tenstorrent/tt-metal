@@ -30,7 +30,6 @@ void MAIN {
     constexpr uint32_t first_tile = 0;
 
     unary_op_init_common(cb_in, cb_out);
-    PACK(DPRINT << "[Cumsum Pack] start" << ENDL());
 
     // [UNPACK]: Acquire lock on cb_zero
     // cb_zero is only written once per execution: we can (and should) keep the lock
@@ -57,13 +56,10 @@ void MAIN {
         for (unsigned j = 0; j < tiles_per_row; j++) {
             // [UNPACK]: Input => TILE_DEST
             cb_wait_front(cb_in, 1);
-            // copy_tile_to_dst_init_short(cb_in);
-            // copy_tile(cb_in, first_tile, TILE_DEST);
 
             // [UNPACK]: Accumulator (db_intermed) => TILE_ACC
             cb_wait_front(cb_intermed, 1);
-            // copy_tile_to_dst_init_short(cb_intermed);
-            // copy_tile(cb_intermed, first_tile, TILE_ACC);
+
 #ifdef CUMSUM_USE_INT32
             copy_tile_to_dst_init_short(cb_in);
             copy_tile(cb_in, first_tile, TILE_DEST);
@@ -72,7 +68,6 @@ void MAIN {
             copy_tile(cb_intermed, first_tile, TILE_ACC);
 #endif  // CUMSUM_USE_INT32
 
-            // MATH
             tile_regs_acquire();  // acquire 8 tile registers
 
 #ifndef CUMSUM_USE_INT32
@@ -83,7 +78,6 @@ void MAIN {
             add_int32_tile(TILE_DEST, TILE_ACC);
 #endif  // CUMSUM_USE_INT32
 
-            // MATH(dprint_tensix_dest_reg(TILE_DEST));
             tile_regs_commit();
 
             cb_pop_front(cb_in, 1);
@@ -113,8 +107,6 @@ void MAIN {
     }
 
     cb_pop_front(cb_zero, 1);  // end of kernel: release lock on cb_zero
-
-    PACK(DPRINT << "[Cumsum Pack] end" << ENDL());
 }
 
 }  // namespace NAMESPACE
