@@ -4,6 +4,9 @@
 
 #include "llama_reduce_scatter_pybind.hpp"
 
+#include <cstdint>
+#include <optional>
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -12,8 +15,6 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 
-
-namespace py = pybind11;
 
 namespace ttnn::operations::experimental::ccl {
 

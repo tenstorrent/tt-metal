@@ -14,8 +14,7 @@ using namespace tt::tt_metal;
 
 namespace py = pybind11;
 
-namespace ttnn {
-namespace cluster {
+namespace ttnn::cluster {
 
 void py_cluster_module(py::module& module) {
     module.def(
@@ -26,5 +25,4 @@ void py_cluster_module(py::module& module) {
              )doc");
 }
 
-}  // namespace cluster
-}  // namespace ttnn
+}  // namespace ttnn::cluster

@@ -1,36 +1,45 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "pytensor.hpp"
+
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <vector>
+
+#include <fmt/format.h>
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <chrono>
-#include <memory>
-
-#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
-#include <tt-metalium/host_buffer.hpp>
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/graph_tracking.hpp>
-#include <tt_stl/overloaded.hpp>
-#include <tt_stl/span.hpp>
+#include "tools/profiler/op_profiler.hpp"
+#include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include "tools/profiler/op_profiler.hpp"
-
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/types.hpp"
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt_stl/overloaded.hpp>
+#include <tt_stl/span.hpp>
 
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
-
-namespace py = pybind11;
 
 namespace ttnn::tensor {
 

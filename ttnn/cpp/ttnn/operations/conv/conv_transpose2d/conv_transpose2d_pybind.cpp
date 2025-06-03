@@ -2,17 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn-pybind/decorators.hpp"
-
 #include "conv_transpose2d_pybind.hpp"
+
+#include <array>
+#include <cstdint>
+#include <optional>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
 #include "conv_transpose2d.hpp"
 #include "prepare_conv_transpose2d_weights.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
-namespace py = pybind11;
-
-namespace ttnn {
-namespace operations::conv {
-namespace conv_transpose2d {
+namespace ttnn::operations::conv::conv_transpose2d {
 
 void py_bind_conv_transpose2d(py::module& module) {
     bind_registered_operation(
@@ -309,6 +312,4 @@ void py_bind_conv_transpose2d(py::module& module) {
         py::arg("compute_config") = std::nullopt);
 }
 
-}  // namespace conv_transpose2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv_transpose2d
