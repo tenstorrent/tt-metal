@@ -109,8 +109,8 @@ TEST_P(AccessorBenchmarks, Generic) {
             input_sharded_accessor_args.num_banks};
         input_compile_time_args.insert(
             input_compile_time_args.end(),
-            input_sharded_accessor_args.shapes_and_bank_coords.cbegin(),
-            input_sharded_accessor_args.shapes_and_bank_coords.cend());
+            input_sharded_accessor_args.compile_time_args.cbegin(),
+            input_sharded_accessor_args.compile_time_args.cend());
 
         // Create reader kernel
         KernelHandle reader_kernel_id = CreateKernel(

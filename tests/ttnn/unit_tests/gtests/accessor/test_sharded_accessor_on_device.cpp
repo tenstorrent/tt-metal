@@ -176,8 +176,8 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             input_sharded_accessor_args.rank, input_sharded_accessor_args.num_banks};
         input_compile_time_args.insert(
             input_compile_time_args.end(),
-            input_sharded_accessor_args.shapes_and_bank_coords.cbegin(),
-            input_sharded_accessor_args.shapes_and_bank_coords.cend());
+            input_sharded_accessor_args.compile_time_args.cbegin(),
+            input_sharded_accessor_args.compile_time_args.cend());
         input_compile_time_args.push_back(cb_in0_idx);
         input_compile_time_args.push_back(aligned_page_size);
 
@@ -190,8 +190,8 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             output_sharded_accessor_args.rank, output_sharded_accessor_args.num_banks};
         output_compile_time_args.insert(
             output_compile_time_args.end(),
-            output_sharded_accessor_args.shapes_and_bank_coords.cbegin(),
-            output_sharded_accessor_args.shapes_and_bank_coords.cend());
+            output_sharded_accessor_args.compile_time_args.cbegin(),
+            output_sharded_accessor_args.compile_time_args.cend());
         output_compile_time_args.push_back(cb_in0_idx);
         output_compile_time_args.push_back(aligned_page_size);
 
@@ -225,6 +225,201 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
         std::vector<uint32_t> output_runtime_args = {
             output_bank_base_address,
         };
+        SetRuntimeArgs(program, writer_kernel_id, grid, output_runtime_args);
+
+        // Launch program
+        auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
+        AddProgramToMeshWorkload(
+            mesh_work_load, std::move(program), (tt::tt_metal::distributed::MeshCoordinateRange)mesh_coordinate);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
+
+        // Wait for program to finish
+        tt::log_info("Program launched!");
+        Finish(mesh_device_->mesh_command_queue());
+        tt::log_info("Program finished!");
+    }
+
+    // Initialize dst vector
+    std::vector<uint8_t> dst(host_size_in_bytes / sizeof(uint8_t), 0);
+
+    // Validate output buffer matches src vector
+    {
+        tt::log_info("Validating output buffer matches src vector");
+        std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
+            .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
+            .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
+        }};
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            shard_data_transfer, output_mesh_buffer, /*blocking=*/false);
+        Finish(mesh_device_->mesh_command_queue());
+
+        // Validate read results are correct
+        EXPECT_EQ(src, dst);
+    }
+
+    // Validate input buffer matches src vector (ie. unmodified after kernel read/writes)
+    {
+        tt::log_info("Validating input buffer matches src vector (as a sanity check)");
+        std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
+            .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
+            .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
+        }};
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            shard_data_transfer, input_mesh_buffer, /*blocking=*/false);
+        Finish(mesh_device_->mesh_command_queue());
+
+        // Validate read results are correct
+        EXPECT_EQ(src, dst);
+    }
+}
+
+TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshardRuntimeTensorRuntimeShardShape) {
+    const auto& params = GetParam();
+
+    // Create input and output replicated mesh buffers across generic mesh device; tests will only use first device
+    const auto [input_mesh_buffer, output_mesh_buffer] =
+        create_replicated_input_and_output_mesh_buffers_from_inputs(params, mesh_device_.get());
+
+    // Extract local single-device buffer (ie. shard_view) concepts for testing
+    const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
+    const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
+    const auto output_shard_view = output_mesh_buffer->get_device_buffer(mesh_coordinate);
+    const auto local_device = input_shard_view->device();
+
+    const auto host_size_in_bytes = input_mesh_buffer->device_local_size();
+    ASSERT_EQ(host_size_in_bytes, output_mesh_buffer->device_local_size());
+
+    const auto input_bank_base_address = input_mesh_buffer->address();
+    const auto output_bank_base_address = output_mesh_buffer->address();
+    ASSERT_NE(input_bank_base_address, output_bank_base_address);
+
+    // Input and output buffers may not have the same aligned size per bank
+    // Initialize input local device buffers to 0
+    {
+        std::vector<uint32_t> zeros_vector(input_shard_view->aligned_size_per_bank() / sizeof(uint32_t), 0);
+        for (const auto& core : corerange_to_cores(params.input_shard_spec.grid)) {
+            tt::tt_metal::detail::WriteToDeviceL1(
+                local_device, core, input_bank_base_address, zeros_vector, input_shard_view->core_type());
+        }
+    }
+
+    // Initialize output local device buffers to 0
+    {
+        std::vector<uint32_t> zeros_vector(output_shard_view->aligned_size_per_bank() / sizeof(uint32_t), 0);
+        for (const auto& core : corerange_to_cores(params.output_shard_spec.grid)) {
+            tt::tt_metal::detail::WriteToDeviceL1(
+                local_device, core, output_bank_base_address, zeros_vector, output_shard_view->core_type());
+        }
+    }
+
+    // Create src vector
+    const auto src =
+        tt::test_utils::generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, host_size_in_bytes / sizeof(uint8_t));
+
+    {
+        tt::log_info("Writing input buffer to device");
+        std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
+            .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
+            .host_data = const_cast<void*>(reinterpret_cast<const void*>(src.data())),
+        }};
+        mesh_device_->mesh_command_queue().enqueue_write_shards(
+            input_mesh_buffer, shard_data_transfer, /*blocking=*/false);
+        Finish(mesh_device_->mesh_command_queue());
+    }
+
+    /* CREATE AND LAUNCH PROGRAM ON DEVICE
+     * - This program uses reader and writer kernel to copy input buffer to output buffer using sharded accessors.
+     * - Inside the reader and writer kernels, loop through total volume (in pages) of the tensor to complete the copy.
+     * - This is essentially a single-core reshard OP.
+     * - TODO: One major restriction is that page size must be the same for both input and output buffers.
+     *   - For tile layout, can use UNPACK / PACK to convert between different data formats and page sizes.
+     *   - For row major layout, need to handle shard shapes with different widths (ie. last dim) properly
+     */
+    {
+        tt::log_info("Creating single-core reshard program");
+        auto program = CreateProgram();
+
+        constexpr CoreCoord grid = {0, 0};
+        const auto data_format = params.data_format;
+
+        // Setup circular buffer for reading and writing to buffers
+        // TODO: Expose aligned page size to mesh buffer?
+        TT_FATAL(
+            input_shard_view->aligned_page_size() == output_shard_view->aligned_page_size(),
+            "Input and output mesh buffers must have the same aligned page size!");
+        const auto aligned_page_size = input_shard_view->aligned_page_size();
+        constexpr auto num_tiles = 2;  // Double buffered for perf, but it doesn't really matter for this test
+        CBHandle cb_in0_idx = tt::CBIndex::c_0;
+        auto c_in0_config = CircularBufferConfig(aligned_page_size * num_tiles, {{cb_in0_idx, data_format}})
+                                .set_page_size(cb_in0_idx, aligned_page_size);
+        auto cb_in0_id = CreateCircularBuffer(program, grid, c_in0_config);
+
+        // Set up compile-time args for reader kernel
+        const auto& input_buffer_distribution_spec =
+            std::get<BufferDistributionSpec>(input_mesh_buffer->device_local_config().shard_parameters.value());
+        const auto input_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), true, true, false);
+        std::vector<uint32_t> input_compile_time_args = {
+            input_sharded_accessor_args.rank, input_sharded_accessor_args.num_banks};
+        input_compile_time_args.insert(
+            input_compile_time_args.end(),
+            input_sharded_accessor_args.compile_time_args.cbegin(),
+            input_sharded_accessor_args.compile_time_args.cend());
+        input_compile_time_args.push_back(cb_in0_idx);
+        input_compile_time_args.push_back(aligned_page_size);
+
+        // Set up compile-time args for writer kernel
+        const auto& output_buffer_distribution_spec =
+            std::get<BufferDistributionSpec>(output_mesh_buffer->device_local_config().shard_parameters.value());
+        const auto output_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+            *mesh_device_, output_buffer_distribution_spec, output_shard_view->core_type(), true, true, false);
+        std::vector<uint32_t> output_compile_time_args = {
+            output_sharded_accessor_args.rank, output_sharded_accessor_args.num_banks};
+        output_compile_time_args.insert(
+            output_compile_time_args.end(),
+            output_sharded_accessor_args.compile_time_args.cbegin(),
+            output_sharded_accessor_args.compile_time_args.cend());
+        output_compile_time_args.push_back(cb_in0_idx);
+        output_compile_time_args.push_back(aligned_page_size);
+
+        // Create reader kernel
+        KernelHandle reader_kernel_id = CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/accessor/kernels/reader_reshard_tensor_shard_shape_runtime.cpp",
+            grid,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = input_compile_time_args});
+
+        // Create writer kernel
+        KernelHandle writer_kernel_id = CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/accessor/kernels/writer_reshard_tensor_shard_shape_runtime.cpp",
+            grid,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = output_compile_time_args});
+
+        // Set up runtime args for reader kernel
+        std::vector<uint32_t> input_runtime_args = {
+            input_bank_base_address,
+        };
+        input_runtime_args.insert(
+            input_runtime_args.end(),
+            input_sharded_accessor_args.runtime_args.cbegin(),
+            input_sharded_accessor_args.runtime_args.cend());
+        SetRuntimeArgs(program, reader_kernel_id, grid, input_runtime_args);
+
+        // Set up runtime args for writer kernel
+        std::vector<uint32_t> output_runtime_args = {
+            output_bank_base_address,
+        };
+        output_runtime_args.insert(
+            output_runtime_args.end(),
+            output_sharded_accessor_args.runtime_args.cbegin(),
+            output_sharded_accessor_args.runtime_args.cend());
         SetRuntimeArgs(program, writer_kernel_id, grid, output_runtime_args);
 
         // Launch program
