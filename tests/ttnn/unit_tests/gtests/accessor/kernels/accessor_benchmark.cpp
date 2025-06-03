@@ -12,11 +12,29 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t rank = get_compile_time_arg_val(2);
     constexpr uint32_t num_banks = get_compile_time_arg_val(3);
-    constexpr uint32_t base_idx = 4;
+    constexpr uint32_t base_idx_cta = 4;
 
-    using input_dspec = distribution_spec_t<base_idx, rank, num_banks>;
+    using input_dspec_cta = distribution_spec_t<base_idx_cta, rank, num_banks>;
+    // runtime tensor shape, runtime shard shape, and static bank coords
+    constexpr uint32_t base_idx_cta_DDS = base_idx_cta + compile_time_args_skip<input_dspec_cta>;
+    constexpr uint32_t base_idx_rta_DDS = 0;
+    using input_dspec_crta_DDS = distribution_spec_t<base_idx_cta_DDS, rank, num_banks, true, true, false>;
 
-    auto sharded_accessor = ShardedAccessor<input_dspec, page_size>(bank_base_address);
+    constexpr uint32_t base_idx_cta_SSD = base_idx_cta_DDS + compile_time_args_skip<input_dspec_crta_DDS>;
+    constexpr uint32_t base_idx_rta_SSD = base_idx_rta_DDS + runtime_args_skip<input_dspec_crta_DDS>;
+    using input_dspec_crta_SSD = distribution_spec_t<base_idx_cta_SSD, rank, num_banks, false, false, true>;
+
+    constexpr uint32_t base_idx_cta_DDD = base_idx_cta_SSD + compile_time_args_skip<input_dspec_crta_SSD>;
+    constexpr uint32_t base_idx_rta_DDD = base_idx_rta_SSD + runtime_args_skip<input_dspec_crta_SSD>;
+    using input_dspec_crta_DDD = distribution_spec_t<base_idx_cta_DDD, rank, num_banks, true, true, true>;
+
+    auto sharded_accessor_cta = ShardedAccessor<input_dspec_cta, page_size>(bank_base_address);
+    auto sharded_accessor_crta_DDS =
+        ShardedAccessor<input_dspec_crta_DDS, page_size, base_idx_rta_DDS>(bank_base_address);
+    auto sharded_accessor_crta_SSD =
+        ShardedAccessor<input_dspec_crta_SSD, page_size, base_idx_rta_SSD>(bank_base_address);
+    auto sharded_accessor_crta_DDD =
+        ShardedAccessor<input_dspec_crta_DDD, page_size, base_idx_rta_DDD>(bank_base_address);
 
     auto interleaved_accessor = InterleavedAddrGenFast</*DRAM=*/false>{
         .bank_base_address = bank_base_address, .page_size = page_size, .data_format = data_format};
@@ -34,11 +52,35 @@ void kernel_main() {
      */
     constexpr size_t loop_count = 30;
     for (size_t i = 0; i < loop_count; ++i) {
-        auto page_id = i % sharded_accessor.get_dspec().get_tensor_volume();
+        auto page_id = i % sharded_accessor_cta.get_dspec().get_tensor_volume();
         {
-            DeviceZoneScopedN("SHARDED_ACCESSOR");
-            volatile auto _ = sharded_accessor.get_noc_addr(i);
+            DeviceZoneScopedN("SHARDED_ACCESSOR_CTA");
+            volatile auto _ = sharded_accessor_cta.get_noc_addr(i);
         }
+    }
+    for (size_t i = 0; i < loop_count; ++i) {
+        auto page_id = i % sharded_accessor_cta.get_dspec().get_tensor_volume();
+        {
+            DeviceZoneScopedN("SHARDED_ACCESSOR_CRTA_DDS");
+            volatile auto _ = sharded_accessor_crta_DDS.get_noc_addr(i);
+        }
+    }
+    for (size_t i = 0; i < loop_count; ++i) {
+        auto page_id = i % sharded_accessor_cta.get_dspec().get_tensor_volume();
+        {
+            DeviceZoneScopedN("SHARDED_ACCESSOR_CRTA_SSD");
+            volatile auto _ = sharded_accessor_crta_SSD.get_noc_addr(i);
+        }
+    }
+    for (size_t i = 0; i < loop_count; ++i) {
+        auto page_id = i % sharded_accessor_cta.get_dspec().get_tensor_volume();
+        {
+            DeviceZoneScopedN("SHARDED_ACCESSOR_CRTA_DDD");
+            volatile auto _ = sharded_accessor_crta_DDD.get_noc_addr(i);
+        }
+    }
+    for (size_t i = 0; i < loop_count; ++i) {
+        auto page_id = i % sharded_accessor_cta.get_dspec().get_tensor_volume();
         {
             DeviceZoneScopedN("INTERLEAVED_ACCESSOR");
             volatile auto _ = interleaved_accessor.get_noc_addr(i);
