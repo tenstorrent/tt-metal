@@ -26,7 +26,7 @@ def test_vit_device_ops(
 ):
     torch.manual_seed(0)
 
-    test_infra = create_test_infra(device, batch_size)
+    test_infra = create_test_infra(device, batch_size, use_random_input_tensor=True)
 
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)

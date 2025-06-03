@@ -21,6 +21,7 @@ class VitTestInfra:
         inputs_mesh_mapper=None,
         weights_mesh_mapper=None,
         output_mesh_composer=None,
+        use_random_input_tensor=False,
     ):
         super().__init__()
         torch.manual_seed(0)
@@ -64,9 +65,12 @@ class VitTestInfra:
             torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-        ## IMAGENET INFERENCE
-        data_loader = get_data_loader("ImageNet_data", batch_size, 2)
-        self.torch_pixel_values, labels = get_batch(data_loader, image_processor)
+        if use_random_input_tensor == False:
+            ## IMAGENET INFERENCE
+            data_loader = get_data_loader("ImageNet_data", batch_size, 2)
+            self.torch_pixel_values, labels = get_batch(data_loader, image_processor)
+        else:
+            self.torch_pixel_values = torch.randn(batch_size, 3, sequence_size, sequence_size, dtype=torch.bfloat16)
 
     def setup_l1_sharded_input(self, device, torch_pixel_values, mesh_mapper=None, mesh_composer=None):
         torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
@@ -132,6 +136,7 @@ def create_test_infra(
     inputs_mesh_mapper=None,
     weights_mesh_mapper=None,
     output_mesh_composer=None,
+    use_random_input_tensor=False,
 ):
     return VitTestInfra(
         device,
@@ -139,4 +144,5 @@ def create_test_infra(
         inputs_mesh_mapper,
         weights_mesh_mapper,
         output_mesh_composer,
+        use_random_input_tensor,
     )

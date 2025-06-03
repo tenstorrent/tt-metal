@@ -12,6 +12,9 @@ import ttnn
 
 def update_model_config(config, batch_size):
     wh_core_grid_y = 8
+
+    # In case of < 6 cores per batch, we need to do move in attention to remove defragmentation
+    should_reallocate_in_attention = False
     if batch_size <= wh_core_grid_y:
         grid_y = batch_size
         grid_x = 6  ## it can be 4 or 3, for higher core utilization but less latency
@@ -20,6 +23,7 @@ def update_model_config(config, batch_size):
         batch_per_y_core = batch_size // wh_core_grid_y
         batch_size = grid_y * batch_per_y_core
         grid_x = 4
+        should_reallocate_in_attention = True
     core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
 
@@ -150,7 +154,13 @@ def update_model_config(config, batch_size):
     }
 
     return DotAccessDict(
-        dict(**config.to_dict(), core_grid=core_grid, core_grid_8x8=core_grid_8x8, program_configs=program_configs)
+        dict(
+            **config.to_dict(),
+            core_grid=core_grid,
+            core_grid_8x8=core_grid_8x8,
+            should_reallocate_in_attention=should_reallocate_in_attention,
+            program_configs=program_configs,
+        )
     )
 
 
@@ -251,6 +261,8 @@ def vit_attention(
     )
     ttnn.deallocate(query_key_value)
     ttnn.deallocate(hidden_states)
+    if config.should_reallocate_in_attention:
+        value = ttnn.reallocate(value)
 
     attention_scores = ttnn.matmul(
         query,
@@ -297,6 +309,7 @@ def vit_attention(
 
     # reshard back to 64 cores
     # cant use reshard as it's not working here, so use s2i followed by i2s
+    # workaround for issue #22640, once fixed first call can be removed
     context_layer = ttnn.to_memory_config(context_layer, ttnn.DRAM_MEMORY_CONFIG)
     context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cores)
 
@@ -309,6 +322,8 @@ def vit_attention(
         program_config=config.program_configs["self_output_matmul_program_config"],
     )
     ttnn.deallocate(context_layer)
+    if config.should_reallocate_in_attention:
+        self_output = ttnn.reallocate(self_output)
 
     return self_output
 
