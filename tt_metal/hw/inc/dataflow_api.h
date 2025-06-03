@@ -466,6 +466,7 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 FORCE_INLINE
 void noc_async_read_one_packet(
     std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
+    validate_no_linked_transactions(noc);
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -585,6 +586,7 @@ void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32
 template <bool inc_num_issued = true>
 FORCE_INLINE void noc_async_read_one_packet_with_state(
     std::uint32_t src_noc_addr, std::uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
+    validate_no_linked_transactions(noc);
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -655,6 +657,7 @@ void noc_async_read_set_state(std::uint64_t src_noc_addr, uint8_t noc = noc_inde
 template <bool inc_num_issued = true>
 FORCE_INLINE void noc_async_read_with_state(
     std::uint32_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
+    validate_no_linked_transactions(noc);
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -727,6 +730,7 @@ void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t n
 FORCE_INLINE
 void noc_async_write_one_packet(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
+    validate_no_linked_transactions(noc);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_,dst_noc_addr,size,NOC_UNICAST_WRITE_VC);
 
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -844,6 +848,7 @@ FORCE_INLINE void noc_async_write_one_packet_set_state(
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
     std::uint32_t src_local_l1_addr, std::uint32_t dst_noc_addr, uint8_t noc = noc_index) {
+    validate_no_linked_transactions(noc);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
 
     if constexpr (non_posted) {
@@ -894,6 +899,7 @@ FORCE_INLINE void noc_async_read_tile(
     std::uint32_t dst_local_l1_addr,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
+    validate_no_linked_transactions(noc);
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -1013,6 +1019,7 @@ FORCE_INLINE void noc_async_read_partial_page(
     const uint32_t size,
     const uint32_t offset,
     uint8_t noc = noc_index) {
+    validate_no_linked_transactions(noc);
     // Note: This is not used anywhere in tt-metal
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
@@ -1050,6 +1057,7 @@ FORCE_INLINE void noc_async_write_page(
     const uint32_t write_size_bytes,
     const uint32_t offset = 0,
     uint8_t noc = noc_index) {
+    validate_no_linked_transactions(noc);
     // Note: This is not used anywhere in tt-metal
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -1695,6 +1703,7 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
     // only either hi or lo address should be getting updated
     static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
+    validate_no_linked_transactions(noc);
 
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (update_counter) {
@@ -1813,6 +1822,7 @@ FORCE_INLINE uint32_t noc_async_read_tile_dram_sharded_set_state(
 FORCE_INLINE
 void noc_async_read_tile_dram_sharded_with_state(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
+    validate_no_linked_transactions(noc);
     RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
 
     uint32_t src_addr_;
@@ -1896,6 +1906,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     std::uint32_t trid,
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index) {
+    validate_no_linked_transactions(noc);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (update_counter) {
             if constexpr (posted) {
@@ -1939,6 +1950,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index,
     uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    validate_no_linked_transactions(noc);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (update_counter) {
             if constexpr (posted) {

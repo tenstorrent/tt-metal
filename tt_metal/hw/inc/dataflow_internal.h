@@ -32,6 +32,7 @@ void noc_fast_read_set_len(uint32_t len_bytes) {
 
 FORCE_INLINE
 void noc_fast_read(uint32_t src_addr, uint32_t dest_addr) {
+    validate_no_linked_transactions(noc);
     WAYPOINT("NFRW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(
         noc_index,
@@ -85,6 +86,7 @@ void noc_fast_write_set_len(uint32_t len_bytes) {
 // a fast write that assumes a single-dest (ie unicast)
 FORCE_INLINE
 void noc_fast_write(uint32_t src_addr, uint64_t dest_addr) {
+    validate_no_linked_transactions(noc);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
         noc_index,
         dest_addr | (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE) << 32,
