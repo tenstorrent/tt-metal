@@ -8,6 +8,7 @@
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/buffer.hpp"
+#include <cstdint>
 #include <vector>
 #include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/hal.hpp>
@@ -17,68 +18,186 @@ namespace ttnn::operations::pool {
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
+struct ScalarInfo {
+    // Scalar Info is used to store the information abpou the scalar used in avg pool op
+    // start and end refer to indices of the output stick core is calculating.
+    // These are directly mapped to the for loop that can be found in reader and compute kernel of the pool op
+    // for (uint32_t i = 0; i < nsticks_per_core; ++i), start is first stick which should be reduced and multiplied by
+    // scalar value, end is the first stick which should not be reduced and multiplied by scalar value. So the interval
+    // [start, end) is the range of sticks that should be reduced and multiplied by scalar value.
+    uint32_t start;
+    uint32_t value;
+    uint32_t end;
+};
+
+// This function generates a vector of elements of type ScalarInfo. It is called once per core and generates the
+// adequate scalars for each output element that core should produce. It should be called only for avg pool operation
+// and only if the divisor_override is NOT set and the idea behind it is to generate config tesnor in cases where one
+// scalar per core is not sufficient to create correct result. Those scenarios are ceil_mode == true and (ceil_pad_h > 0
+// || ceil_pad_w > 0) or count_include_pad == false || (pad_h > 0 || pad_w > 0). Both of these scenarios can be
+// irrelevant if the divisor_override is set, in which case we don't calculate the divisor since it is already passed as
+// an argument. It only adds scalars that are different than the scalar preeceding it not to have duplicates of data,
+// this is why we use start and end indices to know how many sequential output elements should be multiplied by the same
+// scalar value.
+std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
+    const AvgPoolConfig& config, uint32_t output_stick_x, uint32_t output_stick_y) {
+    std::vector<ScalarInfo> scalars;
+    float value;
+    bool first_scalar = true;
+    uint32_t last_pool_area = 0;
+
+    if (config.ceil_mode && (config.ceil_w > 0 || config.ceil_h > 0)) {
+        for (uint32_t i = 0; i < config.out_nhw_per_core; i++) {
+            // Compute starting and ending indices of the pooling window
+            int h_start = output_stick_x * config.stride_h - config.pad_h;
+            int w_start = output_stick_y * config.stride_w - config.pad_w;
+            int h_end = std::min(
+                h_start + static_cast<int>(config.kernel_h),
+                static_cast<int>(config.in_h + config.pad_h + config.ceil_h));
+            int w_end = std::min(
+                w_start + static_cast<int>(config.kernel_w),
+                static_cast<int>(config.in_w + config.pad_w + config.ceil_w));
+
+            // Initial pool area
+            int pool_area = (h_end - h_start) * (w_end - w_start);
+
+            // Calculate ceil induced padding overflow beyond input dimensions
+            int pad_h_over = std::max(h_end - static_cast<int>(config.in_h) - static_cast<int>(config.pad_h), 0);
+            int pad_w_over = std::max(w_end - static_cast<int>(config.in_w) - static_cast<int>(config.pad_w), 0);
+
+            // Adjust pool area to exclude padded overflow
+            pool_area -= pad_h_over * config.kernel_w;
+            pool_area -= pad_w_over * config.kernel_h;
+
+            // Re-add intersection if both directions overflowed
+            if (pad_h_over > 0 && pad_w_over > 0) {
+                pool_area += pad_h_over * pad_w_over;
+            }
+
+            // Avoid division by zero
+            pool_area = pool_area > 1 ? pool_area : 1;
+            float value = pool_area > 0 ? 1.f / static_cast<float>(pool_area) : 0.f;
+
+            // Add new scalar if padding config changes
+            if (first_scalar || static_cast<uint32_t>(pool_area) != last_pool_area) {
+                if (!scalars.empty()) {
+                    scalars.back().end = i;
+                }
+                scalars.push_back({i, bfloat16(value).to_packed() << 16, i});
+                first_scalar = false;
+            }
+            last_pool_area = static_cast<uint32_t>(pool_area);
+
+            // Advance output element coordinates
+            output_stick_y = (output_stick_y + 1) % config.out_w;
+            if (output_stick_y == 0) {
+                output_stick_x = (output_stick_x + 1) % config.out_h;
+            }
+        }
+    } else {
+        TT_FATAL(
+            false,
+            "Avg pool scalars config should be calulated only for ceil_mode == true and "
+            "(ceil_pad_h > 0 || ceil_pad_w > 0)");
+    }
+    scalars.back().end = config.out_nhw_per_core;
+    return scalars;
+}
+
+static void push_back_scalar_info_or_zero(
+    std::vector<uint32_t>& config_vector,
+    const std::vector<ScalarInfo>& scalars,
+    uint32_t max_scalars_cnt,
+    uint32_t repeats) {
+    for (uint32_t r = 0; r < repeats; ++r) {
+        for (uint32_t j = 0; j < max_scalars_cnt; ++j) {
+            if (j < scalars.size()) {
+                config_vector.insert(config_vector.end(), {scalars[j].start, scalars[j].value, scalars[j].end});
+            } else {
+                config_vector.insert(config_vector.end(), {0, 0, 0});
+            }
+        }
+    }
+}
 
 // This function creates a scalar config tensor for the AvgPool2D operation. It is entirely made of
 // a vector of ScalarInfo structs, which are used to configure the pooling operation. The config tensor
 // is filled with out_nhw_per_core number of ScalarInfos for each core and then sharded across the cores.
 // Since we don't usually have that many different scalars, we fill the rest of the config tensor with 0s.
 static Tensor create_scalar_config_tensor(
-    AvgPoolConfig config, uint32_t in_n, uint32_t num_shards_c, CoreRangeSet all_cores) {
-    auto ranges = all_cores.ranges();
-
+    const AvgPoolConfig& config,
+    TensorMemoryLayout in_memory_layout,
+    uint32_t n_dim,
+    uint32_t num_shards_c,
+    uint32_t num_cores) {
     std::vector<uint32_t> config_vector;
 
-    uint32_t output_stick_w = 0;
-    uint32_t output_stick_h = 0;
-    uint32_t output_stick_c = 0;
-    uint32_t output_stick_n = 0;
-
-    uint32_t max_scalars_cnt = 0;
+    size_t max_scalars_cnt = 0;
     std::vector<std::vector<ScalarInfo>> scalars_per_core = {};
+    uint32_t num_iterations = 0;
 
-    for (const auto& range : ranges) {
-        for (auto it = range.begin(); it != range.end(); ++it) {
-            std::vector<ScalarInfo> scalars = get_bf16_avg_pool_config_scalars(config, output_stick_w, output_stick_h);
+    switch (in_memory_layout) {
+        case TensorMemoryLayout::HEIGHT_SHARDED: num_iterations = num_cores; break;
+        case TensorMemoryLayout::BLOCK_SHARDED: num_iterations = num_cores / num_shards_c; break;
+        case TensorMemoryLayout::WIDTH_SHARDED: num_iterations = 1; break;
+        default: break;
+    }
 
-            max_scalars_cnt = std::max(max_scalars_cnt, (uint32_t)scalars.size());
-            scalars_per_core.push_back(scalars);
+    {
+        uint32_t nhw_linear = 0;
+        uint32_t output_stick_n = 0;
+        uint32_t output_stick_h = 0;
+        uint32_t output_stick_w = 0;
+        uint32_t output_stick_c = 0;
+        for (uint32_t i = 0; i < num_iterations; ++i) {
+            scalars_per_core.emplace_back(get_bf16_avg_pool_config_scalars(config, output_stick_h, output_stick_w));
+            max_scalars_cnt = std::max(max_scalars_cnt, scalars_per_core.back().size());
 
-            // Advance core and tensor location tracking
-            if (++output_stick_c == num_shards_c) {
-                output_stick_c = 0;
+            // Width sharded layout requires only one iteration, so we can break here
+            if (in_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+                in_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+                // Block sharded layout will valulate one set of scalars for all channels, so we don't need to iterate
+                // over channels
+                if (++output_stick_c == num_shards_c || in_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+                    output_stick_c = 0;
 
-                output_stick_h += config.out_nhw_per_core;
-                output_stick_w += output_stick_h / config.out_w;
-                output_stick_h %= config.out_w;
+                    nhw_linear += config.out_nhw_per_core;
+                    output_stick_w = nhw_linear % config.out_w;
+                    output_stick_h = (nhw_linear / config.out_w) % config.out_h;
+                    output_stick_n = nhw_linear / (config.out_w * config.out_h);
 
-                output_stick_n += output_stick_w / config.out_h;
-                output_stick_w %= config.out_h;
-
-                if (output_stick_n == in_n) {
-                    output_stick_n = 0;
-                    output_stick_h = 0;
-                    output_stick_w = 0;
+                    if (output_stick_n == n_dim) {
+                        nhw_linear -= output_stick_n * config.out_w * config.out_h;
+                        output_stick_n = 0;
+                        output_stick_h = 0;
+                        output_stick_w = 0;
+                    }
                 }
             }
         }
     }
 
-    const uint32_t entry_size = 3;
+    constexpr uint32_t entry_size = 3;
     const uint32_t entries_per_core = entry_size * max_scalars_cnt;
 
-    // Fill with 0 values when the scalars count is less than max_scalars_cnt
-    for (uint32_t i = 0; i < scalars_per_core.size(); i++) {
-        for (uint32_t j = 0; j < max_scalars_cnt; j++) {
-            if (j < scalars_per_core[i].size()) {
-                config_vector.push_back(scalars_per_core[i][j].start);
-                config_vector.push_back(scalars_per_core[i][j].value);
-                config_vector.push_back(scalars_per_core[i][j].end);
-            } else {
-                config_vector.push_back(0);
-                config_vector.push_back(0);
-                config_vector.push_back(0);
+    switch (in_memory_layout) {
+        case TensorMemoryLayout::HEIGHT_SHARDED:
+        // With height sharded layout each scalar is unique and needs to be calculated
+        case TensorMemoryLayout::BLOCK_SHARDED:
+            // With block sharded layout scalars across sequential channels shard repeat, so we use repeats variable not
+            // to recalculate scalars that we can reuse
+            for (const std::vector<ScalarInfo>& scalars : scalars_per_core) {
+                uint32_t repeats = (in_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) ? num_shards_c : 1;
+                push_back_scalar_info_or_zero(config_vector, scalars, max_scalars_cnt, repeats);
             }
-        }
+            break;
+        case TensorMemoryLayout::WIDTH_SHARDED:
+            // With width sharded layout scalars should be calulated only once, so we push them back num_shards_c times
+            // but have only one array of scalars
+            push_back_scalar_info_or_zero(config_vector, scalars_per_core[0], max_scalars_cnt, num_shards_c);
+            break;
+
+        default: break;
     }
 
     TT_FATAL(
@@ -129,21 +248,22 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     tt::DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t in_nbytes = datum_size(in_df);
-    uint32_t out_nbytes = datum_size(out_df);
+    const uint32_t in_nbytes = datum_size(in_df);
+    const uint32_t out_nbytes = datum_size(out_df);
 
-    uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;     // row of input (channels)
-    uint32_t out_nbytes_c = output_shape[3] / num_shards_c * out_nbytes;  // row of output (channels)
+    const uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;     // row of input (channels)
+    const uint32_t out_nbytes_c = output_shape[3] / num_shards_c * out_nbytes;  // row of output (channels)
 
-    tt::DataFormat indices_df =
+    constexpr tt::DataFormat indices_df =
         tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.get_dtype());
-    uint32_t indices_nbytes = datum_size(indices_df);
+    const uint32_t indices_nbytes = datum_size(indices_df);
 
-    uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
-    uint32_t kernel_size_hw_padded = tt::round_up(kernel_size_hw, tt::constants::TILE_HEIGHT);
-    uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
-    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
-    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
+    const uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
+    const uint32_t kernel_size_hw_padded = tt::round_up(kernel_size_hw, tt::constants::TILE_HEIGHT);
+    const uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
+    const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
+    const uint32_t out_ntiles_c =
+        (uint32_t)std::ceil((float)output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
     const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
@@ -161,16 +281,16 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
         TT_FATAL(input_shape[3] == 16, "Error");
     }
-    uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
+    const uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
     auto all_cores = input.shard_spec().value().grid;
-    uint32_t ncores = all_cores.num_cores();
-    uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
-    uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
+    const uint32_t ncores = all_cores.num_cores();
+    const uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
+    const uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
 
-    uint32_t ncores_w = grid_size.x;
+    const uint32_t ncores_w = grid_size.x;
 
     // TODO: support generic nblocks
     TT_FATAL(
@@ -180,9 +300,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         nblocks);
 
     // CBs
-    uint32_t multi_buffering_factor = 2;
+    const uint32_t multi_buffering_factor = 2;
 
-    uint32_t split_reader = 1;
+    const uint32_t split_reader = 1;
 
     // scalar CB as coefficient of reduce
     using tt::tt_metal::CBHandle;
@@ -190,9 +310,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     using tt::tt_metal::CircularBufferConfig;
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
-    uint32_t in_scalar_cb_id_0 = next_cb_index++;
-    uint32_t in_scalar_cb_pagesize = tile_size(in_df);
-    uint32_t in_scalar_cb_npages = 1;
+    const uint32_t in_scalar_cb_id_0 = next_cb_index++;
+    const uint32_t in_scalar_cb_pagesize = tile_size(in_df);
+    const uint32_t in_scalar_cb_npages = 1;
     tt::tt_metal::create_cb(in_scalar_cb_id_0, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
@@ -202,8 +322,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t in_scalar_cb_id_1 = 32;
     if (pool_type == Pool2DType::AVG_POOL2D) {
         in_one_cb_id = next_cb_index++;
-        uint32_t in_one_cb_pagesize = tile_size(in_df);
-        uint32_t in_one_cb_npages = 1;
+        const uint32_t in_one_cb_pagesize = tile_size(in_df);
+        const uint32_t in_one_cb_npages = 1;
         tt::tt_metal::create_cb(in_one_cb_id, program, all_cores, in_one_cb_pagesize, in_one_cb_npages, in_df);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_one_cb_id, in_one_cb_pagesize, in_one_cb_npages);
         if (split_reader) {
@@ -226,18 +346,18 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
-    uint32_t raw_in_cb_npages = input.shard_spec().value().shape[0];
-    uint32_t raw_in_cb_pagesize = in_nbytes_c;
+    const uint32_t raw_in_cb_npages = input.shard_spec().value().shape[0];
+    const uint32_t raw_in_cb_pagesize = in_nbytes_c;
     auto [raw_in_cb_id, raw_in_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, raw_in_cb_pagesize, raw_in_cb_npages, in_df, input.buffer());
 
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", raw_in_cb_id, raw_in_cb_pagesize, raw_in_cb_npages);
 
     // reader indices
-    uint32_t in_reader_indices_cb_id = next_cb_index++;
-    uint32_t in_reader_indices_cb_pagesize =
+    const uint32_t in_reader_indices_cb_id = next_cb_index++;
+    const uint32_t in_reader_indices_cb_pagesize =
         tt::round_up(out_nhw_per_core * indices_nbytes, 4);  // pagesize needs to be multiple of 4
-    uint32_t in_reader_indices_cb_npages = 1;
+    constexpr uint32_t in_reader_indices_cb_npages = 1;
 
     tt::tt_metal::create_cb(
         in_reader_indices_cb_id,
@@ -264,13 +384,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
 
     // reader output == input to tilize
-    uint32_t in_cb_id_0 = next_cb_index++;  // input rows for "multiple (out_nelems)" output pixels
-    uint32_t in_cb_id_1 = 32;               // input rows for "multiple (out_nelems)" output pixels
-    uint32_t in_cb_page_padded = tt::round_up(
+    const uint32_t in_cb_id_0 = next_cb_index++;  // input rows for "multiple (out_nelems)" output pixels
+    uint32_t in_cb_id_1 = 32;                     // input rows for "multiple (out_nelems)" output pixels
+    const uint32_t in_cb_page_padded = tt::round_up(
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
-    uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
-    uint32_t in_cb_npages = multi_buffering_factor * nblocks;
+    const uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
+    const uint32_t in_cb_npages = multi_buffering_factor * nblocks;
 
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
@@ -284,10 +404,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // output of reduce == writer to write
     // output rows in RM
     // after reduction
-    uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, output.shard_spec().value().shape[1]) *
-                               out_nbytes;  // there is just one row of channels after each reduction (or 1 block
-                                            // of c if its greater than 8 tiles)
-    uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_ntiles_c;
+    const uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, output.shard_spec().value().shape[1]) *
+                                     out_nbytes;  // there is just one row of channels after each reduction (or 1 block
+                                                  // of c if its greater than 8 tiles)
+    const uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_ntiles_c;
 
     auto [out_cb_id, cb_out] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, out_df, output.buffer());
@@ -297,8 +417,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t max_pool_partials_cb_id = 32;
     if (is_large_kernel) {
         max_pool_partials_cb_id = next_cb_index++;  // max_pool partials
-        uint32_t max_pool_partials_cb_pagesize = out_cb_pagesize;
-        uint32_t max_pool_partials_cb_npages = nblocks;
+        const uint32_t max_pool_partials_cb_pagesize = out_cb_pagesize;
+        const uint32_t max_pool_partials_cb_npages = nblocks;
 
         tt::tt_metal::create_cb(
             max_pool_partials_cb_id,
@@ -319,12 +439,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     /**
      * Reader Kernel: input rows -> input cb
      */
-    float one = 1.;
-    uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
-    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
-    uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
-    bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false ||
-                               (ceil_pad_h == 0 && ceil_pad_w == 0) || divisor_override.has_value();
+    constexpr float one = 1.;
+    const uint32_t bf16_one_u32 = *reinterpret_cast<const uint32_t*>(&one);
+    const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
+    const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
+    const bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false ||
+                                     (ceil_pad_h == 0 && ceil_pad_w == 0) || divisor_override.has_value();
 
     CBHandle config_cb;
     tt::tt_metal::DeviceStorage scalar_config_storage;
@@ -347,20 +467,21 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             .pad_h = pad_h / 2,  // pad_h is the total padding, so divide by 2 for each side
             .pad_w = pad_w / 2,  // pad_w is the total padding, so divide by 2 for each side
             .out_nhw_per_core = out_nhw_per_core};
-        config_tensor = create_scalar_config_tensor(avg_pool_config, in_n, num_shards_c, all_cores);
+        config_tensor = create_scalar_config_tensor(
+            avg_pool_config, input.memory_config().memory_layout(), in_n, num_shards_c, ncores);
 
-        std::array<uint32_t, 2> shard_shape =
-            std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
-        tt::tt_metal::ShardOrientation config_tensor_shard_orientation = input.shard_spec().value().orientation;
-        tt::tt_metal::ShardSpec config_shard_spec(
+        const std::array<uint32_t, 2> shard_shape =
+            std::array<uint32_t, 2>({1, static_cast<uint32_t>(config_tensor.get_logical_shape()[-1])});
+        const tt::tt_metal::ShardOrientation config_tensor_shard_orientation = input.shard_spec().value().orientation;
+        const tt::tt_metal::ShardSpec config_shard_spec(
             input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
-        MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
-        Tensor config_tensor_device = config_tensor.to_device(device, memory_config);
+        const MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
+        const Tensor config_tensor_device = config_tensor.to_device(device, memory_config);
 
-        tt::DataFormat config_df = tt::DataFormat::RawUInt32;
+        constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt32;
         scalar_config_storage = config_tensor_device.device_storage();
         tt::tt_metal::Buffer* config_buffer = scalar_config_storage.get_buffer();
-        uint32_t config_buffer_page_size = config_buffer->page_size();
+        const uint32_t config_buffer_page_size = config_buffer->page_size();
 
         std::tie(config_cb_id, config_cb) = tt::tt_metal::create_cb(
             next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
