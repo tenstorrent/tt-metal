@@ -1054,8 +1054,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
     } else {
         // Interleaved input
         bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
-        uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_full_core;
-        uint32_t bytes_per_input_tile = tile_volume * a.element_size();
         std::vector<uint32_t> reader_compile_time_args = {
             (uint32_t)src0_is_dram,
             (uint32_t)src0_cb_index,
@@ -1093,9 +1091,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
 
     // Compute compile-time args
+    // Note: This condition is always true for sharded input
     if (full_compute_core_range.ranges().size() > 0) {
-        // Condition always true for sharded input
-
         std::vector<uint32_t> compute_compile_time_args = {
             (uint32_t)num_blocks_per_full_core,  // per_core_block_cnt
             (uint32_t)num_tiles_per_block,       // per_block_ntiles
@@ -1108,13 +1105,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
             ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
     }
 
-    // Compute Cliff compile_time args.
+    // Compute Cliff compile_time args
+    // Note: This condition is always false for sharded input
     if (cliff_compute_core_range.ranges().size() > 0) {
-        // Condition always false for sharded input
-
         std::vector<uint32_t> compute_compile_time_args_cliff = {
             (uint32_t)num_blocks_per_cliff_core,
-            (uint32_t)num_tiles_per_block,  // per_block_ntiles
+            (uint32_t)num_tiles_per_block,
             (uint32_t)src0_cb_index,
             (uint32_t)output_cb_index};
         KernelHandle untilize_cliff_kernel_id = CreateKernel(
@@ -1130,6 +1126,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // uint32_t row_start_id = 0;
 
     // Run-time args (full cores)
+    // Note: For sharded input, these are the only cores used
     std::vector<CoreCoord> full_cores = corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
     for (uint32_t i = 0; i < full_cores.size(); ++i) {
         CoreCoord core = full_cores[i];
@@ -1142,11 +1139,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
             reader_run_time_args = {num_tiles_to_read};
         } else {
             // Interleaved input
-            // TODO: (GR) Figure out after writing kernel
             reader_run_time_args = {
-                src0_buffer->address(),  // src_addr
-                num_tiles_to_read,       // ntiles
-                tile_start_id            // start_id
+                src0_buffer->address(),
+                num_tiles_to_read,
+                tile_start_id,
             };
         }
 
@@ -1165,18 +1161,18 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
 
     // Run-time args (cliff core)
-    // Only applicable if input is interleaved (sharded input will never have a cliff core)
+    // Note: Only applicable if input is interleaved (sharded input will never have a cliff core)
     std::vector<CoreCoord> cliff_cores = corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
     if (cliff_cores.size() > 0) {
-        // Should only ever be 0 or 1 cliff cores
+        // There should only ever be 0 or 1 cliff cores
         CoreCoord cliff_core = cliff_cores[0];
 
-        // Reader run-time args (always reading interleaved input as cliff core does not exist for sharded)
+        // Reader run-time args (always reading interleaved input as cliff core does not exist for sharded input)
         uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_cliff_core;
         std::vector<uint32_t> reader_run_time_args = {
-            src0_buffer->address(),  // src_addr
-            num_tiles_to_read,       // ntiles
-            tile_start_id            // start_id
+            src0_buffer->address(),
+            num_tiles_to_read,
+            tile_start_id,
         };
 
         // Writer run-time args
@@ -1218,14 +1214,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
             auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             for (const CoreCoord& core : cores_with_run_time_args) {
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
-                runtime_args[0] =
-                    src_buffer
-                        ->address();  // TODO: (GR) Possibly need to update depending on the interleaved kernel I write
+                runtime_args[0] = src_buffer->address();
             }
         }
 
         // Output
-        // TODO: (GR) Set after figuring out kernel
+        // TODO: (GR) Update after figuring out kernel
         auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
         for (const CoreCoord& core : cores_with_run_time_args) {
             auto& runtime_args = runtime_args_by_core[core.x][core.y];
