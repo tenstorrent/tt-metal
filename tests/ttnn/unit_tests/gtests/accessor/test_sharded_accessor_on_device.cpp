@@ -357,8 +357,15 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshardRuntimeTensorRuntimeShardS
         // Set up compile-time args for reader kernel
         const auto& input_buffer_distribution_spec =
             std::get<BufferDistributionSpec>(input_mesh_buffer->device_local_config().shard_parameters.value());
-        const auto input_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), true, true, false);
+        const auto input_sharded_accessor_args = sharded_accessor_utils::get_sharded_accessor_args(
+            *mesh_device_,
+            input_buffer_distribution_spec,
+            input_shard_view->core_type(),
+            sharded_accessor_utils::CRTAConfig{
+                .runtime_tensor_shape = true,
+                .runtime_shard_shape = true,
+                .runtime_bank_coords = false,
+            });
         std::vector<uint32_t> input_compile_time_args = {
             input_sharded_accessor_args.rank, input_sharded_accessor_args.num_banks};
         input_compile_time_args.insert(
@@ -372,7 +379,14 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshardRuntimeTensorRuntimeShardS
         const auto& output_buffer_distribution_spec =
             std::get<BufferDistributionSpec>(output_mesh_buffer->device_local_config().shard_parameters.value());
         const auto output_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-            *mesh_device_, output_buffer_distribution_spec, output_shard_view->core_type(), true, true, false);
+            *mesh_device_,
+            output_buffer_distribution_spec,
+            output_shard_view->core_type(),
+            sharded_accessor_utils::CRTAConfig{
+                .runtime_tensor_shape = true,
+                .runtime_shard_shape = true,
+                .runtime_bank_coords = false,
+            });
         std::vector<uint32_t> output_compile_time_args = {
             output_sharded_accessor_args.rank, output_sharded_accessor_args.num_banks};
         output_compile_time_args.insert(
