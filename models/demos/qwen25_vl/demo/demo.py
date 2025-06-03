@@ -183,7 +183,11 @@ def create_tt_model(
     ],
     ids=["performance", "accuracy"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 25663488, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 25663488, "num_command_queues": 1, "physical_device_ids": [0]}],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [

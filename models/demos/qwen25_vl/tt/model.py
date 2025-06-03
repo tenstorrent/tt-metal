@@ -2,24 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 from loguru import logger
-from models.utility_functions import comp_pcc
+
+import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen25_vl.tt.vision_block import VisionBlock
-from models.demos.qwen25_vl.tt.patch_merger import PatchMerger
-from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.demos.qwen25_vl.tt.rope import RotarySetup
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+from models.demos.qwen25_vl.tt.attention import Attention as QwenVLAttentionModule
+from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.qwen25_vl.tt.patch_merger import PatchMerger
+from models.demos.qwen25_vl.tt.rope import RotarySetup
+from models.demos.qwen25_vl.tt.vision_block import VisionBlock
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
-    standardize_hf_keys,
     convert_rope_style_hf_to_meta,
+    standardize_hf_keys,
 )
 from models.tt_transformers.tt.model import Transformer as TTTransformer
-from models.demos.qwen25_vl.tt.attention import Attention as QwenVLAttentionModule
+from models.utility_functions import comp_pcc
 
 
 class VisionTransformer(LightweightModule):
@@ -448,5 +449,5 @@ class Transformer(LightweightModule):
     def prepare_inputs_decode(self, *inputs):
         return self.__tt_transformer.prepare_inputs_decode(*inputs)
 
-    def process_output_decode(self, tt_out, B, S=1, argmax_on_device=False):
-        return self.__tt_transformer.process_output_decode(tt_out, B, S, argmax_on_device=argmax_on_device)
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
+        return self.__tt_transformer.process_output_decode(tt_out, B, S, is_tokens=is_tokens)

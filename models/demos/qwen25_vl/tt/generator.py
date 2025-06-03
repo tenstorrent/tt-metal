@@ -97,14 +97,16 @@ class Generator:
         read_from_device=True,
         argmax_on_device=False,
     ):
-        return self._ttt_generator.decode_forward_text(
+        assert argmax_on_device is False, "todo)) the new decode_forward_text expects sampling_params"
+        return self.__ttt_generator.decode_forward_text(
             tokens=tokens,
             start_pos=start_pos,
             page_table=page_table,
-            kv_cache=kv_cache,
+            kv_cache=[
+                kv_cache
+            ],  # [INFO] surrounding arguments with [] is the work-around to the built-in data parallel code of tt_transformer
             enable_trace=enable_trace,
             read_from_device=read_from_device,
-            argmax_on_device=argmax_on_device,
         )
 
     def __get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
@@ -202,160 +204,7 @@ class Generator:
 
             return logits
 
-    def _decode_forward_no_trace_text(
-        self,
-        tokens,
-        current_pos,
-        page_table=None,
-        kv_cache=None,
-        argmax_on_device=False,
-    ):
-        return self._ttt_generator._decode_forward_no_trace_text(
-            tokens=tokens,
-            current_pos=current_pos,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            argmax_on_device=argmax_on_device,
-        )
-
-    def _capture_trace_text(
-        self,
-        tokens,
-        current_pos,
-        page_table=None,
-        kv_cache=None,
-        argmax_on_device=False,
-    ):
-        return self._ttt_generator._capture_trace_text(
-            tokens=tokens,
-            current_pos=current_pos,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            argmax_on_device=argmax_on_device,
-        )
-
-    def _decode_forward_trace_text(
-        self,
-        trace_id,
-        device_inputs,
-        tt_out_trace,
-        tokens,
-        current_pos,
-        page_table=None,
-    ):
-        return self._ttt_generator._decode_forward_trace_text(
-            trace_id=trace_id,
-            device_inputs=device_inputs,
-            tt_out_trace=tt_out_trace,
-            tokens=tokens,
-            current_pos=current_pos,
-            page_table=page_table,
-        )
-
-    def _easy_trace_text(
-        self,
-        tokens,
-        current_pos,
-        page_table=None,
-        kv_cache=None,
-        argmax_on_device=False,
-    ):
-        return self._ttt_generator._easy_trace_text(
-            tokens=tokens,
-            current_pos=current_pos,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            argmax_on_device=argmax_on_device,
-        )
-
-    def read_decode_output(self, tt_logits, unpadded_batch, argmax_on_device=False):
-        return self._ttt_generator.read_decode_output(
-            tt_logits=tt_logits, unpadded_batch=unpadded_batch, argmax_on_device=argmax_on_device
-        )
-
-    def _capture_trace(
-        self,
-        position_id,
-        tokens,
-        cross_attention_masks,
-        full_text_row_masked_out_mask,
-        xattn_caches,
-        page_table=None,
-        kv_cache=None,
-        cross_page_table=None,
-    ):
-        return self._ttt_generator._capture_trace(
-            position_id=position_id,
-            tokens=tokens,
-            cross_attention_masks=cross_attention_masks,
-            full_text_row_masked_out_mask=full_text_row_masked_out_mask,
-            xattn_caches=xattn_caches,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            cross_page_table=cross_page_table,
-        )
-
-    def _decode_forward_trace(
-        self,
-        position_id,
-        tokens,
-        cross_attention_masks,
-        full_text_row_masked_out_mask,
-        page_table,
-        cross_page_table,
-        trace_id,
-        trace_logits_rm,
-        trace_h,
-        trace_xattn_mask,
-        trace_full_text_mask_expand_1NSH,
-        trace_full_text_mask_expand_11SD,
-        trace_position_id,
-        trace_rope_id,
-        trace_page_table,
-        trace_cross_page_table,
-    ):
-        return self._ttt_generator._decode_forward_trace(
-            position_id=position_id,
-            tokens=tokens,
-            cross_attention_masks=cross_attention_masks,
-            full_text_row_masked_out_mask=full_text_row_masked_out_mask,
-            page_table=page_table,
-            cross_page_table=cross_page_table,
-            trace_id=trace_id,
-            trace_logits_rm=trace_logits_rm,
-            trace_h=trace_h,
-            trace_xattn_mask=trace_xattn_mask,
-            trace_full_text_mask_expand_1NSH=trace_full_text_mask_expand_1NSH,
-            trace_full_text_mask_expand_11SD=trace_full_text_mask_expand_11SD,
-            trace_position_id=trace_position_id,
-            trace_rope_id=trace_rope_id,
-            trace_page_table=trace_page_table,
-            trace_cross_page_table=trace_cross_page_table,
-        )
-
-    def _easy_trace(
-        self,
-        position_id,
-        tokens,
-        cross_attention_masks,
-        full_text_row_masked_out_mask,
-        xattn_caches=None,
-        page_table=None,
-        kv_cache=None,
-        cross_page_table=None,
-    ):
-        return self._ttt_generator._easy_trace(
-            position_id=position_id,
-            tokens=tokens,
-            cross_attention_masks=cross_attention_masks,
-            full_text_row_masked_out_mask=full_text_row_masked_out_mask,
-            xattn_caches=xattn_caches,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            cross_page_table=cross_page_table,
-        )
-
     ## Destructor (used to delete ttnn trace if exists)
 
     def __del__(self):
-        self._ttt_generator.__del__()
+        self.__ttt_generator.__del__()
