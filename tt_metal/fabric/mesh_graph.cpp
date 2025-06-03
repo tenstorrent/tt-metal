@@ -26,48 +26,48 @@ MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path) {
 }
 
 void MeshGraph::add_to_connectivity(
-    mesh_id_t src_mesh_id,
+    MeshId src_mesh_id,
     chip_id_t src_chip_id,
-    chip_id_t dest_mesh_id,
+    MeshId dest_mesh_id,
     chip_id_t dest_chip_id,
     RoutingDirection port_direction) {
     TT_ASSERT(
-        src_mesh_id < this->intra_mesh_connectivity_.size(),
+        *src_mesh_id < this->intra_mesh_connectivity_.size(),
         "MeshGraph: Invalid src_mesh_id: {} or unsized intramesh map",
-        src_mesh_id);
+        *src_mesh_id);
     TT_ASSERT(
-        dest_mesh_id < this->intra_mesh_connectivity_.size(),
+        *dest_mesh_id < this->intra_mesh_connectivity_.size(),
         "MeshGraph: Invalid dest_mesh_id: {} or unsized intramesh map",
-        dest_mesh_id);
+        *dest_mesh_id);
     TT_ASSERT(
-        src_chip_id < this->intra_mesh_connectivity_[src_mesh_id].size(),
+        src_chip_id < this->intra_mesh_connectivity_[*src_mesh_id].size(),
         "MeshGraph: Invalid src_chip_id: {} or unsized intramesh map",
         src_chip_id);
     TT_ASSERT(
-        dest_chip_id < this->intra_mesh_connectivity_[dest_mesh_id].size(),
+        dest_chip_id < this->intra_mesh_connectivity_[*dest_mesh_id].size(),
         "MeshGraph: Invalid dest_chip_id: {} or unsized intramesh map",
         dest_chip_id);
 
     TT_ASSERT(
-        src_mesh_id < this->inter_mesh_connectivity_.size(),
+        *src_mesh_id < this->inter_mesh_connectivity_.size(),
         "MeshGraph: Invalid src_mesh_id: {} or unsized intermesh map",
-        src_mesh_id);
+        *src_mesh_id);
     TT_ASSERT(
-        dest_mesh_id < this->inter_mesh_connectivity_.size(),
+        *dest_mesh_id < this->inter_mesh_connectivity_.size(),
         "MeshGraph: Invalid dest_mesh_id: {} or unsized intermesh map",
-        dest_mesh_id);
+        *dest_mesh_id);
     TT_ASSERT(
-        src_chip_id < this->inter_mesh_connectivity_[src_mesh_id].size(),
+        src_chip_id < this->inter_mesh_connectivity_[*src_mesh_id].size(),
         "MeshGraph: Invalid src_chip_id: {} or unsized intermesh map",
         src_chip_id);
     TT_ASSERT(
-        dest_chip_id < this->inter_mesh_connectivity_[dest_mesh_id].size(),
+        dest_chip_id < this->inter_mesh_connectivity_[*dest_mesh_id].size(),
         "MeshGraph: Invalid dest_chip_id: {} or unsized intermesh map",
         dest_chip_id);
 
     if (src_mesh_id != dest_mesh_id) {
         // Intermesh Connection
-        auto& edge = this->inter_mesh_connectivity_[src_mesh_id][src_chip_id];
+        auto& edge = this->inter_mesh_connectivity_[*src_mesh_id][src_chip_id];
         auto [it, is_inserted] = edge.insert(
             {dest_mesh_id,
              RouterEdge{.port_direction = port_direction, .connected_chip_ids = {dest_chip_id}, .weight = 0}});
@@ -76,7 +76,7 @@ void MeshGraph::add_to_connectivity(
         }
     } else {
         // Intramesh Connection
-        auto& edge = this->intra_mesh_connectivity_[src_mesh_id][src_chip_id];
+        auto& edge = this->intra_mesh_connectivity_[*src_mesh_id][src_chip_id];
         auto [it, is_inserted] = edge.insert(
             {dest_chip_id,
              RouterEdge{.port_direction = port_direction, .connected_chip_ids = {dest_chip_id}, .weight = 0}});
@@ -216,15 +216,15 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
     std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>> mesh_edge_ports_to_chip_id;
     for (const auto& mesh : yaml["Mesh"]) {
         std::string mesh_board = mesh["board"].as<std::string>();
-        mesh_id_t mesh_id = mesh["id"].as<std::uint32_t>();
-        if (this->intra_mesh_connectivity_.size() <= mesh_id) {
+        MeshId mesh_id{mesh["id"].as<std::uint32_t>()};
+        if (this->intra_mesh_connectivity_.size() <= *mesh_id) {
             // Resize all variables that loop over mesh_ids
-            this->intra_mesh_connectivity_.resize(mesh_id + 1);
-            this->inter_mesh_connectivity_.resize(mesh_id + 1);
-            this->mesh_shapes_.resize(mesh_id + 1);
-            this->mesh_host_ranks_.resize(mesh_id + 1, MeshContainer<std::uint32_t>({}, {}));
-            this->host_rank_coord_ranges_.resize(mesh_id + 1);
-            mesh_edge_ports_to_chip_id.resize(mesh_id + 1);
+            this->intra_mesh_connectivity_.resize(*mesh_id + 1);
+            this->inter_mesh_connectivity_.resize(*mesh_id + 1);
+            this->mesh_shapes_.resize(*mesh_id + 1);
+            this->mesh_host_ranks_.resize(*mesh_id + 1, MeshContainer<std::uint32_t>({}, {}));
+            this->host_rank_coord_ranges_.resize(*mesh_id + 1);
+            mesh_edge_ports_to_chip_id.resize(*mesh_id + 1);
             this->mesh_ids_.push_back(mesh_id);
         }
         TT_FATAL(
@@ -238,7 +238,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         std::uint32_t mesh_ns_size = mesh_board_ns_size * board_name_to_topology[mesh_board][0];
 
         std::uint32_t mesh_size = mesh_ew_size * mesh_ns_size;
-        this->mesh_shapes_[mesh_id] = {mesh_ns_size, mesh_ew_size};
+        this->mesh_shapes_[*mesh_id] = {mesh_ns_size, mesh_ew_size};
 
         // Fill in host ranks for Mesh
         TT_FATAL(
@@ -266,9 +266,9 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             }
         }
         // Fill in all host rank coordinate ranges
-        this->host_rank_coord_ranges_[mesh_id].resize(mesh_host_ranks_values.size(), MeshCoordinateRange({}));
+        this->host_rank_coord_ranges_[*mesh_id].resize(mesh_host_ranks_values.size(), MeshCoordinateRange({}));
         for (const auto& [host_rank, coords] : host_rank_submesh_start_end_coords) {
-            this->host_rank_coord_ranges_[mesh_id][host_rank] = MeshCoordinateRange(
+            this->host_rank_coord_ranges_[*mesh_id][host_rank] = MeshCoordinateRange(
                 MeshCoordinate(
                     coords.first[0] * board_name_to_topology[mesh_board][0],
                     coords.first[1] * board_name_to_topology[mesh_board][1]),
@@ -276,17 +276,17 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
                     (coords.second[0] + 1) * board_name_to_topology[mesh_board][0] - 1,
                     (coords.second[1] + 1) * board_name_to_topology[mesh_board][1] - 1));
         }
-        this->mesh_host_ranks_[mesh_id] =
+        this->mesh_host_ranks_[*mesh_id] =
             MeshContainer<std::uint32_t>(MeshShape(mesh_board_ns_size, mesh_board_ew_size), mesh_host_ranks_values);
 
         // Fill in connectivity for Mesh
-        this->intra_mesh_connectivity_[mesh_id].resize(mesh_size);
+        this->intra_mesh_connectivity_[*mesh_id].resize(mesh_size);
         for (std::uint32_t i = 0; i < mesh_size; i++) {
-            this->intra_mesh_connectivity_[mesh_id][i] =
+            this->intra_mesh_connectivity_[*mesh_id][i] =
                 this->get_valid_connections(i, mesh_ew_size, mesh_size, board_name_to_fabric_type[mesh_board]);
         }
 
-        this->inter_mesh_connectivity_[mesh_id].resize(this->intra_mesh_connectivity_[mesh_id].size());
+        this->inter_mesh_connectivity_[*mesh_id].resize(this->intra_mesh_connectivity_[*mesh_id].size());
 
         // Print Mesh
         std::stringstream ss;
@@ -296,41 +296,41 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             }
             ss << " " << std::setfill('0') << std::setw(2) << i;
         }
-        log_debug(tt::LogFabric, "Mesh Graph: Mesh {} Logical Device Ids {}", mesh_id, ss.str());
+        log_debug(tt::LogFabric, "Mesh Graph: Mesh {} Logical Device Ids {}", *mesh_id, ss.str());
 
         // Get the edge ports of each mesh
         // North, start from NW corner
         std::uint32_t chan_id = 0;
         for (std::uint32_t chip_id = 0; chip_id < mesh_ew_size; chip_id++) {
             for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
             }
         }
         // South, start from SW corner
         chan_id = 0;
         for (std::uint32_t chip_id = (mesh_size - mesh_ew_size); chip_id < mesh_size; chip_id++) {
             for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
             }
         }
         // East, start from NE corner
         chan_id = 0;
         for (std::uint32_t chip_id = (mesh_ew_size - 1); chip_id < mesh_size; chip_id += mesh_ew_size) {
             for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
             }
         }
         // WEST, start from NW corner
         chan_id = 0;
         for (std::uint32_t chip_id = 0; chip_id < mesh_size; chip_id += mesh_ew_size) {
             for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
             }
         }
     }
     // Loop over Graph, populate inter mesh
-    auto convert_yaml_to_port_id = [](const YAML::Node& node) -> std::pair<mesh_id_t, port_id_t> {
-        mesh_id_t mesh_id = node[0].as<std::uint32_t>();
+    auto convert_yaml_to_port_id = [](const YAML::Node& node) -> std::pair<MeshId, port_id_t> {
+        MeshId mesh_id{node[0].as<std::uint32_t>()};
         std::string port_string = node[1].as<std::string>();
         RoutingDirection port_direction =
             magic_enum::enum_cast<RoutingDirection>(port_string.substr(0, 1), magic_enum::case_insensitive).value();
@@ -341,8 +341,8 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         TT_FATAL(mesh_connection.size() == 2, "MeshGraph: Expecting 2 elements in each Graph connection");
         const auto& [src_mesh_id, src_port_id] = convert_yaml_to_port_id(mesh_connection[0]);
         const auto& [dst_mesh_id, dst_port_id] = convert_yaml_to_port_id(mesh_connection[1]);
-        const auto& src_chip_id = mesh_edge_ports_to_chip_id[src_mesh_id].at(src_port_id);
-        const auto& dst_chip_id = mesh_edge_ports_to_chip_id[dst_mesh_id].at(dst_port_id);
+        const auto& src_chip_id = mesh_edge_ports_to_chip_id[*src_mesh_id].at(src_port_id);
+        const auto& dst_chip_id = mesh_edge_ports_to_chip_id[*dst_mesh_id].at(dst_port_id);
         this->add_to_connectivity(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_port_id.first);
     }
 }
@@ -352,11 +352,11 @@ void MeshGraph::print_connectivity() const {
 
     std::stringstream ss;
     ss << " Mesh Graph:  Intra Mesh Connectivity: " << std::endl;
-    for (uint32_t mesh_id = 0; mesh_id < this->intra_mesh_connectivity_.size(); mesh_id++) {
-        ss << "M" << mesh_id << ":" << std::endl;
-        for (uint32_t chip_id = 0; chip_id < this->intra_mesh_connectivity_[mesh_id].size(); chip_id++) {
+    for (uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_connectivity_.size(); mesh_id_val++) {
+        ss << "M" << mesh_id_val << ":" << std::endl;
+        for (uint32_t chip_id = 0; chip_id < this->intra_mesh_connectivity_[mesh_id_val].size(); chip_id++) {
             ss << "   D" << chip_id << ": ";
-            for (auto [connected_chip_id, edge] : this->intra_mesh_connectivity_[mesh_id][chip_id]) {
+            for (auto [connected_chip_id, edge] : this->intra_mesh_connectivity_[mesh_id_val][chip_id]) {
                 for (int i = 0; i < edge.connected_chip_ids.size(); i++) {
                     ss << edge.connected_chip_ids[i] << "(" << magic_enum::enum_name(edge.port_direction) << ", "
                        << edge.weight << ") ";
@@ -368,13 +368,13 @@ void MeshGraph::print_connectivity() const {
     log_debug(tt::LogFabric, "{}", ss.str());
     ss.str(std::string());
     ss << " Mesh Graph:  Inter Mesh Connectivity: " << std::endl;
-    for (uint32_t mesh_id = 0; mesh_id < this->inter_mesh_connectivity_.size(); mesh_id++) {
-        ss << "M" << mesh_id << ":" << std::endl;
-        for (uint32_t chip_id = 0; chip_id < this->inter_mesh_connectivity_[mesh_id].size(); chip_id++) {
+    for (uint32_t mesh_id_val = 0; mesh_id_val < this->inter_mesh_connectivity_.size(); mesh_id_val++) {
+        ss << "M" << mesh_id_val << ":" << std::endl;
+        for (uint32_t chip_id = 0; chip_id < this->inter_mesh_connectivity_[mesh_id_val].size(); chip_id++) {
             ss << "   D" << chip_id << ": ";
-            for (auto [connected_mesh_id, edge] : this->inter_mesh_connectivity_[mesh_id][chip_id]) {
+            for (auto [connected_mesh_id, edge] : this->inter_mesh_connectivity_[mesh_id_val][chip_id]) {
                 for (int i = 0; i < edge.connected_chip_ids.size(); i++) {
-                    ss << "M" << connected_mesh_id << "D" << edge.connected_chip_ids[i] << "("
+                    ss << "M" << *connected_mesh_id << "D" << edge.connected_chip_ids[i] << "("
                        << magic_enum::enum_name(edge.port_direction) << ", " << edge.weight << ") ";
                 }
             }

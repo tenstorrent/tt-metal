@@ -107,7 +107,7 @@ WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
 // first generates the physical chip id matrix and then returns the sequence of connected chip ids
 std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
     auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    tt::tt_fabric::mesh_id_t mesh_id = control_plane->get_user_physical_mesh_ids()[0];
+    tt::tt_fabric::MeshId mesh_id = control_plane->get_user_physical_mesh_ids()[0];
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     uint32_t chip_id_offset = 0;

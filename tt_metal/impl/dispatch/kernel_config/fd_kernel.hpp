@@ -106,9 +106,9 @@ public:
     virtual void UpdateArgsForFabric(
         const CoreCoord& fabric_router_virtual,
         uint32_t outbound_eth_chan,
-        tt::tt_fabric::mesh_id_t upstream_mesh_id,
+        tt::tt_fabric::MeshId upstream_mesh_id,
         chip_id_t upstream_chip_id,
-        tt::tt_fabric::mesh_id_t downstream_mesh_id,
+        tt::tt_fabric::MeshId downstream_mesh_id,
         chip_id_t downstream_chip_id) {}
 
     // Generator function to create a kernel of a given type. New kernels need to be added here.
