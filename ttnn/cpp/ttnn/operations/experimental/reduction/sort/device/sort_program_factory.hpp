@@ -33,10 +33,12 @@ struct SortProgramFactorySRSC {
 // Single row - multi core
 struct SortProgramFactorySRMC {
     struct shared_variables_t {
+        KernelHandle coordinator_kernel_id;
         KernelHandle reader_kernel_id;
         KernelHandle compute_kernel_id;
         KernelHandle writer_kernel_id;
-        CoreCoord storage_grid_size;
+        CoreCoord coordinator_core;
+        CoreRangeSet worker_core_range;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

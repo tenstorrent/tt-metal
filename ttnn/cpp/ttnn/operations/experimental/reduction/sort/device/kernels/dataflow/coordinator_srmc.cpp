@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstdint>
 #include "dataflow_api.h"
 
 #include "debug/dprint.h"
@@ -41,7 +42,7 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     }  // i loop
 
     // Push the tile
-    cb_push_back(cb_id, 1);
+    cb_push_back(cb_id, one_tile);
 }
 
 void kernel_main() {
@@ -50,10 +51,12 @@ void kernel_main() {
     const uint32_t start_core_physical_coord_y = get_arg_val<uint32_t>(1);
     const uint32_t end_core_physical_coord_x = get_arg_val<uint32_t>(2);
     const uint32_t end_core_physical_coord_y = get_arg_val<uint32_t>(3);
-    const uint32_t number_of_dest = get_arg_val<uint32_t>(4);
-    const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(5);
-    const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(6);
-    const uint32_t output_index_tensor_buffer_addr = get_arg_val<uint32_t>(7);
+    const uint32_t coordinator_to_cores_semaphore_id = get_semaphore(get_arg_val<uint32_t>(4));
+    const uint32_t cores_to_coordinator_semaphore_id = get_semaphore(get_arg_val<uint32_t>(5));
+    const uint32_t number_of_dest = get_arg_val<uint32_t>(6);
+    const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(7);
+    const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(8);
+    const uint32_t output_index_tensor_buffer_addr = get_arg_val<uint32_t>(9);
 
     // Compile time args
     constexpr uint32_t total_work_units = get_compile_time_arg_val(0);
@@ -61,12 +64,11 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(2);
     constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(3);
     constexpr uint32_t number_of_available_cores = get_compile_time_arg_val(4);
-    constexpr uint32_t sem_id = get_semaphore(get_compile_time_arg_val(5));
-    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(7);
-    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(8) == 1;
-    constexpr bool output_tensor_is_dram = get_compile_time_arg_val(9) == 1;
-    constexpr bool output_index_tensor_is_dram = get_compile_time_arg_val(10) == 1;
+    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(5);
+    constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(6);
+    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(7) == 1;
+    constexpr bool output_tensor_is_dram = get_compile_time_arg_val(8) == 1;
+    constexpr bool output_index_tensor_is_dram = get_compile_time_arg_val(9) == 1;
 
     constexpr uint32_t one_tile = 1;
 
@@ -93,17 +95,18 @@ void kernel_main() {
         .data_format = index_tensor_output_data_format};
 
     // Semaphore setup
-    volatile tt_l1_ptr uint32_t* semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_id);
+    volatile tt_l1_ptr uint32_t* semaphore_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cores_to_coordinator_semaphore_id);
     noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
-
-    uint64_t semaphore_global_multicast_addr = get_noc_multicast_addr(
+    const uint64_t semaphore_global_multicast_addr = get_noc_multicast_addr(
         start_core_physical_coord_x,
         start_core_physical_coord_y,
         end_core_physical_coord_x,
         end_core_physical_coord_y,
-        sem_id);
+        coordinator_to_cores_semaphore_id);
 
     const auto number_of_confirmations = Wt / 2;
+
     // Copy input data to output and generate index tiles
     for (uint32_t h = 0; h < Ht; h++) {
         // Process each row
@@ -128,33 +131,40 @@ void kernel_main() {
             // Write output value data
             cb_wait_front(input_tensor_cb_index, one_tile);
             const uint32_t l1_write_addr_output_tensor_cb = get_read_ptr(input_tensor_cb_index);
-            noc_async_write_tile(h * Wt + w, output_tensor_addr_gen, l1_write_addr_input_tensor_cb);
+            noc_async_write_tile(h * Wt + w, output_tensor_addr_gen, l1_write_addr_output_tensor_cb);
             noc_async_write_barrier();
             cb_pop_front(input_tensor_cb_index, one_tile);
-
-            // Wait until all cores are ready to start
-            noc_semaphore_wait(semaphore_ptr, number_of_dest);
-            noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
-
-            // Set signal to start processing
-            noc_semaphore_set_multicast(semaphore_ptr, semaphore_global_multicast_addr, number_of_dest);
-
-            // Calculate sorting stages
-            uint32_t stages = 0;
-            for (uint32_t i = n; i > 1; i >>= 1) {
-                stages++;
-            }
-
-            for (uint32_t stage = 1; stage <= stages; stage++) {
-                for (int sub = stage; sub > 0; sub--) {
-                    // Wait until cores will process and save data
-                    noc_semaphore_wait(semaphore_ptr, number_of_confirmations);
-                    noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
-
-                    // Set signal to start processing next sub-stage
-                    noc_semaphore_set_multicast(semaphore_ptr, semaphore_global_multicast_addr, number_of_dest);
-                }  // sub loop
-            }  // stage loop
+            
         }  // Wt loop
+
+        // Wait until all cores are ready to start
+        noc_semaphore_wait(semaphore_ptr, number_of_confirmations);
+        noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
+
+        // Set signal to start processing
+        noc_semaphore_set_multicast(coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
+
+DPRINT << "COORDINATOR: Signaled to start" << ENDL();
+        // Calculate sorting stages
+        uint32_t stages = 0;
+        for (uint32_t i = Wt; i > 1; i >>= 1) {
+            stages++;
+        }
+
+        for (uint32_t stage = 1; stage <= stages; stage++) {
+            for (uint32_t sub = stage; sub > 0; sub--) {
+                // Set signal to start processing next sub-stage
+                noc_semaphore_set_multicast(
+                    coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
+
+DPRINT << "COORDINATOR: Signaled to start sub-stage: " << U32(sub) << ENDL();
+                // Wait until cores will process and save data
+                noc_semaphore_wait(semaphore_ptr, number_of_confirmations);
+                noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
+DPRINT << "COORDINATOR: Cores finished processing sub-stage: " << U32(sub) << ENDL();
+
+            }  // sub loop
+        }  // stage loop
+        DPRINT << "COORDINATOR: Finished processing row: " << U32(h) << ENDL();
     }  // Ht loop
 }

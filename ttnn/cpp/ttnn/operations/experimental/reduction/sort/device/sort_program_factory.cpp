@@ -284,8 +284,8 @@ void SortProgramFactorySRSC::override_runtime_arguments(
         }
     }
 }
+
 // Single row - multi core
-// Single row - single core
 SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
     // Program config
@@ -359,9 +359,10 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
     std::cout << "Core range: " << core_range.str() << std::endl;
     CoreRangeSet all_core_set({CoreRange(coordinator_core)});
     all_core_set = all_core_set.merge<CoreRangeSet>(core_range);
+    std::cout << "All core set: " << all_core_set.str() << std::endl;
 
     // Circular buffers
-    constexpr uint32_t buffer_scale_factor = 2;
+    constexpr uint32_t buffer_scale_factor = 4;
 
     constexpr uint32_t input_tensor_cb_index = tt::CBIndex::c_0;
     const tt::tt_metal::CircularBufferConfig input_tensor_cb_config =
@@ -395,24 +396,27 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
     auto cb_index_tensor_transposed =
         tt::tt_metal::CreateCircularBuffer(program, all_core_set, index_tensor_transposed_cb_config);
 
-    // constexpr uint32_t value_tensor_cb_index = tt::CBIndex::c_16;
-    // const tt::tt_metal::CircularBufferConfig value_tensor_cb_config =
-    //     tt::tt_metal::CircularBufferConfig(
-    //         buffer_scale_factor * value_tensor_tile_size, {{value_tensor_cb_index, value_tensor_cb_data_format}})
-    //         .set_page_size(value_tensor_cb_index, index_tensor_tile_size);
-    // auto cb_value_tensor = tt::tt_metal::CreateCircularBuffer(program, all_core_set, value_tensor_cb_config);
+    constexpr uint32_t input_tensor_output_cb_index = tt::CBIndex::c_16;
+    const tt::tt_metal::CircularBufferConfig input_tensor_output_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            buffer_scale_factor * value_tensor_tile_size, {{input_tensor_output_cb_index, value_tensor_cb_data_format}})
+            .set_page_size(input_tensor_output_cb_index, value_tensor_tile_size);
+    auto cb_value_tensor = tt::tt_metal::CreateCircularBuffer(program, all_core_set, input_tensor_output_cb_config);
 
-    // constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_17;
-    // const tt::tt_metal::CircularBufferConfig index_tensor_output_cb_config =
-    //     tt::tt_metal::CircularBufferConfig(
-    //         buffer_scale_factor * index_tensor_tile_size, {{index_tensor_output_cb_index,
-    //         index_tensor_cb_data_format}}) .set_page_size(index_tensor_output_cb_index, index_tensor_tile_size);
-    // auto cb_index_tensor_output =
-    //     tt::tt_metal::CreateCircularBuffer(program, all_core_set, index_tensor_output_cb_config);
+    constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_17;
+    const tt::tt_metal::CircularBufferConfig index_tensor_output_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            buffer_scale_factor * index_tensor_tile_size, {{index_tensor_output_cb_index, index_tensor_cb_data_format}})
+            .set_page_size(index_tensor_output_cb_index, index_tensor_tile_size);
+    auto cb_index_tensor_output =
+        tt::tt_metal::CreateCircularBuffer(program, all_core_set, index_tensor_output_cb_config);
 
     // Semaphores
-    const uint32_t sem_id = CreateSemaphore(program, all_core_set, 0);
+    const uint32_t coordinator_to_cores_semaphore_id = CreateSemaphore(program, all_core_set, 0);
+    const uint32_t cores_to_coordinator_semaphore_id = CreateSemaphore(program, all_core_set, 0);
     const auto coordinator_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
+    std::cout << "Coordinator core logical coord: " << coordinator_core.str() << std::endl;
+    std::cout << "Coordinator core physical coord: " << coordinator_core_physical_coord.str() << std::endl;
 
     const auto start_core_logical = core_range.ranges()[0].start_coord;
     const auto end_core_logical = core_range.ranges()[core_range.ranges().size() - 1].end_coord;
@@ -429,7 +433,6 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
         Ht,
         total_number_of_cores,
         number_of_available_cores,
-        sem_id,
         input_tensor_cb_index,
         index_tensor_cb_index,
         static_cast<uint32_t>(input_tensor_is_dram),
@@ -450,6 +453,8 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
          start_core_physical_coord.y,
          end_core_physical_coord.x,
          end_core_physical_coord.y,
+         coordinator_to_cores_semaphore_id,
+         cores_to_coordinator_semaphore_id,
          core_range.num_cores(),
          input_buffer->address(),
          value_buffer->address(),
@@ -465,8 +470,7 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
         total_number_of_cores,
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y,
-        number_of_available_cores,
-        sem_id};
+        number_of_available_cores};
     const std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/reader_srmc.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -475,23 +479,24 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
         program,
         reader_kernel_id,
         core_range,
-        {
-            value_buffer->address(),
-            index_buffer->address(),
-            coordinator_core_physical_coord.x,
-            coordinator_core_physical_coord.y,
-            //  all_core_utilization_loop_count ? all_core_utilization_loop_count : 1 // ?
-        });
+        {value_buffer->address(),
+         index_buffer->address(),
+         coordinator_core_physical_coord.x,
+         coordinator_core_physical_coord.y,
+         coordinator_to_cores_semaphore_id,
+         cores_to_coordinator_semaphore_id});
 
     const std::vector<uint32_t> writer_compile_time_args = {
-        value_tensor_cb_index,
-        index_tensor_cb_index,
+        input_tensor_output_cb_index,
+        index_tensor_output_cb_index,
         static_cast<uint32_t>(value_tensor_is_dram),
+        static_cast<uint32_t>(index_tensor_is_dram),
         Wt,
         Ht,
         total_number_of_cores,
-        number_of_available_cores,
-        sem_id};
+        compute_with_storage_grid_size.x,
+        compute_with_storage_grid_size.y,
+        number_of_available_cores};
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/writer_srmc.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -501,22 +506,26 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
         writer_kernel_id,
         core_range,
         {value_buffer->address(),
+         index_buffer->address(),
          coordinator_core_physical_coord.x,
          coordinator_core_physical_coord.y,
-         all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+         coordinator_to_cores_semaphore_id,
+         cores_to_coordinator_semaphore_id});
 
     const std::vector<uint32_t> compute_compile_time_args = {
         input_tensor_cb_index,
         index_tensor_cb_index,
         input_tensor_transposed_cb_index,
         index_tensor_transposed_cb_index,
-        value_tensor_cb_index,
+        input_tensor_output_cb_index,
         index_tensor_output_cb_index,
         Wt,
-        static_cast<uint32_t>(attributes.descending),
-        static_cast<uint32_t>(attributes.stable),
+        Ht,
+        number_of_available_cores,
         compute_with_storage_grid_size.x,
-        compute_with_storage_grid_size.y};
+        compute_with_storage_grid_size.y,
+        static_cast<uint32_t>(attributes.descending),
+        static_cast<uint32_t>(attributes.stable)};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_srmc.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -524,45 +533,41 @@ SortProgramFactorySRMC::cached_program_t SortProgramFactorySRMC::create(
         compute_kernel_path,
         core_range,
         tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
-    SetRuntimeArgs(
-        program,
-        compute_kernel_id,
-        core_range,
-        {all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
 
-    // TO change
-    // if (all_core_utilization_loop_residuum != 0 && all_core_utilization_loop_count != 0) {
-    //     uint32_t residuum_count = 0;
-    //     for (uint32_t core_y = 0; core_y < compute_with_storage_grid_size.y; core_y++) {
-    //         for (uint32_t core_x = 0; core_x < compute_with_storage_grid_size.x; core_x++) {
-    //             const uint32_t new_loop_count = all_core_utilization_loop_count + 1;
-    //             const CoreCoord core = {core_x, core_y};
-
-    //             SetRuntimeArgs(
-    //                 program,
-    //                 reader_kernel_id,
-    //                 core,
-    //                 {input_buffer->address(), index_buffer->address(), new_loop_count});
-
-    //             SetRuntimeArgs(program, writer_kernel_id, core, {value_buffer->address(), new_loop_count});
-
-    //             SetRuntimeArgs(program, compute_kernel_id, core, {new_loop_count});
-
-    //             residuum_count++;
-    //             if (residuum_count >= all_core_utilization_loop_residuum) {
-    //                 core_y = compute_with_storage_grid_size.y;  // Break outer loop
-    //                 break;
-    //             }
-    //         }  // core_x loop
-    //     }  // core_y loop
-    // }
-
-    return {std::move(program), {}};
+    return {
+        std::move(program),
+        {coordinator_kernel_id, reader_kernel_id, compute_kernel_id, writer_kernel_id, coordinator_core, core_range}};
 }
 
 void SortProgramFactorySRMC::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {}
+    tensor_return_value_t& output_tensors) {
+    const auto input_tensor_buffer = tensor_args.input_tensor.buffer();
+    const auto value_tensor_buffer = output_tensors.at(0).buffer();
+    const auto index_tensor_buffer = output_tensors.at(1).buffer();
+
+    auto& coordinator_core_runtime_args = GetRuntimeArgs(
+        cached_program.program,
+        cached_program.shared_variables.coordinator_kernel_id,
+        cached_program.shared_variables.coordinator_core);
+    coordinator_core_runtime_args[5] = input_tensor_buffer->address();
+    coordinator_core_runtime_args[6] = value_tensor_buffer->address();
+    coordinator_core_runtime_args[7] = index_tensor_buffer->address();
+
+    for (const auto& core_range : cached_program.shared_variables.worker_core_range.ranges()) {
+        for (const auto& core : core_range) {
+            auto& reader_runtime_args =
+                GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core);
+            reader_runtime_args[0] = value_tensor_buffer->address();
+            reader_runtime_args[1] = index_tensor_buffer->address();
+
+            auto& writer_runtime_args =
+                GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core);
+            writer_runtime_args[0] = value_tensor_buffer->address();
+            writer_runtime_args[1] = index_tensor_buffer->address();
+        }  // core loop
+    }  // core_range loop
+}
 }  // namespace ttnn::operations::experimental::reduction::sort::program
