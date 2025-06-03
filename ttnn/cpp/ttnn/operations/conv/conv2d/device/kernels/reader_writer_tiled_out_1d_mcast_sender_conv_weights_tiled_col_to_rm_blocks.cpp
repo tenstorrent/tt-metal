@@ -5,12 +5,15 @@
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
 #include "debug/debug.h"
+#include "debug/dprint_pages.h"
 
 template <uint32_t NumTiles, uint32_t TileSizeBytes>
-FORCE_INLINE void copy_weights_from_dram(uint32_t bank_id, uint32_t dram_base_read_addr, uint32_t l1_base_write_addr) {
+FORCE_INLINE void copy_weights_from_dram(
+    uint32_t bank_id, uint32_t dram_base_read_addr, uint32_t l1_base_write_addr, uint32_t offset = 0) {
     constexpr uint32_t size = NumTiles * TileSizeBytes;
-    const uint64_t l1_read_addr = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
-    noc_async_read(l1_read_addr, l1_base_write_addr, size);
+    const uint64_t dram_read_addr = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr + offset);
+    DPRINT << "read=" << dram_read_addr << " write=offset=" << offset << " size=" << size << ENDL();
+    noc_async_read(dram_read_addr, l1_base_write_addr + offset, size);
 }
 
 void kernel_main() {
@@ -144,13 +147,17 @@ void kernel_main() {
     }
 
     constexpr uint32_t number_of_banks = 1;
-    constexpr uint32_t bank_id = 0;
     constexpr uint32_t total_weight_tiles = weight_block_num_tiles * num_blocks_weight_h;
     constexpr uint32_t tiles_per_bank = total_weight_tiles / number_of_banks;
     constexpr uint32_t weight_bytes_per_bank = tiles_per_bank * weight_tile_nbytes;
     const uint32_t weights_l1_base_write_addr = get_read_ptr(cb_id_weight);
+    DPRINT << "tiles per bank = " << tiles_per_bank << " bytes per bank = " << weight_bytes_per_bank
+           << " weight tile nbytes = " << weight_tile_nbytes << ENDL();
+    copy_weights_from_dram<tiles_per_bank, weight_tile_nbytes>(0, weight_addr_dram_base, weights_l1_base_write_addr, 0);
+    noc_async_read_barrier();
     copy_weights_from_dram<tiles_per_bank, weight_tile_nbytes>(
-        bank_id, weight_addr_dram_base, weights_l1_base_write_addr);
+        1, weight_addr_dram_base, weights_l1_base_write_addr, weight_bytes_per_bank);
+    noc_async_read_barrier();
 
     for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
         // READ WEIGHTS + MCAST SEND WEIGHTS
@@ -193,9 +200,10 @@ void kernel_main() {
             cb_reserve_back(cb_id_weight, weight_block_num_tiles);
             if (bh == 0) {
                 // mcast args
-                uint32_t weights_start_address = get_write_ptr(cb_id_weight);
-                uint32_t weights_block_size_bytes =
+                const uint32_t weights_start_address = get_write_ptr(cb_id_weight);
+                const uint32_t weights_block_size_bytes =
                     weight_tile_nbytes * weight_block_height_ntiles * weight_block_width_ntiles;
+                DPRINT << "weights block size bytes " << weights_block_size_bytes << ENDL();
 
 #ifndef SKIP_MCAST
                 // wait until all weights mcast destinations have atomically incremented the weights
