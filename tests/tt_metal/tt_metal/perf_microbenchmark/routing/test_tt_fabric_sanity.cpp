@@ -252,7 +252,7 @@ struct test_board_t {
         // populate valid chip and available chip IDs
         for (auto i = start_row_idx; i < (start_row_idx + num_rows); i++) {
             for (auto j = i; j < 32; j += 8) {
-                physical_chip_id = control_plane->get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id, j));
+                physical_chip_id = control_plane->get_physical_chip_id_from_fabric_node_id(FabricNodeId(MeshId{mesh_id}, j));
                 physical_chip_ids.push_back(physical_chip_id);
             }
         }
@@ -505,7 +505,7 @@ struct test_device_t {
     std::vector<CoreCoord> router_virtual_cores;
     CoreCoord core_range_start_virtual;
     CoreCoord core_range_end_virtual;
-    mesh_id_t mesh_id;
+    MeshId mesh_id;
     chip_id_t logical_chip_id;
     uint32_t master_router_idx;
     uint32_t mesh_chip_id = 0;
@@ -523,7 +523,7 @@ struct test_device_t {
         auto fabric_node_id = board_handle->get_fabric_node_id(physical_chip_id);
         mesh_id = fabric_node_id.mesh_id;
         logical_chip_id = fabric_node_id.chip_id;
-        mesh_chip_id = (mesh_id << 16 | logical_chip_id);
+        mesh_chip_id = (*mesh_id << 16 | logical_chip_id);
         soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
 
         // initalize list of worker cores in 8X8 grid
@@ -750,7 +750,7 @@ struct test_device_t {
     }
 
     inline std::vector<std::pair<chip_id_t, chan_id_t>> _get_route_to_chip(
-        mesh_id_t dst_mesh_id, chip_id_t dst_chip_id, chan_id_t src_chan_id) {
+        MeshId dst_mesh_id, chip_id_t dst_chip_id, chan_id_t src_chan_id) {
         return board_handle->get_route_to_chip(
             FabricNodeId(mesh_id, logical_chip_id), FabricNodeId(dst_mesh_id, dst_chip_id), src_chan_id);
     }
