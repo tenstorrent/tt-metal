@@ -42,6 +42,7 @@ install(
         eltwise_binary
         eltwise_sfpu
         hello_world_compute_kernel
+        hello_world_datatypes_kernel
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
         loopback
@@ -63,6 +64,7 @@ install(
         eltwise_binary
         eltwise_sfpu
         hello_world_compute_kernel
+        hello_world_datatypes_kernel
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
         loopback
