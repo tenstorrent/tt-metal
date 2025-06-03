@@ -171,6 +171,8 @@ target_sources(
             include/compute_kernel_api/untilize.h
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
+            programming_examples/matmul_common/bmm_op.hpp
+            programming_examples/matmul_common/kernels/compute/bmm_large_block_zm.cpp
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_addr_map.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_addrmod.h
@@ -333,6 +335,8 @@ target_sources(
             impl/dispatch/kernels/packet_mux.cpp
             impl/dispatch/kernels/vc_eth_tunneler.cpp
             impl/dispatch/kernels/vc_packet_router.cpp
+
+
             kernels/compute/blank.cpp
             kernels/compute/eltwise_binary.cpp
             kernels/compute/eltwise_sfpu.cpp
