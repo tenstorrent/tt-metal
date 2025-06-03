@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sliding_window.hpp"
-#include <climits>
 #include <cstdint>
 #include <vector>
 #include <tt-metalium/assert.hpp>
@@ -696,6 +695,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     std::vector<GatherConfig> ordered_gather_configs0;
     std::vector<GatherConfig> ordered_gather_configs1;
     std::vector<uint16_t> number_of_blocks_per_core;
+    int core = 0;
     for (const auto& config : gather_configs) {
         if (use_blocking) {
             const auto quantized = quantize_transfers_along_block_boundaries(config, block_size);
@@ -889,14 +889,8 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         return flattened_config;
     };
 
-    int32_t in_out_shard_size_delta =
-        (in_place && is_in_tiled)
-            ? 0
-            : max_out_nsticks_per_core - in_nsticks_per_core;  // for in place with tilized data we untilize
-                                                               // directly into the output buffer so delta is zero
-
-    auto flatten_local_config =
-        [in_place, in_out_shard_size_delta](auto& config) -> std::vector<std::vector<std::vector<unsigned short>>> {
+    auto flatten_local_config = [in_place, max_out_nsticks_per_core, in_nsticks_per_core, is_in_tiled](
+                                    auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
         // find max length
         size_t max_len = 0;
         for (const auto& [_, data] : config) {
@@ -910,7 +904,11 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         max_len += 6;  // account for the key tuple and null plug
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-
+        int32_t in_out_shard_size_delta =
+            (in_place && is_in_tiled)
+                ? 0
+                : max_out_nsticks_per_core - in_nsticks_per_core;  // for in place with tilized data we untilize
+                                                                   // directly into the output buffer so delta is zero
         for (const auto& [key, data] : config) {
             auto [nocx, nocy, len] = key;
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
@@ -964,11 +962,10 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
             flattened_config[0].emplace_back(std::move(flat_data[0]));
             flattened_config[1].emplace_back(std::move(flat_data[1]));
         }
-
         return flattened_config;
     };
 
-    auto flatten_remote_config = [in_place, core_id_to_noc_coords, &device, in_out_shard_size_delta](
+    auto flatten_remote_config = [in_place, core_id_to_noc_coords, &device](
                                      auto& config) -> std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> {
         // find max length
         size_t max_len = 0;
@@ -990,7 +987,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         int num_cores_y = device->compute_with_storage_grid_size().y;
         int num_cores = num_cores_x * num_cores_y;
         CoreCoord noc_00 = core_id_to_noc_coords(0);
-        int max_ref_size = 0;
+        int max_ref_size = 0;  // track the max remote ref size for sizing the remote temp tensor
         for (const auto& core_config : config) {
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
             uint32_t idx1 = 0, idx2 = 0;
@@ -1011,33 +1008,22 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
                 int ref_ind = nocx - noc_00.x + (nocy - noc_00.y) * num_cores_x;
                 for (size_t i = 0; i < subdata.size(); ++i) {
                     auto [src_start, dst_start, length] = subdata[i];
-                    ref_size += length;
-                    if (in_place) {
-                        int dst_relative_src = src_start + in_out_shard_size_delta;
-
+                    if (vector_id || in_place) {
                         flat_data[0][idx1++] = src_start;
                         flat_data[0][idx1++] = dst_start;
                         flat_data[0][idx1++] = length;
                         flat_data[0][len_idx1] += 3;
-
-                        idx1 = flat_data[0][len_idx1] ? idx1 : idx1 - 3;
+                        ref_size += length;
                     } else {
-                        if (vector_id) {
-                            flat_data[0][idx1++] = src_start;
-                            flat_data[0][idx1++] = dst_start;
-                            flat_data[0][idx1++] = length;
-                            flat_data[0][len_idx1] += 3;
-                        } else {
-                            flat_data[1][idx2++] = src_start;
-                            flat_data[1][idx2++] = dst_start;
-                            flat_data[1][idx2++] = length;
-                            flat_data[1][len_idx2] += 3;
-                        }
-                        vector_id = (vector_id + 1) % 2;
-                        idx1 = flat_data[0][len_idx1] ? idx1 : idx1 - 3;
-                        idx2 = flat_data[1][len_idx2] ? idx2 : idx2 - 3;
+                        flat_data[1][idx2++] = src_start;
+                        flat_data[1][idx2++] = dst_start;
+                        flat_data[1][idx2++] = length;
+                        flat_data[1][len_idx2] += 3;
                     }
+                    vector_id = (vector_id + 1) % 2;
                 }
+                idx1 = flat_data[0][len_idx1] ? idx1 : idx1 - 3;
+                idx2 = flat_data[1][len_idx2] ? idx2 : idx2 - 3;
             }
 
             flattened_config[0].emplace_back(std::move(flat_data[0]));
