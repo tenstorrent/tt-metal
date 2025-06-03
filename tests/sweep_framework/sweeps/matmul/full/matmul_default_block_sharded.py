@@ -15,7 +15,6 @@ import ttnn
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import (
-    check_with_pcc,
     get_per_core_size_and_num_cores,
     start_measuring_time,
     stop_measuring_time,

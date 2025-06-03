@@ -249,7 +249,7 @@ def run_matmul(device, shapes, transpose_a, transpose_b) -> tuple:
 
     # Allow some tolerance for numeric differences
     atol = rtol = 0.1
-    allclose = (torch.allclose(torch_result, ttnn_result_torch, atol=atol, rtol=rtol, equal_nan=True),)
+    allclose = (torch.allclose(torch_result, output_tensor, atol=atol, rtol=rtol, equal_nan=True),)
     if not allclose:
         return [(False, f"mismatch in allclose: torch: {torch_result}, ttnn: {output_tensor}"), e2e_perf]
 

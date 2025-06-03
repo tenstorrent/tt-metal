@@ -210,6 +210,9 @@ def run_linear(device, shapes, transpose_a, transpose_b) -> tuple:
         2,
         shape_b[-1],
     ]  # shape_a: all batch dimensions, m, k; shape_b[-1]: n, disregards addition
+    tensors = [ttnn_a, ttnn_b, op_output_tensor]
+    if ttnn_bias:
+        tensors.append(ttnn_bias)
     return get_run_return(torch_result, output_tensor, expected_pcc, tensors, e2e_perf, flop_counts)
 
 
