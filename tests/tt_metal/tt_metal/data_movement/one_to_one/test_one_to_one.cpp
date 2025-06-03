@@ -66,7 +66,6 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     }
     // Check if the L1 size is sufficient for the test configuration
     if (master_l1_info.size < total_size_bytes) {
-        std::cout << "L1 size: " << master_l1_info.size << ", Total size required: " << total_size_bytes << std::endl;
         log_error("Insufficient L1 size for the test configuration");
         return false;
     }
