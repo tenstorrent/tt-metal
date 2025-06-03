@@ -1192,7 +1192,10 @@ void setup_test_with_persistent_fabric(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     size_t switch_interval = 0,
     bool loopback_on_last_device = false,
-    bool is_galaxy = false) {
+    bool is_galaxy = false,
+    bool en_dateline_upstream_sender_extra_buffer = false,
+    bool en_dateline_upstream_receiver_extra_buffer = false,
+    bool has_ring_loopback = false) {
     if (enable_persistent_fabric) {
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
@@ -1206,8 +1209,26 @@ void setup_test_with_persistent_fabric(
             programs.begin(), programs.end(), std::back_inserter(fabric_program_ptrs), [](auto& p) { return &p; });
     }
 
+    if (has_ring_loopback) {
+        TT_FATAL(
+            !en_dateline_upstream_sender_extra_buffer,
+            "Dateline upstream sender extra buffer not supported with ring loopback");
+        TT_FATAL(
+            !en_dateline_upstream_receiver_extra_buffer,
+            "Dateline upstream receiver extra buffer not supported with ring loopback");
+    }
+
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, topology, is_galaxy);
+        devices,
+        fabric_program_ptrs,
+        enable_persistent_fabric,
+        num_links.value_or(1),
+        false,
+        topology,
+        is_galaxy,
+        en_dateline_upstream_sender_extra_buffer,
+        en_dateline_upstream_receiver_extra_buffer,
+        has_ring_loopback);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
@@ -2507,6 +2528,24 @@ void Run1DFabricPacketSendTest(
         case FabricTestMode::RingAsLinear: topology = ttnn::ccl::Topology::Ring; break;
     }
 
+    bool en_dateline_upstream_sender_extra_buffer = false;
+    bool en_dateline_upstream_receiver_extra_buffer = false;
+    bool has_ring_loopback = false;
+    if (fabric_mode == FabricTestMode::HalfRing) {
+        // HalfRing test is more optimal with extra recv buffer on upstream edm.
+        en_dateline_upstream_sender_extra_buffer = false;
+        en_dateline_upstream_receiver_extra_buffer = true;
+    } else if (fabric_mode == FabricTestMode::FullRing) {
+        // FullRing is more optimal with extra buffer on both send/recv channels.
+        en_dateline_upstream_sender_extra_buffer = true;
+        en_dateline_upstream_receiver_extra_buffer = true;
+    } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+        // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+        en_dateline_upstream_sender_extra_buffer = false;
+        en_dateline_upstream_receiver_extra_buffer = false;
+        has_ring_loopback = true;
+    }
+
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
     // static constexpr size_t source_l1_buffer_address = 1000000;
@@ -2552,7 +2591,10 @@ void Run1DFabricPacketSendTest(
             topology,
             fabric_context_switch_interval,
             false,
-            is_6u_galaxy);
+            is_6u_galaxy,
+            en_dateline_upstream_sender_extra_buffer,
+            en_dateline_upstream_receiver_extra_buffer,
+            has_ring_loopback);
         packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     } else {
         // TODO: get packet header size from control plane after it adds APIs to present this information
