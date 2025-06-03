@@ -35,23 +35,23 @@ inline void print_full_tile_column0(uint32_t cb_id, uint32_t tile_id = 0, bool u
 }
 
 inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    UNPACK(DPRINT << "U=====!" << ENDL());
+    // UNPACK(DPRINT << "U=====!" << ENDL());
     // MATH(DPRINT << "M=====!" << ENDL());
     // PACK(DPRINT << "P=====!" << ENDL());
     for (uint8_t r = 0; r < 32; ++r) {
         SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
         SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-        UNPACK(
-            DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-                   << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL());
+        // UNPACK(
+        //     DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+        //            << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL());
         // MATH(
         //     DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
         //            << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL());
-        // PACK(
-        //     DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-        //            << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL());
+        PACK(
+            DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+                   << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL());
     }
-    UNPACK(DPRINT << "U+++++!" << ENDL());
+    // UNPACK(DPRINT << "U+++++!" << ENDL());
     // MATH(DPRINT << "M+++++!" << ENDL());
     // PACK(DPRINT << "P+++++!" << ENDL());
 }
@@ -123,8 +123,7 @@ void MAIN {
 
                             cb_wait_front(input_tensor_cb_index, 2 * one_tile);
                             cb_wait_front(index_tensor_cb_index, 2 * one_tile);
-// DPRINT << "COMPUTE: 1. INPUT TENSOR" << ENDL();
-// print_full_tile(input_tensor_cb_index, left_tile_id);
+
                             cb_reserve_back(input_tensor_transposed_cb_index, 2 * one_tile);
                             cb_reserve_back(index_tensor_transposed_cb_index, 2 * one_tile);
 
@@ -141,7 +140,7 @@ void MAIN {
                             transpose_wh_tile(index_tensor_cb_index, 1, index_dest_end);
 
                             // llk_topk_sort -> inplace
-                            // ckernel::topk_local_sort(0, (int)dir, 5); // TODO: Turn on
+                            ckernel::topk_local_sort(0, (int)dir, 5);
 
                             // pack value tiles into transposed buffer
                             pack_reconfig_data_format(input_tensor_transposed_cb_index);
@@ -166,39 +165,18 @@ void MAIN {
 
                             cb_wait_front(input_tensor_transposed_cb_index, 2 * one_tile);
 
-                            // Transpose from sorting by column to right structure
                             reconfig_data_format_srca(input_tensor_transposed_cb_index);
                             transpose_wh_init_short(input_tensor_transposed_cb_index);
-                            pack_reconfig_data_format(input_tensor_transposed_cb_index);
-// {
-//     volatile int delay = 100000;
-//     while (delay--) {
-//         asm volatile("nop");
-//     }
-// }
-// UNPACK(DPRINT << "COMPUTE: 2. Transposed" << ENDL());
-// print_full_tile(input_tensor_transposed_cb_index, 0);
-// Add a small delay loop using inline assembly
-// {
-//     volatile int delay = 100000;
-//     while (delay--) {
-//         asm volatile("nop");
-//     }
-// }
-                            cb_reserve_back(input_tensor_output_cb_index, one_tile);
-                            transpose_wh_tile(input_tensor_transposed_cb_index, 0, 0);
-                            pack_tile(0, input_tensor_output_cb_index);
-
-// PACKER(DPRINT << "COMPUTE: 3. Output" << ENDL());
-// print_full_tile(input_tensor_output_cb_index, 0);
-                            cb_push_back(input_tensor_output_cb_index, one_tile);
+                            transpose_wh_tile(input_tensor_transposed_cb_index, 0, input_dest_start);
+                            transpose_wh_tile(input_tensor_transposed_cb_index, 1, input_dest_end);
 
                             cb_reserve_back(input_tensor_output_cb_index, one_tile);
-                            transpose_wh_tile(input_tensor_transposed_cb_index, 1, 0);
-                            pack_tile(0, input_tensor_output_cb_index);
-                            cb_push_back(input_tensor_output_cb_index, one_tile);
+                            pack_reconfig_data_format(input_tensor_output_cb_index);
+                            pack_tile(input_dest_start, input_tensor_output_cb_index);
+                            pack_tile(input_dest_end, input_tensor_output_cb_index);
 
                             cb_pop_front(input_tensor_transposed_cb_index, 2 * one_tile);
+                            cb_push_back(input_tensor_output_cb_index, 2 * one_tile);
 
                             release_dst();
 
@@ -209,19 +187,16 @@ void MAIN {
 
                             reconfig_data_format_srca(index_tensor_transposed_cb_index);
                             transpose_wh_init_short(index_tensor_transposed_cb_index);
-                            pack_reconfig_data_format(index_tensor_transposed_cb_index);
+                            transpose_wh_tile(index_tensor_transposed_cb_index, 0, input_dest_start);
+                            transpose_wh_tile(index_tensor_transposed_cb_index, 1, input_dest_end);
 
                             cb_reserve_back(index_tensor_output_cb_index, one_tile);
-                            transpose_wh_tile(index_tensor_transposed_cb_index, 0, 0);
-                            pack_tile(0, index_tensor_output_cb_index);
-                            cb_push_back(index_tensor_output_cb_index, one_tile);
-
-                            cb_reserve_back(index_tensor_output_cb_index, one_tile);
-                            transpose_wh_tile(index_tensor_transposed_cb_index, 1, 0);
-                            pack_tile(0, index_tensor_output_cb_index);
-                            cb_push_back(index_tensor_output_cb_index, one_tile);
+                            pack_reconfig_data_format(index_tensor_output_cb_index);
+                            pack_tile(input_dest_start, index_tensor_output_cb_index);
+                            pack_tile(input_dest_end, index_tensor_output_cb_index);
 
                             cb_pop_front(index_tensor_transposed_cb_index, 2 * one_tile);
+                            cb_push_back(index_tensor_output_cb_index, 2 * one_tile);
 
                             release_dst();
 
