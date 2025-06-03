@@ -617,6 +617,8 @@ bool Cluster::supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) c
     // TODO: Remove this once we have a proper fix for small DMA sizes.
     constexpr uint32_t min_dma_size_bytes = 32;
 
+    // DMA reads and writes are only supported on WH. If/when DMA reads and writes are supported on BH, this should be
+    // updated to support BH architectures as well. See https://github.com/tenstorrent/tt-metal/issues/22957
     return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->cluster_desc_->is_chip_mmio_capable(chip_id) &&
            sz_in_bytes >= min_dma_size_bytes;
 }
