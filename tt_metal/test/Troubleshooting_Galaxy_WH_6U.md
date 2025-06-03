@@ -5,7 +5,7 @@ If you suspect system issues in Wormhole Galaxy 6U systems reference the followi
 To perform a system information dump see the [TT-SMI README.md](https://github.com/tenstorrent/tt-smi/blob/main/README.md). In the TT-SMI repository there are instructions for building from git, usage, resets, disabling software versions, taking system snapshots, and more.
 
 ## Testing System Configurations
-Testing any system configuration is required to ensure that code is behaving as intended and the configuration is set up properly. You can build a custom test or run component tests to check for basic functionality of componenets in the AI stack.
+Testing any system configuration is required to ensure that code is behaving as intended and the configuration is set up properly. You can build a custom test or run component tests to check for basic functionality of components in the AI stack.
 
 ### Build a Metal Test
 To build a custom test run the following command: `./build_metal.sh --build-tests`
