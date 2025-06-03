@@ -34,6 +34,7 @@ target_compile_definitions(
     PUBLIC
         TRACY_ENABLE
         "$<$<BOOL:${ENABLE_TRACY_TIMER_FALLBACK}>:TRACY_TIMER_FALLBACK>"
+)
 target_compile_options(
     TracyClient
     PUBLIC
