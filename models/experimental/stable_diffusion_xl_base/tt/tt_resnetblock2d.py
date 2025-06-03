@@ -100,7 +100,7 @@ class TtResnetBlock2D(nn.Module):
                 device,
                 conv_weights_1,
                 conv_bias_1,
-                model_config.conv_w_dtype,
+                self.conv1_config.weights_dtype,
                 split_in,
                 split_out,
             )
@@ -114,7 +114,8 @@ class TtResnetBlock2D(nn.Module):
                 device,
                 conv_weights_1,
                 conv_bias_1,
-                model_config.conv_w_dtype,
+                self.conv1_config.weights_dtype,
+                fp32_dest_acc_en=self.conv1_config.weights_dtype == ttnn.bfloat8_b,
             )
 
         self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
@@ -127,7 +128,8 @@ class TtResnetBlock2D(nn.Module):
             device,
             conv_weights_2,
             conv_bias_2,
-            model_config.conv_w_dtype,
+            self.conv2_config.weights_dtype,
+            fp32_dest_acc_en=self.conv2_config.weights_dtype == ttnn.bfloat8_b,
         )
 
         if conv_shortcut:
