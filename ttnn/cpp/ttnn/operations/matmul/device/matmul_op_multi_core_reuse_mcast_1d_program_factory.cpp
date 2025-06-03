@@ -2229,14 +2229,6 @@ inline void override_program_mcast_in1(
     }
 
     auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.kernels.at(2));
-            if (!global_cb.has_value()) {
-                TT_FATAL(
-                    input_tensors.size() + optional_input_tensors.size() == 3,
-                    "Total number of input tensors (required ({}) + optional ({})) must be 3",
-                    input_tensors.size(),
-                    optional_input_tensors.size());
-                TT_FATAL(output_tensors.size() == 1, "Number of output tensors ({}) must be 1", output_tensors.size());
-            }
 
     for (uint32_t i = 1; i < shared_variables.cores.size(); ++i) {
         const CoreCoord& core = shared_variables.cores[i];
@@ -2337,8 +2329,12 @@ inline void override_program_gather_in0(
     auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
 
     if (!global_cb.has_value()) {
-        TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
-        TT_ASSERT(output_tensors.size() == 1);
+        TT_FATAL(
+            input_tensors.size() + optional_input_tensors.size() == 3,
+            "Total number of input tensors (required ({}) + optional ({})) must be 3",
+            input_tensors.size(),
+            optional_input_tensors.size());
+        TT_FATAL(output_tensors.size() == 1, "Number of output tensors ({}) must be 1", output_tensors.size());
     }
 
     auto src_buffer_a = input_tensors[0].buffer();
