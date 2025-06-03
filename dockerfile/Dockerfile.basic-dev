@@ -29,3 +29,8 @@ RUN set -eux; \
     apt-get install -f -y "$TMP_DIR/ompi.deb" && \
     rm -rf "$TMP_DIR" && \
     rm -rf /var/lib/apt/lists/*
+
+
+RUN mkdir /debians
+# Copy all .deb files from host into the image
+COPY .build/default/*.deb /debians/
