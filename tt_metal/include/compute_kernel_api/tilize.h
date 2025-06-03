@@ -246,12 +246,11 @@ ALWI void fast_tilize_init_short(uint32_t icb, uint32_t full_dim, uint32_t ocb) 
     PACK((llk_pack_fast_tilize_init()));
 }
 
-ALWI void fast_tilize_init_short_with_dt(
-    uint32_t old_icb, uint32_t new_icb, uint32_t block_dim, uint32_t full_dim, uint32_t ocb) {
-    UNPACK((llk_unpack_reconfig_data_format_srca(old_icb, new_icb)));
-    MATH((llk_math_reconfig_data_format_srca(old_icb, new_icb)));
+ALWI void fast_tilize_init_short_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+    UNPACK((llk_unpack_reconfig_data_format(icb, icb)));
+    MATH((llk_math_reconfig_data_format(icb, icb)));
 
-    fast_tilize_init_short(new_icb, full_dim, ocb);
+    fast_tilize_init_short(icb, full_dim, ocb);
 }
 
 ALWI void fast_tilize_block(

@@ -22,7 +22,7 @@
 
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    fast_tilize_init_short(in_cb_id, in_block_w, out_cb_id);
+    fast_tilize_init_short_with_dt(in_cb_id, in_block_w, out_cb_id);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
@@ -135,12 +135,17 @@ void MAIN {
     for (uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
 #ifdef PRE_TILIZE
-            reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
-
             tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
 
             mm_block_init_short_with_dt(
-                in0_cb_id, in1_cb_id, in0_pretilize_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                in0_cb_id,
+                in1_cb_id,
+                in0_pretilize_cb_id,
+                in0_pretilize_cb_id,
+                false,
+                out_subblock_w,
+                out_subblock_h,
+                in0_block_w);
 #endif
 
             bool enable_reload = false;
@@ -157,13 +162,17 @@ void MAIN {
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
 #ifdef WIDTH_SHARDED
                 if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
-                    reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
-
-                    // DPRINT_MATH(DPRINT<<"Tilize Loop "<<in0_block_h_i<<" "<<in0_block_w_i<<"\n";)
                     tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
 
                     mm_block_init_short_with_dt(
-                        in0_cb_id, in1_cb_id, in0_pretilize_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                        in0_cb_id,
+                        in1_cb_id,
+                        in0_pretilize_cb_id,
+                        in0_pretilize_cb_id,
+                        false,
+                        out_subblock_w,
+                        out_subblock_h,
+                        in0_block_w);
                 }
 #endif
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
@@ -178,9 +187,6 @@ void MAIN {
                     pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                     pack_reconfig_l1_acc(0);
 #endif
-
-                    reconfig_data_format_srca(in1_cb_id, in0_cb_id);
-
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
 #ifdef SPLIT_READER
                     tilize_in(
@@ -194,7 +200,8 @@ void MAIN {
                     mm_block_init_short_with_dt(
                         mm_in0_cb_id,
                         in1_cb_id,
-                        /*srca_old_operand=*/in0_cb_id,
+                        in0_cb_id,
+                        in0_cb_id,
                         false,
                         out_subblock_w,
                         out_subblock_h,
@@ -236,6 +243,7 @@ void MAIN {
                             mm_block_init_short_with_dt(
                                 mm_in0_cb_id,
                                 in1_cb_id,
+                                mm_in0_cb_id,
                                 matmul_partials_cb,
                                 false,
                                 out_subblock_w,
