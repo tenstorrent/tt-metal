@@ -29,10 +29,11 @@ set_target_properties(
             "tracy"
 )
 
-target_compile_definitions(TracyClient PUBLIC
-    TRACY_ENABLE
-    "$<$<BOOL:${ENABLE_TRACY_TIMER_FALLBACK}>:TRACY_TIMER_FALLBACK>"
-)
+target_compile_definitions(
+    TracyClient
+    PUBLIC
+        TRACY_ENABLE
+        "$<$<BOOL:${ENABLE_TRACY_TIMER_FALLBACK}>:TRACY_TIMER_FALLBACK>"
 target_compile_options(
     TracyClient
     PUBLIC
