@@ -415,7 +415,7 @@ def test_untilize_single_core_sharded_to_sharded(
     "num_shard_cores, standard_shard_core_grid, block_shard_core_grid",
     [
         [
-            2,
+            4,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
         ],
