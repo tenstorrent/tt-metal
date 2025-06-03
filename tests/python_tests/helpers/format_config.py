@@ -31,6 +31,7 @@ class DataFormat(Enum):
     Bfp8_b = DataFormatInfo("Bfp8_b", 1)
     Float32 = DataFormatInfo("Float32", 4)
     Int32 = DataFormatInfo("Int32", 4)
+    Tf32 = DataFormatInfo("Tf32", 3)
 
     @property
     def size(self) -> int:

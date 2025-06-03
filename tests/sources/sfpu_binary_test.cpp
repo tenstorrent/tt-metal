@@ -8,8 +8,6 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 
-const bool unpack_to_dest = true;
-
 // Globals
 uint32_t unp_cfg_context          = 0;
 uint32_t pack_sync_tile_dst_ptr   = 0;

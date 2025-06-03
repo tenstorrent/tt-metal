@@ -92,6 +92,7 @@ def test_all(testname, formats, dest_acc, mathop):
         "testname": testname,
         "dest_acc": dest_acc,
         "mathop": mathop,
+        "unpack_to_dest": True,  # This test does a datacopy and unpacks input into dest register
     }
 
     make_cmd = generate_make_command(test_config)

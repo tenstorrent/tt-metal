@@ -23,16 +23,16 @@ def generate_make_command(test_config):
     make_cmd = f"make -j 6 --silent "
     formats = test_config.get("formats")
     testname = test_config.get("testname")
-    dest_acc = test_config.get(
-        "dest_acc", DestAccumulation.No
-    )  # default is not 32 bit dest_acc
+    dest_acc = test_config.get("dest_acc", DestAccumulation.No)
+    unpack_to_dest = str(test_config.get("unpack_to_dest", False)).lower()
+
     if isinstance(formats, InputOutputFormat):
         make_cmd += f"unpack_A_src={unpack_A_src_dict[formats.input_format]} pack_dst={pack_dst_dict[formats.output_format]} "
     else:
         make_cmd += f"unpack_A_src={unpack_A_src_dict[formats.unpack_A_src]} unpack_A_dst={unpack_A_dst_dict[formats.unpack_A_dst]} unpack_B_src={unpack_B_src_dict[formats.unpack_B_src]} unpack_B_dst={unpack_B_dst_dict[formats.unpack_B_dst]} "
         make_cmd += f"fpu={math_dict[formats.math]} pack_src={pack_src_dict[formats.pack_src]} pack_dst={pack_dst_dict[formats.pack_dst]} "
 
-    make_cmd += f"testname={testname} dest_acc={dest_acc.value} "
+    make_cmd += f"testname={testname} dest_acc={dest_acc.value} unpack_to_dest={unpack_to_dest} "
     mathop = test_config.get("mathop", "no_mathop")
     approx_mode = test_config.get("approx_mode", ApproximationMode.No)
     math_fidelity = test_config.get("math_fidelity", MathFidelity.LoFi)

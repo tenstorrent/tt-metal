@@ -49,7 +49,7 @@ else
 	MATHOP_ARG:= -D$(mathop) -DAPPROX_MODE=$(approx_mode)  -DPOOL_TYPE=$(pool_type) -DREDUCE_DIM=$(reduce_dim)
 endif
 
-OPTIONS_COMPILE+= -DMATH_FIDELITY=$(math_fidelity)
+OPTIONS_COMPILE+= -DMATH_FIDELITY=$(math_fidelity) -DUNPACKING_TO_DEST=$(unpack_to_dest)
 
 # If test needs to run muliple consecutive operations it needs some additional
 # files to be linked to it

@@ -25,7 +25,7 @@ from helpers.utils import compare_pcc, run_shell_command
 
 
 def generate_golden(operand1, operand2, data_format, math_fidelity):
-    data_type = format_dict.get(data_format, format_dict[DataFormat.Float16_b])
+    torch_format = format_dict.get(data_format, format_dict[DataFormat.Float16_b])
 
     if math_fidelity in [MathFidelity.LoFi, MathFidelity.HiFi2]:  # LoFi or HiFi2
         for element in operand2:
@@ -36,16 +36,21 @@ def generate_golden(operand1, operand2, data_format, math_fidelity):
             element = element.to(torch.int32)
             element &= 0xFFF8
 
-    operand1_matrix = operand1.view(32, 32).to(data_type)
-    operand2_matrix = operand2.view(32, 32).to(data_type)
+    operand1_matrix = operand1.view(32, 32).to(torch_format)
+    operand2_matrix = operand2.view(32, 32).to(torch_format)
 
     result_matrix = torch.matmul(operand1_matrix, operand2_matrix)
 
-    return result_matrix.view(1024).to(data_type)
+    return result_matrix.view(1024).to(torch_format)
 
 
 # SUPPORTED FORMATS FOR TEST
-supported_formats = [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Bfp8_b]
+supported_formats = [
+    DataFormat.Float16,
+    DataFormat.Float16_b,
+    DataFormat.Bfp8_b,
+    DataFormat.Float32,
+]
 #   INPUT-OUTPUT FORMAT SWEEP
 #   input_output_formats(supported_formats)
 
@@ -62,7 +67,6 @@ supported_formats = [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Bfp8_b
 
 #   SPECIFIC INPUT-OUTPUT COMBINATION
 #   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
-
 
 test_formats = input_output_formats(supported_formats)
 all_params = generate_params(
@@ -85,19 +89,18 @@ param_ids = generate_param_ids(all_params)
     ids=param_ids,
 )
 def test_matmul(testname, formats, dest_acc, math_fidelity):
-    data_type = format_dict.get(
+    torch_format = format_dict.get(
         formats.output_format, format_dict[DataFormat.Float16_b]
     )
 
     src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
 
     golden_tensor = generate_golden(src_A, src_B, formats.output_format, math_fidelity)
-    golden_tensor = tilize(golden_tensor, data_type)
-    golden_tensor = golden_tensor.to(data_type)
+    golden_tensor = tilize(golden_tensor, torch_format).to(torch_format)
 
     write_stimuli_to_l1(
-        tilize(src_A, data_type),
-        tilize(src_B, data_type),
+        tilize(src_A, torch_format),
+        tilize(src_B, torch_format),
         formats.input_format,
         formats.input_format,
     )
@@ -118,7 +121,7 @@ def test_matmul(testname, formats, dest_acc, math_fidelity):
     res_from_L1 = collect_results(formats, tensor_size=len(src_A))
     assert len(res_from_L1) == len(golden_tensor)
 
-    res_tensor = torch.tensor(res_from_L1, dtype=(data_type))
+    res_tensor = torch.tensor(res_from_L1, dtype=(torch_format))
 
     atol = 0.1
     rtol = 0.05

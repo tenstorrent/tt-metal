@@ -35,12 +35,7 @@ constexpr bool dest_acc_en_input =
     false;
 #endif
 
-constexpr bool unpack_to_dest =
-#if defined(UNPACK_A_SRC_INT32) || defined(UNPACK_A_SRC_FLOAT32)
-    true;
-#else
-    false;
-#endif
+constexpr bool unpack_to_dest = UNPACKING_TO_DEST;
 
 #define UNPACK_A_SRC_CASE(data_format) constexpr auto UNPACK_A_IN = get_data_format(DataFormat::data_format);
 
@@ -58,6 +53,9 @@ UNPACK_A_SRC_CASE(Int32)
 #endif
 #if defined(UNPACK_A_SRC_BFP8_B)
 UNPACK_A_SRC_CASE(Bfp8_b)
+#endif
+#if defined(UNPACK_A_SRC_TF32)
+UNPACK_A_SRC_CASE(Tf32)
 #endif
 
 #undef UNPACK_A_SRC_CASE
@@ -79,6 +77,9 @@ UNPACK_B_SRC_CASE(Int32)
 #if defined(UNPACK_B_SRC_BFP8_B)
 UNPACK_B_SRC_CASE(Bfp8_b)
 #endif
+#if defined(UNPACK_B_SRC_TF32)
+UNPACK_B_SRC_CASE(Tf32)
+#endif
 
 #undef UNPACK_B_SRC_CASE
 
@@ -98,6 +99,9 @@ UNPACK_A_DST_CASE(Int32)
 #if defined(UNPACK_A_DST_BFP8_B)
 UNPACK_A_DST_CASE(Bfp8_b)
 #endif
+#if defined(UNPACK_A_DST_TF32)
+UNPACK_A_DST_CASE(Tf32)
+#endif
 
 #undef UNPACK_A_DST_CASE
 
@@ -116,6 +120,9 @@ UNPACK_B_DST_CASE(Int32)
 #endif
 #if defined(UNPACK_B_DST_BFP8_B)
 UNPACK_B_DST_CASE(Bfp8_b)
+#endif
+#if defined(UNPACK_B_DST_TF32)
+UNPACK_B_DST_CASE(Tf32)
 #endif
 
 #undef UNPACK_B_DST_CASE
@@ -137,6 +144,9 @@ PACK_SRC_CASE(Int32)
 #if defined(PACK_SRC_BFP8_B)
 PACK_SRC_CASE(Bfp8_b)
 #endif
+#if defined(PACK_SRC_TF32)
+PACK_SRC_CASE(Tf32)
+#endif
 
 #undef PACK_SRC_CASE
 
@@ -156,6 +166,9 @@ PACK_DST_CASE(Int32)
 #endif
 #if defined(PACK_DST_BFP8_B)
 PACK_DST_CASE(Bfp8_b)
+#endif
+#if defined(PACK_DST_TF32)
+PACK_DST_CASE(Tf32)
 #endif
 
 #undef PACK_DST_CASE
@@ -177,17 +190,21 @@ MATH_CASE(Int32)
 #if defined(MATH_BFP8_B)
 MATH_CASE(Bfp8_b)
 #endif
+#if defined(MATH_TF32)
+MATH_CASE(Tf32)
+#endif
 
 #undef MATH_CASE
 
-#if !defined(MATH_BFP8_B) && !defined(MATH_INT32) && !defined(MATH_FLOAT32) && !defined(MATH_FLOAT16) && !defined(MATH_FLOAT16_B)
-constexpr bool is_fp32_dest_acc_en      = dest_acc_en_input || is_format_combination_outlier(UNPACK_A_IN, PACK_OUT, dest_acc_en_input);
-constexpr FormatConfig pipeline_formats = get_data_formats(UNPACK_A_IN, PACK_OUT, dest_acc_en_input);
-constexpr auto UNPACK_A_OUT             = pipeline_formats.unpack_dst;
-constexpr auto UNPACK_B_IN              = pipeline_formats.unpack_src;
-constexpr auto UNPACK_B_OUT             = pipeline_formats.unpack_dst;
-constexpr auto PACK_IN                  = pipeline_formats.pack_src;
-constexpr auto MATH_FORMAT              = pipeline_formats.unpack_dst;
+#if !defined(MATH_BFP8_B) && !defined(MATH_INT32) && !defined(MATH_FLOAT32) && !defined(MATH_FLOAT16) && !defined(MATH_FLOAT16_B) && !defined(MATH_TF32)
+constexpr bool is_fp32_dest_acc_en =
+    dest_acc_en_input || is_format_combination_outlier(static_cast<DataFormat>(UNPACK_A_IN), static_cast<DataFormat>(PACK_OUT), dest_acc_en_input);
+constexpr FormatConfig pipeline_formats = get_data_formats(static_cast<DataFormat>(UNPACK_A_IN), static_cast<DataFormat>(PACK_OUT), dest_acc_en_input);
+constexpr auto UNPACK_A_OUT             = static_cast<uint32_t>(pipeline_formats.unpack_dst);
+constexpr auto UNPACK_B_IN              = static_cast<uint32_t>(pipeline_formats.unpack_src);
+constexpr auto UNPACK_B_OUT             = static_cast<uint32_t>(pipeline_formats.unpack_dst);
+constexpr auto PACK_IN                  = static_cast<uint32_t>(pipeline_formats.pack_src);
+constexpr auto MATH_FORMAT              = static_cast<uint32_t>(pipeline_formats.unpack_dst);
 #else
 constexpr bool is_fp32_dest_acc_en = dest_acc_en_input;
 #endif
