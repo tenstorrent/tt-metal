@@ -66,7 +66,7 @@ std::optional<HostBuffer> DistributedHostBuffer::get_shard(const distributed::Me
 }
 
 void DistributedHostBuffer::emplace_shard(
-    const distributed::MeshCoordinate& coord, const std::function<HostBuffer()>& buffer_fn) {
+    const distributed::MeshCoordinate& coord, const std::function<HostBuffer()>& produce_buffer) {
     TT_FATAL(
         distributed::MeshCoordinateRange(global_shape_).contains(coord),
         "Coordinate {} is outside the global shape bounds {}",
@@ -76,7 +76,7 @@ void DistributedHostBuffer::emplace_shard(
     populated_shards_.insert(coord);
     auto local_coord_opt = global_to_local(coord);
     if (local_coord_opt.has_value()) {
-        local_buffers_.at(*local_coord_opt) = buffer_fn();
+        local_buffers_.at(*local_coord_opt) = produce_buffer();
     }
 }
 
