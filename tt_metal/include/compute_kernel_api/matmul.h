@@ -38,9 +38,9 @@ ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, co
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
 
-    PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id)));
+    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
-    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
 
 // clang-format off
@@ -163,9 +163,9 @@ ALWI void mm_block_init(
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
 
-    PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id)));
+    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
     PACK((llk_pack_init<false, false>(out_cb_id)));
-    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
 
 // clang-format off

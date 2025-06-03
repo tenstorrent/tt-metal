@@ -29,7 +29,7 @@ namespace ckernel {
 ALWI void copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, false /*transpose within 16x16 face*/, cbid)));
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, cbid)));
 }
 /**
@@ -81,7 +81,7 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cb
 ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index)));
-    MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(
+    MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 }
 
@@ -89,7 +89,7 @@ ALWI void copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles, false)));
-    MATH((llk_math_eltwise_unary_datacopy_block<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(
+    MATH((llk_math_eltwise_unary_datacopy_block<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         start_dst_tile_index, ntiles, in_cb_id)));
 }
 
