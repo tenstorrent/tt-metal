@@ -14,6 +14,14 @@
 #include <tt-metalium/logger.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 
+// Global state for daemon mode
+static bool daemon_mode = false;
+static bool daemon_running = true;
+static std::string daemon_pipe_path = "/tmp/tt_metal_fabric_edm_daemon";
+static FILE* debug_log = nullptr;
+
+// Signal handler for graceful shutdown
+void signal_handler(int signum) { daemon_running = false; }
 
 struct TestParams {
     WriteThroughputStabilityTestWithPersistentFabricParams params;
@@ -112,8 +120,177 @@ static void dispatch_single_line_bw_test(
     Run1DFabricPacketSendTest(test_specs, test_params.params);
 }
 
+static int run_single_test(TestParams& test_params, const std::string& test_mode) {
+    auto chip_send_type = test_params.fabric_unicast ? tt::tt_fabric::CHIP_UNICAST : tt::tt_fabric::CHIP_MULTICAST;
+    auto [noc_send_type, flush] = get_noc_send_type(test_params.message_noc_type);
+
+    std::vector<Fabric1DPacketSendTestSpec> test_specs{
+        {.chip_send_type = chip_send_type,
+         .noc_send_type = noc_send_type,
+         .num_messages = test_params.num_messages,
+         .packet_payload_size_bytes = test_params.packet_payload_size_bytes,
+         .flush = flush}};
+
+    try {
+        if (test_mode == "1_fabric_instance") {
+            Run1DFabricPacketSendTest(test_specs, test_params.params);
+        } else if (test_mode == "1D_fabric_on_mesh") {
+            if (test_params.params.fabric_mode == FabricTestMode::Linear) {
+                Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_specs, test_params.params);
+            } else if (test_params.params.fabric_mode == FabricTestMode::FullRing) {
+                Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_specs, test_params.params);
+            } else {
+                TT_THROW(
+                    "Invalid fabric mode when using device init fabric in 1D fabric on mesh BW test: {}",
+                    test_params.params.fabric_mode);
+            }
+        } else {
+            TT_THROW("Invalid test mode: {}", test_mode.c_str());
+        }
+        return 0;
+    } catch (const std::exception& e) {
+        tt::log_error("Test failed: {}", e.what());
+        return 1;
+    }
+}
+
+static TestParams parse_test_params_from_string(const std::string& params_str) {
+    std::istringstream iss(params_str);
+    std::vector<std::string> tokens;
+    std::string token;
+
+    while (std::getline(iss, token, '|')) {
+        tokens.push_back(token);
+    }
+
+    if (tokens.size() < 12) {
+        TT_THROW("Invalid parameter string format");
+    }
+
+    TestParams test_params;
+    size_t idx = 0;
+
+    test_params.fabric_unicast = std::stoi(tokens[idx++]);
+    test_params.message_noc_type = tokens[idx++];
+    test_params.num_messages = std::stoi(tokens[idx++]);
+    test_params.params.num_links = std::stoi(tokens[idx++]);
+    test_params.params.num_op_invocations = std::stoi(tokens[idx++]);
+    test_params.params.line_sync = std::stoi(tokens[idx++]);
+    test_params.params.line_size = std::stoi(tokens[idx++]);
+    test_params.packet_payload_size_bytes = std::stoi(tokens[idx++]);
+    test_params.params.fabric_mode = static_cast<FabricTestMode>(std::stoi(tokens[idx++]));
+    test_params.params.disable_sends_for_interior_workers = std::stoi(tokens[idx++]);
+    test_params.params.disable_end_workers_in_backward_direction = std::stoi(tokens[idx++]);
+    test_params.params.senders_are_unidirectional = std::stoi(tokens[idx++]);
+
+    // Optional mesh parameters
+    if (tokens.size() > 12) {
+        test_params.params.num_fabric_rows = std::stoi(tokens[idx++]);
+        test_params.params.num_fabric_cols = std::stoi(tokens[idx++]);
+        test_params.params.first_link_offset = std::stoi(tokens[idx++]);
+    }
+
+    return test_params;
+}
+
+static void run_daemon_mode() {
+    tt::log_info("Starting fabric EDM daemon mode...");
+
+    // Setup signal handlers
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    // Create named pipe
+    unlink(daemon_pipe_path.c_str());
+    if (mkfifo(daemon_pipe_path.c_str(), 0666) == -1) {
+        TT_THROW("Failed to create named pipe: {}", daemon_pipe_path);
+    }
+
+    tt::log_info("Daemon listening on pipe: {}", daemon_pipe_path);
+
+    while (daemon_running) {
+        std::ifstream pipe(daemon_pipe_path);
+        if (!pipe.is_open()) {
+            tt::log_warning("Failed to open pipe, retrying...");
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
+        std::string command;
+        if (std::getline(pipe, command)) {
+            if (command == "SHUTDOWN") {
+                tt::log_info("Received shutdown command");
+                break;
+            } else if (command.starts_with("TEST:")) {
+                std::string test_params_str = command.substr(5);
+                size_t separator_pos = test_params_str.find(':');
+                if (separator_pos == std::string::npos) {
+                    tt::log_error("Invalid test command format");
+                    continue;
+                }
+
+                std::string test_mode = test_params_str.substr(0, separator_pos);
+                std::string params_str = test_params_str.substr(separator_pos + 1);
+
+                try {
+                    TestParams test_params = parse_test_params_from_string(params_str);
+
+                    auto rc = baseline_validate_test_environment(test_params.params);
+                    int result;
+                    if (rc != 0) {
+                        tt::log_warning("Test environment validation failed");
+                        result = 1;  // Return 1 for environment validation failure
+                    } else {
+                        result = run_single_test(test_params, test_mode);
+                    }
+
+                    // Write result back to a result pipe
+                    std::string result_pipe_path = daemon_pipe_path + "_result";
+                    std::ofstream result_pipe(result_pipe_path);
+                    if (result_pipe.is_open()) {
+                        result_pipe << result << std::endl;
+                        result_pipe.close();
+                    }
+
+                    tt::log_info("Test completed with result: {}", result);
+
+                } catch (const std::exception& e) {
+                    tt::log_error("Error running test: {}", e.what());
+
+                    // Write error result
+                    std::string result_pipe_path = daemon_pipe_path + "_result";
+                    std::ofstream result_pipe(result_pipe_path);
+                    if (result_pipe.is_open()) {
+                        result_pipe << 1 << std::endl;
+                        result_pipe.close();
+                    }
+                }
+            }
+        }
+
+        pipe.close();
+        // Small delay to prevent busy waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // Cleanup
+    unlink(daemon_pipe_path.c_str());
+    unlink((daemon_pipe_path + "_result").c_str());
+    if (debug_log) {
+        fclose(debug_log);
+        debug_log = nullptr;
+    }
+    tt::log_info("Daemon shutdown complete");
+}
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "daemon_mode") {
+        daemon_mode = true;
+        run_daemon_mode();
+        return 0;
+    }
+
+    // Original single-run mode
     std::size_t arg_idx = 1;
     std::string test_mode = argv[arg_idx++];
 
@@ -155,24 +332,12 @@ int main(int argc, char** argv) {
     TT_FATAL(test_params.params.num_op_invocations > 0, "num_op_invocations must be greater than 0");
     TT_FATAL(test_params.params.line_size > 0, "line_size must be greater than 0");
 
-    auto chip_send_type = test_params.fabric_unicast ? tt::tt_fabric::CHIP_UNICAST : tt::tt_fabric::CHIP_MULTICAST;
-
-    auto [noc_send_type, flush] = get_noc_send_type(test_params.message_noc_type);
-
-    std::vector<Fabric1DPacketSendTestSpec> test_specs{
-        {.chip_send_type = chip_send_type,
-         .noc_send_type = noc_send_type,
-         .num_messages = test_params.num_messages,
-         .packet_payload_size_bytes = test_params.packet_payload_size_bytes,
-         .flush = flush}};
-
-    if (test_mode == "1_fabric_instance") {
-        dispatch_single_line_bw_test(test_specs, test_params, argc, argv, arg_idx);
-    } else if (test_mode == "1D_fabric_on_mesh") {
-        dispatch_1d_fabric_on_mesh(test_specs, test_params, argc, argv, arg_idx);
-    } else {
-        TT_THROW("Invalid test mode: {}", test_mode.c_str());
+    // Handle mesh parameters if present
+    if (test_mode == "1D_fabric_on_mesh" && arg_idx < argc) {
+        test_params.params.num_fabric_rows = std::stoi(argv[arg_idx++]);
+        test_params.params.num_fabric_cols = std::stoi(argv[arg_idx++]);
+        test_params.params.first_link_offset = std::stoi(argv[arg_idx++]);
     }
 
-    return 0;
+    return run_single_test(test_params, test_mode);
 }
