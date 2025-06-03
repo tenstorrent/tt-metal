@@ -122,6 +122,7 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
         "dest_acc": dest_acc,
         "mathop": mathop,
         "approx_mode": approx_mode,
+        "unpack_to_dest": True,  # This test does a datacopy and unpacks input into dest register
     }
 
     make_cmd = generate_make_command(test_config)

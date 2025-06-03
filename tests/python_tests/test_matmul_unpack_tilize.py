@@ -25,19 +25,19 @@ from helpers.utils import compare_pcc, run_shell_command
 
 
 def generate_golden(operand1, operand2, data_format, math_fidelity):
+    torch_format = format_dict.get(data_format, format_dict[DataFormat.Float16_b])
 
-    if data_format == DataFormat.Float16_b:
-        if math_fidelity in [MathFidelity.LoFi, MathFidelity.HiFi2]:  # LoFi or HiFi2
-            for element in operand2:
-                element = element.to(torch.int32)
-                element &= 0xFFFE
-        if math_fidelity == MathFidelity.LoFi:  # LoFi
-            for element in operand1:
-                element = element.to(torch.int32)
-                element &= 0xFFF8
+    if math_fidelity in [MathFidelity.LoFi, MathFidelity.HiFi2]:  # LoFi or HiFi2
+        for element in operand2:
+            element = element.to(torch.int32)
+            element &= 0xFFFE
+    if math_fidelity == MathFidelity.LoFi:  # LoFi
+        for element in operand1:
+            element = element.to(torch.int32)
+            element &= 0xFFF8
 
-    operand1_matrix = operand1.view(32, 32).to(format_dict[data_format])
-    operand2_matrix = operand2.view(32, 32).to(format_dict[data_format])
+    operand1_matrix = operand1.view(32, 32).to(torch_format)
+    operand2_matrix = operand2.view(32, 32).to(torch_format)
 
     result_matrix = torch.matmul(operand1_matrix, operand2_matrix)
 
@@ -45,7 +45,10 @@ def generate_golden(operand1, operand2, data_format, math_fidelity):
 
 
 # SUPPORTED FORMATS FOR TEST
-supported_formats = [DataFormat.Float16_b, DataFormat.Float16]
+supported_formats = [
+    DataFormat.Float16_b,
+    DataFormat.Float16,
+]  # Add DataFormat.Float32 when Data format Inference Model 2.0 supports format conversions for > 1 pipeline run
 
 #   INPUT-OUTPUT FORMAT SWEEP
 #   input_output_formats(supported_formats)
@@ -86,12 +89,16 @@ param_ids = generate_param_ids(all_params)
 )
 def test_matmul_unpack_tilize(testname, formats, dest_acc, math_fidelity):
 
+    torch_format = format_dict.get(
+        formats.output_format, format_dict[DataFormat.Float16_b]
+    )
+
     src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
 
     golden_tensor = tilize(
         generate_golden(src_A, src_B, formats.output_format, math_fidelity)
     )
-    golden_tensor = golden_tensor.to(format_dict[formats.output_format])
+    golden_tensor = golden_tensor.to(torch_format)
 
     write_stimuli_to_l1(
         src_A,
@@ -118,19 +125,11 @@ def test_matmul_unpack_tilize(testname, formats, dest_acc, math_fidelity):
     )
     assert len(res_from_L1) == len(golden_tensor)
 
-    res_tensor = torch.tensor(
-        res_from_L1,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
-            else torch.bfloat16
-        ),
-    )
+    res_tensor = torch.tensor(res_from_L1, dtype=(torch_format))
 
-    if formats.output_format in [DataFormat.Float16_b, DataFormat.Float16]:
-        atol = 0.1
-        rtol = 0.05
-    elif formats.output_format == DataFormat.Bfp8_b:
+    atol = 0.1
+    rtol = 0.05
+    if formats.output_format == DataFormat.Bfp8_b:
         atol = 0.1
         rtol = 0.2
 

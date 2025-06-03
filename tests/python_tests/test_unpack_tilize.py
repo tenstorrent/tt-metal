@@ -67,6 +67,7 @@ def test_unpack_tilize(testname, formats):
     test_config = {
         "formats": formats,
         "testname": testname,
+        "unpack_to_dest": True,  # This test does a datacopy and unpacks input into dest register
     }
 
     make_cmd = generate_make_command(test_config)

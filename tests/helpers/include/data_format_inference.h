@@ -17,48 +17,60 @@ constexpr bool is_wormhole  = false;
 
 struct FormatConfig
 {
-    const uint32_t unpack_src;
-    const uint32_t unpack_dst;
-    const uint32_t pack_src;
-    const uint32_t pack_dst;
+    DataFormat unpack_src;
+    DataFormat unpack_dst;
+    DataFormat pack_src;
+    DataFormat pack_dst;
 };
 
-constexpr bool is_exponentB(uint32_t format)
+constexpr bool is_exponentB(DataFormat format)
 {
-    return (
-        format == static_cast<uint32_t>(DataFormat::Float16_b) || format == static_cast<uint32_t>(DataFormat::Bfp8_b) ||
-        format == static_cast<uint32_t>(DataFormat::Tf32));
+    return (format == DataFormat::Float16_b || format == DataFormat::Bfp8_b || format == DataFormat::Tf32);
 }
 
-constexpr bool is_format_combination_outlier(uint32_t input, uint32_t output, bool is_fp32_dest_acc_en)
+constexpr bool is_format_combination_outlier(DataFormat input, DataFormat output, bool is_fp32_dest_acc_en)
 {
-    return (is_exponentB(input) && output == (uint32_t)DataFormat::Float16 && !is_fp32_dest_acc_en);
+    return (is_exponentB(input) && output == DataFormat::Float16 && !is_fp32_dest_acc_en);
 }
 
-constexpr FormatConfig get_data_formats(uint32_t input, uint32_t output, bool is_fp32_dest_acc_en)
+constexpr FormatConfig get_data_formats(DataFormat input, DataFormat output, bool is_fp32_dest_acc_en)
 {
-    uint32_t unpack_in  = input;
-    uint32_t unpack_out = input;
-    uint32_t pack_out   = output;
-    uint32_t pack_in    = 0;
+    DataFormat unpack_in  = input;
+    DataFormat unpack_out = input;
+    DataFormat pack_out   = output;
+    DataFormat pack_in    = DataFormat::Invalid; // Invalid format as placeholder
 
-    if (input == (uint32_t)DataFormat::Float16 && output == (uint32_t)DataFormat::Bfp8_b && !is_fp32_dest_acc_en)
+    if (input == DataFormat::Float32 && !UNPACKING_TO_DEST)
     {
-        pack_in = static_cast<uint32_t>(DataFormat::Bfp8);
+        unpack_out = DataFormat::Tf32;
+        if (is_fp32_dest_acc_en || is_exponentB(output))
+        {
+            pack_in = output;
+        }
+        else
+        {
+            pack_in = DataFormat::Tf32;
+        }
     }
-    else if (is_wormhole && is_fp32_dest_acc_en && output == (uint32_t)DataFormat::Float16)
+    else if (input == DataFormat::Float16 && output == DataFormat::Bfp8_b && !is_fp32_dest_acc_en)
     {
-        pack_in = static_cast<uint32_t>(DataFormat::Float32); // Gasket in wormhole cannot convert fp32 to fp16, and since dest accumulation turns on for
-                                                              // outlier cases we have fp32 in dest, so gasket cannot convert it to fp16, packer must do that
+        pack_in = DataFormat::Bfp8;
     }
     else if (is_format_combination_outlier(input, output, is_fp32_dest_acc_en))
     {
-        pack_in = (is_wormhole) ? (uint32_t)DataFormat::Float32 : output;
+        pack_in = (is_wormhole) ? DataFormat::Float32 : output;
     }
     else
     {
         pack_in = is_fp32_dest_acc_en ? output : input;
     }
 
+    if (is_wormhole && is_fp32_dest_acc_en && output == DataFormat::Float16)
+    {
+        pack_in = DataFormat::Float32; // Gasket in wormhole cannot convert fp32 to fp16, and since dest accumulation turns on for
+                                       // outlier cases we have fp32 in dest, so gasket cannot convert it to fp16, packer must do that
+    }
+
     return {unpack_in, unpack_out, pack_in, pack_out};
+    // return {unpack_in, unpack_out, pack_in, pack_out};
 }
