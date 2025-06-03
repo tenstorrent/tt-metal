@@ -320,4 +320,32 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
     }
 }
 
+TEST_F(DispatchFixture, TensixCircularBufferInitFunction) {
+    for (auto& device : devices_) {
+        for (bool use_assembly : {true, false}) {
+            for (uint32_t mask : {0xffffffffu, 0xaaaaaaaau}) {
+                CoreCoord core{0, 0};
+                Program program;
+                std::map<std::string, std::string> defines;
+                if (!use_assembly) {
+                    defines["DISABLE_CB_ASSEMBLY"] = "1";
+                }
+                KernelHandle kernel = CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_init.cpp",
+                    core,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = NOC::RISCV_1_default,
+                        .defines = defines,
+                        .opt_level = KernelBuildOptLevel::O2});
+                uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+                std::vector<uint32_t> runtime_args{mask, l1_unreserved_base};
+                SetRuntimeArgs(program, kernel, core, runtime_args);
+                this->RunProgram(device, program);
+            }
+        }
+    }
+}
+
 }  // namespace tt::tt_metal
