@@ -26,10 +26,17 @@ public:
 
     void register_kernel_elf_paths_with_watcher(IDevice& device) const;
 
-    // KernelImpl and subclasses are the only implementations of Kernel.
-    static KernelImpl& from(Kernel& kernel) { return static_cast<KernelImpl&>(kernel); }
+    static KernelImpl& from(Kernel& kernel) {
+        // KernelImpl and subclasses are the only implementations of Kernel.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+        return static_cast<KernelImpl&>(kernel);
+    }
 
-    static const KernelImpl& from(const Kernel& kernel) { return static_cast<const KernelImpl&>(kernel); }
+    static const KernelImpl& from(const Kernel& kernel) {
+        // KernelImpl and subclasses are the only implementations of Kernel.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+        return static_cast<const KernelImpl&>(kernel);
+    }
 
 protected:
     KernelImpl(
