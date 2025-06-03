@@ -88,7 +88,7 @@
         "dispatch_duration_relative_margin": 0.1
     },
     "Matmul_RS_0": {
-        "op_name": "ReduceScatter_FF1_FF3_MM",
+        "op_name": "ReduceScatter_FF1_MM_FF3",
         "kernel_duration": 12686.777777777777,
         "op_to_op": 756.1111111111111,
         "first_to_last_start": 2198.777777777778,
@@ -100,7 +100,7 @@
     },
     "LlamaReduceScatterCreateHeadsDeviceOperation_0": {
         "op_name": "LlamaReduceScatterCreateHeads",
-        "kernel_duration": 9801.145,
+        "kernel_duration": 9479.038194444445,
         "op_to_op": 966.0,
         "first_to_last_start": 1843.22,
         "non-overlapped-dispatch-time": 6101.6,
