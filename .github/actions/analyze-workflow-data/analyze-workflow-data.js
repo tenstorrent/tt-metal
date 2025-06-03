@@ -246,19 +246,9 @@ async function generateSummaryBox(grouped, github, context, workflowConfigs) {
 
     // Process each matching workflow
     for (const [name, runs] of matchingWorkflows) {
-      const mainBranchRuns = runs
-        .filter(r => r.head_branch === 'main')
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
       const stats = getWorkflowStats(runs);
-
-      // Skip workflows that only have workflow_dispatch as their event type
-      if (stats.eventTypes === 'workflow_dispatch') {
-        continue;
-      }
-
       const workflowLink = getWorkflowLink(context, runs[0]?.path);
-      const runInfo = await getLastRunInfo(mainBranchRuns, github, context);
+      const runInfo = await getLastRunInfo(runs, github, context);
 
       const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
       rows.push(row);
@@ -293,95 +283,24 @@ async function buildReport(grouped, github, context, workflowConfigs) {
     'The success rates are calculated based on unique runs (not including retries in the denominator):\n',
     '- **Success Rate**: (Number of unique runs that eventually succeeded / Total number of unique runs) × 100%\n',
     '  - Example: 3 successful unique runs out of 5 total unique runs = 60% success rate\n',
-    '- **Unique Success Rate**: (Number of unique runs that succeeded on first try / Total number of unique runs) × 100%\n',
-    '  - Example: 1 unique run succeeded on first try out of 5 total unique runs = 20% unique success rate\n',
+    '- **First Try Success Rate**: (Number of unique runs that succeeded on first try / Total number of unique runs) × 100%\n',
+    '  - Example: 1 unique run succeeded on first try out of 5 total unique runs = 20% first try success rate\n',
     '\n| Column | Description |',
     '|--------|-------------|',
     '| Workflow | Name of the workflow with link to its GitHub Actions page |',
-    '| Event Type(s) | Types of events that trigger this workflow (e.g., push, pull_request, schedule) |',
-    '| Total Runs | Total number of workflow runs including all retry attempts |',
+    '| Event Types | Types of events that trigger this workflow |',
+    '| Total Runs | Total number of workflow runs, including all retry attempts |',
     '| Successful Runs | Number of unique workflow runs that eventually succeeded |',
     '| Success Rate | Percentage of unique workflow runs that eventually succeeded |',
-    '| Success Rate (no retries) | Percentage of unique workflow runs that succeeded on their first attempt |',
-    '| Last Run on `main` | Status of the most recent run on the main branch (✅ for success, ❌ for failure) |',
-    '| Last SHA | Short SHA of the most recent run on main |',
-    '| Last Run | Link to the most recent run on main, with attempt number if applicable |',
-    '| Last PR | Link to the PR associated with the most recent run, if any |',
-    '| PR Title - Author | Title and author of the PR (e.g., "Fix bug - @username") |',
-    '| Earliest Bad SHA | Short SHA of the earliest failing run on main (only shown if last run failed) |',
-    '| Last Good SHA | Short SHA of the last successful run on main |'
+    '| First Try Success | Percentage of unique workflow runs that succeeded on their first attempt |',
+    '| Status | Status of the most recent run (✅ for success, ❌ for failure) |',
+    '| SHA | Short SHA of the most recent run |',
+    '| Run | Link to the most recent run, with attempt number if applicable |',
+    '| PR | Link to the PR associated with the most recent run, if any |',
+    '| Title | Title and author of the PR (e.g., "Fix bug - @username") |',
+    '| Earliest Bad SHA | Short SHA of the earliest failing run (only shown if last run failed) |',
+    '| Last Good SHA | Short SHA of the last successful run |'
   ].join('\n');
-}
-
-/**
- * Filters workflow runs by date range
- * @param {Array<Object>} runs - Array of workflow runs
- * @param {number} days - Number of days to look back
- * @returns {Array<Object>} Filtered runs within the date range
- */
-function filterRunsByDate(runs, days) {
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - days);
-
-  return runs.filter(run => {
-    const runDate = new Date(run.created_at);
-    return runDate >= cutoffDate;
-  });
-}
-
-/**
- * Sorts workflows based on their names and prefixes, maintaining the exact order from configs.
- * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
- * @param {Array<object>} workflowConfigs - Array of workflow config objects
- * @returns {Map<string, Array<object>>} Sorted map of workflow names to their runs
- */
-function sortWorkflows(grouped, workflowConfigs) {
-  // Create a map of workflow name to its index in the config array
-  const priorityMap = new Map();
-  workflowConfigs.forEach((config, index) => {
-    if (config.wkflw_name) {
-      priorityMap.set(config.wkflw_name, index);
-    }
-    if (config.wkflw_prefix) {
-      // For prefix matches, we'll use the index as priority
-      priorityMap.set(config.wkflw_prefix, index);
-    }
-  });
-
-  // Convert to array and sort based on priority
-  const sortedEntries = Array.from(grouped.entries())
-    .sort(([nameA], [nameB]) => {
-      // First try exact name match
-      const priorityA = priorityMap.get(nameA);
-      const priorityB = priorityMap.get(nameB);
-
-      if (priorityA !== undefined && priorityB !== undefined) {
-        return priorityA - priorityB;
-      }
-
-      // If one has priority and other doesn't, prioritize the one with priority
-      if (priorityA !== undefined) return -1;
-      if (priorityB !== undefined) return 1;
-
-      // For remaining items, check prefix matches
-      for (const config of workflowConfigs) {
-        if (config.wkflw_prefix) {
-          const aStartsWith = nameA.startsWith(config.wkflw_prefix);
-          const bStartsWith = nameB.startsWith(config.wkflw_prefix);
-          if (aStartsWith && !bStartsWith) return -1;
-          if (!aStartsWith && bStartsWith) return 1;
-          if (aStartsWith && bStartsWith) {
-            // If both match the same prefix, maintain original order
-            return 0;
-          }
-        }
-      }
-
-      // If no priority found, maintain original order
-      return 0;
-    });
-
-  return new Map(sortedEntries);
 }
 
 /**
@@ -412,20 +331,11 @@ async function run() {
     const failedWorkflows = [];
 
     // Process each workflow
-    const filteredGrouped = new Map();
     for (const [name, runs] of grouped) {
-      // Filter runs by date range
-      const filteredRuns = filterRunsByDate(runs, days);
-      if (filteredRuns.length > 0) {
-        filteredGrouped.set(name, filteredRuns);
-
-        // Check if latest run on main is failing
-        const mainBranchRuns = filteredRuns
-          .filter(r => r.head_branch === 'main')
-          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        if (mainBranchRuns[0]?.conclusion !== 'success') {
-          failedWorkflows.push(name);
-        }
+      // Check if latest run is failing
+      const sortedRuns = runs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      if (sortedRuns[0]?.conclusion !== 'success') {
+        failedWorkflows.push(name);
       }
     }
 
@@ -433,7 +343,7 @@ async function run() {
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
 
     // Generate report
-    const report = await buildReport(filteredGrouped, octokit, github.context, workflowConfigs);
+    const report = await buildReport(grouped, octokit, github.context, workflowConfigs);
 
     // Set outputs
     core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
