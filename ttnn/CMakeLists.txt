@@ -23,6 +23,7 @@ add_library(ttnn_core ${LIB_TYPE})
 add_library(TT::NN::Core ALIAS ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
 
 set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_coordinate.fbs
@@ -74,6 +75,7 @@ target_sources(
         core/tensor/tensor_utils.cpp
         core/tensor/types.cpp
         core/tensor/xtensor/partition.cpp
+        core/tensor/nd_sharding_utils.cpp
 )
 target_include_directories(
     ttnn_core
@@ -495,12 +497,10 @@ if(WITH_PYTHON_BINDINGS)
             ${TTNN_SRC_PYBIND}
             ${CCL_TTNN_SRCS_PYBIND}
             ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
-            ${Python3_LIBRARY_DIRS}
     )
     target_include_directories(
         ttnn
         PUBLIC
-            ${Python3_INCLUDE_DIRS}
             ${PROJECT_SOURCE_DIR}/ttnn
             ${CMAKE_CURRENT_SOURCE_DIR}/cpp
     )
@@ -510,7 +510,6 @@ if(WITH_PYTHON_BINDINGS)
         PUBLIC
             TT::NN::CPP
         PRIVATE
-            ${Python3_LIBRARIES}
             pybind11::module
             Boost::algorithm
             TT::Metalium
