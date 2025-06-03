@@ -69,7 +69,8 @@ test_suite_wh_6u_llama_demo_tests() {
 }
 
 test_suite_wh_6u_llama_long_stress_tests() {
-    echo "[upstream-tests] running WH 6U upstream Llama long stress tests"
+    echo "[upstream-tests] running WH 6U upstream Llama long stress tests. Note that on 6U systems built as of End of May 2025, this may take up to 4 hours to run."
+    echo "[upstream-tests] Ensure that you have a TG directory populated with .bin files in LLAMA_DIR on the host."
 
     if [ -z "${LLAMA_DIR}" ]; then
         echo "[upstream-tests] Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
