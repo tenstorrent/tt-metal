@@ -13,17 +13,18 @@ namespace ttnn::operations::point_to_point {
 
 namespace detail {
 
-std::tuple<uint32_t, uint32_t, uint32_t> compute_packet_dims(
-    const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages) {
+std::tuple<uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
+    const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment) {
     const auto fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const size_t max_packet_size_bytes =
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
-    // figure out packets
-    // !TODO see what happens if page size is larger than packet size.
-    const uint32_t num_pages_per_packet = max_packet_size_bytes / page_size_bytes;
+    const uint32_t aligned_page_size_bytes = tt::round_up(page_size_bytes, alignment);
 
-    const uint32_t packet_size_bytes = page_size_bytes * num_pages_per_packet;
+    // !TODO see what happens if page size is larger than packet size.
+    const uint32_t num_pages_per_packet = max_packet_size_bytes / aligned_page_size_bytes;
+
+    const uint32_t packet_size_bytes = aligned_page_size_bytes * num_pages_per_packet;
 
     const uint32_t total_packets = tt::div_up(num_pages, num_pages_per_packet);
 
@@ -88,11 +89,14 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
     const auto final_output_spec = input_tensor.tensor_spec();
 
     const uint32_t input_num_pages = data_movement::get_num_pages(tensor_args.input_tensor);
-    const auto [packet_size_bytes, num_pages_per_packet, total_packets] = detail::compute_packet_dims(
-        input_tensor.get_dtype(), final_output_spec.compute_page_size_bytes(), input_num_pages);
+    const auto [packet_size_bytes, num_pages_per_packet, total_packets] = detail::compute_aligned_packet_dims(
+        input_tensor.get_dtype(),
+        final_output_spec.compute_page_size_bytes(),
+        input_num_pages,
+        ::hal::get_l1_alignment());
 
-    const uint32_t packet_page_dim = tt::round_up(packet_size_bytes, ::hal::get_l1_alignment()) /
-                                     tt::datum_size(datatype_to_dataformat_converter(input_tensor.get_dtype()));
+    const uint32_t packet_page_dim =
+        packet_size_bytes / tt::datum_size(datatype_to_dataformat_converter(input_tensor.get_dtype()));
 
     Shape intermediate_shape{total_packets, packet_page_dim};
 
