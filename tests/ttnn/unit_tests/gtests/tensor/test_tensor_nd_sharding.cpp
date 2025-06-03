@@ -5,6 +5,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/core/tensor/nd_sharding_utils.hpp"
 
 #include "ttnn_test_fixtures.hpp"
 
@@ -36,6 +37,13 @@ struct NDShardingOpCompatParams {
     Shape shape;
     Shape shard_shape;
     CoreCoord grid_size;
+};
+struct PrepareShardedDataParams {
+    Shape shape;
+    Shape shard_shape;
+    uint32_t num_cores;
+
+    std::vector<uint8_t> expected_data;
 };
 }  // namespace
 
@@ -150,6 +158,37 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
     }
 }
 
+class PrepareNdShardedDataTests : public ::testing::TestWithParam<PrepareShardedDataParams> {};
+
+TEST_P(PrepareNdShardedDataTests, PrepareNdShardedData) {
+    const auto& params = GetParam();
+
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{0, params.num_cores - 1}));
+    NdShardSpec nd_shard_spec{params.shard_shape, cores, ShardOrientation::ROW_MAJOR};
+    MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
+    TensorLayout tensor_layout(DataType::UINT8, PageConfig(Layout::ROW_MAJOR), memory_config);
+    TensorSpec tensor_spec(params.shape, tensor_layout);
+
+    std::vector<uint8_t> data(params.shape.volume());
+    for (size_t i = 0; i < data.size(); i++) {
+        data[i] = static_cast<uint8_t>(i);
+    }
+    auto tensor = Tensor::from_vector(data, tensor_spec);
+    auto tensor_data = std::get<HostStorage>(tensor.get_storage()).buffer.view_as<uint8_t>();
+
+    auto sharded_data = pack_nd_sharded_data<uint8_t>(tensor_data, tensor_spec);
+    EXPECT_EQ(sharded_data.size(), params.expected_data.size());
+    for (size_t i = 0; i < sharded_data.size(); i++) {
+        EXPECT_EQ(sharded_data[i], static_cast<std::byte>(params.expected_data[i]));
+    }
+
+    auto unpacked_data = unpack_nd_sharded_data<std::byte>(sharded_data, tensor_spec);
+    EXPECT_EQ(unpacked_data.size(), tensor_data.size());
+    for (size_t i = 0; i < unpacked_data.size(); i++) {
+        EXPECT_EQ(unpacked_data[i], static_cast<std::byte>(tensor_data[i]));
+    }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     TensorShardingTests,
     NDShardingTests,
@@ -201,6 +240,41 @@ INSTANTIATE_TEST_SUITE_P(
                 .layout = Layout::TILE,
             },
             NDShardingParams{
+                .shape = Shape({3 * 32 + 5, 4 * 32, 5 * 32}),
+                .shard_shape = Shape({32, 4 * 32, 5 * 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32, 4 * 32 + 5, 5 * 32}),
+                .shard_shape = Shape({3 * 32, 32, 5 * 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32, 4 * 32, 5 * 32 + 5}),
+                .shard_shape = Shape({3 * 32, 4 * 32, 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32, 4 * 32 + 5, 5 * 32 + 5}),
+                .shard_shape = Shape({3 * 32, 32, 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32 + 5, 4 * 32, 5 * 32 + 5}),
+                .shard_shape = Shape({32, 4 * 32, 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32 + 5, 4 * 32 + 5, 5 * 32}),
+                .shard_shape = Shape({32, 32, 5 * 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32 + 5, 4 * 32 + 5, 5 * 32 + 5}),
+                .shard_shape = Shape({32, 32, 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
                 .shape = Shape({30, 40, 50}),
                 .shard_shape = Shape({30, 40, 50}),
                 .layout = Layout::ROW_MAJOR,
@@ -238,6 +312,51 @@ INSTANTIATE_TEST_SUITE_P(
             NDShardingParams{
                 .shape = Shape({30, 40, 50}),
                 .shard_shape = Shape({10, 10, 10}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({3, 4, 5}),
+                .shard_shape = Shape({1, 1, 1}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({35, 40, 50}),
+                .shard_shape = Shape({10, 40, 50}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({30, 45, 50}),
+                .shard_shape = Shape({30, 10, 50}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({30, 40, 55}),
+                .shard_shape = Shape({30, 40, 10}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({35, 45, 50}),
+                .shard_shape = Shape({10, 10, 50}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({35, 40, 55}),
+                .shard_shape = Shape({10, 40, 10}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({30, 45, 55}),
+                .shard_shape = Shape({30, 10, 10}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({35, 45, 55}),
+                .shard_shape = Shape({10, 10, 10}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({3, 5, 7}),
+                .shard_shape = Shape({2, 2, 2}),
                 .layout = Layout::ROW_MAJOR,
             }),
         ::testing::Values(BufferType::L1, BufferType::DRAM),
@@ -619,4 +738,112 @@ INSTANTIATE_TEST_SUITE_P(
             .shape = Shape({1, 2, 32 * 4, 32 * 5}),
             .shard_shape = Shape({1, 1, 32 * 2, 32 * 2}),
             .grid_size = CoreCoord{3, 4},
+        }));
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    PrepareNdShardedDataTests,
+    ::testing::Values(
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({2, 2, 2}),
+            .num_cores = 1,
+            .expected_data = {0, 1, 2, 3, 4, 5, 6, 7},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({2, 2, 2}),
+            .num_cores = 2,
+            .expected_data = {0, 1, 2, 3, 4, 5, 6, 7, 0, 0, 0, 0, 0, 0, 0, 0},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({1, 2, 2}),
+            .num_cores = 2,
+            .expected_data = {0, 1, 2, 3, 4, 5, 6, 7},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({2, 1, 2}),
+            .num_cores = 2,
+            .expected_data = {0, 1, 4, 5, 2, 3, 6, 7},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({2, 2, 1}),
+            .num_cores = 2,
+            .expected_data = {0, 2, 4, 6, 1, 3, 5, 7},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({2, 1, 1}),
+            .num_cores = 2,
+            .expected_data = {0, 4, 2, 6, 1, 5, 3, 7},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({2, 1, 1}),
+            .num_cores = 3,
+            .expected_data = {0, 4, 3, 7, 1, 5, 0, 0, 2, 6, 0, 0},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({1, 2, 1}),
+            .num_cores = 2,
+            .expected_data = {0, 2, 4, 6, 1, 3, 5, 7},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({1, 2, 1}),
+            .num_cores = 3,
+            .expected_data = {0, 2, 5, 7, 1, 3, 0, 0, 4, 6, 0, 0},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({1, 1, 2}),
+            .num_cores = 2,
+            .expected_data = {0, 1, 4, 5, 2, 3, 6, 7},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({1, 1, 2}),
+            .num_cores = 3,
+            .expected_data = {0, 1, 6, 7, 2, 3, 0, 0, 4, 5, 0, 0},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({1, 1, 1}),
+            .num_cores = 2,
+            .expected_data = {0, 2, 4, 6, 1, 3, 5, 7},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({1, 1, 1}),
+            .num_cores = 3,
+            .expected_data = {0, 3, 6, 1, 4, 7, 2, 5, 0},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({1, 1, 1}),
+            .num_cores = 4,
+            .expected_data = {0, 4, 1, 5, 2, 6, 3, 7},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({2, 2, 2}),
+            .shard_shape = Shape({1, 1, 1}),
+            .num_cores = 5,
+            .expected_data = {0, 5, 1, 6, 2, 7, 3, 0, 4, 0},
+        },
+        PrepareShardedDataParams{
+            .shape = Shape({3, 3, 3}),
+            .shard_shape = Shape({2, 2, 2}),
+            .num_cores = 8,
+            .expected_data = {/* core 0 */ 0,  1,  3,  4,  9,  10, 12, 13,
+                              /* core 1 */ 2,  0,  5,  0,  11, 0,  14, 0,
+                              /* core 2 */ 6,  7,  0,  0,  15, 16, 0,  0,
+                              /* core 3 */ 8,  0,  0,  0,  17, 0,  0,  0,
+                              /* core 4 */ 18, 19, 21, 22, 0,  0,  0,  0,
+                              /* core 5 */ 20, 0,  23, 0,  0,  0,  0,  0,
+                              /* core 6 */ 24, 25, 0,  0,  0,  0,  0,  0,
+                              /* core 7 */ 26, 0,  0,  0,  0,  0,  0,  0},
         }));

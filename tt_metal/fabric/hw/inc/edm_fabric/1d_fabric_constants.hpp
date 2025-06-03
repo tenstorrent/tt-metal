@@ -15,7 +15,6 @@
 // ETH TXQ SELECTION
 
 constexpr uint32_t DEFAULT_ETH_TXQ = 0;
-constexpr uint32_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = 32;
 
 // STREAM REGISTER ASSIGNMENT
 // senders update this stream
@@ -42,6 +41,87 @@ constexpr uint32_t to_sender_2_pkts_completed_id = 9;
 constexpr uint32_t to_sender_3_pkts_completed_id = 10;
 // receivers updates the reg on this stream
 constexpr uint32_t to_sender_4_pkts_completed_id = 11;
+
+/*
+Receiver channel side registers are defined here to receive free-slot credits from downstream sender channels.
+
+                                North Router
+                        ┌───────────────────────────────────┐
+                        │                                   │
+                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  └────┘ └────┘ └────┘ └────┘      │
+                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  └────┘ └─┬──┘ └────┘ └────┘      │
+    West Router         └───────────┼───────────────────────┘        East Router
+ ┌─────────────────────┐            │                             ┌────────────────────────────┐
+ │                     │            │                             │                            │
+ │                     │            │                             │                            │
+ │               ┌────┐│ (increment)│    Acks From East           │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    ◄┼────────────┼───────────────────┐         ││              │ │    │ E   │
+ │     East      │    ││            │                   │         ││              │ │    │     │
+ │               └────┘│            │                   │         │└──────────────┘ └────┘     │
+ │                 12  │            │                   │         │                            │
+ │               ┌────┐│            │                   │         │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    ││            │                   │         ││              │ │    │ W   │
+ │     West      │    ││            │                   └─────────┼┼              │ │    │     │
+ │               └────┘│            │                             │└──────────────┘ └────┘     │
+ │                 13  │            │                             │                            │
+ │               ┌────┐│ (increment)│                             │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    │◄────────────┘                             ││              │ │    │ N   │
+ │     North     │    ││  Acks From North                         ││              │ │    │     │
+ │               └────┘│                                          │└──────────────┘ └────┘     │
+ │                 14  │                                          │                            │
+ │               ┌────┐│  Acks From South                         │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    │◄────────────────┐                         ││              │ │    │ S   │
+ │     South     │    ││ (increment)    │                         ││              │ │    │     │
+ │               └────┘│                │                         │└──────────────┘ └────┘     │
+ │                 15  │                │                         │                            │
+ │                     │                │                         │                            │
+ │                     │                │                         │                            │
+ └─────────────────────┘  ┌─────────────┼───────────────────┐     └────────────────────────────┘
+                          │   ┌────┐ ┌──┼─┐ ┌────┐ ┌────┐   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   └────┘ └────┘ └────┘ └────┘   │
+                          │   ┌────┐ ┌────┐ ┌────┐ ┌────┐   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   └────┘ └────┘ └────┘ └────┘   │
+                          │                                 │
+                          └─────────────────────────────────┘
+                                   South Router
+*/
+constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
+constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
+constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
+constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
+constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
+
+// For post-dateline connection. We only have one counter here because if we are
+// post-dateline, there is only one other possible post-dateline consumer that we
+// can forward to (the consumer in the same direction). Switching directions/turning
+// requires directing back to pre-dateline consumer channels (in those cases, we'd
+// use the receiver_channel_0_free_slots_* location). For the time being, this is
+// placeholder until 2D torus is implemented
+constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
+
+// These are the
+// Slot 17 is defined in the edm_fabric_worker_adapter
+constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
+constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
+constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
+constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
+constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
@@ -108,89 +188,109 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 // then the total amount of buffering for that
 constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
 
-constexpr size_t SENDER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
-constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
-constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
-constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 11);
-constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 12);
-constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 13);
-constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 14);
-constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 15);
-constexpr size_t local_sender_3_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 16);
-constexpr size_t local_sender_channel_3_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 17);
-constexpr size_t local_sender_4_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 18);
-constexpr size_t local_sender_channel_4_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 19);
-constexpr size_t local_receiver_0_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 20);
-constexpr size_t remote_receiver_0_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 21);
-constexpr size_t local_receiver_1_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 22);
-constexpr size_t remote_receiver_1_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 23);
-constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 24);
-constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 25);
-constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 26);
-constexpr size_t remote_sender_3_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 27);
-constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 28);
+constexpr size_t SENDER_NUM_BUFFERS_IDX = MAIN_CT_ARGS_START_IDX + 8;
+constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =
+    fill_array_with_next_n_args<size_t, SENDER_NUM_BUFFERS_IDX, NUM_SENDER_CHANNELS>();
+// assume the internal sender channels have the same buffer slots for now, dateline edm send channel 2 has 0 buffer
+// slots.
+constexpr size_t SENDER_NUM_BUFFERS = SENDER_NUM_BUFFERS_ARRAY[1];
+
+constexpr size_t RECEIVER_NUM_BUFFERS_IDX = SENDER_NUM_BUFFERS_IDX + NUM_SENDER_CHANNELS;
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY =
+    fill_array_with_next_n_args<size_t, RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
+// assume the non-dateline receiver channels have the same buffer slots for now, dateline edm recv channel 0 has 0
+// buffer slots.
+constexpr size_t RECEIVER_NUM_BUFFERS = RECEIVER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
+
+constexpr size_t REMOTE_RECEIVER_NUM_BUFFERS_IDX = RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY =
+    fill_array_with_next_n_args<size_t, REMOTE_RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
+
+constexpr size_t MAIN_CT_ARGS_IDX_1 = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
+constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1);
+constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 1);
+constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 2);
+constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 3);
+constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 4);
+constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 5);
+constexpr size_t local_sender_3_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 6);
+constexpr size_t local_sender_channel_3_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 7);
+constexpr size_t local_sender_4_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 8);
+constexpr size_t local_sender_channel_4_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 9);
+constexpr size_t local_receiver_0_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 10);
+constexpr size_t remote_receiver_0_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 11);
+constexpr size_t local_receiver_1_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 12);
+constexpr size_t remote_receiver_1_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 13);
+constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 14);
+constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 15);
+constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 16);
+constexpr size_t remote_sender_3_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 17);
+constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 18);
 
 // TODO: CONVERT TO SEMAPHORE
-constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 29);
+constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + 19;
+constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2);
 constexpr uint32_t edm_local_sync_ptr_addr =
-    wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 30) : 0;
-constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 31);
+    wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) : 0;
+constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2);
 
-constexpr bool persistent_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 32) != 0;
+constexpr bool persistent_mode = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3) != 0;
 
 // Per-channel counters
-constexpr bool enable_fabric_counters = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 33) != 0;
-constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 34);
-constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 35);
-constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 36);
-constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 37);
-constexpr size_t sender_channel_2_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 38);
-constexpr size_t sender_channel_3_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 39);
-constexpr size_t sender_channel_4_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 40);
+constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 4;
+constexpr bool enable_fabric_counters = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 0) != 0;
+constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 1);
+constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 2);
+constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 3);
+constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 4);
+constexpr size_t sender_channel_2_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 5);
+constexpr size_t sender_channel_3_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 6);
+constexpr size_t sender_channel_4_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 7);
 
-constexpr bool enable_packet_header_recording = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 41) != 0;
-constexpr size_t receiver_0_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 42);
-constexpr size_t receiver_0_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 43);
-constexpr size_t receiver_1_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 44);
-constexpr size_t receiver_1_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 45);
-constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 46);
-constexpr size_t sender_0_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 47);
-constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 48);
-constexpr size_t sender_1_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 49);
-constexpr size_t sender_2_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 50);
-constexpr size_t sender_2_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 51);
-constexpr size_t sender_3_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 52);
-constexpr size_t sender_3_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 53);
-constexpr size_t sender_4_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 54);
-constexpr size_t sender_4_completed_packet_header_cb_size_headers =
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 55);
+constexpr size_t MAIN_CT_ARGS_IDX_4 = MAIN_CT_ARGS_IDX_3 + 8;
+constexpr bool enable_packet_header_recording = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 0) != 0;
+constexpr size_t receiver_0_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 1);
+constexpr size_t receiver_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 2);
+constexpr size_t receiver_1_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 3);
+constexpr size_t receiver_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 4);
+constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 5);
+constexpr size_t sender_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 6);
+constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 7);
+constexpr size_t sender_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 8);
+constexpr size_t sender_2_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 9);
+constexpr size_t sender_2_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 10);
+constexpr size_t sender_3_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 11);
+constexpr size_t sender_3_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 12);
+constexpr size_t sender_4_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 13);
+constexpr size_t sender_4_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 14);
 
-constexpr size_t sender_channel_serviced_args_idx = MAIN_CT_ARGS_START_IDX + 56;
+constexpr size_t sender_channel_serviced_args_idx = MAIN_CT_ARGS_IDX_4 + 15;
 constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced =
     fill_array_with_next_n_args<bool, sender_channel_serviced_args_idx, MAX_NUM_SENDER_CHANNELS>();
 constexpr size_t receiver_channel_serviced_args_idx =
     sender_channel_serviced_args_idx + is_sender_channel_serviced.size();
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced =
     fill_array_with_next_n_args<bool, receiver_channel_serviced_args_idx, MAX_NUM_RECEIVER_CHANNELS>();
-constexpr size_t MAIN_CT_ARGS_IDX_2 = receiver_channel_serviced_args_idx + is_receiver_channel_serviced.size();
+constexpr size_t MAIN_CT_ARGS_IDX_5 = receiver_channel_serviced_args_idx + is_receiver_channel_serviced.size();
 
-constexpr bool enable_ethernet_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2) != 0;
-constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) != 0;
-constexpr bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2) != 0;
-constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3);
-constexpr size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 4);
-constexpr size_t iterations_between_ctx_switch_and_teardown_checks = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 5);
-constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 6);
-constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 7);
-constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 8);
+constexpr bool enable_ethernet_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5) != 0;
+constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 1) != 0;
+constexpr bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 2) != 0;
+constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 3);
+constexpr size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 4);
+constexpr size_t iterations_between_ctx_switch_and_teardown_checks = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 5);
+constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 6);
+constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 7);
+constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 8);
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_2 + 9;
+// If true, the sender channel will spin inside send_next_data until the eth_txq is not busy, rather than checking
+// eth_txq_is_busy() being false as a prerequisite for sending the next packet
+constexpr bool ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 9) != 0;
+constexpr bool ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 10) != 0;
+
+constexpr size_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 11);
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 12;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
@@ -248,6 +348,7 @@ constexpr uint32_t edm_channels_mask =
 
 constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 
+constexpr size_t sender_channel_base_id = 0;
 constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
 // TRANSACTION IDS

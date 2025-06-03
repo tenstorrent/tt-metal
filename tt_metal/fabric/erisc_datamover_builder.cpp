@@ -343,6 +343,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->receiver_channels_size_bytes[i] =
             skip_current_channel ? 0 : channel_buffer_size_bytes * num_receiver_buffer_slots;
     }
+    // TODO: change remote receiver channels to be calculated seprately
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+        this->remote_receiver_channels_num_buffers[i] = this->receiver_channels_num_buffers[i];
+    }
 
     uint32_t buffer_addr = buffer_region_start;
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -432,6 +436,11 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
     auto edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y);
+
+    TT_FATAL(
+        (sender_worker_flow_control_semaphore_id & 0xFFFF) == sender_worker_flow_control_semaphore_id,
+        "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
+
     const std::vector<uint32_t> values = {
         connection.persistent_fabric,
         connection.edm_direction,
@@ -501,6 +510,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     channel_buffer_size(config.channel_buffer_size_bytes),
     sender_channels_num_buffers(config.sender_channels_num_buffers),
     receiver_channels_num_buffers(config.receiver_channels_num_buffers),
+    remote_receiver_channels_num_buffers(config.remote_receiver_channels_num_buffers),
 
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
     receiver_channels_downstream_flow_control_semaphore_id(receiver_channels_downstream_flow_control_semaphore_id),
@@ -540,6 +550,14 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         log_trace(tt::LogTest, "Receiver {} channel address: {}", i, this->local_receiver_channels_buffer_address[i]);
     }
 
+    // TODO: promote to user-configurable parameter (user could be just control plane based on arch in this case)
+    // specifies if we do spin waits on eth_txq_busy in send_next_data
+    const bool eth_txq_spin_wait_send_next_data = false;
+    const bool eth_txq_spin_wait_receiver_send_completion_ack = false;
+
+    // TODO: allow specification per eth txq
+    const size_t default_num_eth_txq_data_packet_accept_ahead = 32;
+
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
     auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->my_chip_id);
@@ -565,9 +583,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
-
-        sender_channel_num_buffers,
-        receiver_channel_num_buffers,
 
         config.sender_channels_base_address[0],
         config.sender_channels_worker_conn_info_base_address[0],
@@ -638,8 +653,32 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.topology == Topology::Mesh,
         this->direction,
         soc_desc.get_num_eth_channels(),
+
+        eth_txq_spin_wait_send_next_data,
+        eth_txq_spin_wait_receiver_send_completion_ack,
+        default_num_eth_txq_data_packet_accept_ahead,
+
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
+
+    // insert the sender channel num buffers
+    const size_t sender_channel_num_buffers_idx = 12;
+    ct_args.insert(
+        ct_args.begin() + sender_channel_num_buffers_idx,
+        this->sender_channels_num_buffers.begin(),
+        this->sender_channels_num_buffers.begin() + num_sender_channels);
+    // insert the receiver channel num buffers
+    const size_t receiver_channel_num_buffers_idx = sender_channel_num_buffers_idx + num_sender_channels;
+    ct_args.insert(
+        ct_args.begin() + receiver_channel_num_buffers_idx,
+        this->receiver_channels_num_buffers.begin(),
+        this->receiver_channels_num_buffers.begin() + num_receiver_channels);
+    // insert the remote receiver channel num buffers
+    const size_t remote_receiver_channel_num_buffers_idx = receiver_channel_num_buffers_idx + num_receiver_channels;
+    ct_args.insert(
+        ct_args.begin() + remote_receiver_channel_num_buffers_idx,
+        this->remote_receiver_channels_num_buffers.begin(),
+        this->remote_receiver_channels_num_buffers.begin() + num_receiver_channels);
 
     for (size_t i = 0; i < num_sender_channels; i++) {
         ct_args.push_back(this->sender_channel_connection_liveness_check_disable_array[i]);
@@ -955,6 +994,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
         ds_dir);
 
     // VC 0
+    // For non-mesh, downstream channel is always 1 because channel 0 is always reserved for worker connections
     auto ds_edm_send_chan = config.topology == Topology::Mesh ? this->direction : 1;
     auto adapter_spec = downstream_edm.build_connection_to_fabric_channel(ds_edm_send_chan);
 
@@ -981,6 +1021,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
     this->downstream_edm_vcs_worker_location_info_address[1] = adapter_spec.edm_worker_location_info_addr;
 
     // VC 1
+    // Indexing from the back -- grabbing the last channel as it is the designated VC1 channel
     ds_edm_send_chan = config.topology == Topology::Mesh ? FabricEriscDatamoverConfig::num_sender_channels_2d - 1
                                                          : FabricEriscDatamoverConfig::num_sender_channels_1d - 1;
     adapter_spec = downstream_edm.build_connection_to_fabric_channel(ds_edm_send_chan);
@@ -1016,6 +1057,8 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
 }
 
 eth_chan_directions FabricEriscDatamoverBuilder::get_direction() const { return this->direction; }
+
+size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
 
 size_t FabricEriscDatamoverBuilder::get_noc_x() const { return this->my_noc_x; }
 

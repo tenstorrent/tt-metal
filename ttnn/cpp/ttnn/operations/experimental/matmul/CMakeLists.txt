@@ -2,6 +2,7 @@ add_library(ttnn_op_experimental_matmul ${LIB_TYPE})
 add_library(TT::NN::Ops::Experimental::Matmul ALIAS ttnn_op_experimental_matmul)
 
 target_precompile_headers(ttnn_op_experimental_matmul REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_matmul)
 
 target_sources(
     ttnn_op_experimental_matmul
