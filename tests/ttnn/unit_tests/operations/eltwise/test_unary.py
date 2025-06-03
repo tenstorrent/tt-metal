@@ -13,6 +13,26 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
 from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 
+def create_full_range_tensor(input_shapes, dtype):
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+
+    large_negatives = torch.linspace(-3.3e38, -1e30, steps=num_elements // 5, dtype=dtype)
+    medium_negatives = torch.linspace(-1e5, -1e-3, steps=num_elements // 5, dtype=dtype)
+    near_zero = torch.linspace(-1e-5, 1e-5, steps=num_elements // 5, dtype=dtype)
+    medium_positives = torch.linspace(1e-3, 1e5, steps=num_elements // 5, dtype=dtype)
+    large_positives = torch.linspace(1e30, 3.3e38, steps=num_elements // 5, dtype=dtype)
+
+    in_data = torch.cat([large_negatives, medium_negatives, near_zero, medium_positives, large_positives])
+
+    corner_cases = torch.tensor([0.0], dtype=dtype)
+    in_data = torch.cat([in_data, corner_cases])
+
+    in_data = in_data[:num_elements]
+    in_data = in_data.reshape(input_shapes)
+
+    return in_data
+
+
 def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     torch.manual_seed(0)
 
@@ -563,8 +583,82 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc == 1
+
+    assert torch.equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+        torch.Size([1, 3, 320, 384]),
+    ],
+)
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (0, 2),  # Small range
+        (0, 65535),  # Full uint16 range
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.eqz,
+        ttnn.nez,
+    ],
+)
+def test_unary_zero_comp_uint16_ttnn(input_shapes, low, high, ttnn_function, device):
+    in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    cq_id = 0
+    output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    golden_tensor = golden_function(in_data)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.eqz,
+        ttnn.nez,
+    ],
+)
+def test_unary_zero_comp_with_majority_zeros(input_shapes, ttnn_function, device):
+    rows, cols = input_shapes[-2], input_shapes[-1]
+    total_elements = rows * cols
+    num_zeros = total_elements * 3 // 4
+    num_nonzeros = total_elements - num_zeros
+
+    flat_tensor = torch.zeros(total_elements, dtype=torch.int32)
+    random_ints = torch.randint(0, 100, (num_nonzeros,), dtype=torch.int32)
+    flat_tensor[:num_nonzeros] = random_ints
+    flat_tensor = flat_tensor[torch.randperm(total_elements)]
+
+    in_data = flat_tensor.reshape(input_shapes)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    cq_id = 0
+    output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    golden_tensor = golden_function(in_data)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -607,8 +701,7 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc == 1
+    assert torch.equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -649,3 +742,43 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_tanhshrink_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    cq_id = 0
+
+    ttnn.tanhshrink(input_tensor1, queue_id=cq_id, output_tensor=output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
+    golden_tensor = golden_function(in_data1)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 5, 512, 1024])),),
+)
+def test_unary_tanhshrink_edge_case_ttnn(input_shapes, device):
+    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    cq_id = 0
+
+    ttnn.tanhshrink(input_tensor, queue_id=cq_id, output_tensor=output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
+    golden_tensor = golden_function(in_data)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass

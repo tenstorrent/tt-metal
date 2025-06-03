@@ -360,6 +360,8 @@ std::pair<string, string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
                 op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile_int32({});", idst)};
+            } else if (input_dtype.value() == DataType::UINT16) {
+                op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile_uint16({});", idst)};
             } else {
                 op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)};
             }
@@ -369,6 +371,8 @@ std::pair<string, string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile_int32({});", idst)};
+            } else if (input_dtype == DataType::UINT16) {
+                op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile_uint16({});", idst)};
             } else {
                 op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile({});", idst)};
             }
@@ -450,6 +454,7 @@ std::pair<string, string> get_op_init_and_func_default(
             op_init_and_name = {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
             break;
         case UnaryOpType::MISH: op_init_and_name = {}; break;
+        case UnaryOpType::TANHSHRINK: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;
@@ -569,6 +574,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root) {
     switch (op_type) {
         case UnaryOpType::MISH: return fmt::format("{}/{}", compute_root, "mish_kernel.cpp");
+        case UnaryOpType::TANHSHRINK: return fmt::format("{}/{}", compute_root, "tanhshrink_kernel.cpp");
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
 }

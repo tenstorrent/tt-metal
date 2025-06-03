@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_
 
 
 class TtResnetBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, conv_shortcut=False, gn_fallback=False):
+    def __init__(self, device, state_dict, module_path, model_config, conv_shortcut=False, gn_fallback=False):
         super().__init__()
 
         self.device = device
@@ -71,8 +71,7 @@ class TtResnetBlock2D(nn.Module):
             )
 
         (
-            self.compute_config,
-            self.conv_config,
+            self.compute1_config,
             self.tt_conv1_weights,
             self.tt_conv1_bias,
             self.conv1_params,
@@ -80,34 +79,44 @@ class TtResnetBlock2D(nn.Module):
             device,
             conv_weights_1,
             conv_bias_1,
-            ttnn.bfloat16,
-            act_block_h_override=32,
+            model_config.conv_w_dtype,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv1_slice_config = get_DRAM_conv_config(module_path, 1)
+        self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
 
-        _, _, self.tt_conv2_weights, self.tt_conv2_bias, self.conv2_params = prepare_conv_params(
+        (
+            self.compute2_config,
+            self.tt_conv2_weights,
+            self.tt_conv2_bias,
+            self.conv2_params,
+        ) = prepare_conv_params(
             device,
             conv_weights_2,
             conv_bias_2,
-            ttnn.bfloat16,
-            act_block_h_override=32,
+            model_config.conv_w_dtype,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv2_slice_config = get_DRAM_conv_config(module_path, 2)
+        self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
 
         if conv_shortcut:
-            _, _, self.tt_conv3_weights, self.tt_conv3_bias, self.conv3_params = prepare_conv_params(
+            (
+                self.compute_config_conv_linear,
+                self.tt_conv3_weights,
+                self.tt_conv3_bias,
+                self.conv3_params,
+            ) = prepare_conv_params(
                 device,
                 conv_weights_3,
                 conv_bias_3,
-                ttnn.bfloat16,
-                act_block_h_override=32,
-                fp32_dest_acc_en=True,
-                math_fidelity=ttnn.MathFidelity.LoFi,
+                model_config.conv_w_dtype,
+                fp32_dest_acc_en=False,
+                math_fidelity=ttnn.MathFidelity.HiFi2,
             )
+            self.conv3_config = model_config.get_conv_config(conv_path=f"{module_path}.conv_shortcut")
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
@@ -156,15 +165,10 @@ class TtResnetBlock2D(nn.Module):
 
         hidden_states = ttnn.silu(hidden_states)
 
-        self.conv_config.shard_layout = (
-            hidden_states.memory_config().memory_layout if hidden_states.is_sharded() else None
-        )
-        self.conv_config.act_block_h_override = 32 if hidden_states.is_sharded() else 0
-
         if self.conv1_slice_config is not None:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
-        [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [hidden_states, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv1_weights,
             in_channels=self.conv1_params["input_channels"],
@@ -178,8 +182,8 @@ class TtResnetBlock2D(nn.Module):
             batch_size=B,
             input_height=H,
             input_width=W,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
+            conv_config=self.conv1_config,
+            compute_config=self.compute1_config,
             groups=self.groups,
             memory_config=None,
             slice_config=self.conv1_slice_config,
@@ -187,9 +191,6 @@ class TtResnetBlock2D(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv1_params["output_channels"]
-
-        self.tt_conv1_weights = d_w
-        self.tt_conv1_bias = d_b
 
         if self.conv1_slice_config is not None:
             hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
@@ -236,11 +237,11 @@ class TtResnetBlock2D(nn.Module):
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)  # note: silu hangs if not tile
-        self.conv_config.shard_layout = None
+
         if self.conv2_slice_config is not None:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
-        [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [hidden_states, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,
             in_channels=self.conv2_params["input_channels"],
@@ -254,8 +255,8 @@ class TtResnetBlock2D(nn.Module):
             batch_size=B,
             input_height=H,
             input_width=W,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
+            conv_config=self.conv2_config,
+            compute_config=self.compute2_config,
             groups=self.groups,
             memory_config=None,
             slice_config=self.conv2_slice_config,
@@ -263,8 +264,7 @@ class TtResnetBlock2D(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv2_params["output_channels"]
-        self.tt_conv2_weights = d_w
-        self.tt_conv2_bias = d_b
+
         if self.conv2_slice_config is not None:
             hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
 
@@ -272,9 +272,7 @@ class TtResnetBlock2D(nn.Module):
             if input_tensor.shape[3] >= 1920:
                 input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
-            self.conv_config.shard_layout = None
-            self.conv_config.act_block_h_override = 0
-            [input_tensor, [H, W], [d_w, d_b]] = ttnn.conv2d(
+            [input_tensor, [H, W], [self.tt_conv3_weights, self.tt_conv3_bias]] = ttnn.conv2d(
                 input_tensor=input_tensor,
                 weight_tensor=self.tt_conv3_weights,
                 in_channels=self.conv3_params["input_channels"],
@@ -288,16 +286,15 @@ class TtResnetBlock2D(nn.Module):
                 batch_size=input_shape[0],
                 input_height=input_shape[2],
                 input_width=input_shape[3],
-                conv_config=self.conv_config,
-                compute_config=self.compute_config,
+                conv_config=self.conv3_config,
+                compute_config=self.compute_config_conv_linear,
                 groups=self.groups,
                 memory_config=None,
                 return_output_dim=True,
                 return_weights_and_bias=True,
             )
             C = self.conv3_params["output_channels"]
-            self.tt_conv3_weights = d_w
-            self.tt_conv3_bias = d_b
+
         if input_tensor.is_sharded():
             input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
         if hidden_states.is_sharded():
@@ -310,6 +307,4 @@ class TtResnetBlock2D(nn.Module):
         ttnn.deallocate(input_tensor)
         hidden_states = ttnn.move(hidden_states)
 
-        self.conv_config.preprocess_weights_on_device = False
-        self.conv_config.always_preprocess_weights = False
         return hidden_states, [C, H, W]

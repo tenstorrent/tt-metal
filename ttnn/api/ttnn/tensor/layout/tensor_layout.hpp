@@ -42,7 +42,8 @@ public:
 
     Strides compute_strides(const ttnn::Shape& shape) const;
 
-    std::optional<ShardSpecBuffer> compute_shard_spec_buffer(const ttnn::Shape& shape) const;
+    std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> compute_distribution_spec(
+        const ttnn::Shape& shape) const;
 
     size_t compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const;
     size_t compute_page_size_bytes(const ttnn::Shape& shape) const;
@@ -68,6 +69,9 @@ public:
     // Returns physical shard shape based on ShardMode, shard shape, and alignment
     Shape2D get_physical_shard_shape() const;
 
+    Shape2D compute_page_shape(const Shape2D& physical_size) const;
+    size_t compute_page_size_bytes(const Shape2D& page_size) const;
+
     TensorLayout with_memory_config(MemoryConfig memory_config) const {
         TensorLayout result = *this;
         result.memory_config_ = std::move(memory_config);
@@ -89,9 +93,6 @@ private:
         DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
     void initialize_alignment();
-
-    Shape2D compute_page_shape(const Shape2D& physical_size) const;
-    size_t compute_page_size_bytes(const Shape2D& page_size) const;
 
     DataType dtype_ = DataType::BFLOAT16;
     PageConfig page_config_;

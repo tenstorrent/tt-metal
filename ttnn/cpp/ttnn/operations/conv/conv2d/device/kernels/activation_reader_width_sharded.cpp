@@ -212,7 +212,7 @@ void kernel_main() {
                         act_multicast_data_addr,
                         act_mcast_sender_size_bytes,
                         num_reader_cores,
-                        false);
+                        true);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
                     // vc even though cmd bufs are different Also, this only works because we are setting VCs statically

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -664,6 +664,11 @@ uint32_t MeshDevice::dram_channel_from_logical_core(const CoreCoord& logical_cor
         return device->dram_channel_from_logical_core(logical_core);
     });
 }
+uint32_t MeshDevice::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
+    return validate_and_get_reference_value(scoped_devices_->root_devices(), [virtual_core](const auto& device) {
+        return device->dram_channel_from_virtual_core(virtual_core);
+    });
+}
 
 // Core management and network operations
 const std::set<CoreCoord>& MeshDevice::ethernet_cores() const {
@@ -720,6 +725,14 @@ std::shared_ptr<MeshTraceBuffer>& MeshDevice::create_mesh_trace(const MeshTraceI
 
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) {
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
+    const auto& trace_mesh_buffer = trace_buffer_pool_.at(trace_id)->mesh_buffer;
+    TT_FATAL(
+        trace_mesh_buffer and trace_mesh_buffer->is_allocated(),
+        "Trace buffer for {} is not allocated when calling {}",
+        *trace_id,
+        __FUNCTION__);
+    auto current_trace_buffers_size = this->get_trace_buffers_size();
+    this->set_trace_buffers_size(current_trace_buffers_size - trace_mesh_buffer->size());
     trace_buffer_pool_.erase(trace_id);
 }
 
@@ -834,14 +847,16 @@ HalMemType MeshDevice::get_mem_type_of_core(CoreCoord virtual_core) const {
 }
 
 // Methods for SubDevice Management
-bool MeshDevice::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
+uint8_t MeshDevice::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
 }
 uint8_t MeshDevice::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
 }
-uint8_t MeshDevice::noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data) const {
-    if (unicast_data) {
+uint8_t MeshDevice::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
+    if (mcast_data) {
+        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_data_start_index(sub_device_id);
+    } else if (unicast_data) {
         return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
             sub_device_id);
     } else {

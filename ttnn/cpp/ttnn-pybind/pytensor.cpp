@@ -11,6 +11,7 @@
 
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include <tt-metalium/host_buffer.hpp>
+#include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -75,7 +76,8 @@ Tensor create_typed_tt_tensor_from_py_data(
     ttnn::QueueId cq_id,
     float pad_value) {
     TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec().has_value(),
+        !tensor_spec.memory_config().is_sharded() || tensor_spec.memory_config().shard_spec().has_value() ||
+            tensor_spec.memory_config().nd_shard_spec().has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
     const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
@@ -371,20 +373,7 @@ Tensor convert_python_tensors_to_tt_tensors(
             pad_value,
             /*force_disable_borrow=*/true));
     }
-    std::vector<HostBuffer> host_owned_buffers;
-    std::vector<ttnn::TensorSpec> host_owned_specs;
-    for (const auto& shard : tt_shards) {
-        TT_ASSERT(
-            std::holds_alternative<HostStorage>(shard.get_storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(shard.get_storage()));
-        host_owned_buffers.push_back(std::get<HostStorage>(shard.get_storage()).buffer);
-        host_owned_specs.push_back(shard.get_tensor_spec());
-    }
-    auto distributed_tensor_config = get_distributed_tensor_config(strategy);
-    auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers), host_owned_specs};
-
-    auto output = Tensor(std::move(storage), tt_shards.at(0).get_tensor_spec(), distributed_tensor_config);
+    auto output = distributed::aggregate_as_tensor(tt_shards, get_distributed_tensor_config(strategy));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -394,7 +383,8 @@ template <typename T>
 HostBuffer create_row_major_host_buffer(
     HostBuffer host_buffer, const ttnn::TensorSpec& tensor_spec, const bool padded_output) {
     TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec().has_value(),
+        !tensor_spec.memory_config().is_sharded() || tensor_spec.memory_config().shard_spec().has_value() ||
+            tensor_spec.memory_config().nd_shard_spec().has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
     if (padded_output) {

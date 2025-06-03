@@ -450,8 +450,7 @@ int main(int argc, char** argv) {
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
                         tt_cxy_pair(device->id(), w),
-                        dispatch_l1_unreserved_base,
-                        vec.size() == 1);
+                        dispatch_l1_unreserved_base);
                 }
             }
 
@@ -465,8 +464,7 @@ int main(int argc, char** argv) {
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
                         tt_cxy_pair(device->id(), w),
-                        dispatch_l1_unreserved_base,
-                        vec.size() == 1);
+                        dispatch_l1_unreserved_base);
                 }
             }
             auto end = std::chrono::system_clock::now();
