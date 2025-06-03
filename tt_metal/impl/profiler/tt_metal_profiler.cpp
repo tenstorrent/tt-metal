@@ -704,15 +704,7 @@ void DumpDeviceProfileResults(
         workerCores.push_back(virtualCore);
     }
 
-    detail::DumpDeviceProfileResults(device, workerCores, state, metadata);
-    if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and
-        state == ProfilerDumpState::CLOSE_DEVICE_SYNC) {
-        for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
-            chip_id_t sender_id = device->id();
-            chip_id_t receiver_id = connected_device.first;
-        }
-    }
-
+    DumpDeviceProfileResults(device, workerCores, state, metadata);
 #endif
 }
 
