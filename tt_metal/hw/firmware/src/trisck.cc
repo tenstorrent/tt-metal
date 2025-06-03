@@ -18,6 +18,7 @@
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "remote_circular_buffer_api.h"
 #endif
+#include "debug/stack_usage.h"
 
 // Global vars
 uint32_t unp_cfg_context = 0;
@@ -37,7 +38,8 @@ volatile tt_reg_ptr uint * mailbox_base[4] = {
 };
 }
 
-void kernel_launch(uint32_t kernel_base_addr) {
+uint32_t kernel_launch(uint32_t kernel_base_addr) {
+    mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
@@ -63,5 +65,7 @@ void kernel_launch(uint32_t kernel_base_addr) {
     WAYPOINT("K");
     run_kernel();
     WAYPOINT("KD");
+    EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif
+    return measure_stack_usage();
 }
