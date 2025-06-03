@@ -564,7 +564,6 @@ class TT_CCL:
             input_tensor_mesh,
             persistent_interim_buffer,
             dim,
-            topology=ttnn.Topology.Linear,
             self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             1,
             self.mesh_device,
@@ -575,6 +574,7 @@ class TT_CCL:
             program_config=program_config,
             memory_config_mm=memory_config,
             global_cb=global_cb,
+            topology=ttnn.Topology.Linear,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
