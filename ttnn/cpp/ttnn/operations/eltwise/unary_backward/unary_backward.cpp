@@ -255,7 +255,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardPow::invoke(
         return grad_tensor;
     }
 
-    Tensor power_input = ttnn::power(queue_id, input, std::fabs(exponent - 1.0f), output_mem_config);
+    Tensor power_input = ttnn::pow(queue_id, input, std::fabs(exponent - 1.0f), output_mem_config);
     if (exponent < 1.0f) {
         power_input = ttnn::reciprocal(queue_id, power_input, output_mem_config);
     }
@@ -264,17 +264,12 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardPow::invoke(
     power_input.deallocate();
     Tensor final_result = ttnn::multiply(queue_id, result, grad, std::nullopt, output_mem_config);
     result.deallocate();
-    Tensor temp = where(
-        queue_id,
-        ttnn::le(queue_id, final_result, -3.4e+38, std::nullopt, output_mem_config),
-        -std::numeric_limits<float>::infinity(),
-        final_result,
-        output_mem_config);
+    // Handle negative inputs by returning infinity
     where(
         queue_id,
-        ttnn::ge(queue_id, final_result, 3.4e+38, std::nullopt, output_mem_config),
+        ttnn::lez(queue_id, input),
         std::numeric_limits<float>::infinity(),
-        temp,
+        final_result,
         output_mem_config,
         input_grad);
     grad_tensor.emplace_back(input_grad);
