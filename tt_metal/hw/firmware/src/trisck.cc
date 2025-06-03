@@ -52,6 +52,11 @@ uint32_t kernel_launch(uint32_t kernel_base_addr) {
   do_crt1((
       uint32_t tt_l1_ptr *)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base - (uint32_t)__fw_export_text_end));
 
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+	// The initialization happens in local memory
+        noc_local_state_init(NOC_INDEX);
+    }
+
 #if defined(UCK_CHLKC_UNPACK)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
     memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);

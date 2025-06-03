@@ -17,7 +17,6 @@
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
 #include "llk_param_structs.h"
-
 /*************************************************************************
  * LLK PACK
  *************************************************************************/
@@ -171,6 +170,27 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
+template <bool untilize = false, bool zero_output = false, bool tilize = false>
+inline void llk_pack_init_st(const std::uint32_t pack_output = 16) {
+    // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
+    const std::uint32_t output_id = get_output_id(pack_output);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const bool partial_face = get_output_partial_face(output_id);
+    const bool narrow_tile = get_output_narrow_tile(output_id);
+
+    // Since this is for single threaded programming we do not initialize the mop
+    // to avoid contending with unpacker threads mop
+    _llk_pack_init_st_<untilize, zero_output, DstTileFaceLayout::RowMajor, false, tilize>(
+        pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
+
+    set_packer_strides<untilize, tilize>(pack_src_format[output_id], pack_dst_format[output_id], tile_c_dim);
+
+    // Program packer to pack out 16 datums per row
+    TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+}
+
 template <bool out_of_order_output, bool untilize>
 inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32_t output_tile_index) {
     std::uint32_t pack_tile_addr;
@@ -198,6 +218,17 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
     _llk_pack_<DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(tile_index, pack_tile_addr);
+}
+
+template <bool out_of_order_output = false, bool untilize = false, bool is_fp32_dest_acc_en = false>
+inline void llk_pack_st(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
+    std::uint8_t output_id = get_output_id(output);
+
+    static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
+
+    std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
+
+    _llk_pack_st_<DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(tile_index, pack_tile_addr);
 }
 
 /*************************************************************************

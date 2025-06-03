@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t bank_id = get_arg_val<uint32_t>(1);
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
 

@@ -31,6 +31,8 @@
 #include "dataflow_api_addrgen.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+#if not defined(COMPILE_FOR_TRISC)
+
 // clang-format off
 /**
  * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
@@ -151,6 +153,8 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
 
+#endif
+
 // clang-format off
 /**
  * Pushes a given number of tiles in the back of the specified CB’s queue.
@@ -193,6 +197,24 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
     }
 }
 
+FORCE_INLINE
+void cb_push_back_df(const int32_t operand, const int32_t num_pages) {
+    uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
+
+    volatile tt_reg_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(operand);
+    pages_received_ptr[0] += num_pages;
+
+    get_local_cb_interface(operand).fifo_wr_ptr += num_words;
+
+    // this will basically reset fifo_wr_ptr to fifo_addr -- no other wrap is legal
+    // producer always writes into contiguous memory, it cannot wrap
+    ASSERT(get_local_cb_interface(operand).fifo_wr_ptr <= get_local_cb_interface(operand).fifo_limit);
+    if (get_local_cb_interface(operand).fifo_wr_ptr == get_local_cb_interface(operand).fifo_limit) {
+        // TODO: change this to fifo_wr_ptr
+        get_local_cb_interface(operand).fifo_wr_ptr -= get_local_cb_interface(operand).fifo_size;
+    }
+}
+
 // clang-format off
 /**
  * Pops a specified number of tiles from the front of the specified CB. This
@@ -219,6 +241,24 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
+    volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
+    pages_acked_ptr[0] += num_pages;
+
+    uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
+
+    get_local_cb_interface(operand).fifo_rd_ptr += num_words;
+
+    // this will basically reset fifo_rd_ptr to fifo_addr -- no other wrap is legal
+    // consumer always reads from contiguous memory, it cannot wrap
+    ASSERT(get_local_cb_interface(operand).fifo_rd_ptr <= get_local_cb_interface(operand).fifo_limit);
+    if (get_local_cb_interface(operand).fifo_rd_ptr == get_local_cb_interface(operand).fifo_limit) {
+        // TODO: change this to fifo_wr_ptr
+        get_local_cb_interface(operand).fifo_rd_ptr -= get_local_cb_interface(operand).fifo_size;
+    }
+}
+
+FORCE_INLINE
+void cb_pop_front_df(int32_t operand, int32_t num_pages) {
     volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
     pages_acked_ptr[0] += num_pages;
 
@@ -534,7 +574,6 @@ inline void noc_async_read(
         Read responses - assigned VCs dynamically
     */
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ,src_noc_addr,size, -1);
-
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
         noc_async_read_one_packet(src_noc_addr, dst_local_l1_addr, size, noc);
     } else {
@@ -1993,3 +2032,27 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     invalidate_l1_cache();
     WAYPOINT("NWTD");
 }
+
+#if defined(COMPILE_FOR_TRISC)
+
+inline void cb_push_back_from_dram(
+    uint32_t dram_bank_id, uint32_t dram_addr, uint32_t cb_id, uint32_t num_tiles, uint32_t noc = noc_index) {
+    UNPACK(uint32_t tile_size_bytes = get_tile_size(cb_id);
+           uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, dram_addr);
+           uint32_t l1_write_addr = get_write_ptr(cb_id);
+           noc_async_read(dram_noc_addr, l1_write_addr << 4, tile_size_bytes * num_tiles, noc);
+           noc_async_read_barrier(noc);
+           cb_push_back_df(cb_id, num_tiles););
+}
+
+inline void cb_pop_front_to_dram(
+    uint32_t dram_bank_id, uint32_t dram_addr, uint32_t cb_id, uint32_t num_tiles, uint32_t noc = noc_index) {
+    UNPACK(uint32_t tile_size_bytes = get_tile_size(cb_id);
+           uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, dram_addr);
+           uint32_t l1_read_addr = get_read_ptr(cb_id);
+           noc_async_write(l1_read_addr << 4, dram_noc_addr, tile_size_bytes * num_tiles, noc);
+           noc_async_write_barrier(noc);
+           cb_pop_front_df(cb_id, num_tiles););
+}
+
+#endif

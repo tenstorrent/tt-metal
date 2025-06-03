@@ -10,6 +10,20 @@
  * LLK UNPACK AB
  *************************************************************************/
 
+inline void llk_unpack_AB_init_st(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t transpose = 0,
+    const std::uint32_t acc_to_dest = 0) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);  // face r dim in unpA and unpB are the same
+    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
+    const bool narrow_tile =
+        get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
+
+    _llk_unpack_AB_init_st_(face_r_dim, num_faces, narrow_tile, transpose, acc_to_dest);
+}
+
 template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_AB_hw_configure(
     const llk_unpack_AB_params_t* unpack_AB_params, const int within_face_16x16_transpose = 0) {
@@ -62,6 +76,27 @@ inline void llk_unpack_AB_init(
         get_operand_narrow_tile(operandA_id);  // if narrow tile read face 0 twice for row broadcast
 
     _llk_unpack_AB_init_<BType>(face_r_dim, num_faces, narrow_tile, transpose, acc_to_dest);
+}
+
+inline void llk_unpack_AB_st(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t dst_index,
+    const bool transpose_of_faces = 0 /*not used*/) {
+    std::uint32_t operandA_id = get_operand_id(operandA);
+    std::uint32_t operandB_id = get_operand_id(operandB);
+    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * tile_index_a;
+    std::uint32_t address_a = base_address_a + offset_address_a;
+    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
+    std::uint32_t address_b = base_address_b + offset_address_b;
+
+    WAYPOINT("UABW");
+    _llk_unpack_AB_st_(address_a, address_b, dst_index, transpose_of_faces > 0);
+    WAYPOINT("UABD");
 }
 
 template <BroadcastType BType = BroadcastType::NONE>

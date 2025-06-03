@@ -6,6 +6,7 @@
 
 #include "risc_common.h"
 
+inline __attribute__((always_inline)) void invalidate_l1_cache();
 /*
  * Device-side debug print API for device kernels.
  * Works on either one of NC/BR/TR threads.
