@@ -129,7 +129,7 @@ tt::stl::hash::hash_t BatchNormOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
 
-    TT_ASSERT(
+    TT_FATAL(
         std::holds_alternative<DeviceStorage>(input.get_storage()),
         "Unexpected type {}",
         tt::stl::get_active_type_name_in_variant(input.get_storage()));

@@ -209,7 +209,10 @@ public:
     uint64_t padded_volume() const;
     const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
+
+    // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
     const std::optional<ShardSpec>& shard_spec() const;
+    const std::optional<NdShardSpec>& nd_shard_spec() const;
 
     // ======================================================================================
     //                                      Extra Helper Functions
@@ -239,8 +242,6 @@ public:
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.
     IDevice* device() const;
-
-    std::vector<IDevice*> active_physical_devices() const;
 
     bool is_sharded() const;
 

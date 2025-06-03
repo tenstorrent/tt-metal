@@ -40,6 +40,7 @@ set(TTNN_1D_FABRIC_LATENCY_TEST_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_1d_fabr
 set(TTNN_ACCESSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/accessor/test_sharded_accessor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/accessor/test_sharded_accessor_on_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/accessor/test_accessor_benchmarks.cpp
 )
 
 set(TTNN_TENSOR_UNIT_TESTS_SRC
@@ -51,6 +52,7 @@ set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_distributed_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_mesh_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_partition.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_nd_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_vector_conversion.cpp
@@ -68,6 +70,7 @@ add_executable(unit_tests_ttnn_ccl_multi_tensor ${TTNN_CCL_MULTI_TENSOR_UNIT_TES
 add_executable(unit_tests_ttnn_1d_fabric_latency ${TTNN_1D_FABRIC_LATENCY_TEST_SRC})
 add_executable(unit_tests_ttnn_accessor ${TTNN_ACCESSOR_UNIT_TESTS_SRC})
 add_executable(unit_tests_ttnn_tensor ${TTNN_TENSOR_UNIT_TESTS_SRC})
+target_link_libraries(unit_tests_ttnn_tensor PRIVATE xtensor)
 add_executable(
     test_ccl_multi_cq_multi_device
     ${CMAKE_CURRENT_SOURCE_DIR}/multi_thread/test_ccl_multi_cq_multi_device.cpp

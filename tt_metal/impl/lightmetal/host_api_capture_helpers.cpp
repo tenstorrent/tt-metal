@@ -100,10 +100,9 @@ void CaptureBufferCreate(
     DeviceAddr page_size,
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameters,
     const std::optional<bool> bottom_up,
-    const std::optional<SubDeviceId> sub_device_id,
-    const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
+    const std::optional<SubDeviceId> sub_device_id) {
     auto& ctx = LightMetalCaptureContext::get();
     auto& fbb = ctx.get_builder();
 
@@ -125,7 +124,11 @@ void CaptureBufferCreate(
     auto address_offset = address.has_value() ? flatbuffer::CreateUint32Optional(fbb, address.value()) : 0;
     auto bottom_up_offset = bottom_up.has_value() ? flatbuffer::CreateBoolOptional(fbb, bottom_up.value()) : 0;
     auto sub_device_id_offset = sub_device_id.has_value() ? flatbuffer::CreateUint8Optional(fbb, **sub_device_id) : 0;
-    auto shard_parameters_offset = to_flatbuffer(shard_parameters, fbb);
+    std::optional<ShardSpecBuffer> shard_spec_buffer;
+    if (shard_parameters && std::holds_alternative<ShardSpecBuffer>(*shard_parameters)) {
+        shard_spec_buffer = std::get<ShardSpecBuffer>(*shard_parameters);
+    }
+    auto shard_parameters_offset = to_flatbuffer(shard_spec_buffer, fbb);
 
     auto cmd = tt::tt_metal::flatbuffer::CreateBufferCreateCommand(
         fbb,

@@ -107,7 +107,7 @@ WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
 // first generates the physical chip id matrix and then returns the sequence of connected chip ids
 std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
     auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    tt::tt_fabric::mesh_id_t mesh_id = control_plane->get_user_physical_mesh_ids()[0];
+    tt::tt_fabric::MeshId mesh_id = control_plane->get_user_physical_mesh_ids()[0];
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     uint32_t chip_id_offset = 0;
@@ -297,7 +297,8 @@ void create_worker_kernel(
         mux_kernel_config.get_connection_handshake_address(channel_type, worker_id),
         mux_kernel_config.get_flow_control_address(channel_type, worker_id),
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id),
-        mux_kernel_config.get_status_address()};
+        mux_kernel_config.get_status_address(),
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id)};
 
     // virtual coordinates will be the same for the receiver device
     // hence, we can use the noc encoding derived using current device

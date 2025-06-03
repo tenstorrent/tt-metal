@@ -29,10 +29,10 @@
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
+#include "trace/trace_buffer.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
-#include <tt-metalium/trace_buffer.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/common/scoped_timer.hpp"
 #include "umd/device/tt_core_coordinates.h"

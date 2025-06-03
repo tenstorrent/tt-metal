@@ -122,7 +122,7 @@ void RunTestLineMcast(
     }
     // Setup mcast path
     chip_id_t mcast_start_phys_id;                              // Physical ID for chip starting mcast
-    FabricNodeId mcast_start_id(0, 0);                          // Mesh ID for chip starting mcast
+    FabricNodeId mcast_start_id(MeshId{0}, 0);                          // Mesh ID for chip starting mcast
     std::unordered_map<RoutingDirection, uint32_t> mcast_hops;  // Specify mcast path from mcast src chip
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>>
         mcast_group;  // Mesh IDs for chips involved in mcast
@@ -226,7 +226,7 @@ void RunTestLineMcast(
         receiver_noc_encoding,
         time_seed,
         mcast_start_id.chip_id,
-        mcast_start_id.mesh_id};
+        *mcast_start_id.mesh_id};
 
     std::vector<uint32_t> mcast_header_rtas(4, 0);
     for (const auto& routing_info : mcast_routing_info) {
@@ -299,8 +299,8 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
 
     auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
-    FabricNodeId src_fabric_node_id(0, 0);
-    FabricNodeId dst_fabric_node_id(0, 0);
+    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
+    FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
     chip_id_t not_used_1;
     chip_id_t not_used_2;
     // Find a device num_hops away in specified direction.
@@ -361,7 +361,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
                 "No fabric routers between Src MeshId {} ChipId {} - Dst MeshId {} ChipId {}",
                 src_fabric_node_id.mesh_id,
                 src_fabric_node_id.chip_id,
-                dst_fabric_node_id.mesh_id,
+                *dst_fabric_node_id.mesh_id,
                 dst_fabric_node_id.chip_id);
 
             GTEST_SKIP() << "Skipping Test";
@@ -435,7 +435,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         mesh_shape[1],
         src_fabric_node_id.chip_id,
         dst_fabric_node_id.chip_id,
-        dst_fabric_node_id.mesh_id,
+        *dst_fabric_node_id.mesh_id,
         num_hops};
 
     // append the EDM connection rt args
@@ -584,14 +584,14 @@ void run_unicast_test_bw_chips(
         mesh_shape[1],
         src_fabric_node_id.chip_id,
         dst_fabric_node_id.chip_id,
-        dst_fabric_node_id.mesh_id,
+        *dst_fabric_node_id.mesh_id,
         num_hops};
 
     // append the EDM connection rt args
-    uint32_t link_idx = 0;
-    if (is_2d_fabric) {
-        link_idx = get_forwarding_link_indices(src_physical_device_id, dst_physical_device_id)[0];
-    }
+    const auto& available_links = get_forwarding_link_indices(src_physical_device_id, dst_physical_device_id);
+    EXPECT_EQ(available_links.size() > 0, true);
+
+    uint32_t link_idx = available_links[0];
     append_fabric_connection_rt_args(
         src_physical_device_id,
         dst_physical_device_id,
@@ -656,8 +656,8 @@ void run_unicast_test_bw_chips(
 void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction) {
     const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
-    FabricNodeId src_fabric_node_id(0, 0);
-    FabricNodeId dst_fabric_node_id(0, 0);
+    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
+    FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
     chip_id_t not_used_1;
     chip_id_t not_used_2;
     // Find a device with a neighbour in the East direction
@@ -703,6 +703,35 @@ void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
         fixture, src_physical_device_id, dst_physical_device_id, 0 /* num_hops, not needed for 2d */);
 }
 
+void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
+    // TODO: remove this restriction once tunneling is disabled
+    if (!fixture->slow_dispatch_) {
+        tt::log_info(tt::LogTest, "This test can only be run with TT_METAL_SLOW_DISPATCH_MODE currently");
+        GTEST_SKIP();
+    }
+
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::TG) {
+        tt::log_info(tt::LogTest, "This test is only for TG");
+        GTEST_SKIP();
+    }
+
+    // run tests b/w all pairs of TG gateways <> remote chip connections
+    // this only tests connections with the immediate remote chip in the tunnel since other connections
+    // are 'normal' and covered in other tests
+    const std::vector<chip_id_t> mmio_chip_ids = {0, 1, 2, 3};
+    for (const auto& mmio_chip_id : mmio_chip_ids) {
+        const auto& tunnels_from_mmio =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_chip_id);
+        for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+            // idx 0 in the tunnel is the mmio chip itself
+            const auto remote_chip_id = tunnels_from_mmio[t][1];
+            tt::log_info(tt::LogTest, "Running tests for chips: {} and {}", mmio_chip_id, remote_chip_id);
+            run_unicast_test_bw_chips(fixture, mmio_chip_id, remote_chip_id, 1);
+            run_unicast_test_bw_chips(fixture, remote_chip_id, mmio_chip_id, 1);
+        }
+    }
+}
+
 void RunTestMCastConnAPI(
     BaseFabricFixture* fixture,
     RoutingDirection fwd_dir,
@@ -717,7 +746,7 @@ void RunTestMCastConnAPI(
 
     // use control plane to find a mesh with 3 devices
     auto user_meshes = control_plane->get_user_physical_mesh_ids();
-    std::optional<mesh_id_t> mesh_id;
+    std::optional<MeshId> mesh_id;
     for (const auto& mesh : user_meshes) {
         auto mesh_shape = control_plane->get_physical_mesh_shape(mesh);
         if (mesh_shape.mesh_size() >= 3) {
@@ -730,7 +759,7 @@ void RunTestMCastConnAPI(
     }
 
     // Find a device num_hops away in specified direction.
-    FabricNodeId src_fabric_node_id(0, 0);
+    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
     chip_id_t src_phys_chip_id;
@@ -834,7 +863,7 @@ void RunTestMCastConnAPI(
         mesh_shape[1],
         src_fabric_node_id.chip_id,
         left_fabric_node_id.chip_id,
-        mesh_id.value(),
+        *mesh_id.value(),
         fwd_hops, /* mcast_fwd_hops */
     };
 
@@ -948,6 +977,7 @@ void RunTestMCastConnAPI(
 
 TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
+TEST_F(Fabric1DFixture, TestUnicastTGGateways) { RunTestUnicastTGGateways(this); }
 TEST_F(Fabric1DFixture, TestMCastConnAPI) { RunTestMCastConnAPI(this); }
 
 TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
@@ -964,13 +994,13 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
     auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     log_debug(tt::LogTest, "Control plane found");
 
-    std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
-    std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
+    std::pair<MeshId, chip_id_t> src_mesh_chip_id;
+    std::pair<MeshId, chip_id_t> dst_mesh_chip_id;
     chip_id_t not_used_1;
     chip_id_t not_used_2;
     // use control plane to find a mesh with 3 devices
     auto user_meshes = control_plane->get_user_physical_mesh_ids();
-    std::optional<mesh_id_t> mesh_id;
+    std::optional<MeshId> mesh_id;
     for (const auto& mesh : user_meshes) {
         auto mesh_shape = control_plane->get_physical_mesh_shape(mesh);
         if (mesh_shape.mesh_size() > 1) {
