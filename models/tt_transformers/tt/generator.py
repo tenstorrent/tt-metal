@@ -229,6 +229,9 @@ class Generator:
         else:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
+        for i in range(self.data_parallel):
+            tt_logits[i] = tt_logits[i][:, :, : tokens[i].shape[0]]
+
         if read_from_device:
             to_host = self.read_decode_output(tt_logits, B, is_tokens=(sampling_params is not None))
             return to_host
@@ -603,7 +606,8 @@ class Generator:
         """
         Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
-        batch_per_dp = unpadded_batch // self.data_parallel
+        # batch_per_dp = unpadded_batch // self.data_parallel
+        batch_per_dp = tt_out[0].shape[2]
         logits = []
         for i in range(self.data_parallel):
             logits_i = self.model[i].process_output_decode(tt_out[i], B=batch_per_dp, S=1, is_tokens=is_tokens)
