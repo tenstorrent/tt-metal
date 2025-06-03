@@ -564,6 +564,7 @@ class TT_CCL:
             input_tensor_mesh,
             persistent_interim_buffer,
             dim,
+            topology=ttnn.Topology.Linear,
             self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             1,
             self.mesh_device,
