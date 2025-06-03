@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fabric_mux.hpp"
+#include "relay_mux.hpp"
 #include "context/metal_context.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
 #include "fabric/fabric_mux_config.hpp"
+#include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include "tt_align.hpp"
@@ -17,8 +18,9 @@
 
 namespace tt::tt_metal {
 
-void FabricMux::GenerateStaticConfigs() {
+void RelayMux::GenerateStaticConfigs() {
     constexpr uint32_t k_NumSlotsPerChannel = 16;
+    constexpr uint32_t k_BufferSize = 4096;
 
     uint32_t l1_base = 0;
     uint32_t l1_size = 0;
@@ -55,7 +57,10 @@ void FabricMux::GenerateStaticConfigs() {
     // Setup the buffer sizes depending on how many upstream/downstream kernels are connected
     static_config_.num_full_size_channels = kernels_requiring_full_size_channel;
     static_config_.num_header_only_channels = kernels_requiring_header_only_channel;
-    static_config_.buffer_size_bytes = sizeof(tt::tt_fabric::PacketHeader) + 4096;
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    const auto& fabric_context = control_plane->get_fabric_context();
+    static_config_.buffer_size_bytes = fabric_context.get_fabric_packet_header_size_bytes() + k_BufferSize;
 
     // FabricMuxConfig only accepts Worker or Idle Eth. Eth is not accepted.
     CoreType mux_config_core = GetCoreType() == CoreType::WORKER ? CoreType::WORKER : CoreType::IDLE_ETH;
@@ -71,7 +76,7 @@ void FabricMux::GenerateStaticConfigs() {
 
     log_debug(
         tt::LogMetal,
-        "FabricMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {}",
+        "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {}",
         device_->id(),
         kernels_requiring_header_only_channel,
         kernels_requiring_full_size_channel,
@@ -82,7 +87,7 @@ void FabricMux::GenerateStaticConfigs() {
 
     uint32_t mux_buffer_end =
         mux_kernel_config_->get_start_address_to_clear() + mux_kernel_config_->get_num_bytes_to_clear();
-    TT_ASSERT(mux_buffer_end < l1_size, "Fabric MUX Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
+    TT_ASSERT(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
 
     mux_rt_args_.clear();
     int destination_device_id = -1;
@@ -97,26 +102,32 @@ void FabricMux::GenerateStaticConfigs() {
     const auto& available_links = tt_fabric::get_forwarding_link_indices(device_id_, destination_device_id);
     TT_ASSERT(!available_links.empty());
     tt_fabric::append_fabric_connection_rt_args(
-        device_id_, destination_device_id, available_links[0], *program_, {logical_core_}, mux_rt_args_, GetCoreType());
+        device_id_,
+        destination_device_id,
+        available_links.back(),
+        *program_,
+        {logical_core_},
+        mux_rt_args_,
+        GetCoreType());
 }
 
-void FabricMux::GenerateDependentConfigs() {}
+void RelayMux::GenerateDependentConfigs() {}
 
-void FabricMux::CreateKernel() {
+void RelayMux::CreateKernel() {
     auto mux_kernel =
         configure_kernel_variant(dispatch_kernel_file_names[FABRIC_MUX], mux_ct_args_, {}, false, false, false);
 
     tt::tt_metal::SetRuntimeArgs(*program_, mux_kernel, logical_core_, mux_rt_args_);
 }
 
-void FabricMux::ConfigureCore() {
+void RelayMux::ConfigureCore() {
     // TODO: Only need to clear the read/write pointers to 0
     std::vector<uint32_t> mux_zero_vec((mux_kernel_config_->get_num_bytes_to_clear() / sizeof(uint32_t)), 0);
     tt::tt_metal::detail::WriteToDeviceL1(
         device_, logical_core_, mux_kernel_config_->get_start_address_to_clear(), mux_zero_vec, GetCoreType());
 }
 
-int FabricMux::GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const {
+int RelayMux::GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const {
     const auto& kernels = channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL ? upstream_kernels_
                                                                                                  : downstream_kernels_;
     for (int i = 0; i < kernels.size(); ++i) {
@@ -132,8 +143,8 @@ int FabricMux::GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChan
 void assemble_fabric_mux_client_config_args(
     int node_id,
     tt::tt_fabric::FabricMuxChannelType ch_type,
-    const FabricMux* fabric_mux,
-    fabric_mux_client_config& config) {
+    const RelayMux* fabric_mux,
+    relay_mux_client_config& config) {
     const auto ch_index = fabric_mux->GetWorkerChannelIndex(node_id, ch_type);
     const CoreCoord& fabric_mux_core = fabric_mux->GetVirtualCore();
     config.virtual_x = fabric_mux_core.x;
@@ -160,7 +171,9 @@ int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id) {
 
     if (dev_mmio_device_id != mmio_dev_id) {
         TT_THROW(
-            "Specified MMIO device ID {} is not an MMIO device. MMIO device is {}", mmio_dev_id, dev_mmio_device_id);
+            "RelayMux Specified MMIO device ID {} is not an MMIO device. MMIO device is {}",
+            mmio_dev_id,
+            dev_mmio_device_id);
     }
 
     auto tunnels_from_mmio =
@@ -179,7 +192,8 @@ int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id) {
             }
         }
     }
-    TT_THROW("Downstream device {} is not found in tunnel from MMIO device {}", downstream_dev_id, mmio_dev_id);
+    TT_THROW(
+        "RelayMux Downstream device {} is not found in tunnel from MMIO device {}", downstream_dev_id, mmio_dev_id);
     return -1;
 }
 }  // namespace tt::tt_metal

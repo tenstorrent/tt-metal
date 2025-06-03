@@ -12,7 +12,7 @@
 #include "demux.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
-#include "dispatch/kernel_config/fabric_mux.hpp"
+#include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
 #include "dprint_server.hpp"
@@ -119,10 +119,10 @@ FDKernel* FDKernel::Generate(
         case PACKET_ROUTER_DEMUX:
             return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
         case FABRIC_MUX:
-            return new tt::tt_metal::FabricMux(
+            return new tt::tt_metal::RelayMux(
                 node_id, device_id, servicing_device_id, cq_id, noc_selection, false, tunnel_index);
         case RETURN_FABRIC_MUX:
-            return new tt::tt_metal::FabricMux(
+            return new tt::tt_metal::RelayMux(
                 node_id, device_id, servicing_device_id, cq_id, noc_selection, true, tunnel_index);
         default: TT_FATAL(false, "Unrecognized dispatch kernel type: {}.", type); return nullptr;
     }

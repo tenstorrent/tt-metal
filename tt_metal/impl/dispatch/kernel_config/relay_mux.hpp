@@ -14,7 +14,7 @@
 
 namespace tt::tt_metal {
 
-struct fabric_mux_client_config {
+struct relay_mux_client_config {
     std::optional<uint32_t> virtual_x;
     std::optional<uint32_t> virtual_y;
     std::optional<uint32_t> num_buffers_per_channel;
@@ -29,7 +29,7 @@ struct fabric_mux_client_config {
     std::optional<uint32_t> worker_credits_stream_id;
 };
 
-struct fabric_mux_static_config {
+struct relay_mux_static_config {
     // Base address for each buffer
     std::optional<uint32_t> buffer_base_address;
 
@@ -44,7 +44,7 @@ struct fabric_mux_static_config {
 };
 
 //
-// Represents a TT-Fabric MUX
+// Represents a TT-Fabric MUX to be used for relaying to remote chips
 // This FDKernel treats upstream and downstream kernels differently:
 //  Upstream kernels: Full size channel
 //  Downstreamkernels: Header only channel
@@ -53,9 +53,9 @@ struct fabric_mux_static_config {
 // Servicing Device Id: The downstream tunnel index
 // d2h: True means this MUX is for returning data from device to host. Servicing device Id is ignored if this is true.
 //
-class FabricMux : public FDKernel {
+class RelayMux : public FDKernel {
 private:
-    fabric_mux_static_config static_config_;
+    relay_mux_static_config static_config_;
     // This is separate from independent/dependent config as it's managed by fabric
     std::shared_ptr<tt::tt_fabric::FabricMuxConfig> mux_kernel_config_;
     std::vector<uint32_t> mux_ct_args_;
@@ -64,7 +64,7 @@ private:
     int tunnel_id_ = 0;
 
 public:
-    FabricMux(
+    RelayMux(
         int node_id,
         chip_id_t device_id,
         chip_id_t servicing_device_id,
@@ -89,7 +89,7 @@ public:
         };
     }
 
-    const fabric_mux_static_config& GetStaticConfig() const { return static_config_; }
+    const relay_mux_static_config& GetStaticConfig() const { return static_config_; }
 
     // Returns the Mux Kernel config. Populated after generating static configs.
     const std::shared_ptr<tt::tt_fabric::FabricMuxConfig>& GetMuxKernelConfig() const { return mux_kernel_config_; }
@@ -101,12 +101,12 @@ public:
     int GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const;
 };
 
-// Helper function to assemble the fabric_mux_client_config args
+// Helper function to assemble the dispatch_fabric_mux_client_config args
 void assemble_fabric_mux_client_config_args(
     int node_id,
     tt::tt_fabric::FabricMuxChannelType ch_type,
-    const FabricMux* fabric_mux,
-    fabric_mux_client_config& config);
+    const RelayMux* fabric_mux,
+    relay_mux_client_config& config);
 
 // Helper function to calculate number of hops from a mmio device to downstream device
 // The two devices must be along the same tunnel.
