@@ -44,7 +44,6 @@ void kernel_main() {
 #if CAUSAL_MASK
     constexpr uint32_t num_tiles_causal_mask = get_compile_time_arg_val(2);
 
-    uint32_t mask_id_offset = mask_offset;
     uint32_t mask_ht = mask_start_ht;
 #endif
 
@@ -70,8 +69,9 @@ void kernel_main() {
 #else
     constexpr uint32_t total_passes = 2;
 #endif
-#if CAUSAL_MASK
-    uint32_t mask_index = mask_id_offset;
+#if FUSED_SCALE_MASK
+    uint32_t mask_id_offset = mask_id;
+    uint32_t mask_index = mask_id;
 #endif
 
     for (uint32_t ncht = 0; ncht < NCht; ncht++) {
