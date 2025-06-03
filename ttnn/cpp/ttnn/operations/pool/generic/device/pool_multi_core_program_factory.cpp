@@ -312,7 +312,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t in_scalar_cb_id_0 = next_cb_index++;
     const uint32_t in_scalar_cb_pagesize = tile_size(in_df);
-    const uint32_t in_scalar_cb_npages = 1;
+    const uint32_t in_scalar_cb_npages = 1 * multi_buffering_factor;
+    TT_FATAL(in_scalar_cb_npages == 2, "Kernel logic relys on scalar cb page number being 2");
     tt::tt_metal::create_cb(in_scalar_cb_id_0, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
