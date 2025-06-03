@@ -91,8 +91,8 @@ struct ShardSpec {
             shard_shape_[1]);
     }
 
-    const uint32_t num_cores() const { return this->grid.num_cores(); }
-    const uint32_t numel() const { return this->shape[0] * this->shape[1]; }
+    uint32_t num_cores() const { return this->grid.num_cores(); }
+    uint32_t numel() const { return this->shape[0] * this->shape[1]; }
 
     bool operator==(const ShardSpec& other) const;
     bool operator!=(const ShardSpec& other) const;
@@ -207,10 +207,9 @@ public:
         DeviceAddr page_size,
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
+        const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameter = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
-        std::optional<SubDeviceId> sub_device_id = std::nullopt,
-        const std::optional<BufferDistributionSpec>& buffer_distribution_spec = std::nullopt);
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
         IDevice* device,
         DeviceAddr address,
@@ -218,10 +217,9 @@ public:
         DeviceAddr page_size,
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
+        const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameter = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
-        std::optional<SubDeviceId> sub_device_id = std::nullopt,
-        const std::optional<BufferDistributionSpec>& buffer_distribution_spec = std::nullopt);
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
@@ -313,8 +311,7 @@ public:
         DeviceAddr page_size,
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout,
-        const std::optional<ShardSpecBuffer>& shard_parameter,
-        const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
+        const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameter,
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,

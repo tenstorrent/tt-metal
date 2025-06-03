@@ -170,9 +170,10 @@ void TensorLayout::initialize_alignment() {
     alignment_ = Alignment(std::move(result));
 }
 
-TensorLayout::BufferDistributionSpecVariant TensorLayout::compute_distribution_spec(const ttnn::Shape& shape) const {
+std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> TensorLayout::compute_distribution_spec(
+    const ttnn::Shape& shape) const {
     if (!memory_config_.is_sharded()) {
-        return std::monostate{};
+        return std::nullopt;
     }
 
     TT_FATAL(
@@ -213,8 +214,9 @@ TensorLayout::BufferDistributionSpecVariant TensorLayout::compute_distribution_s
     }
 
     auto& nd_shard_spec = memory_config_.nd_shard_spec().value();
+    auto padded_shape = compute_padded_shape(shape);
     return BufferDistributionSpec::from_shard_spec(
-        shape, nd_shard_spec.shard_shape, page_shape, nd_shard_spec.cores, nd_shard_spec.shard_orientation);
+        padded_shape, nd_shard_spec.shard_shape, page_shape, nd_shard_spec.grid, nd_shard_spec.orientation);
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const {

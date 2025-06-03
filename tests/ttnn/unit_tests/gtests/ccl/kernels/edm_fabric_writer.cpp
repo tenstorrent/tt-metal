@@ -14,7 +14,7 @@ static constexpr bool enable_start_synchronization = get_compile_time_arg_val(0)
 static constexpr bool enable_finish_synchronization = get_compile_time_arg_val(1) != 0;
 static constexpr bool enable_any_synchronization = enable_start_synchronization || enable_finish_synchronization;
 
-FORCE_INLINE void line_sync(
+void line_sync(
     FabricConnectionManager& fabric_connection,
     bool sync_forward,
     bool sync_backward,

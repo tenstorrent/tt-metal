@@ -13,6 +13,13 @@ target_sources(
         fabric_context.cpp
 )
 
+# These headers are for the device, not host; will require cross compiling to verify.
+set_target_properties(
+    fabric
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 target_sources(
     fabric
     PUBLIC

@@ -24,7 +24,6 @@
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include <tt-metalium/mesh_device.hpp>
@@ -915,6 +914,7 @@ bool RunLocalTestWithMultiInputReaders(
     std::optional<ttnn::ccl::SyncModeSpec> sync_details;
     std::optional<CoreCoord> teardown_worker_core;
     std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> teardown_command_stream;
+    TT_FATAL(enable_persistent_fabric, "Non-persistent fabric is not supported for this test");
     if (fabric_enabled && !enable_persistent_fabric) {
         teardown_worker_core = worker_core;
 
@@ -1404,9 +1404,19 @@ int TestLoopbackEntrypoint(
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        fabric_sender_program, sender_device, chip_0_edm_builder, eth_sender_core, NOC::NOC_0);
+        fabric_sender_program,
+        sender_device,
+        chip_0_edm_builder,
+        eth_sender_core,
+        DataMovementProcessor::RISCV_0,
+        NOC::NOC_0);
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        fabric_receiver_program, receiver_device, chip_1_edm_builder, eth_receiver_core, NOC::NOC_0);
+        fabric_receiver_program,
+        receiver_device,
+        chip_1_edm_builder,
+        eth_receiver_core,
+        DataMovementProcessor::RISCV_0,
+        NOC::NOC_0);
 
     if (enable_persistent_fabric) {
         tt::tt_metal::detail::CompileProgram(sender_device, fabric_sender_program);
@@ -2781,6 +2791,16 @@ void Run1DFabricPacketSendTest(
 
             std::vector<uint32_t> worker_ct_args = {params.line_sync, params.line_sync};
 
+            TT_FATAL(
+                std::any_of(
+                    worker_cores_vec.begin(),
+                    worker_cores_vec.end(),
+                    [&sync_core_coord](const CoreCoord& core) {
+                        return core.x == sync_core_coord.x && core.y == sync_core_coord.y;
+                    }),
+                "Atleast one worker core must be mapped onto sync core: x={}, y={}",
+                sync_core_coord.x,
+                sync_core_coord.y);
             auto worker_kernel_id = tt_metal::CreateKernel(
                 program,
                 "tests/ttnn/unit_tests/gtests/ccl/kernels/edm_fabric_writer.cpp",
@@ -2796,6 +2816,8 @@ void Run1DFabricPacketSendTest(
                                              size_t link,
                                              bool is_connected_in_direction,
                                              IDevice* connected_device,
+                                             // not updated to CCL line direction because this is a metal/fabric level
+                                             // test
                                              ttnn::ccl::EdmLineFabricOpInterface::Direction direction,
                                              std::vector<uint32_t>& rt_args_out) {
                 rt_args_out.push_back(is_connected_in_direction);

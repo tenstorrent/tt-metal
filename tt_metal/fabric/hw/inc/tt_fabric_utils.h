@@ -31,23 +31,18 @@ FORCE_INLINE bool connect_is_requested(uint32_t cached) {
            cached == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
 }
 
-template <bool enable_ring_support = false, bool enable_first_level_ack = false, uint8_t SENDER_NUM_BUFFERS>
-FORCE_INLINE void establish_connection(
+template <uint8_t SENDER_NUM_BUFFERS>
+FORCE_INLINE void establish_worker_connection(
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface) {
     local_sender_channel_worker_interface.cache_producer_noc_addr();
-    if constexpr (enable_first_level_ack) {
-        local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
-            local_sender_channel_worker_interface.local_ackptr.get_ptr());
-    } else {
-        local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
-            local_sender_channel_worker_interface.local_rdptr.get_ptr());
-    }
+    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
 }
 
-template <bool enable_ring_support = false, bool enable_first_level_ack = false, uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void check_worker_connections(
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
-    bool& channel_connection_established) {
+    bool& channel_connection_established,
+    uint32_t stream_id) {
     if (!channel_connection_established) {
         // Can get rid of one of these two checks if we duplicate the logic above here in the function
         // and depending on which of the two versions we are in (the connected version or disconnected version)
@@ -59,16 +54,14 @@ FORCE_INLINE void check_worker_connections(
         // In such a case like that, we still want to formally teardown the connection to keep things clean
         uint32_t cached = *local_sender_channel_worker_interface.connection_live_semaphore;
         if (connect_is_requested(cached)) {
-            // if constexpr (enable_fabric_counters) {
-            //     sender_channel_counters->add_connection();
-            // }
             channel_connection_established = true;
-            establish_connection<enable_ring_support, enable_first_level_ack>(local_sender_channel_worker_interface);
+
+            ASSERT(get_ptr_val(stream_id) <= static_cast<int32_t>(SENDER_NUM_BUFFERS));
+            establish_worker_connection(local_sender_channel_worker_interface);
         }
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
         channel_connection_established = false;
-        local_sender_channel_worker_interface.template teardown_connection<true>(
-            local_sender_channel_worker_interface.local_rdptr.get_ptr());
+        local_sender_channel_worker_interface.template teardown_worker_connection<true>();
     }
 }
 
@@ -100,14 +93,16 @@ inline void notify_master_router(uint32_t master_eth_chan, uint32_t address) {
 }
 
 // !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
+// exclude_eth_chan is normally used for master ethernet channel to avoid sending notification to itself
+// but still can send to itself if the eth core has multiple risc cores (like Blackhole)
 inline void notify_subordinate_routers(
-    uint32_t router_eth_chans_mask, uint32_t master_eth_chan, uint32_t address, uint32_t notification) {
+    uint32_t router_eth_chans_mask, uint32_t exclude_eth_chan, uint32_t address, uint32_t notification) {
     uint32_t remaining_cores = router_eth_chans_mask;
     for (uint32_t i = 0; i < 16; i++) {
         if (remaining_cores == 0) {
             break;
         }
-        if ((remaining_cores & (0x1 << i)) && (master_eth_chan != i)) {
+        if ((remaining_cores & (0x1 << i)) && (exclude_eth_chan != i)) {
             uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][i], address);
             noc_inline_dw_write(dest_addr, notification);
             remaining_cores &= ~(0x1 << i);
