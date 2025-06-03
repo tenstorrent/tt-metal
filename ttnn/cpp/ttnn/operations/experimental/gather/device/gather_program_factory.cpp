@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::experimental::gather::program {
 // Single row - single core
-GatherProgramFactorySRSC::cached_program_t GatherProgramFactorySRSC::create(
+GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySingleRowSingleCore::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     tt::tt_metal::Program program{};
 
@@ -34,12 +34,14 @@ GatherProgramFactorySRSC::cached_program_t GatherProgramFactorySRSC::create(
     const bool input_index_tensor_is_dram = input_index_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool output_tensor_is_dram = output_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
+    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
+
     const auto input_index_shape = tensor_args.input_index_tensor.get_padded_shape();
     const auto input_shape = tensor_args.input_tensor.get_padded_shape();
-    const uint32_t Ht =
-        (input_index_shape[0] * input_index_shape[1] * input_index_shape[2]) / tt::constants::TILE_HEIGHT;
-    const uint32_t Wt_input = input_shape[3] / tt::constants::TILE_WIDTH;
-    const uint32_t Wt_index = input_index_shape[3] / tt::constants::TILE_WIDTH;
+    const uint32_t Ht = (input_index_shape[0] * input_index_shape[1] * input_index_shape[2]) / tile_height;
+    const uint32_t Wt_input = input_shape[3] / tile_width;
+    const uint32_t Wt_index = input_index_shape[3] / tile_width;
 
     // Calculate the number of cores available for computation
     auto device = tensor_args.input_tensor.device();
@@ -129,7 +131,7 @@ GatherProgramFactorySRSC::cached_program_t GatherProgramFactorySRSC::create(
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string gather_reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_reader.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_reader_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle gather_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         gather_reader_kernel_path,
@@ -139,7 +141,10 @@ GatherProgramFactorySRSC::cached_program_t GatherProgramFactorySRSC::create(
         program,
         gather_reader_kernel_id,
         core_range,
-        {input_index_tensor_buffer->address(), all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+        {input_index_tensor_buffer->address(),
+         all_core_utilization_loop_count ? all_core_utilization_loop_count : 1,
+         tile_width,
+         tile_height});
 
     const std::vector<uint32_t> writer_compile_time_args = {
         input_tensor_cb_index,
@@ -153,7 +158,7 @@ GatherProgramFactorySRSC::cached_program_t GatherProgramFactorySRSC::create(
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string gather_writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_writer.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_writer_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle gather_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         gather_writer_kernel_path,
@@ -176,7 +181,10 @@ GatherProgramFactorySRSC::cached_program_t GatherProgramFactorySRSC::create(
                 const CoreCoord core = {core_x, core_y};
 
                 SetRuntimeArgs(
-                    program, gather_reader_kernel_id, core, {input_index_tensor_buffer->address(), new_loop_count});
+                    program,
+                    gather_reader_kernel_id,
+                    core,
+                    {input_index_tensor_buffer->address(), new_loop_count, tile_width, tile_height});
 
                 SetRuntimeArgs(
                     program,
@@ -196,7 +204,7 @@ GatherProgramFactorySRSC::cached_program_t GatherProgramFactorySRSC::create(
     return {std::move(program), {gather_reader_kernel_id, gather_writer_kernel_id, compute_with_storage_grid_size}};
 }
 
-void GatherProgramFactorySRSC::override_runtime_arguments(
+void GatherProgramFactorySingleRowSingleCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
@@ -240,7 +248,7 @@ void GatherProgramFactorySRSC::override_runtime_arguments(
 }
 
 // Single row - multi core
-GatherProgramFactorySRMC::cached_program_t GatherProgramFactorySRMC::create(
+GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySingleRowMultiCore::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     tt::tt_metal::Program program{};
 
@@ -264,12 +272,14 @@ GatherProgramFactorySRMC::cached_program_t GatherProgramFactorySRMC::create(
     const bool input_index_tensor_is_dram = input_index_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool output_tensor_is_dram = output_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
+    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
+
     const auto input_index_shape = tensor_args.input_index_tensor.get_padded_shape();
     const auto input_shape = tensor_args.input_tensor.get_padded_shape();
-    const uint32_t Ht =
-        (input_index_shape[0] * input_index_shape[1] * input_index_shape[2]) / tt::constants::TILE_HEIGHT;
-    const uint32_t Wt_input = input_shape[3] / tt::constants::TILE_WIDTH;
-    const uint32_t Wt_index = input_index_shape[3] / tt::constants::TILE_WIDTH;
+    const uint32_t Ht = (input_index_shape[0] * input_index_shape[1] * input_index_shape[2]) / tile_height;
+    const uint32_t Wt_input = input_shape[3] / tile_width;
+    const uint32_t Wt_index = input_index_shape[3] / tile_width;
 
     // Calculate the number of cores available for computation
     auto device = tensor_args.input_tensor.device();
@@ -360,7 +370,7 @@ GatherProgramFactorySRMC::cached_program_t GatherProgramFactorySRMC::create(
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string gather_reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_reader_srmc.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_reader_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle gather_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         gather_reader_kernel_path,
@@ -370,7 +380,10 @@ GatherProgramFactorySRMC::cached_program_t GatherProgramFactorySRMC::create(
         program,
         gather_reader_kernel_id,
         core_range,
-        {input_index_tensor_buffer->address(), all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+        {input_index_tensor_buffer->address(),
+         all_core_utilization_loop_count ? all_core_utilization_loop_count : 1,
+         tile_width,
+         tile_height});
 
     const std::vector<uint32_t> writer_compile_time_args = {
         input_tensor_cb_index,
@@ -384,7 +397,7 @@ GatherProgramFactorySRMC::cached_program_t GatherProgramFactorySRMC::create(
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
     const std::string gather_writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_writer_srmc.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_writer_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle gather_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         gather_writer_kernel_path,
@@ -407,7 +420,10 @@ GatherProgramFactorySRMC::cached_program_t GatherProgramFactorySRMC::create(
                 const CoreCoord core = {core_x, core_y};
 
                 SetRuntimeArgs(
-                    program, gather_reader_kernel_id, core, {input_index_tensor_buffer->address(), new_loop_count});
+                    program,
+                    gather_reader_kernel_id,
+                    core,
+                    {input_index_tensor_buffer->address(), new_loop_count, tile_width, tile_height});
 
                 SetRuntimeArgs(
                     program,
@@ -427,7 +443,7 @@ GatherProgramFactorySRMC::cached_program_t GatherProgramFactorySRMC::create(
     return {std::move(program), {gather_reader_kernel_id, gather_writer_kernel_id, compute_with_storage_grid_size}};
 }
 
-void GatherProgramFactorySRMC::override_runtime_arguments(
+void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,

@@ -50,6 +50,8 @@ void kernel_main() {
     // Runtime args
     const uint32_t input_index_tensor_buffer_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_loop_count = get_arg_val<uint32_t>(1);
+    const uint32_t tile_width = get_arg_val<uint32_t>(2);
+    const uint32_t tile_height = get_arg_val<uint32_t>(3);
 
     // Compile time args
     constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
@@ -64,7 +66,7 @@ void kernel_main() {
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(9);
 
     constexpr uint32_t one_tile = 1;
-    constexpr uint32_t TILE_WIDTH_MASK = tt::constants::TILE_WIDTH - 1;
+    const uint32_t TILE_WIDTH_MASK = tile_width - 1;
 
     // Index tensor config
     constexpr uint32_t input_index_tensor_tile_size_bytes = get_tile_size(input_index_tensor_cb_index);
@@ -119,13 +121,13 @@ void kernel_main() {
                                     input_index_tensor_l1_read_addr, count, input_index_tensor_data_format_size);
 
                                 // Calculate local index
-                                const uint32_t tile_idx = global_index >> __builtin_ctz(tt::constants::TILE_WIDTH);
+                                const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
 
                                 ASSERT(
                                     tile_idx <= Wt_input,
                                     "Index out of range. Index: {}, Max index: {}",
                                     global_index,
-                                    Wt_input * tt::constants::TILE_WIDTH);
+                                    Wt_input * tile_width);
 
                                 if (tile_idx != wi) {
                                     // Index not in current input tile, skip
@@ -138,7 +140,7 @@ void kernel_main() {
                                 const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
 
                                 const uint16_t local_index = which_row * (face_size * face_size) + k * face_size +
-                                                             which_col + i * (tt::constants::TILE_WIDTH * face_size);
+                                                             which_col + i * (tile_width * face_size);
 
                                 // Read value
                                 const uint32_t value = get_value_from_tile(

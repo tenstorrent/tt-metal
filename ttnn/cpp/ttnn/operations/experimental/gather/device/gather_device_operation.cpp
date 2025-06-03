@@ -20,9 +20,9 @@ GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_f
 
     if (Wt_input > WT_THRESHOLD || Wt_index > WT_THRESHOLD) {
         // Use GatherProgramFactorySRMC for larger Wt
-        return gather::program::GatherProgramFactorySRMC{};
+        return gather::program::GatherProgramFactorySingleRowMultiCore{};
     }
-    return gather::program::GatherProgramFactorySRSC{};
+    return gather::program::GatherProgramFactorySingleRowSingleCore{};
 }
 
 void GatherDeviceOperation::validate_on_program_cache_hit(

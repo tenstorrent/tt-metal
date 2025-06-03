@@ -15,7 +15,7 @@
 namespace ttnn::operations::experimental::gather::program {
 using namespace tt::tt_metal;
 // Single row - single core
-struct GatherProgramFactorySRSC {
+struct GatherProgramFactorySingleRowSingleCore {
     struct shared_variables_t {
         KernelHandle gather_reader_kernel_id;
         KernelHandle gather_writer_kernel_id;
@@ -30,7 +30,7 @@ struct GatherProgramFactorySRSC {
 };
 
 // Single row - multi core
-struct GatherProgramFactorySRMC {
+struct GatherProgramFactorySingleRowMultiCore {
     struct shared_variables_t {
         KernelHandle gather_reader_kernel_id;
         KernelHandle gather_writer_kernel_id;
