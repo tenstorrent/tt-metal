@@ -33,7 +33,7 @@ protected:
         for (unsigned int id = 0; id < num_devices_; id++) {
             ids.push_back(id);
         }
-        create_devices(ids);
+        create_devices(ids, DEFAULT_L1_SMALL_SIZE);
     }
 
     // Suite-level cleanup: Closes all devices after the test suite completes
@@ -51,9 +51,9 @@ protected:
     }
 
     // Creates devices and populates the static device map
-    static void create_devices(const std::vector<chip_id_t>& device_ids) {
+    static void create_devices(const std::vector<chip_id_t>& device_ids, size_t l1_small_size) {
         const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
-        tt::DevicePool::initialize(device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+        tt::DevicePool::initialize(device_ids, 1, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
         devices_ = tt::DevicePool::instance().get_all_active_devices();
         for (auto device : devices_) {
             device_map[device->id()] = device;
@@ -94,13 +94,7 @@ protected:
         for (unsigned int id = 0; id < num_devices_; id++) {
             ids.push_back(id);
         }
-        const size_t l1_small_size = 24 * 1024; // Custom L1 small size
-        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
-        tt::DevicePool::initialize(ids, 1, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
-        devices_ = tt::DevicePool::instance().get_all_active_devices();
-        for (auto device : devices_) {
-            device_map[device->id()] = device;
-        }
+        create_devices(ids, 24 * 1024); // Custom L1 small size
     }
 
     static void TearDownTestSuite() {
