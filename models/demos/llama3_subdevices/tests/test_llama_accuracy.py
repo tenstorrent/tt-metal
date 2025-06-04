@@ -198,7 +198,7 @@ def test_tt_model_acc(
     )
 
     # Get the first input tensors
-    _, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+    _, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     ref_token = input_ids[0, 0].item()  # First token
     ref_token = torch.tensor([[ref_token]], dtype=torch.int32)
@@ -210,7 +210,7 @@ def test_tt_model_acc(
     )
 
     def run_model():
-        rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+        rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
 
         tt_out = tt_model(
             decode_input,
@@ -274,7 +274,7 @@ def test_tt_model_acc(
 
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     ttnn.synchronize_device(mesh_device)

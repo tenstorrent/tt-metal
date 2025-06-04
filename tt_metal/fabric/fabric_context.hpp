@@ -22,7 +22,7 @@ public:
     explicit FabricContext(tt::tt_metal::FabricConfig fabric_config);
     ~FabricContext() = default;
 
-    bool is_wrap_around_mesh(mesh_id_t mesh_id) const;
+    bool is_wrap_around_mesh(MeshId mesh_id) const;
 
     tt::tt_fabric::Topology get_fabric_topology() const;
 
@@ -47,7 +47,7 @@ public:
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
 private:
-    std::unordered_map<mesh_id_t, bool> check_for_wrap_around_mesh() const;
+    std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;
     tt::tt_fabric::Topology get_topology() const;
     size_t get_packet_header_size_bytes() const;
     size_t get_max_payload_size_bytes() const;
@@ -55,7 +55,7 @@ private:
     bool initialized_ = false;
     tt::tt_metal::FabricConfig fabric_config_{};
 
-    std::unordered_map<mesh_id_t, bool> wrap_around_mesh_{};
+    std::unordered_map<MeshId, bool> wrap_around_mesh_{};
     tt::tt_fabric::Topology topology_{};
     size_t packet_header_size_bytes_ = 0;
     size_t max_payload_size_bytes_ = 0;

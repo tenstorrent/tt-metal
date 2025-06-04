@@ -608,8 +608,23 @@ void Cluster::read_dram_vec(
     read_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
 }
 
+bool Cluster::supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const {
+    if (this->rtoptions_.get_disable_dma_ops()) {
+        return false;
+    }
+
+    // Currently, DMA reads/writes hang for small sizes. As a safety measure, we disable DMA for small sizes.
+    // TODO: Remove this once we have a proper fix for small DMA sizes.
+    constexpr uint32_t min_dma_size_bytes = 32;
+
+    // DMA reads and writes are only supported on WH. If/when DMA reads and writes are supported on BH, this should be
+    // updated to support BH architectures as well. See https://github.com/tenstorrent/tt-metal/issues/22957
+    return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->cluster_desc_->is_chip_mmio_capable(chip_id) &&
+           sz_in_bytes >= min_dma_size_bytes;
+}
+
 void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
-    chip_id_t chip_id = core.chip;
+    const chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_write(
@@ -624,14 +639,20 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
+        // tt::log_info(tt::LogMetal, "Writing to device {} using DMA", core.chip);
+        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    } else {
+        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    }
+
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
 }
 
 void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
-    int chip_id = core.chip;
+    const chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
@@ -647,7 +668,12 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
+    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+        // tt::log_info(tt::LogMetal, "Reading from device {} using DMA", core.chip);
+        this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
+    } else {
+        this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
+    }
 }
 
 void Cluster::read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
