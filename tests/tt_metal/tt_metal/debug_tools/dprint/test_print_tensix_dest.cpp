@@ -449,6 +449,15 @@ protected:
     }
 };
 
+// Overload the output stream operator for TestParams
+std::ostream& operator<<(std::ostream& os, const TestParams& params) {
+    return os << "DestPrintTest: " << params.test_name
+              << " [DataFormat: " << static_cast<int>(params.data_format)
+              << ", NumTiles: " << params.num_tiles
+              << ", Remap: " << (params.remap ? "true" : "false")
+              << ", Swizzle: " << (params.swizzle ? "true" : "false") << "]";
+}
+
 // Define test parameters with more combinations
 const std::vector<TestParams> kTestParams = {
     // Float16b tests
