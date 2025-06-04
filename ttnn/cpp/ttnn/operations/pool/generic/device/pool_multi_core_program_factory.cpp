@@ -83,7 +83,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
                 if (!scalars.empty()) {
                     scalars.back().end = i;
                 }
-                scalars.push_back({i, bfloat16(value).to_packed() << 16, i});
+                scalars.push_back({i, bfloat16(value).to_packed(), i});
                 first_scalar = false;
             }
             last_pool_area = static_cast<uint32_t>(pool_area);
@@ -201,7 +201,7 @@ static Tensor create_scalar_config_tensor(
 
     ttnn::Shape config_shape = ttnn::Shape({tt::div_up(config_vector.size(), entries_per_core), entries_per_core});
     tt::tt_metal::HostBuffer buffer(std::move(config_vector));
-    return Tensor(std::move(buffer), config_shape, DataType::UINT32, Layout::ROW_MAJOR);
+    return Tensor(std::move(buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
