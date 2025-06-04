@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <iostream>
+
 #include "scatter.hpp"
 
 #include "device/scatter_device_operation.hpp"
@@ -77,6 +79,41 @@ Tensor ScatterOperation::invoke(
     // index and source tensors should have same rank as input tensor
     const bool input_tensor_is_dim_last_idx = (dim == -1 || dim == input_tensor_rank - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
+
+    constexpr uint64_t max_complexity = 2.08e9;  // 25e3x25e3 -> ~1.5s, 5e4x5e4 -> ~6s
+    const uint64_t given_complexity = static_cast<uint64_t>(original_input_tensor_lshape[dim]) *
+                                      static_cast<uint64_t>(original_index_tensor_lshape[dim]);
+    TT_FATAL(given_complexity < max_complexity, "");
+
+    // transposition case size growth check
+    if (!input_tensor_is_dim_last_idx) {
+        const int64_t original_volume = static_cast<int64_t>(input_tensor.padded_volume());
+        ttnn::Shape new_shape = input_tensor.logical_shape();
+        std::swap(new_shape[dim], new_shape[-1]);
+        const int64_t tile_width = input_tensor.tensor_spec().tile().get_width();
+        const int64_t tile_height = input_tensor.tensor_spec().tile().get_height();
+        new_shape[-1] = ((new_shape[-1] + tile_width - 1) / tile_width) * tile_width;
+        new_shape[-2] = ((new_shape[-2] + tile_height - 1) / tile_height) * tile_height;
+        const uint32_t new_volume = new_shape.volume();
+
+        std::cout << new_volume << " " << original_volume << " " << new_shape << " " << new_shape << " "
+                  << input_tensor.get_padded_shape();
+
+        if (new_volume > original_volume) {
+            const int64_t datum_size = input_tensor.element_size();
+            constexpr int64_t growth_limit = 200 * 1024;
+            const int64_t growth = (new_volume - original_volume) * datum_size;
+            TT_FATAL(
+                input_tensor.get_logical_shape()[-2] % 32 != 0 && input_tensor.get_logical_shape()[-1] % 32 != 0 &&
+                    growth < growth_limit,
+                "Original tensor's volume is {} KB, which is more than {} KB larger than the volume of the same tiled "
+                "transposed tensor: {} KB (growth limit: {} KB)",
+                new_volume * datum_size / 1024,
+                growth / 1024,
+                original_volume * datum_size / 1024,
+                growth_limit / 1024);
+        }
+    }
 
     Tensor padded_index_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
         index_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
