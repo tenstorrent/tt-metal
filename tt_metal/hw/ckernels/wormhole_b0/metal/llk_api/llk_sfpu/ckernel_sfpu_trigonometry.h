@@ -19,6 +19,7 @@ namespace sfpu {
 static const float PI = 3.1415927f;
 static const float PI_2 = 1.5707964f;
 static const float PI_4 = 0.7853982f;
+static const float FRAC_1_PI = 0.31830987f;
 
 static sfpi_inline vFloat sfpu_tan_large(vFloat x) {
     const vFloat r = 4.0f * sfpi::abs(x) - 5.0f;
