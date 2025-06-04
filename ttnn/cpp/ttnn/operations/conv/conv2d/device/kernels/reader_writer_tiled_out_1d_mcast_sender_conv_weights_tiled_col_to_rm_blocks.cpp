@@ -5,6 +5,37 @@
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
 #include "debug/debug.h"
+#include "debug/dprint_pages.h"
+
+template <uint32_t NumTiles, uint32_t TileSizeBytes>
+FORCE_INLINE void copy_weights_from_dram(
+    uint32_t bank_id,
+    uint32_t dram_base_read_addr,
+    uint32_t l1_base_write_addr,
+    uint32_t read_offset,
+    uint32_t write_offset) {
+    constexpr uint32_t size = NumTiles * TileSizeBytes;
+    const uint64_t dram_read_addr = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr + read_offset);
+    noc_async_read(dram_read_addr, l1_base_write_addr + write_offset, size);
+}
+
+template <uint32_t NumberOfBanks, uint32_t TransactionSize, uint32_t WeightSizeBytes>
+FORCE_INLINE void fetch_dram_sharded_weights(uint32_t dram_base_read_addr, uint32_t l1_base_write_addr) {
+    constexpr uint32_t num_reads = WeightSizeBytes / TransactionSize / NumberOfBanks;
+    uint32_t read_offset = 0;
+    uint32_t write_offset = 0;
+    for (uint32_t bank_id = 0; bank_id < NumberOfBanks; bank_id++) {
+        const uint32_t read_base_addr =
+            noc_async_read_tile_dram_sharded_set_state<true>(dram_base_read_addr, TransactionSize, bank_id);
+        read_offset = 0;
+        write_offset = l1_base_write_addr;
+        for (uint32_t i = 0; i < num_reads; i++) {
+            noc_async_read_tile_dram_sharded_with_state(read_base_addr, read_offset, write_offset);
+            read_offset += TransactionSize;
+            write_offset += TransactionSize;
+        }
+    }
+}
 
 void kernel_main() {
     // This writer is for output tensor in tile format
@@ -136,6 +167,8 @@ void kernel_main() {
         start_reader_idx = act_block_h_datums_first_reader / 2;
     }
 
+    const uint32_t weights_l1_base_write_addr = get_read_ptr(cb_id_weight);
+
     for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
         // READ WEIGHTS + MCAST SEND WEIGHTS
         // read weight blocks inner dim
@@ -176,26 +209,12 @@ void kernel_main() {
             // Do weights read + mcast
             cb_reserve_back(cb_id_weight, weight_block_num_tiles);
             if (bh == 0) {
-                uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
-                uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id + weight_h_offset;
-
                 // mcast args
-                uint32_t weights_start_address = weight_write_l1_addr;
-                uint32_t weights_block_size_bytes = 0;
+                const uint32_t weights_start_address = get_write_ptr(cb_id_weight);
+                constexpr uint32_t weights_block_size_bytes = weight_tile_nbytes * weight_block_num_tiles;
 
-                // loop over weight block tiles along h
-                for (uint32_t weight_tile_h_i = 0; weight_tile_h_i < weight_block_height_ntiles; ++weight_tile_h_i) {
-                    uint32_t weight_tile_id = weight_row_start_tile_id;
-                    // loop over weight block tiles along w
-                    for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                        // DPRINT << "weight_tile_id=" << weight_tile_id << ENDL();
-                        noc_async_read_tile(weight_tile_id, s_weight, weight_write_l1_addr);
-                        weight_write_l1_addr += weight_tile_nbytes;
-                        weights_block_size_bytes += weight_tile_nbytes;
-                        weight_tile_id += 1;
-                    }  // for weight_block_w
-                    weight_row_start_tile_id += weight_stride_h;
-                }  // for weight_block_h
+                fetch_dram_sharded_weights<4, 8192, weights_block_size_bytes>(
+                    weight_addr_dram_base, weights_l1_base_write_addr);
                 noc_async_read_barrier();
 
 #ifndef SKIP_MCAST

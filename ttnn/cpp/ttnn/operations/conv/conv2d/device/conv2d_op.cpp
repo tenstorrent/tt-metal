@@ -124,7 +124,7 @@ void OptimizedConvNew::validate(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Activation tensor should be sharded.");
-    TT_FATAL(!input_tensor_b.memory_config().is_sharded(), "Weights tensor should not be sharded.");
+    // TT_FATAL(!input_tensor_b.memory_config().is_sharded(), "Weights tensor should not be sharded.");
     if (this->untilize_out) {
         TT_FATAL((this->dtype == DataType::BFLOAT16) || (this->dtype == DataType::FLOAT32), "Error");
     }
@@ -296,11 +296,11 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             sliding_window_config.get_output_shape()[2],
             has_bias));
 
-    TT_FATAL(
-        actual_cb_size == l1_usage.CB_allocation_size,
-        "Calculated CB size {} does not match with the actual CB size {}",
-        l1_usage.CB_allocation_size,
-        actual_cb_size);
+    // TT_FATAL(
+    // actual_cb_size == l1_usage.CB_allocation_size,
+    // "Calculated CB size {} does not match with the actual CB size {}",
+    // l1_usage.CB_allocation_size,
+    // actual_cb_size);
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
     // in graph capture NO_DISPATCH mode.

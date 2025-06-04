@@ -1052,6 +1052,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         }
     }
 
+    const bool use_dram_sharded_weights = b.is_sharded();
+
+    const auto weight_core_grid = b.memory_config().shard_spec().value();
+    const auto weight_cores = corerange_to_cores(weight_core_grid.grid);  // TODO: fix this call
+    tt::log_info("dram cores = {}", weight_cores);
+    for (const auto& core : weight_cores) {
+        const auto bank_id = device->allocator()->get_bank_ids_from_logical_core(BufferType::DRAM, core);
+        tt::log_info("core = {}, bank_id = {}", core, bank_id);
+    }
+
     bool read_window_in_inner_loop = false;
     uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles / conv_act_c_blocks;
     bool fully_buffer_weights = false;
@@ -1072,7 +1082,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             num_weight_cb_tiles *= filter_h * filter_w;
             num_act_cb_tiles *= filter_h * filter_w;
         }
-    } else if (num_blocks_act_h_per_core > 1) {
+    } else if (num_blocks_act_h_per_core > 1 || use_dram_sharded_weights) {
         fully_buffer_weights = true;
     }
     uint32_t num_cb0_tilized_tiles = num_act_cb_tiles;
