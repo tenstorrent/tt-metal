@@ -13,7 +13,8 @@ namespace ttml::core {
 
 template <typename T>
 std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& tensor, int num_chunks, int dim) {
-    return ttnn::experimental::xtensor::chunk(tensor, num_chunks, dim);
+    auto chunks = ttnn::experimental::xtensor::chunk(tensor, num_chunks, dim);
+    return std::vector<xt::xarray<T>>(chunks.begin(), chunks.end());
 }
 
 template <class Derived, typename T>
