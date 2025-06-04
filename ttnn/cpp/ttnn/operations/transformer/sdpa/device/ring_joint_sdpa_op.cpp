@@ -230,7 +230,6 @@ std::vector<TensorSpec> RingJointScaledDotProductAttention::compute_output_specs
     auto lse_shape = input.get_logical_shape();
     lse_shape[3] = 1;
     lse_shape[2] = input.get_padded_shape()[2] + joint_input.get_padded_shape()[2];
-    lse_shape[0] = this->ring_size;  // DEBUG: Returning intermediate LSEs for testing
 
     return {
         TensorSpec(

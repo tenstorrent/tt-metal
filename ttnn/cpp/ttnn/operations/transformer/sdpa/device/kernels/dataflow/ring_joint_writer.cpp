@@ -120,8 +120,16 @@ void kernel_main() {
                     const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
                     const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
 
-                    // If ring_id > 0, read LSE input and previous output chunk.
+                    // If not on the first iteration, read LSE input and previous output chunk.
                     // No race condition because writer kernel writes previous output before reading it again
+
+                    uint32_t base_lse_tile_id =
+                        nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) + q_chunk * Sq_chunk_t;
+                    // Don't write beyond the end of the LSE in sequence length
+                    uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
+                    uint32_t lse_seq_end = lse_seq_start + Sq_chunk_t;
+                    lse_seq_start = std::min(lse_seq_start, (local_Nt + logical_Lt));
+                    lse_seq_end = std::min(lse_seq_end, (local_Nt + logical_Lt));
 
                     if (ring_iter > 0) {
                         // Read previous output for this Q chunk
@@ -129,16 +137,8 @@ void kernel_main() {
 
                         // Read previous LSE for this Q chunk
                         cb_reserve_back(cb_lse_in, Sq_chunk_t);
-                        // DEBUG: logging each LSE to different element in batch. Remove
-                        // BUG: (ring_id - 1) is wrong now that we iterate over ring_id in different order
-                        uint32_t lse_tile_id =  //(ring_id - 1) * B * NH * (local_Nt + logical_Lt) +
-                            nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) + q_chunk * Sq_chunk_t;
                         uint32_t lse_addr = get_write_ptr(cb_lse_in);
-                        // Don't write beyond the end of the LSE in sequence length
-                        uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
-                        uint32_t lse_seq_end = lse_seq_start + Sq_chunk_t;
-                        lse_seq_start = std::min(lse_seq_start, (local_Nt + logical_Lt));
-                        lse_seq_end = std::min(lse_seq_end, (local_Nt + logical_Lt));
+                        uint32_t lse_tile_id = base_lse_tile_id;
 
                         for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
                             noc_async_read_tile(lse_tile_id, lse_writer, lse_addr);
@@ -152,14 +152,8 @@ void kernel_main() {
                     write_block(cat_out_generator, dst_slice, cb_out, tile_bytes, barrier_threshold);
 
                     cb_wait_front(cb_lse_out, Sq_chunk_t);
-                    // DEBUG: logging each LSE to different element in batch. Remove
-                    uint32_t lse_tile_id =  // ring_id * B * NH * (local_Nt + logical_Lt) +
-                        nb * NH * (local_Nt + logical_Lt) + nq * (local_Nt + logical_Lt) + q_chunk * Sq_chunk_t;
                     uint32_t lse_addr = get_read_ptr(cb_lse_out);
-                    uint32_t lse_seq_start = q_chunk * Sq_chunk_t;
-                    uint32_t lse_seq_end = lse_seq_start + Sq_chunk_t;
-                    lse_seq_start = std::min(lse_seq_start, (local_Nt + logical_Lt));
-                    lse_seq_end = std::min(lse_seq_end, (local_Nt + logical_Lt));
+                    uint32_t lse_tile_id = base_lse_tile_id;
 
                     for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
                         noc_async_write_tile(lse_tile_id, lse_writer, lse_addr);
@@ -171,6 +165,6 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_write_barrier();
+        noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
     }
 }
