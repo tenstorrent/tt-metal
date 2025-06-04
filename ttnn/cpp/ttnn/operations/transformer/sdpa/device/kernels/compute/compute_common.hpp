@@ -30,7 +30,7 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
         acquire_dst();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
-        max_tile(dst_reg_0, dst_reg_1, (int)VectorMode::C);
+        max_tile(dst_reg_0, dst_reg_1, static_cast<int>(VectorMode::C));
         pack_tile(dst_reg_0, in0);
         release_dst();
     }
@@ -67,7 +67,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
-            max_tile(reduce_dst_idx, prev_max_dst_idx, (int)VectorMode::C);
+            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
         }
 
         pack_tile(reduce_dst_idx, out_cb);
@@ -89,7 +89,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         copy_tile(in_cb, i, 0);
-        recip_tile(0, (int)VectorMode::C);
+        recip_tile(0, static_cast<int>(VectorMode::C));
         pack_tile(0, in_cb);
         release_dst();
     }
@@ -289,7 +289,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
 
-        exp_tile<false, EXP_APPROX_MODE, true, true>(0, (int)VectorMode::C, scale_bf16);
+        exp_tile<false, EXP_APPROX_MODE, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
 
         pack_tile(0, out_cb);
 
