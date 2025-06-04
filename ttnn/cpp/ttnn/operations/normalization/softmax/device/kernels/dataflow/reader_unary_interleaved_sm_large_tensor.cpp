@@ -79,9 +79,9 @@ void kernel_main() {
         for (uint32_t cur_pass = 0; cur_pass < total_passes; cur_pass++) {
             // We want to fill up the CB for input, and do so in chunks of blk
             uint32_t tile_index = tile_offset + (ncht * Wt);
-            uint32_t length_left_t = Wt;
-            uint32_t cur_cb_length_t = cb_length_t;
-
+#if FUSED_SCALE_MASK
+            mask_index = mask_id_offset;
+#endif
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_reserve_back(cb_id_in0, blk);
                 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
@@ -95,6 +95,7 @@ void kernel_main() {
                     l1_write_addr += src0_tile_bytes;
 #if FUSED_SCALE_MASK
                     noc_async_read_tile(mask_index, addr_mask, l1_write_addr_mask);  // TODO(AP): data type size
+                    DPRINT << "mask_index: " << mask_index << ENDL();
                     mask_index++;
                     l1_write_addr_mask += mask_tile_bytes;
 #endif
@@ -120,6 +121,15 @@ void kernel_main() {
                 mask_id_offset = mask_index;
             }
         }
+#elif FUSED_SCALE_MASK
+        ht++;
+        if (ht != Ht) {
+            mask_index = mask_id_offset;
+        } else {
+            ht = 0;
+            mask_id_offset = mask_index;
+        }
+
 #endif
     }
 }

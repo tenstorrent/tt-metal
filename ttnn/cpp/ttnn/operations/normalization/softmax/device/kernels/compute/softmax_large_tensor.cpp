@@ -19,16 +19,16 @@
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #include "debug/dprint_tensix.h"
-// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-//      DPRINT << "======" << ENDL();
-//      for (uint8_t r = 0; r < 32; ++ r) {
-//          SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r+1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-//          SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r+1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-//          DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " " << TileSlice(cb_id,
-//          tile_id, sr_right, true, untilize) << ENDL();
-//      }
-//      DPRINT << "++++++" << ENDL();
-// }
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 
 namespace NAMESPACE {
 void apply_fused_scale_mask(
@@ -85,7 +85,6 @@ void MAIN {
         cb_wait_front(cb_mask_padded, 1);
         unary_bcast_init<BroadcastType::ROW>(cb_mask_padded, cb_mask_padded_bcast);
         unary_bcast<BroadcastType::ROW>(cb_mask_padded, 0, 0);
-        // dprint_tensix_dest_reg(0);
         tile_regs_wait();
         tile_regs_commit();
         cb_reserve_back(cb_mask_padded_bcast, 1);
@@ -322,12 +321,7 @@ void apply_fused_attn_mask(
         }
 #else
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
-            DPRINT << "input: " << ENDL();
-            UNPACK(tt::compute::common::print_full_tile(cb_in, cur_dst));
-            DPRINT << "mask: " << ENDL();
-            UNPACK(tt::compute::common::print_full_tile(cb_fused_attn_mask, cur_dst));
             add_tiles_bcast_rows(cb_in, cb_fused_attn_mask, cur_dst, cur_dst, cur_dst);
-            dprint_tensix_dest_reg(cur_dst);
         }
 #endif
         if (do_mask && cur_blk == cb_length_t - blk) {
@@ -360,14 +354,9 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
         cb_reserve_back(cb_out, blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             if (cur_dst == blk - 1 && cur_blk == cb_length_t - blk) {
-                // // reconfig_data_format_srca(cb_mask_padded_bcast);
-                // binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD,
-                // EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_mask_padded_bcast);
                 add_tiles_init(cb_in, cb_mask_padded_bcast);
                 cb_wait_front(cb_mask_padded_bcast, 1);
                 add_tiles(cb_in, cb_mask_padded_bcast, cur_dst, 0, cur_dst);
-                // binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD,
-                // EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_mask_padded_bcast, 0, cur_dst);
             } else {
                 copy_tile(cb_in, cur_dst, cur_dst);
             }
@@ -406,6 +395,7 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
 #ifdef NUMERIC_STABLE
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             sub_tiles_bcast_cols(cb_in, cb_max, cur_dst, 0, cur_dst);
+            // dprint_tensix_dest_reg(cur_dst);
         }
 #else
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
