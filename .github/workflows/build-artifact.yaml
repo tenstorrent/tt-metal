@@ -352,7 +352,8 @@ jobs:
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY=${{ env.ENABLE_TRACY_BUILD }}
           CIBW_BEFORE_BUILD: mkdir -p /tmp/ccache && ccache -z
-          CIBW_AFTER_BUILD: ccache -s
+          CIBW_BEFLRE_TEST: ccache -s
+          CIBW_TEST_COMMAND: python -c "import ttnn"
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
 
       - name: Set wheel artifact name
