@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <filesystem>
@@ -17,8 +18,9 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
+
+using ::testing::ElementsAre;
 
 TEST_F(ControlPlaneFixture, TestTGMeshGraphInit) {
     const std::filesystem::path tg_mesh_graph_desc_path =
@@ -195,6 +197,44 @@ TEST_F(ControlPlaneFixture, TestQuantaGalaxyMeshAPIs) {
     EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{0}), tt::tt_metal::distributed::MeshShape(8, 4));
 }
 
+TEST(MeshGraphValidation, TestT3kDualHostMeshGraph) {
+    const std::filesystem::path t3k_dual_host_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.yaml";
+    auto mesh_graph = std::make_unique<tt_fabric::MeshGraph>(t3k_dual_host_mesh_graph_desc_path.string());
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+    EXPECT_THAT(mesh_graph->get_mesh_ids(), ElementsAre(MeshId{0}));
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}), MeshShape(2, 4));
+
+    // Check host ranks by accessing the values vector
+    const auto& host_ranks = mesh_graph->get_host_ranks(MeshId{0});
+    EXPECT_EQ(host_ranks, MeshContainer<HostRankId>(MeshShape(1, 2), {HostRankId(0), HostRankId(1)}));
+
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}), MeshShape(2, 4));
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}, HostRankId(0)), MeshShape(2, 2));
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}, HostRankId(1)), MeshShape(2, 2));
+
+    EXPECT_EQ(mesh_graph->get_coord_range(MeshId{0}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3)));
+    EXPECT_EQ(
+        mesh_graph->get_coord_range(MeshId{0}, HostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+    EXPECT_EQ(
+        mesh_graph->get_coord_range(MeshId{0}, HostRankId(1)),
+        MeshCoordinateRange(MeshCoordinate(0, 2), MeshCoordinate(1, 3)));
+
+    EXPECT_THAT(mesh_graph->get_mesh_ids(), ElementsAre(MeshId{0}));
+
+    EXPECT_EQ(
+        mesh_graph->get_chip_ids(MeshId{0}),
+        MeshContainer<chip_id_t>(MeshShape(2, 4), std::vector<chip_id_t>{0, 1, 2, 3, 4, 5, 6, 7}));
+    EXPECT_EQ(
+        mesh_graph->get_chip_ids(MeshId{0}, HostRankId(0)),
+        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 4, 5}));
+    EXPECT_EQ(
+        mesh_graph->get_chip_ids(MeshId{0}, HostRankId(1)),
+        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{2, 3, 6, 7}));
+
+    mesh_graph->print_connectivity();
+}
+
+}  // namespace tt::tt_fabric::fabric_router_tests
