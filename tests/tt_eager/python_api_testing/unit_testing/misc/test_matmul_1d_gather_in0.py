@@ -18,6 +18,10 @@ import math
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from tracy import signpost
 
+from models.demos.llama3_subdevices.tt.model_config import (
+    PREFETCHER_NOC1_GRID,
+)
+
 
 random.seed(10)
 
@@ -28,9 +32,6 @@ def num_cores_to_rectangle_grid(num_cores, device):
 
     Return None if rectangle grid is not possible.
     """
-    is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
-    if is_mesh_device:
-        device = device.get_device(device.get_device_ids()[0])
     x = device.compute_with_storage_grid_size().x
     while x > 0 and num_cores % x != 0:
         x -= 1
@@ -92,32 +93,32 @@ PREFETCHER_GRID = [
     (2, 11),
 ]
 
-# logical coords
-PREFETCHER_NOC1_GRID = [
-    (6, 6),
-    (6, 7),
-    (6, 9),
-    (6, 0),
-    (6, 1),
-    (6, 2),
-    (6, 4),
-    (6, 5),
-    (5, 5),
-    (5, 6),
-    (5, 7),
-    (5, 9),
-    (5, 0),
-    (5, 1),
-    (5, 2),
-    (5, 4),
-    (1, 4),
-    (1, 5),
+# dram sharded MM output logical coords
+PREFETCHER_NOC1_OUTPUT_GRID = [
     (1, 9),
+    (2, 9),
     (1, 0),
     (2, 0),
+    (1, 4),
     (2, 4),
+    (1, 5),
     (2, 5),
-    (2, 9),
+    (5, 0),
+    (6, 0),
+    (5, 9),
+    (6, 9),
+    (5, 1),
+    (6, 1),
+    (5, 7),
+    (6, 7),
+    (5, 6),
+    (6, 6),
+    (5, 2),
+    (6, 2),
+    (5, 4),
+    (6, 4),
+    (5, 5),
+    (6, 5),
 ]
 
 LM_HEAD_32_GRID = list(
@@ -150,6 +151,8 @@ def run_multi_core_matmul_1d(
     use_physical_to_logical_mapping=True,
     hop_grid=None,
     in1_is_dram_interleaved=False,
+    in1_is_in_dram=False,
+    untilize_out=False,
 ):
     assert not has_bias, "Bias not supported for gather_in0 mode."
     if not isinstance(grid, tuple) and not use_arbitrary_cores:
@@ -171,7 +174,13 @@ def run_multi_core_matmul_1d(
     K_per_shard = round_up(math.ceil(K / num_cores), ttnn.TILE_SIZE)
     K_padded = K_per_shard * num_cores
     N_per_shard = round_up(math.ceil(N / num_cores), ttnn.TILE_SIZE)
+    N_per_shard_in_dram = N_per_shard * 2
     N_padded = N_per_shard * num_cores
+
+    logger.info(f"K_per_shard {K_per_shard}")
+    logger.info(f"K_padded {K_padded}")
+    logger.info(f"N_per_shard {N_per_shard}")
+    logger.info(f"N_padded {N_padded}")
 
     in0_block_h = M // ttnn.TILE_SIZE
     in0_block_w = K // num_cores // ttnn.TILE_SIZE
@@ -251,8 +260,23 @@ def run_multi_core_matmul_1d(
         ),
     )
 
-    in1_sharded_mem_config = (
-        ttnn.MemoryConfig(
+    if in1_is_in_dram:
+        if in1_is_dram_interleaved:
+            in1_sharded_mem_config = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+            in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
+            in1_sharded_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.DRAM,
+                ttnn.ShardSpec(
+                    in1_shard_grid,
+                    [K, N_per_shard_in_dram],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+    else:
+        in1_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
@@ -261,15 +285,22 @@ def run_multi_core_matmul_1d(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        if not in1_is_dram_interleaved
-        else ttnn.DRAM_MEMORY_CONFIG
+
+    dram_sharded_output_core_range_set = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(x, y),
+                ttnn.CoreCoord(x, y),
+            )
+            for x, y in PREFETCHER_NOC1_OUTPUT_GRID
+        ]
     )
 
     output_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            core_range_set,
+            dram_sharded_output_core_range_set if (in1_is_in_dram and not in1_is_dram_interleaved) else core_range_set,
             [M, N_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -305,6 +336,7 @@ def run_multi_core_matmul_1d(
         mcast_in0=False,
         gather_in0=True,
         hop_cores=hop_core_range_set,
+        untilize_out=untilize_out,
     )
 
     if is_grayskull():
@@ -332,7 +364,6 @@ def run_multi_core_matmul_1d(
             dtype=output_dtype,
         )
     signpost("stop")
-
     tt_out = ttnn.to_torch(output_t)
     pt_out = in0 @ in1
 
@@ -425,6 +456,7 @@ def test_multi_core_matmul_1d_in1_dram_wh(
         num_iters,
         hop_grid=hop_grid,
         in1_is_dram_interleaved=in1_is_dram_interleaved,
+        in1_is_in_dram=True,
     )
 
 
@@ -758,8 +790,23 @@ def test_multi_core_matmul_1d_gs(
 
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
-    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved",
+    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved, untilize_out",
     [
+        (
+            1,
+            32,
+            2048,
+            1280,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+            True,
+        ),
         (
             1,
             32,
@@ -772,6 +819,7 @@ def test_multi_core_matmul_1d_gs(
             True,
             True,
             PREFETCHER_NOC1_GRID,
+            False,
             False,
         ),
         (
@@ -786,6 +834,7 @@ def test_multi_core_matmul_1d_gs(
             True,
             True,
             PREFETCHER_NOC1_GRID,
+            False,
             False,
         ),
         (
@@ -801,6 +850,7 @@ def test_multi_core_matmul_1d_gs(
             False,
             PREFETCHER_NOC1_GRID,
             False,
+            False,
         ),
         (
             1,
@@ -814,6 +864,7 @@ def test_multi_core_matmul_1d_gs(
             True,
             True,
             PREFETCHER_NOC1_GRID,
+            False,
             False,
         ),
         (
@@ -829,9 +880,11 @@ def test_multi_core_matmul_1d_gs(
             True,
             LM_HEAD_32_GRID,
             True,
+            False,
         ),
     ],
     ids=[
+        "qkv_rm",
         "qkv",
         "do",
         "ff13",
@@ -848,9 +901,8 @@ def test_multi_core_matmul_1d_gs(
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2_grid")], indirect=True)
 def test_matmul_1d_ring_llama_perf(
-    mesh_device,
+    device,
     in0_dtype,
     in1_dtype,
     output_dtype,
@@ -864,11 +916,11 @@ def test_matmul_1d_ring_llama_perf(
     N,
     grid,
     in1_is_dram_interleaved,
+    untilize_out,
     num_iters,
     use_program_cache,
     function_level_defaults,
 ):
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -901,4 +953,94 @@ def test_matmul_1d_ring_llama_perf(
         use_physical_to_logical_mapping=False,
         hop_grid=hop_grid,
         in1_is_dram_interleaved=in1_is_dram_interleaved,
+        untilize_out=untilize_out,
+    )
+
+
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved, in1_is_in_dram",
+    [
+        (
+            1,
+            32,
+            2048,
+            16 * 1024,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+            True,
+        ),
+    ],
+    ids=[
+        "lm_head",
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [5],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
+def test_matmul_1d_ring_llama_lm_head(
+    device,
+    in0_dtype,
+    in1_dtype,
+    output_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    grid,
+    in1_is_dram_interleaved,
+    in1_is_in_dram,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+):
+    # Only run these tests on unharvested TG
+    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
+
+    if in1_is_dram_interleaved:
+        hop_grid = None
+    else:
+        hop_grid = [
+            (3, 6),
+        ]
+
+    run_multi_core_matmul_1d(
+        device,
+        in0_dtype,
+        in1_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        B,
+        M,
+        K,
+        N,
+        None,  # activation,
+        grid,
+        True,
+        num_iters,
+        output_dtype=output_dtype,
+        use_physical_to_logical_mapping=False,
+        hop_grid=hop_grid,
+        in1_is_dram_interleaved=in1_is_dram_interleaved,
+        in1_is_in_dram=in1_is_in_dram,
     )

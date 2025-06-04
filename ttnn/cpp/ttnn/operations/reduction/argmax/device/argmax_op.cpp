@@ -9,12 +9,49 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::reduction {
 
+ttnn::SmallVector<uint32_t> ArgMax::get_output_shape(const Tensor& input_tensor) const {
+    auto input_shape = input_tensor.get_logical_shape();
+    int rank = input_shape.size();
+    ttnn::SmallVector<uint32_t> output_shape;
+
+    // If no reduction dims are specified, we reduce all dimensions
+    auto all_dim_reduce = not this->dim.has_value();
+    auto red_dim = this->dim.value_or(0);
+    TT_FATAL(
+        (rank == 0) or ((red_dim >= -rank) and (red_dim < rank)),
+        "Invalid reduction dimension {} for input tensor with rank {}",
+        red_dim,
+        rank);
+
+    // Adjust negative reduction dimension to positive
+    red_dim = red_dim < 0 ? red_dim + rank : red_dim;
+
+    // Generate output shape
+    // Iterate over the input shape and adjust the output shape for keepdim
+    for (int dim = 0; dim < rank; ++dim) {
+        // If this is in the reduction dims, keep it only if keepdim is true
+        bool is_reduction_dim = all_dim_reduce or (dim == red_dim);
+
+        if (is_reduction_dim) {
+            TT_FATAL(input_shape[dim] != 0, "Expected reduction dim {} to have non-zero size", dim);
+            if (this->keepdim) {
+                output_shape.push_back(1);
+            }
+        } else {
+            // If this is not a reduction dim, we keep the original size
+            output_shape.push_back(input_shape[dim]);
+        }
+    }
+
+    return output_shape;
+}
+
 void ArgMax::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
 
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for inputs!");
 
     TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Only BFLOAT16 is supported for inputs!");
@@ -22,7 +59,7 @@ void ArgMax::validate_with_output_tensors(
 
     TT_FATAL(this->output_dtype == DataType::UINT32, "Only UINT32 is supported for outputs!");
     TT_FATAL(
-        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+        this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for outputs!");
 
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
@@ -31,7 +68,7 @@ void ArgMax::validate_with_output_tensors(
         TT_FATAL(
             optional_output_tensor.value().get_dtype() == DataType::UINT32, "Only UINT32 is supported for outputs!");
         TT_FATAL(
-            optional_output_tensor.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            optional_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only INTERLEAVED memory layout is supported for outputs!");
     }
 
@@ -43,9 +80,12 @@ void ArgMax::validate_with_output_tensors(
         TT_FATAL(normalized_dim == (input_rank - 1), "Only argmax on last dim is supported!");
     }
 
-    auto input_shape = input_tensor_a.get_padded_shape();
-    TT_FATAL(input_shape[0] == 1, "dim 0 must be 1");
-    TT_FATAL(input_shape[1] == 1, "dim 1 must be 1");
+    if (this->use_multicore && this->sub_core_grids.has_value()) {
+        TT_FATAL(
+            this->sub_core_grids->ranges().size() <= 2,
+            "Multicore argmax only supports up to 2 core grid ranges, but got {} ranges",
+            this->sub_core_grids->ranges().size());
+    }
 }
 
 std::vector<TensorSpec> ArgMax::compute_output_specs(
@@ -55,13 +95,10 @@ std::vector<TensorSpec> ArgMax::compute_output_specs(
     }
 
     const auto& input_tensor = input_tensors[0];
-    ttnn::Shape output_shape({1, 1, 1, 1});
-    if (this->dim.has_value()) {
-        auto input_shape = input_tensors[0].get_logical_shape();
-        output_shape = ttnn::Shape{input_shape[0], input_shape[1], 1, input_shape[2]};
-    }
-    return {
-        TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(input_tensor.get_layout()), output_mem_config))};
+    auto output_shape = this->get_output_shape(input_tensor);
+    return {TensorSpec(
+        ttnn::Shape(output_shape),
+        TensorLayout(output_dtype, PageConfig(input_tensor.get_layout()), output_mem_config))};
 }
 
 std::vector<Tensor> ArgMax::create_output_tensors(
@@ -77,11 +114,13 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
-    const auto normalized_dim = dim.has_value() ? *dim + input_tensor.get_padded_shape().rank() * (*dim < 0) : dim;
-    if (use_multicore) {
-        return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim, sub_core_grids);
+    const auto normalized_dim =
+        this->dim.has_value() ? *this->dim + input_tensor.get_padded_shape().rank() * (*this->dim < 0) : this->dim;
+    if (this->use_multicore) {
+        return detail::argmax_multi_core(
+            input_tensor, output_tensor, normalized_dim, this->keepdim, this->sub_core_grids);
     }
-    return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim);
+    return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim, this->keepdim);
 }
 
 }  // namespace ttnn::operations::reduction

@@ -294,7 +294,7 @@ class YoloLayer(nn.Module):
         device = None
         cuda_check = output.is_cuda
         if cuda_check:
-            device = output.get_device()
+            device = output
 
         bx_list = []
         by_list = []

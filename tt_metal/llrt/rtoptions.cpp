@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 #include <stdexcept>
 #include <string>
 
@@ -57,6 +56,7 @@ RunTimeOptions::RunTimeOptions() {
         this->is_kernel_dir_env_var_set = true;
         this->kernel_dir = std::string(kernel_dir_str) + "/";
     }
+    this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
 
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
@@ -72,6 +72,7 @@ RunTimeOptions::RunTimeOptions() {
     profiler_enabled = false;
     profile_dispatch_cores = false;
     profiler_sync_enabled = false;
+    profiler_mid_run_tracy_push = false;
     profiler_buffer_usage_enabled = false;
 #if defined(TRACY_ENABLE)
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
@@ -84,6 +85,11 @@ RunTimeOptions::RunTimeOptions() {
         const char* profiler_sync_enabled_str = std::getenv("TT_METAL_PROFILER_SYNC");
         if (profiler_enabled && profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
             profiler_sync_enabled = true;
+        }
+        const char* profiler_force_push_enabled_str = std::getenv("TT_METAL_TRACY_MID_RUN_PUSH");
+        if (profiler_enabled && profiler_force_push_enabled_str != nullptr &&
+            profiler_force_push_enabled_str[0] == '1') {
+            profiler_mid_run_tracy_push = true;
         }
     }
 
@@ -111,15 +117,16 @@ RunTimeOptions::RunTimeOptions() {
 
     kernels_early_return = (std::getenv("TT_METAL_KERNELS_EARLY_RETURN") != nullptr);
 
-    clear_l1 = false;
+    this->clear_l1 = false;
     const char* clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
-    if (clear_l1_enabled_str != nullptr) {
-        if (clear_l1_enabled_str[0] == '0') {
-            clear_l1 = false;
-        }
-        if (clear_l1_enabled_str[0] == '1') {
-            clear_l1 = true;
-        }
+    if (clear_l1_enabled_str != nullptr && clear_l1_enabled_str[0] == '1') {
+        this->clear_l1 = true;
+    }
+
+    this->clear_dram = false;
+    const char* clear_dram_enabled_str = std::getenv("TT_METAL_CLEAR_DRAM");
+    if (clear_dram_enabled_str != nullptr && clear_dram_enabled_str[0] == '1') {
+        this->clear_dram = true;
     }
 
     const char* skip_eth_cores_with_retrain_str = std::getenv("TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN");
@@ -167,7 +174,9 @@ RunTimeOptions::RunTimeOptions() {
         this->skip_deleting_built_cache = true;
     }
 
-    this->enable_hw_cache_invalidation = (std::getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION") != nullptr);
+    if (getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION")) {
+        this->enable_hw_cache_invalidation = true;
+    }
 
     if (std::getenv("TT_METAL_SIMULATOR")) {
         this->simulator_enabled = true;
@@ -177,9 +186,29 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
         this->erisc_iram_enabled = true;
     }
+
+    if (getenv("TT_METAL_DISABLE_RELAXED_MEM_ORDERING")) {
+        this->disable_relaxed_memory_ordering = true;
+    }
+
+    if (getenv("TT_METAL_ENABLE_GATHERING")) {
+        this->enable_gathering = true;
+    }
+
+    const char *arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");
+    if (arc_debug_enabled_str != nullptr) {
+        sscanf(arc_debug_enabled_str, "%u", &arc_debug_buffer_size);
+    }
+
+    const char* disable_dma_ops_str = std::getenv("TT_METAL_DISABLE_DMA_OPS");
+    if (disable_dma_ops_str != nullptr) {
+        if (disable_dma_ops_str[0] == '1') {
+            this->disable_dma_ops = true;
+        }
+    }
 }
 
-const std::string& RunTimeOptions::get_root_dir() {
+const std::string& RunTimeOptions::get_root_dir() const {
     if (!this->is_root_dir_specified()) {
         TT_THROW("Env var {} is not set.", TT_METAL_HOME_ENV_VAR);
     }
@@ -187,7 +216,7 @@ const std::string& RunTimeOptions::get_root_dir() {
     return root_dir;
 }
 
-const std::string& RunTimeOptions::get_cache_dir() {
+const std::string& RunTimeOptions::get_cache_dir() const {
     if (!this->is_cache_dir_specified()) {
         TT_THROW("Env var {} is not set.", TT_METAL_CACHE_ENV_VAR);
     }
@@ -202,36 +231,28 @@ const std::string& RunTimeOptions::get_kernel_dir() const {
     return this->kernel_dir;
 }
 
+const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
+
 void RunTimeOptions::ParseWatcherEnv() {
-    watcher_interval_ms = 0;
     const char* watcher_enable_str = getenv("TT_METAL_WATCHER");
-    watcher_enabled = (watcher_enable_str != nullptr);
-    if (watcher_enabled) {
+    if (watcher_enable_str != nullptr) {
         int sleep_val = 0;
         sscanf(watcher_enable_str, "%d", &sleep_val);
         if (strstr(watcher_enable_str, "ms") == nullptr) {
             sleep_val *= 1000;
         }
-        watcher_interval_ms = sleep_val;
+        watcher_settings.enabled = true;
+        watcher_settings.interval_ms = sleep_val;
     }
 
-    const char* watcher_dump_all_str = getenv("TT_METAL_WATCHER_DUMP_ALL");
-    watcher_dump_all = (watcher_dump_all_str != nullptr);
-
-    const char* watcher_append_str = getenv("TT_METAL_WATCHER_APPEND");
-    watcher_append = (watcher_append_str != nullptr);
-
-    const char* watcher_noinline_str = getenv("TT_METAL_WATCHER_NOINLINE");
-    watcher_noinline = (watcher_noinline_str != nullptr);
-
-    const char* watcher_phys_str = getenv("TT_METAL_WATCHER_PHYS_COORDS");
-    watcher_phys_coords = (watcher_phys_str != nullptr);
-
-    const char* watcher_text_start_str = getenv("TT_METAL_WATCHER_TEXT_START");
-    watcher_text_start = (watcher_text_start_str != nullptr);
-
+    watcher_settings.dump_all = (getenv("TT_METAL_WATCHER_DUMP_ALL") != nullptr);
+    watcher_settings.append = (getenv("TT_METAL_WATCHER_APPEND") != nullptr);
+    watcher_settings.noinline = (getenv("TT_METAL_WATCHER_NOINLINE") != nullptr);
+    watcher_settings.phys_coords = (getenv("TT_METAL_WATCHER_PHYS_COORDS") != nullptr);
+    watcher_settings.text_start = (getenv("TT_METAL_WATCHER_TEXT_START") != nullptr);
+    watcher_settings.skip_logging = (getenv("TT_METAL_WATCHER_SKIP_LOGGING") != nullptr);
     // Auto unpause is for testing only, no env var.
-    watcher_auto_unpause = false;
+    watcher_settings.auto_unpause = false;
 
     // Any watcher features to disabled based on env var.
     std::set all_features = {
@@ -254,7 +275,7 @@ void RunTimeOptions::ParseWatcherEnv() {
     if (watcher_debug_delay_str != nullptr) {
         sscanf(watcher_debug_delay_str, "%u", &watcher_debug_delay);
         // Assert watcher is also enabled (TT_METAL_WATCHER=1)
-        TT_ASSERT(watcher_enabled, "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER");
+        TT_ASSERT(watcher_settings.enabled, "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER");
         // Assert TT_METAL_WATCHER_DISABLE_NOC_SANITIZE is either not set or set to 0
         TT_ASSERT(
             watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),

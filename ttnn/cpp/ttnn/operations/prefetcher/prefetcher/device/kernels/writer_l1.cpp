@@ -23,6 +23,7 @@ void kernel_main() {
     constexpr uint32_t max_block_num_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t local_cb_id = get_compile_time_arg_val(5);
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(6);
+    constexpr bool skip_ptr_update = get_compile_time_arg_val(7);
 
     // Runtime args
     // Note: Coalesced sizes -> wrt to receiver cores, sizes -> wrt to dram reader cores
@@ -53,7 +54,7 @@ void kernel_main() {
                     cb_wait_front(local_cb_id, max_block_num_tiles);
 
                     uint32_t local_cb_addr = get_read_ptr(local_cb_id);
-                    experimental::remote_cb_push_back_and_write_pages(
+                    experimental::remote_cb_push_back_and_write_pages<skip_ptr_update>(
                         remote_cb_id,
                         local_cb_addr,
                         1,  // wrt to the size of the packet (curr_block_size)
@@ -71,4 +72,13 @@ void kernel_main() {
     experimental::remote_cb_sender_barrier(remote_cb_id);
 
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
+
+    // reset noc counters here because we didn't properly update ptrs for better perf.
+    if constexpr (skip_ptr_update) {
+        if (noc_mode == DM_DEDICATED_NOC) {
+            ncrisc_noc_counters_init();
+        } else {
+            dynamic_noc_local_state_init();
+        }
+    }
 }

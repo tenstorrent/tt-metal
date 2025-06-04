@@ -295,9 +295,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t num_blocks_per_shard = num_blocks / all_storage_cores_vec.size();
     log_debug("num_blocks_per_shard: {}", num_blocks_per_shard);
     if (per_core_M > 1) {
-        TT_ASSERT(
+        TT_FATAL(
             num_blocks_per_shard == 1,
-            "currently not support per_core_M larger than 1, while split one shard into multiple blocks");
+            "currently not support per_core_M larger than 1, while split one shard into multiple blocks (per_core_M "
+            "{}, num_blocks_per_shard {})",
+            per_core_M,
+            num_blocks_per_shard);
     }
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
@@ -842,7 +845,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
     }
 
-    TT_ASSERT(
+    TT_FATAL(
         total_tensor_width_written_back <= expected_max_total_width,
         "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}",
         expected_max_total_width,
@@ -855,8 +858,14 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            TT_FATAL(input_tensors.size() + optional_input_tensors.size() == 3, "Error");
-            TT_FATAL(output_tensors.size() == 1, "Error");
+            TT_FATAL(
+                input_tensors.size() + optional_input_tensors.size() == 3,
+                "Total number of input tensors (required + optional) must be 3, but got {} + {} = {}",
+                input_tensors.size(),
+                optional_input_tensors.size(),
+                input_tensors.size() + optional_input_tensors.size());
+            TT_FATAL(
+                output_tensors.size() == 1, "Number of output tensors must be 1, but got {}", output_tensors.size());
 
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();
@@ -891,6 +900,7 @@ namespace operations {
 namespace matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
+    const ttnn::MeshCoordinate& mesh_coord,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
@@ -930,7 +940,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.get_dtype());
     }
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::IDevice* device = a.mesh_device()->get_device(mesh_coord);
 
     TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value(), "Error");
     CoreRangeSet all_cores_storage = a.shard_spec().value().grid;
@@ -1008,6 +1018,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
+    const ttnn::MeshCoordinate& mesh_coord,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
@@ -1022,6 +1033,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
     bool skip_in0_mcast,
     bool skip_write_back) {
     return matmul_multi_core_reuse_dram_sharded_optimized_(
+        mesh_coord,
         a,
         b,
         bias,

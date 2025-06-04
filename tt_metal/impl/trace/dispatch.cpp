@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <functional>
 
@@ -11,17 +11,16 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "launch_message_ring_buffer_state.hpp"
-#include "strong_type.hpp"
-#include "system_memory_manager.hpp"
+#include "dispatch/launch_message_ring_buffer_state.hpp"
+#include <tt_stl/strong_type.hpp>
+#include "dispatch/system_memory_manager.hpp"
 #include "trace_buffer.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "worker_config_buffer.hpp"
+#include "dispatch/worker_config_buffer.hpp"
 
 namespace tt::tt_metal::trace_dispatch {
 
@@ -96,10 +95,8 @@ void issue_trace_commands(
             index_bitmask |= 1 << *id;
         }
         command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
-        dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
+        dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
     }
-    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    auto dispatch_core_type = dispatch_core_config.get_core_type();
 
     go_msg_t reset_launch_message_read_ptr_go_signal;
     reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
@@ -115,16 +112,16 @@ void issue_trace_commands(
         const auto& num_noc_mcast_txns =
             desc.num_traced_programs_needing_go_signal_multicast ? device->num_noc_mcast_txns(id) : 0;
         const auto& num_noc_unicast_txns =
-            desc.num_traced_programs_needing_go_signal_unicast ? device->num_noc_unicast_txns(id) : 0;
+            desc.num_traced_programs_needing_go_signal_unicast ? device->num_virtual_eth_cores(id) : 0;
         auto index = *id;
         reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(index);
+            MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index);
 
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
             expected_num_workers_completed[index],
             *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(index),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
             num_noc_mcast_txns,
             num_noc_unicast_txns,
             noc_data_start_idx,
@@ -141,21 +138,21 @@ void issue_trace_commands(
             expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
         }
         if (desc.num_traced_programs_needing_go_signal_unicast) {
-            expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, id);
+            expected_num_workers += device->num_virtual_eth_cores(id);
         }
 
         if (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
-                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(index),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
                 expected_num_workers,
                 1);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(index),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
             expected_num_workers);
     }
 
@@ -176,25 +173,26 @@ void issue_trace_commands(
 }
 
 uint32_t compute_trace_cmd_size(uint32_t num_sub_devices) {
-    uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     uint32_t go_signals_cmd_size =
         align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
 
     uint32_t cmd_sequence_sizeB =
         MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() *
-            hal_ref.get_alignment(
+            hal.get_alignment(
                 HalMemType::HOST) +  // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
         go_signals_cmd_size +        // go signal cmd
-        (hal_ref.get_alignment(
+        (hal.get_alignment(
              HalMemType::HOST) +  // wait to ensure that reset go signal was processed (dispatch_d)
                                   // when dispatch_s and dispatch_d are running on 2 cores, workers update dispatch_s.
                                   // dispatch_s is responsible for resetting worker count and giving dispatch_d the
                                   // latest worker state. This is encapsulated in the dispatch_s wait command (only to
                                   // be sent when dispatch is distributed on 2 cores)
          (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) *
-             hal_ref.get_alignment(HalMemType::HOST)) *
+             hal.get_alignment(HalMemType::HOST)) *
             num_sub_devices +
-        hal_ref.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_EXEC_BUF
+        hal.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_EXEC_BUF
 
     return cmd_sequence_sizeB;
 }

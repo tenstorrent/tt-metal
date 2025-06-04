@@ -8,7 +8,6 @@
 #include <host_api.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include <trace.hpp>
 #include <tt_align.hpp>
 #include <tt_stl/span.hpp>
 #include <functional>
@@ -18,13 +17,14 @@
 #include <vector>
 
 #include "allocator_types.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "core_coord.hpp"
-#include "dispatch_settings.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "hal.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 #include "sub_device_manager.hpp"
 #include "impl/context/metal_context.hpp"
+#include "trace/trace.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
@@ -48,7 +48,7 @@ SubDeviceManager::SubDeviceManager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
-    local_l1_size_(tt::align(local_l1_size, hal_ref.get_alignment(HalMemType::L1))),
+    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))),
     device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();

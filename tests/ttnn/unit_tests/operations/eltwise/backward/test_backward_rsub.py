@@ -57,7 +57,7 @@ def test_bw_rsub_opt(input_shapes, device, are_required_outputs):
 
     cq_id = 0
 
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.rsub_bw(
         grad_tensor,
         input_tensor,
@@ -67,7 +67,7 @@ def test_bw_rsub_opt(input_shapes, device, are_required_outputs):
         other_grad=other_grad,
         queue_id=cq_id,
     )
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
     tt_output_tensor_on_device = [input_grad, other_grad]
 
     golden_function = ttnn.get_golden_function(ttnn.rsub_bw)

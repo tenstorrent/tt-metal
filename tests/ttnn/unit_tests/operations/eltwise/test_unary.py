@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,27 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
-from models.utility_functions import torch_random, skip_for_grayskull, is_wormhole_b0, is_blackhole
+from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+
+
+def create_full_range_tensor(input_shapes, dtype):
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+
+    large_negatives = torch.linspace(-3.3e38, -1e30, steps=num_elements // 5, dtype=dtype)
+    medium_negatives = torch.linspace(-1e5, -1e-3, steps=num_elements // 5, dtype=dtype)
+    near_zero = torch.linspace(-1e-5, 1e-5, steps=num_elements // 5, dtype=dtype)
+    medium_positives = torch.linspace(1e-3, 1e5, steps=num_elements // 5, dtype=dtype)
+    large_positives = torch.linspace(1e30, 3.3e38, steps=num_elements // 5, dtype=dtype)
+
+    in_data = torch.cat([large_negatives, medium_negatives, near_zero, medium_positives, large_positives])
+
+    corner_cases = torch.tensor([0.0], dtype=dtype)
+    in_data = torch.cat([in_data, corner_cases])
+
+    in_data = in_data[:num_elements]
+    in_data = in_data.reshape(input_shapes)
+
+    return in_data
 
 
 def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
@@ -157,8 +177,9 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint8, ttnn.uint32, ttnn.int32, ttnn.float32])
-@skip_for_grayskull("Grayskull doesn't support uint32 / fp32 formats and fp32 dest")
 def test_fp32_uint32(device, h, w, dtype):
+    if dtype == ttnn.uint8 or dtype == ttnn.int32:
+        pytest.skip("Test case failing assert_equal() - see #22482")
     run_identity_test(device, h, w, dtype, pcc=0.9998)
 
 
@@ -319,14 +340,12 @@ def test_signbit(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_floor(device, h, w):
     run_unary_test_range(device, h, w, ttnn.floor, pcc=0.99)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_ceil(device, h, w):
     run_unary_test_range(device, h, w, ttnn.ceil, pcc=0.99)
 
@@ -429,7 +448,6 @@ def test_relu_max(device, h, w, upper_limit):
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_remainder(device, h, w, scalar):
     run_unary_test_with_float_remainder(device, h, w, scalar, ttnn.remainder)
 
@@ -437,7 +455,6 @@ def test_remainder(device, h, w, scalar):
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_fmod(device, h, w, scalar):
     run_unary_test_with_float(device, h, w, scalar, ttnn.fmod)
 
@@ -477,7 +494,6 @@ def test_bitwise_not(device, h, w, fill_value):
     run_unary_test_bitwise_not(device, h, w, fill_value, ttnn.bitwise_not)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -496,7 +512,6 @@ def test_unary_floor(input_shapes, device):
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -513,3 +528,184 @@ def test_unary_ceil(input_shapes, device):
     golden_tensor = golden_function(in_data1)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
+    ttnn_function = ttnn.alt_complex_rotate90
+    golden_function = ttnn.get_golden_function(ttnn_function)
+
+    torch.manual_seed(0)
+
+    tt_input = ttnn.from_torch(torch.randn([h, w]), device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    torch_input = ttnn.to_torch(tt_input)
+
+    torch_output = golden_function(torch_input, device=device)
+    tt_output = ttnn_function(tt_input)
+
+    assert torch.equal(torch_output, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+        torch.Size([1, 3, 320, 384]),
+    ],
+)
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (-5, 5),  # Small range
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.eqz,
+        ttnn.nez,
+        ttnn.ltz,
+        ttnn.lez,
+        ttnn.gtz,
+        ttnn.gez,
+    ],
+)
+def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
+    in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    cq_id = 0
+    output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    golden_tensor = golden_function(in_data)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+    assert pcc == 1
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([64, 64])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.eqz,
+        ttnn.nez,
+        ttnn.ltz,
+        ttnn.lez,
+        ttnn.gtz,
+        ttnn.gez,
+    ],
+)
+def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
+    torch.manual_seed(213919)
+
+    # Generate a uniform range of values across the valid int32 range
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+    uniform_values = torch.linspace(-2147483647, 2147483647, num_elements, dtype=torch.int32)
+
+    corner_cases = torch.tensor([0, 1, -1, 2147483647, -2147483647], dtype=torch.int32)
+    in_data = torch.cat([uniform_values, corner_cases])
+
+    in_data = in_data[-num_elements:].reshape(input_shapes)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_function(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    golden_tensor = golden_function(in_data)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+    assert pcc == 1
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([])),
+        (torch.Size([128])),
+        (torch.Size([64, 64])),
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("scalar", [-100, -54, -1, 0, 1, 13, 29])
+@pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq])
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
+    torch.manual_seed(213919)
+
+    # Generate a uniform range of values across the valid int32 range
+    num_elements = int(torch.prod(torch.tensor(input_shapes)).item())
+    uniform_values = torch.linspace(-2147483647, 2147483647, num_elements, dtype=torch.int32)
+
+    corner_cases = torch.tensor([0, 1, -1, 2147483647, -2147483647, -100, -54, 13, 29], dtype=torch.int32)
+    in_data = torch.cat([uniform_values, corner_cases])
+
+    in_data = in_data[-num_elements:].reshape(input_shapes)
+
+    if is_wormhole_b0() and use_legacy == False and ((in_data - scalar) < -2147483647).any():
+        pytest.xfail("Overflow occurs as in case of binary_ng, sub_tile is called")
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_op(input_tensor, scalar, use_legacy=use_legacy)
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden_tensor = golden_function(in_data, scalar)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_tanhshrink_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    cq_id = 0
+
+    ttnn.tanhshrink(input_tensor1, queue_id=cq_id, output_tensor=output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
+    golden_tensor = golden_function(in_data1)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 5, 512, 1024])),),
+)
+def test_unary_tanhshrink_edge_case_ttnn(input_shapes, device):
+    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    cq_id = 0
+
+    ttnn.tanhshrink(input_tensor, queue_id=cq_id, output_tensor=output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
+    golden_tensor = golden_function(in_data)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass

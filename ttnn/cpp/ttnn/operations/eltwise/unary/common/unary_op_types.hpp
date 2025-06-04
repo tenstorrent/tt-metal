@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,7 @@ enum class UnaryOpType {
     SQRT,
     SIGMOID,
     LOG,
+    LOG1P,
     TANH,
     LOG2,
     LOG10,
@@ -71,6 +72,7 @@ enum class UnaryOpType {
     DIV_UNARY_SFPU,
     IDENTITY_UINT32,
     UNARY_NE,
+    UNARY_EQ,
     UNARY_GT,
     UNARY_LT,
     TILED_PROD,
@@ -81,9 +83,7 @@ enum class UnaryOpType {
     BITWISE_OR,
     RIGHT_SHIFT,
     FLOOR,
-    FLOOR_FLOAT32,
     CEIL,
-    CEIL_FLOAT32,
     ROUND,
     LEFT_SHIFT,
     REMAINDER,
@@ -92,9 +92,11 @@ enum class UnaryOpType {
     FILL,
     PRELU_SFPU,
     ZERO_POINT,
+    ALT_COMPLEX_ROTATE90,
     MISH,
     MAXIMUM,
     MINIMUM,
+    TANHSHRINK,
 };
 
 enum class VecMode {

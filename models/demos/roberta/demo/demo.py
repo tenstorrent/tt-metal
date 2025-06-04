@@ -3,26 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
+import evaluate
 import pytest
 import torch
-from loguru import logger
 import transformers
+from loguru import logger
+from transformers import RobertaForQuestionAnswering, RobertaTokenizer, pipeline
+from ttnn.model_preprocessing import preprocess_model_parameters
+
 import ttnn
-import evaluate
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
-from models.demos.bert.tt import ttnn_optimized_bert
-
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-
-from transformers import RobertaForQuestionAnswering, pipeline, RobertaTokenizer
-
-import evaluate
+from models.demos.bert.tt import ttnn_optimized_bert
+from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):

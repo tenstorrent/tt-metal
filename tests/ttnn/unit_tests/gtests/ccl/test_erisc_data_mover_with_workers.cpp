@@ -28,8 +28,8 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
@@ -37,8 +37,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
-#include <tt-metalium/system_memory_manager.hpp>
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -560,11 +559,21 @@ bool RunWriteBWTest(
     // Build EDMs
     ////////////////////////////////////////////////////////////////////////////
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        sender_program, sender_device, local_chip_edm_builder, eth_sender_core, tt_metal::NOC::NOC_0);
+        sender_program,
+        sender_device,
+        local_chip_edm_builder,
+        eth_sender_core,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::NOC_0);
     set_edm_runtime_args(sender_program, local_edm_kernel, local_chip_edm_builder, eth_sender_core);
 
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        receiver_program, receiver_device, remote_chip_edm_builder, eth_receiver_core, tt_metal::NOC::NOC_0);
+        receiver_program,
+        receiver_device,
+        remote_chip_edm_builder,
+        eth_receiver_core,
+        tt_metal::DataMovementProcessor::RISCV_0,
+        tt_metal::NOC::NOC_0);
     set_edm_runtime_args(receiver_program, remote_edm_kernel, remote_chip_edm_builder, eth_receiver_core);
 
     ////////////////////////////////////////////////////////////////////////////

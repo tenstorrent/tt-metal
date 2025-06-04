@@ -29,7 +29,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
@@ -78,7 +78,7 @@ tt::tt_metal::Program initialize_program_data_movement(
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     tt::tt_metal::detail::CompileProgram(device, program);
-    return std::move(program);
+    return program;
 }
 
 tt::tt_metal::Program initialize_program_data_movement_rta(
@@ -108,7 +108,7 @@ tt::tt_metal::Program initialize_program_data_movement_rta(
             .defines = dm_defines});
 
     tt::tt_metal::detail::CompileProgram(device, program);
-    return std::move(program);
+    return program;
 }
 
 tt::tt_metal::KernelHandle initialize_program_compute(

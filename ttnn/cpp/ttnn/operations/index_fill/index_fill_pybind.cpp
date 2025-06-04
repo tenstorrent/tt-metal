@@ -4,14 +4,13 @@
 
 #include "index_fill_pybind.hpp"
 
+#include <optional>
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "index_fill.hpp"
-#include "cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/index_fill/device/index_fill_device_operation.hpp"
-
-namespace py = pybind11;
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::index_fill {
 

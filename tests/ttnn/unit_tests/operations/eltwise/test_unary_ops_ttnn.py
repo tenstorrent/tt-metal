@@ -5,9 +5,7 @@
 import torch
 import pytest
 import ttnn
-import random
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
-from models.utility_functions import skip_for_blackhole
 
 
 @pytest.mark.parametrize(
@@ -1014,3 +1012,41 @@ def test_unary_bitwise_not(input_shapes, device):
 
     pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
     assert pcc == 1
+
+
+# Supported range: [-1, 1e7]. log1p(-1) approaches negative infinity. For input beyond 1e7, pcc drops below 0.999.
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([3, 123, 115])),
+        (torch.Size([69, 178])),
+        (torch.Size([1024])),
+        (torch.Size([])),
+    ),
+)
+def test_unary_log1p_ttnn(input_shapes, device):
+    if len(input_shapes) == 0:
+        torch_input_tensor = torch.rand((), dtype=torch.bfloat16)
+    else:
+        num_elements = torch.prod(torch.tensor(input_shapes)).item()
+        uniform_input_values = torch.linspace(-1, 1e6, num_elements - 1, dtype=torch.bfloat16)
+        corner_cases = torch.tensor([0.0], dtype=torch.bfloat16)  # Verifies log(0+1) = 0
+        torch_input_tensor = torch.cat([uniform_input_values, corner_cases])
+        torch_input_tensor = torch_input_tensor[:num_elements].reshape(input_shapes)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cq_id = 0
+    output_tensor = ttnn.log1p(input_tensor, queue_id=cq_id)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    golden_function = ttnn.get_golden_function(ttnn.log1p)
+    torch_output_tensor = golden_function(torch_input_tensor)
+
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999

@@ -17,9 +17,9 @@
 #include "command_queue_interface.hpp"
 #include "env_lib.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 #include "memcpy.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "vector_aligned.hpp"
@@ -69,7 +69,7 @@ public:
 
     void add_prefetch_relay_paged_packed(
         uint32_t length,
-        std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
+        const std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
         uint16_t num_sub_cmds,
         uint32_t offset_idx = 0);
 
@@ -113,7 +113,7 @@ public:
     void add_dispatch_set_go_signal_noc_data(
         const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);
 
-    void add_dispatch_set_write_offsets(uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2);
+    void add_dispatch_set_write_offsets(tt::stl::Span<const uint32_t> write_offsets);
 
     void add_dispatch_terminate(DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER);
 
@@ -227,8 +227,9 @@ private:
     uint32_t cmd_sequence_sizeB = 0;
     void* cmd_region = nullptr;
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t pcie_alignment =
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 
     vector_aligned<uint32_t> cmd_region_vector;
 };

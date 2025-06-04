@@ -97,10 +97,8 @@ DatacopyParams setup_datacopy(
     auto all_gather_output_buffer = all_gather_output_tensor.buffer();
     auto datacopy_output_buffer = datacopy_output_tensor.buffer();
 
-    bool all_gather_output_is_dram =
-        all_gather_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
-    bool datacopy_output_is_dram =
-        datacopy_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool all_gather_output_is_dram = all_gather_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool datacopy_output_is_dram = datacopy_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t last_output_page_offset = (ring_size - 1) * tensor_slicer.output_page_offset;
     uint32_t num_rows = input_tensor.get_padded_shape()[2] / tile_size;
@@ -204,6 +202,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     const uint32_t ring_index,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology,
@@ -271,9 +270,9 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
                 matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
                     program,
                     all_gather_output_tensor,
-                    weight_tensor,
+                    {weight_tensor},
                     bias,
-                    matmul_output_tensor,
+                    {matmul_output_tensor},
                     bcast_batch,
                     compute_kernel_config,
                     config,
@@ -335,6 +334,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
             num_links,
             ring_size,
             ring_index,
+            target_device_id,
             receiver_device_id,
             sender_device_id,
             topology,

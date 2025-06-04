@@ -45,7 +45,8 @@ protected:
     static void validate_dispatch_mode() {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            tt::log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            this->slow_dispatch_ = false;
             GTEST_SKIP();
         }
     }
@@ -58,7 +59,6 @@ protected:
         for (auto device : devices_) {
             device_map[device->id()] = device;
         }
-    }
 
     // Constructor: No instance-specific setup, as it's handled at suite level
     DeviceFixture() : DispatchFixture(DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE) {}

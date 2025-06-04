@@ -10,7 +10,7 @@
 #include <memory>
 #include <tuple>
 
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>

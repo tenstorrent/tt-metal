@@ -9,6 +9,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -156,9 +157,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t num_cores_r = core_range.y;
 
     // Compile time args
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in0_is_dram,
@@ -223,7 +224,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
 
-    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
 
     // Create compute kernel
     auto mm_kernel_group_1_id = tt_metal::CreateKernel(

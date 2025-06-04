@@ -92,12 +92,32 @@ struct SliceOperation {
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<float>& pad_value = std::nullopt);
+
+    template <typename T>
+    static ttnn::Tensor invoke(
+        QueueId queue_id,
+        const ttnn::Tensor& input_tensor,
+        const ttnn::Tensor& output_tensor_start,
+        const ttnn::Tensor& output_tensor_end,
+        const std::optional<ttnn::SmallVector<T>>& step,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<float>& pad_value = std::nullopt);
+
+    template <typename T>
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const ttnn::Tensor& output_tensor_start,
+        const ttnn::Tensor& output_tensor_end,
+        const std::optional<ttnn::SmallVector<T>>& step,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<float>& pad_value = std::nullopt);
 };
 
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto slice =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::slice", ttnn::operations::data_movement::SliceOperation>();
+constexpr auto slice = ttnn::register_operation<"ttnn::slice", ttnn::operations::data_movement::SliceOperation>();
 
 }  // namespace ttnn

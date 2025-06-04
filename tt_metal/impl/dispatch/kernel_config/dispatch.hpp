@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,15 +9,16 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "impl/context/metal_context.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
-#include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/tt_xy_pair.h>
 
-typedef struct dispatch_static_config {
+namespace tt {
+namespace tt_metal {
+
+struct dispatch_static_config_t {
     std::optional<uint32_t> dispatch_cb_base;  // 0
     std::optional<uint32_t> dispatch_cb_log_page_size;
     std::optional<uint32_t> dispatch_cb_pages;
@@ -51,9 +52,9 @@ typedef struct dispatch_static_config {
 
     // Populated if fabric is being used to talk to downstream
     std::optional<uint32_t> client_interface_addr;
-} dispatch_static_config_t;
+};
 
-typedef struct dispatch_dependent_config {
+struct dispatch_dependent_config_t {
     std::optional<tt_cxy_pair> upstream_logical_core;      // Dependant
     std::optional<tt_cxy_pair> downstream_logical_core;    // Dependant
     std::optional<tt_cxy_pair> downstream_s_logical_core;  // Dependant
@@ -77,7 +78,7 @@ typedef struct dispatch_dependent_config {
     std::optional<uint32_t> downstream_mesh_id;
     std::optional<uint32_t> downstream_dev_id;
     std::optional<uint32_t> outbound_eth_chan;
-} dispatch_dependent_config_t;
+};
 
 class DispatchKernel : public FDKernel {
 public:
@@ -110,6 +111,7 @@ public:
         } else if (d_variant) {
             this->logical_core_ = core_manager.dispatcher_d_core(device_id, channel, cq_id);
         }
+        this->kernel_type_ = FDKernelType::DISPATCH;
     }
 
     void CreateKernel() override;
@@ -123,9 +125,9 @@ public:
     void UpdateArgsForFabric(
         const CoreCoord& fabric_router,
         uint32_t outbound_eth_chan,
-        tt::tt_fabric::mesh_id_t src_mesh_id,
+        tt::tt_fabric::MeshId src_mesh_id,
         chip_id_t src_chip_id,
-        tt::tt_fabric::mesh_id_t dst_mesh_id,
+        tt::tt_fabric::MeshId dst_mesh_id,
         chip_id_t dst_chip_id) override;
 
     uint32_t GetDispatchBufferSize() const {
@@ -137,3 +139,6 @@ private:
     dispatch_static_config_t static_config_;
     dispatch_dependent_config_t dependent_config_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt

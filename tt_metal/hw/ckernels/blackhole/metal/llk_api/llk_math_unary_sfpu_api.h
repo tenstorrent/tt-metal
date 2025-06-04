@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,10 +12,11 @@
 #include "llk_math_eltwise_unary_sfpu_heaviside.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_log.h"
+#include "llk_math_eltwise_unary_sfpu_log1p.h"
 #include "llk_math_eltwise_unary_sfpu_max.h"
 #include "llk_math_eltwise_unary_sfpu_power.h"
 #include "llk_math_eltwise_unary_sfpu_rsqrt.h"
-#include "llk_math_eltwise_unary_sfpu_round.h"
+#include "llk_math_eltwise_unary_sfpu_rounding_ops.h"
 #include "llk_math_eltwise_unary_sfpu_sigmoid.h"
 #include "llk_math_eltwise_unary_sfpu_sign.h"
 #include "llk_math_eltwise_unary_sfpu_signbit.h"
@@ -29,3 +30,4 @@
 #include "llk_math_eltwise_unary_sfpu_fill.h"
 #include "llk_math_eltwise_unary_sfpu_prelu.h"
 #include "llk_math_eltwise_unary_sfpu_i1.h"
+#include "llk_math_eltwise_unary_sfpu_alt_complex_rotate90.h"

@@ -9,15 +9,13 @@
 
 #include <utility>
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include "cpp/pybind11/json_class.hpp"
+#include "ttnn-pybind/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace matmul {
+namespace ttnn::operations::matmul {
 
 using ttnn::operations::unary::UnaryWithParam;
 
@@ -132,7 +130,8 @@ void py_module(py::module& module) {
                         bool mcast_in0,
                         bool gather_in0,
                         CoreRangeSet hop_cores,
-                        std::size_t num_global_cb_receivers) {
+                        std::size_t num_global_cb_receivers,
+                        bool untilize_out) {
                 // Set out_block_h and out_block_w to defaults if they are not provided
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
@@ -151,7 +150,8 @@ void py_module(py::module& module) {
                     mcast_in0,
                     gather_in0,
                     std::move(hop_cores),
-                    num_global_cb_receivers);
+                    num_global_cb_receivers,
+                    untilize_out);
             }),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
@@ -167,7 +167,8 @@ void py_module(py::module& module) {
             py::arg("mcast_in0").noconvert(),
             py::arg("gather_in0").noconvert() = false,
             py::arg("hop_cores").noconvert() = CoreRangeSet(),
-            py::arg("num_global_cb_receivers").noconvert() = 1)
+            py::arg("num_global_cb_receivers").noconvert() = 1,
+            py::arg("untilize_out").noconvert() = false)
         .def_readwrite(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
@@ -184,7 +185,8 @@ void py_module(py::module& module) {
         .def_readwrite("gather_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::gather_in0)
         .def_readwrite("hop_cores", &MatmulMultiCoreReuseMultiCast1DProgramConfig::hop_cores)
         .def_readwrite(
-            "num_global_cb_receivers", &MatmulMultiCoreReuseMultiCast1DProgramConfig::num_global_cb_receivers);
+            "num_global_cb_receivers", &MatmulMultiCoreReuseMultiCast1DProgramConfig::num_global_cb_receivers)
+        .def_readwrite("untilize_out", &MatmulMultiCoreReuseMultiCast1DProgramConfig::untilize_out);
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
@@ -211,14 +213,15 @@ void py_module(py::module& module) {
         R"doc(
         Returns the matrix product of two tensors.
 
-        The input tensors need to be tiled. Therefore, the input tensors have to be
-        at least 2-dimensional.
+        The input tensors need to be tiled and at least 1-dimensional.
 
-        If the input tensors have more than two dimensions, the additional, front,
-        dimensions may be used for batched matrix multiply.
-        These front dimensions may also be referred to as batch dimensions.
-        E.g. a tensor with dimensions (`a` x `b` x `c` x `d`)
-        has batch dimensions `a` and `b`.
+        - If both input tensors are 1-dimensional, then the operation is a dot product.
+        - If first input tensor is 1-dimensional and the other input tensor is at least 2-dimensional,
+          the batched vector-matrix multiplication is performed.
+        - If the first input tensor is at least 2-dimensional and the second input tensor is 1-dimensional,
+          the batched matrix-vector multiplication is performed.
+        - If both input tensors are at least 2-dimensional, then a batched matrix multiply is performed.
+
         The following are the allowed possibilities for batch dimensions.
         Examples below show concrete operations and tensor sizes.
 
@@ -237,8 +240,6 @@ void py_module(py::module& module) {
         - Matrix multiplication will not work if the first input has batch
           dimensions that are all of size 1 and the second input has batch dimensions
           that are not all of size 1.
-
-        - Note: Dimensions of size 0 are not supported.
 
         - Note: In general, the number of dimensions between the two inputs should
           match. There may be cases where they don't. In that case, if the inputs
@@ -346,7 +347,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb,
+               const std::optional<const GlobalCircularBuffer>& global_cb,
                const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
@@ -433,7 +434,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb,
+               const std::optional<const GlobalCircularBuffer>& global_cb,
                const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
@@ -469,8 +470,81 @@ void py_module(py::module& module) {
             py::arg("global_cb") = std::nullopt,
             py::arg("sub_device_id") = std::nullopt,
         });
+
+    bind_registered_operation(
+        module,
+        ::ttnn::matmul_batched_weights,
+        R"doc(
+        performs matrix multiplication for a single input tensor a with multiple tensors b, return a vector of output tensors.
+
+        Args:
+            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
+            input_tensors_b (ttnn.Tensor): the second tensor vector to be multiplied. Needs to be on the device.
+
+        Keyword Args:
+            bias (ttnn.Tensor, optional): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
+            transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
+            transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
+            dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
+            program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
+            activation (str, optional): the activation function to be applied. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
+            core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
+            output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+        )doc",
+        ttnn::pybind_overload_t{
+            [](decltype(::ttnn::matmul_batched_weights)& self,
+               const ttnn::Tensor& input_tensor_a,
+               const std::vector<ttnn::Tensor>& input_tensors_b,
+               const bool transpose_a,
+               const bool transpose_b,
+               const std::optional<const ttnn::MemoryConfig>& memory_config,
+               const std::optional<const DataType> dtype,
+               const std::optional<const MatmulProgramConfig>& program_config,
+               const std::optional<const std::string>& activation,
+               const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<const ttnn::CoreGrid> core_grid,
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor,
+               const std::optional<const GlobalCircularBuffer>& global_cb,
+               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> std::vector<ttnn::Tensor> {
+                return self(
+                    input_tensor_a,
+                    input_tensors_b,
+                    transpose_a,
+                    transpose_b,
+                    memory_config,
+                    dtype,
+                    program_config,
+                    activation,
+                    compute_kernel_config,
+                    core_grid,
+                    output_tile,
+                    optional_output_tensor,
+                    global_cb,
+                    sub_device_id);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("input_tensors_b"),
+            py::kw_only(),
+            py::arg("transpose_a") = false,
+            py::arg("transpose_b") = false,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("dtype") = std::nullopt,
+            py::arg("program_config") = std::nullopt,
+            py::arg("activation") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("core_grid") = std::nullopt,
+            py::arg("output_tile") = std::nullopt,
+            py::arg("optional_output_tensor") = std::nullopt,
+            py::arg("global_cb") = std::nullopt,
+            py::arg("sub_device_id") = std::nullopt,
+        });
 }
 
-}  // namespace matmul
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::matmul

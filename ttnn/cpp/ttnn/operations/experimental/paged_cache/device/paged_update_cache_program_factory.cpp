@@ -69,7 +69,6 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
 
     // Pagetable-specific parameters
     bool is_paged_cache = page_table.has_value();
-    uint32_t batch_size = 0;
     uint32_t block_size = 0;
     uint32_t block_size_t = 0;
     uint32_t max_blocks_per_seq = 0;
@@ -80,7 +79,6 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     if (is_paged_cache) {
         const auto& page_table_tensor = page_table.value();
 
-        batch_size = page_table_tensor.get_padded_shape()[0];
         block_size = cache_tensor.get_padded_shape()[2];
         block_size_t = block_size / TILE_HEIGHT;
         max_blocks_per_seq = page_table_tensor.get_padded_shape()[1];
@@ -169,8 +167,8 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = cache_tensor.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)dst_is_dram,
@@ -268,8 +266,8 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
         uint32_t send_core_x, send_core_y;
         if (share_cache) {
             // Share cache
-            wait_to_start = i == 0 ? false : true;
-            send_signal = i == num_cores - 1 ? false : true;
+            wait_to_start = i != 0;
+            send_signal = i != num_cores - 1;
             auto next_core = i == num_cores - 1 ? core : cores.at(i + 1);
             auto next_core_physical = device->worker_core_from_logical_core(next_core);
             send_core_x = next_core_physical.x;

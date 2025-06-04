@@ -30,13 +30,13 @@ DEFINE_MOREH_SOFT_BACKWARD_OP(MorehLogSoftmaxBackward);
 }  // namespace ttnn::operations::moreh::moreh_softmax_backward
 
 namespace ttnn {
-constexpr auto moreh_softmax_backward = ttnn::register_operation_with_auto_launch_op<
+constexpr auto moreh_softmax_backward = ttnn::register_operation<
     "ttnn::moreh_softmax_backward",
     ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackward>();
-constexpr auto moreh_softmin_backward = ttnn::register_operation_with_auto_launch_op<
+constexpr auto moreh_softmin_backward = ttnn::register_operation<
     "ttnn::moreh_softmin_backward",
     ttnn::operations::moreh::moreh_softmax_backward::MorehSoftminBackward>();
-constexpr auto moreh_logsoftmax_backward = ttnn::register_operation_with_auto_launch_op<
+constexpr auto moreh_logsoftmax_backward = ttnn::register_operation<
     "ttnn::moreh_logsoftmax_backward",
     ttnn::operations::moreh::moreh_softmax_backward::MorehLogSoftmaxBackward>();
 }  // namespace ttnn

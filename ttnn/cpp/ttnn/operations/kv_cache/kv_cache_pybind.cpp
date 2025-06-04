@@ -2,21 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "kv_cache_pybind.hpp"
+
+#include <cstdint>
+#include <optional>
+
+#include <fmt/format.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "kv_cache.hpp"
-#include "kv_cache_pybind.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/types.hpp"
 
-namespace py = pybind11;
+namespace ttnn::operations::kv_cache {
 
-namespace ttnn {
-namespace operations {
-namespace kv_cache {
-
-namespace detail {
+namespace {
 
 template <typename kv_cache_operation_t>
 void bind_fill_cache_for_user_(py::module& module, const kv_cache_operation_t& operation) {
@@ -172,15 +173,13 @@ void bind_fill_cache(pybind11::module& module, const update_cache_operation_t& o
             py::arg("batch_idx")});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_kv_cache(py::module& module) {
-    detail::bind_fill_cache_for_user_(module, ttnn::fill_cache_for_user_);
-    detail::bind_update_cache_for_token_(module, ttnn::update_cache_for_token_);
-    detail::bind_update_cache(module, ttnn::update_cache);
-    detail::bind_fill_cache(module, ttnn::fill_cache);
+    bind_fill_cache_for_user_(module, ttnn::fill_cache_for_user_);
+    bind_update_cache_for_token_(module, ttnn::update_cache_for_token_);
+    bind_update_cache(module, ttnn::update_cache);
+    bind_fill_cache(module, ttnn::fill_cache);
 }
 
-}  // namespace kv_cache
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::kv_cache

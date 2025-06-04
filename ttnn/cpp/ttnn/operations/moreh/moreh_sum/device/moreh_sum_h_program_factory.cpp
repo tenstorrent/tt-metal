@@ -81,7 +81,6 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_sum_h.cpp";
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    CBHandle cb_src0;
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     CBHandle cb_src1 = 0;
     uint32_t num_input_tiles = 2;
@@ -89,7 +88,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         tt::tt_metal::CircularBufferConfig(
             num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
             .set_page_size(src0_cb_index, src0_single_tile_size);
-    cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t scaler_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig cb_scaler_config =
@@ -113,18 +112,17 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     auto cb_intermed1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;  // output operands start at index 16
-    CBHandle cb_output;
     uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
             .set_page_size(output_cb_index, dst_single_tile_size);
-    cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     tt::tt_metal::Buffer* src0_buffer = input.buffer();
     tt::tt_metal::KernelHandle reader_kernel_id;
     auto bfloat_scaler_value = *(new class bfloat16(scaler));
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, Ht, Wt, HtWt, packed_scaler_value};
 
     std::map<string, string> reader_defines;
@@ -141,7 +139,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     tt::tt_metal::KernelHandle writer_kernel_id;
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     writer_kernel_id = tt::tt_metal::CreateKernel(

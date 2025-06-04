@@ -25,8 +25,8 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "dispatch_fixture.hpp"
@@ -34,8 +34,7 @@
 #include <tt-metalium/logger.hpp>
 #include "matmul_test_utils.hpp"
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
-#include "tests/tt_metal/test_utils/tilization.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -377,15 +376,16 @@ bool matmul_large_block(
     if (activations_rm) {
         activations = pack_bfloat16_vec_into_uint32_vec(tensor.get_values());
     } else {
-        auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
-        auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
+        auto activations_tilized = tilize_swizzled(tensor.get_values(), M * 32, K * 32);
+        auto activations_tile_layout =
+            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
         activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     }
     fixture->WriteBuffer(device, src0_dram_buffer, activations);
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
-    auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
-    auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
+    auto identity_tilized = tilize_swizzled<bfloat16>(identity, K * 32, N * 32);
+    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     fixture->WriteBuffer(device, src1_dram_buffer, weights);
 
@@ -418,8 +418,8 @@ bool matmul_large_block(
             tt_metal::print_faces(result_bfp16, "Result");
         }
     } else {
-        auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
-        auto result_untilized = test_utils::untilize(result_flat_layout, M * 32, N * 32);
+        auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
+        auto result_untilized = untilize_swizzled(result_flat_layout, M * 32, N * 32);
         pass &= (golden == result_untilized);
         if (not pass) {
             tt_metal::print_faces(result_untilized, "Result");

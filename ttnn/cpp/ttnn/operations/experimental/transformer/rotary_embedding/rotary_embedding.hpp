@@ -25,7 +25,7 @@ struct RotaryEmbeddingOperation {
 
 namespace experimental {
 
-constexpr auto rotary_embedding = ttnn::register_operation_with_auto_launch_op<
+constexpr auto rotary_embedding = ttnn::register_operation<
     "ttnn::experimental::rotary_embedding",
     ttnn::operations::experimental::transformer::RotaryEmbeddingOperation>();
 

@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "sdpa.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::transformer {
 
@@ -27,7 +27,7 @@ void py_bind_sdpa(py::module& module) {
 
         Keyword args:
             attn_mask (ttnn.Tensor, optional): Defaults to `None`. [b x 1 x s x s]. Head broadcasting is implied.
-            is_casual (bool): Defaults to `true`.
+            is_causal (bool): Defaults to `true`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
             scale (float, optional): Defaults to `None`.

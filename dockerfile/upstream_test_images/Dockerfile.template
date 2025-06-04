@@ -1,0 +1,37 @@
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:${TT_METAL_DEV_VERSION} as base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+LABEL org.opencontainers.image.source=https://github.com/tenstorrent/tt-metal
+LABEL org.opencontainers.image.description="Run upstream smoke tests"
+LABEL org.opencontainers.image.licenses=MIT
+
+## add user
+RUN adduser --uid 1000 --shell /bin/bash user
+RUN usermod -aG sudo user
+RUN echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user
+USER user
+
+RUN git clone https://github.com/tenstorrent/tt-metal --recurse-submodules /home/user/tt-metal
+
+WORKDIR /home/user/tt-metal
+
+RUN git reset --hard ${TT_METAL_COMMIT_SHA} && git submodule update --init --recursive
+
+ENV PYTHONPATH=/home/user/tt-metal
+ENV LD_LIBRARY_PATH=/home/user/tt-metal/build/lib
+ENV TT_METAL_HOME=/home/user/tt-metal
+
+RUN ls -hal
+
+# Can delete these to reduce container image size?
+COPY _tt-metal/build/ ./build/
+COPY _tt-metal/runtime/ ./runtime/
+COPY ttnn-*.whl ./
+
+RUN pip3 install $(ls -1 *.whl)
+
+RUN TRACY_NO_INVARIANT_CHECK=1 TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites" --gtest_list_tests
+RUN TRACY_NO_INVARIANT_CHECK=1 python3 -c 'import ttnn'
+ENTRYPOINT ["$TEST_COMMAND"]
+CMD ["$HW_TOPOLOGY"]

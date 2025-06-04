@@ -16,7 +16,7 @@ struct QuantOp {
         QueueId queue_id,
         const Tensor& input_tensor,
         const std::variant<Tensor, float>& scale,
-        const int32_t zero_point,
+        const std::variant<Tensor, int32_t>& zero_point,
         const std::optional<int32_t> axis,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -28,9 +28,9 @@ struct RequantOp {
         QueueId queue_id,
         const Tensor& input_tensor,
         const std::variant<Tensor, float>& in_scale,
-        const int32_t in_zero_point,
+        const std::variant<Tensor, int32_t>& in_zero_point,
         const std::variant<Tensor, float>& out_scale,
-        const int32_t out_zero_point,
+        const std::variant<Tensor, int32_t>& out_zero_point,
         const std::optional<int32_t> axis,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -42,7 +42,7 @@ struct DequantOp {
         QueueId queue_id,
         const Tensor& input_tensor,
         const std::variant<Tensor, float>& scale,
-        const int32_t zero_point,
+        const std::variant<Tensor, int32_t>& zero_point,
         const std::optional<int32_t> axis,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -52,11 +52,8 @@ struct DequantOp {
 }  // namespace ttnn::operations::quantization
 
 namespace ttnn {
-constexpr auto quantize =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::quantize", operations::quantization::QuantOp>();
-constexpr auto requantize =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::requantize", operations::quantization::RequantOp>();
-constexpr auto dequantize =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::dequantize", operations::quantization::DequantOp>();
+constexpr auto quantize = ttnn::register_operation<"ttnn::quantize", operations::quantization::QuantOp>();
+constexpr auto requantize = ttnn::register_operation<"ttnn::requantize", operations::quantization::RequantOp>();
+constexpr auto dequantize = ttnn::register_operation<"ttnn::dequantize", operations::quantization::DequantOp>();
 
 }  // namespace ttnn

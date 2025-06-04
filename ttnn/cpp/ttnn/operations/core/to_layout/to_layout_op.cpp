@@ -95,7 +95,7 @@ Tensor to_layout_impl(
         }
     }
 
-    if (ttnn::is_tensor_on_device_or_multidevice(tensor_arg)) {
+    if (tt::tt_metal::is_device_tensor(tensor_arg)) {
         bool use_multicore_untilize = true;
         bool use_multicore_tilize = true;
 
@@ -108,7 +108,7 @@ Tensor to_layout_impl(
                     const auto tensor_tile = tensor.get_tensor_spec().tile();
                     uint32_t tile_height = tensor_tile.get_height();
                     uint32_t tile_width = tensor_tile.get_width();
-                    const auto shard_shape = get_memory_config(tensor).value().shard_spec.value().shape;
+                    const auto shard_shape = get_memory_config(tensor).value().shard_spec().value().shape;
                     if (shard_shape[0] % tile_height != 0 or shard_shape[1] % tile_width != 0) {
                         TT_THROW(
                             "ttnn::to_layout: Sharded tensor must have shard shape that is a multiple of "
@@ -127,7 +127,7 @@ Tensor to_layout_impl(
             if (tensor.is_sharded()) {
                 const auto memory_config = tensor.memory_config();
                 output_memory_config =
-                    tt::tt_metal::MemoryConfig{memory_config.memory_layout, memory_config.buffer_type};
+                    tt::tt_metal::MemoryConfig{memory_config.memory_layout(), memory_config.buffer_type()};
             }
             Shape output_tensor_end(SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
             int logical_rank = tensor.get_logical_shape().rank();
@@ -140,7 +140,7 @@ Tensor to_layout_impl(
             return ttnn::reshape(tensor, ttnn::Shape{output_shape});
 
         } else if (layout == ttnn::TILE_LAYOUT) {
-            if (tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
                 SmallVector<std::pair<uint32_t, uint32_t>> padding = {

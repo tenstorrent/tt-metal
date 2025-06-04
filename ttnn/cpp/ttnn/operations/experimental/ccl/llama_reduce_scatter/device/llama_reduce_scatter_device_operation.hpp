@@ -7,13 +7,15 @@
 #include <variant>
 #include <optional>
 
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -22,13 +24,11 @@ struct LlamaReduceScatterDeviceOperation {
         const uint32_t dim;
         const std::optional<GlobalSemaphore> cross_device_semaphore;
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
-        const uint32_t ring_index;
         const uint32_t cluster_axis;
         const std::optional<MemoryConfig> output_mem_config;
         const uint32_t ring_devices;
         const uint32_t num_links;
-        std::optional<IDevice*> forward_device;
-        std::optional<IDevice*> backward_device;
+        tt::tt_fabric::Topology topology;
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -50,15 +50,22 @@ struct LlamaReduceScatterDeviceOperation {
             std::vector<tt::tt_metal::CBHandle> cb_handles;
             CoreRangeSet core_range;
         };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-        static cached_program_t create(
+        static cached_mesh_workload_t create_mesh_workload(
             const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
         static void override_runtime_arguments(
-            cached_program_t& cached_program,
+            cached_mesh_workload_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -89,13 +96,11 @@ struct LlamaReduceScatterDeviceOperation {
         const int32_t dim,
         const GlobalSemaphore& semaphore,
         const tt::tt_metal::SubDeviceId subdevice_id,
-        const uint32_t ring_index,
         const uint32_t cluster_axis,
-        std::optional<IDevice*>& forward_device,
-        std::optional<IDevice*>& backward_device,
         const uint32_t ring_devices,
         const uint32_t num_links,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear);
 };
 }  // namespace ttnn::operations::experimental::ccl
 

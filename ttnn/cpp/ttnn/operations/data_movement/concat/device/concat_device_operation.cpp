@@ -55,14 +55,14 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
                 in_ref.shard_spec().value().grid == first_input.shard_spec().value().grid,
                 "Sharded tensors must have the same grid.");
             TT_FATAL(
-                in_ref.memory_config().memory_layout == first_input.memory_config().memory_layout,
+                in_ref.memory_config().memory_layout() == first_input.memory_config().memory_layout(),
                 "Sharded tensors must have the same memory layout.");
             // TODO(jerrysky3): Remove this when we replace the two tensors concat kernel with the general one.
             TT_FATAL(
-                input_tensors.size() > 2 || in_ref.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
+                input_tensors.size() > 2 || in_ref.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
                 "Width sharded inputs are not supported for two tensors concat yet");
             TT_FATAL(
-                in_ref.memory_config().memory_layout != TensorMemoryLayout::BLOCK_SHARDED,
+                in_ref.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
                 "Block sharded inputs are not supported");
         }
     }
@@ -74,13 +74,13 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
             this->dim);
     }
     if (shard_first) {
-        const auto memory_layout = first_input.memory_config().memory_layout;
+        const auto memory_layout = first_input.memory_config().memory_layout();
         TT_FATAL(
-            this->output_mem_config.memory_layout == memory_layout,
+            this->output_mem_config.memory_layout() == memory_layout,
             "Sharded output and inputs must have the same memory layout.");
         TT_FATAL(this->output_mem_config.is_sharded(), "Output must be sharded if input is sharded.");
         TT_FATAL(
-            this->output_mem_config.shard_spec.value().grid == first_input.shard_spec().value().grid,
+            this->output_mem_config.shard_spec().value().grid == first_input.shard_spec().value().grid,
             "Sharded output and inputs must have the same grid.");
         if (this->dim == shape_first.rank() - 1) {
             TT_FATAL(
@@ -135,74 +135,60 @@ Tensor concat_impl(
     const std::int64_t dim,
     const unsigned int groups,
     const MemoryConfig& output_mem_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensors[0]}))};
-    operation::launch_op(
-        [dim, groups, output_mem_config](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) -> std::vector<Tensor> {
-            TT_FATAL(input_tensors.size() > 0, "need 1 or more tensors");
-            if (input_tensors.size() == 1) {
-                return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
-                    input_tensors[0], output_mem_config)};
-            }
-            uint32_t ref_rank = input_tensors[0].get_padded_shape().rank();
-            uint32_t normalized_dim = input_tensors[0].get_padded_shape().get_normalized_index(dim);
+    TT_FATAL(input_tensors.size() > 0, "need 1 or more tensors");
+    if (input_tensors.size() == 1) {
+        return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
+            input_tensors[0], output_mem_config)};
+    }
+    uint32_t ref_rank = input_tensors[0].get_padded_shape().rank();
+    uint32_t normalized_dim = input_tensors[0].get_padded_shape().get_normalized_index(dim);
 
-            if (input_tensors[0].is_sharded()) {
-                return operation::run(
-                    ConcatDeviceOperation{normalized_dim, groups, output_mem_config}, {input_tensors});
+    if (input_tensors[0].is_sharded()) {
+        return operation::run(ConcatDeviceOperation{normalized_dim, groups, output_mem_config}, {input_tensors}).at(0);
+    } else {
+        if (input_tensors[0].get_layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
+            for (const auto& input_tensor : input_tensors) {
+                TT_FATAL(
+                    (input_tensor.get_padded_shape()[dim] * input_tensor.element_size()) %
+                            input_tensor.buffer()->alignment() ==
+                        0,
+                    "Current concat implementation requires aligned last dim when concatting on last dim");
+            }
+        }
+        // row major should default to row major and tilized to tilized implementations, but the below loop
+        // turned RM to tilized when possible
+        Layout target_layout = input_tensors[0].get_layout();
+        // this should be dead code when instantiating layout to match the input
+        for (const auto& input_tensor : input_tensors) {
+            if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+                const auto& input_shape = input_tensor.get_padded_shape();
+                if (input_shape.rank() < 2 || input_shape[-2] % TILE_HEIGHT != 0 || input_shape[-1] % TILE_WIDTH != 0) {
+                    target_layout = Layout::ROW_MAJOR;
+                    break;
+                }
+            }
+        }
+        std::vector<ttnn::operations::experimental::auto_format::FormatParams> input_format_params;
+        input_format_params.reserve(input_tensors.size());
+        for (const auto& input_tensor : input_tensors) {
+            if (target_layout == Layout::ROW_MAJOR) {
+                input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
+                    .pad_shape = input_tensor.get_padded_shape(), .pad_value = 0.0, .target_layout = target_layout});
             } else {
-                if (input_tensors[0].get_layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
-                    for (const auto& input_tensor : input_tensors) {
-                        TT_FATAL(
-                            (input_tensor.get_padded_shape()[dim] * input_tensor.element_size()) %
-                                    input_tensor.buffer()->alignment() ==
-                                0,
-                            "Current concat implementation requires aligned last dim when concatting on last dim");
-                    }
-                }
-                // row major should default to row major and tilized to tilized implementations, but the below loop
-                // turned RM to tilized when possible
-                Layout target_layout = input_tensors[0].get_layout();
-                // this should be dead code when instantiating layout to match the input
-                for (const auto& input_tensor : input_tensors) {
-                    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-                        const auto& input_shape = input_tensor.get_padded_shape();
-                        if (input_shape.rank() < 2 || input_shape[-2] % TILE_HEIGHT != 0 ||
-                            input_shape[-1] % TILE_WIDTH != 0) {
-                            target_layout = Layout::ROW_MAJOR;
-                            break;
-                        }
-                    }
-                }
-                std::vector<ttnn::operations::experimental::auto_format::FormatParams> input_format_params;
-                input_format_params.reserve(input_tensors.size());
-                for (const auto& input_tensor : input_tensors) {
-                    if (target_layout == Layout::ROW_MAJOR) {
-                        input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
-                            .pad_shape = input_tensor.get_padded_shape(),
-                            .pad_value = 0.0,
-                            .target_layout = target_layout});
-                    } else {
-                        ttnn::Shape pad_shape =
-                            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                                input_tensor.get_padded_shape());
-                        input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
-                            .pad_shape = pad_shape, .pad_value = 0.0, .target_layout = target_layout});
-                    }
-                }
-
-                return operation::run_with_autoformat(
-                    ConcatDeviceOperation{normalized_dim, groups, output_mem_config},
-                    {input_tensors},
-                    {input_format_params},
-                    {target_layout});
+                ttnn::Shape pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
+                    input_tensor.get_padded_shape());
+                input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
+                    .pad_shape = pad_shape, .pad_value = 0.0, .target_layout = target_layout});
             }
-        },
-        input_tensors,
-        output_tensors);
-    return output_tensors.at(0);
+        }
+
+        return operation::run_with_autoformat(
+                   ConcatDeviceOperation{normalized_dim, groups, output_mem_config},
+                   {input_tensors},
+                   {input_format_params},
+                   {target_layout})
+            .at(0);
+    }
 }
 
 }  // namespace ttnn::operations::data_movement

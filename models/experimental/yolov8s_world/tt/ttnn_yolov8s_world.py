@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@ from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
     concat,
     determine_num_cores_for_upsample,
     get_core_grid_from_num_cores,
+    tt_adaptive_to_max_pool2d,
 )
 
 
@@ -39,6 +40,7 @@ class TtConv:
         enable_split_reader=False,
         reshard_if_not_optimal=True,
         batch_size=1,
+        conv_math_fidelity=None,
     ):
         self.device = device
         self.parameters = parameters
@@ -63,7 +65,7 @@ class TtConv:
         self.reshape_tensor = reshape_tensor
 
         self.conv_config = self._initialize_conv_config()
-        self.compute_config = self._initialize_compute_config()
+        self.compute_config = self._initialize_compute_config(conv_math_fidelity)
         if conv_alone:
             self.weights, self.bias = self.parameters["weight"], self.parameters["bias"]
         else:
@@ -75,7 +77,6 @@ class TtConv:
             weights_dtype=ttnn.bfloat16,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            input_channels_alignment=16 if self.input_params[4] < 16 else 32,
             act_block_w_div=1,
             transpose_shards=False,
             deallocate_activation=False,
@@ -110,13 +111,13 @@ class TtConv:
 
         return conv_config
 
-    def _initialize_compute_config(self):
+    def _initialize_compute_config(self, math_fidelity):
         return ttnn.init_device_compute_kernel_config(
             self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=math_fidelity if math_fidelity is not None else ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
     def __call__(self, x):
@@ -308,7 +309,12 @@ class TtSPPF:
         self.batch_size = batch_size
         self.cv1 = TtConv(device, parameters["cv1"], input_params=input_params[0], deallocate_activation=True)
         self.cv2 = TtConv(
-            device, parameters["cv2"], input_params=input_params[1], change_shard=True, deallocate_activation=True
+            device,
+            parameters["cv2"],
+            input_params=input_params[1],
+            change_shard=True,
+            deallocate_activation=True,
+            conv_math_fidelity=ttnn.MathFidelity.HiFi2,
         )
 
     def __call__(self, x):
@@ -317,9 +323,11 @@ class TtSPPF:
         y = [cv1]
         for i in range(3):
             output = ttnn.max_pool2d(
-                input_tensor=ttnn.to_layout(ttnn.sharded_to_interleaved(y[-1]), layout=ttnn.ROW_MAJOR_LAYOUT)
-                if y[-1].is_sharded()
-                else y[-1],
+                input_tensor=(
+                    ttnn.to_layout(ttnn.sharded_to_interleaved(y[-1]), layout=ttnn.ROW_MAJOR_LAYOUT)
+                    if y[-1].is_sharded()
+                    else y[-1]
+                ),
                 batch_size=self.batch_size,
                 input_h=out_h,
                 input_w=out_w,
@@ -421,7 +429,7 @@ class TtMaxSigmoidAttnBlock:
         ttnn.deallocate(guide)
         aw = ttnn.reshape(aw, (batch, m, height, width, n))
 
-        aw = ttnn.max(aw, dim=-1)
+        aw = ttnn.max(aw, dim=-1, keepdim=True)
         aw = ttnn.permute(aw, (0, 1, 2, 4, 3))  # To increase the perfomance of squeeze operation
         aw = ttnn.squeeze(aw, -2)  # If the above permute is removed use ttnn.squeeze(aw, -1)
         aw = ttnn.div(aw, (self.hc**0.5))
@@ -484,6 +492,7 @@ class TtC2fAttn:
             input_params=input_params[1],
             change_shard=True,
             deallocate_activation=self.deallocate_activation,
+            conv_math_fidelity=ttnn.MathFidelity.HiFi2,
         )
         self.m = [
             TtBottleneck(
@@ -559,11 +568,10 @@ class TtImagePoolingAttn:
                 input_params=input_params[i],
                 is_act_false=True,
                 conv_alone=True,
-                reshape_tensor=True,
             )
             for i, in_channels in enumerate(ch)
         ]
-        self.im_pools = nn.ModuleList([nn.AdaptiveMaxPool2d((k, k)) for _ in range(nf)])
+        self.im_pools = [ttnn.max_pool2d for i in range(nf)]
         self.ec = ec
         self.nh = nh
         self.nf = nf
@@ -576,21 +584,56 @@ class TtImagePoolingAttn:
         assert len(x) == self.nf
         num_patches = self.k**2
 
-        x = [ttnn.permute(proj(x)[0], (0, 3, 1, 2)) for (x, proj) in zip(x, self.projections)]
+        x = [proj(x)[0] for (x, proj) in zip(x, self.projections)]
         x = [
-            ttnn.reshape(
-                ttnn.from_torch(
-                    pool(ttnn.to_torch(x)),
-                    device=self.device,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+            ttnn.to_layout(
+                ttnn.reshape(
+                    pool(
+                        input_tensor=ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT),
+                        batch_size=1,
+                        input_h=int(math.sqrt(x.shape[2])),
+                        input_w=int(math.sqrt(x.shape[2])),
+                        channels=x.shape[-1],
+                        kernel_size=[
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[0],
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[0],
+                        ],
+                        stride=[
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[1],
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[1],
+                        ],
+                        padding=[0, 0],
+                        dilation=[1, 1],
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                        applied_shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ),
+                    (bs, num_patches, -1),
                 ),
-                (bs, -1, num_patches),
+                layout=ttnn.TILE_LAYOUT,
             )
             for (x, pool) in zip(x, self.im_pools)
         ]
-        x = ttnn.concat(x, dim=-1)
-        x = ttnn.permute(x, (0, 2, 1))
+        x = ttnn.concat(x, dim=1)
         q = ttnn.clone(text)
         for index, module in enumerate(self.query):
             if module == ttnn.linear:
@@ -821,10 +864,8 @@ class TtWorldDetect:
         self.strides = None
         self.self_shape = None
         self.cv4 = [
-            BNContrastiveHead(embed)
-            if with_bn
-            else TtContrastiveHead(
-                self.device, self.parameters["cv4"][i]
+            (
+                BNContrastiveHead(embed) if with_bn else TtContrastiveHead(self.device, self.parameters["cv4"][i])
             )  # BNContrastiveHead(embed) is not invoked So, Not defined.
             for i, _ in enumerate(ch)
         ]

@@ -18,8 +18,8 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -29,8 +29,8 @@
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "rtoptions.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
@@ -245,19 +245,19 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     // Create kernels on device
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
-        llrt::RunTimeOptions::get_instance().get_root_dir() +
+        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_brisc.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
         program,
-        llrt::RunTimeOptions::get_instance().get_root_dir() +
+        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_ncrisc.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     KernelHandle trisc_print_kernel_id = CreateKernel(
         program,
-        llrt::RunTimeOptions::get_instance().get_root_dir() +
+        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_trisc.cpp",
         core,
         ComputeConfig{});

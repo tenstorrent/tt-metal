@@ -22,7 +22,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -30,10 +30,9 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/semaphore.hpp>
-#include "span.hpp"
-#include <tt-metalium/system_memory_manager.hpp>
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
@@ -385,7 +384,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         }
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(true);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
 
     bool pass = true;
     try {
@@ -470,7 +469,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

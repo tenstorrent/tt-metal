@@ -10,10 +10,11 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "tt-metalium/buffer_constants.hpp"
+#include "tt-metalium/buffer_types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/compute_throttle_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -103,13 +104,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_block_tiles = out_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
     if (B * num_blocks > 1) {
-        in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
+        in0_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
-        in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
+        in1_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
@@ -293,13 +294,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in3_is_dram = true;
     if (bias_buffer != nullptr) {
-        in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+        in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     }
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -523,7 +524,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
 
-    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), cores.size(), mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), cores.size(), mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), cores.size(), mm_kernel_defines);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
@@ -1248,8 +1251,14 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
-            TT_ASSERT(output_tensors.size() == 1);
+            TT_FATAL(
+                input_tensors.size() + optional_input_tensors.size() == 3,
+                "Total number of input tensors (required + optional) must be 3, but got {} + {} = {}",
+                input_tensors.size(),
+                optional_input_tensors.size(),
+                input_tensors.size() + optional_input_tensors.size());
+            TT_FATAL(
+                output_tensors.size() == 1, "Number of output tensors must be 1, but got {}", output_tensors.size());
 
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();

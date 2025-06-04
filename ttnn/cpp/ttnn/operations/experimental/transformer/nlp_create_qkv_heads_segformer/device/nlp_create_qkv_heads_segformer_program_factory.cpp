@@ -72,8 +72,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     tt_metal::Program program = tt_metal::CreateProgram();
 
     bool tile_dtype_is_bfloat16 = a.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in1_is_dram = false;
 
     std::vector<uint32_t> reader_compile_time_args = {

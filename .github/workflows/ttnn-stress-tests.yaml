@@ -1,0 +1,47 @@
+name: "ttnn stress tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - P100
+          - P150
+          - config-tg
+          - config-t3000
+          - topology-6u
+      timeout:
+        required: false
+        type: number
+        default: 120
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
+  test:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
+    with:
+      arch: ${{ inputs.arch || 'wormhole_b0' }}
+      runner-label: ${{ inputs.runner-label || 'N150' }}
+      timeout: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

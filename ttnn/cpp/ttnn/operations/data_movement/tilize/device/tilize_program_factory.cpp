@@ -344,7 +344,6 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
 
     // RUNTIME ARGS
     const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
-    uint32_t number_blocks_per_core;
     uint32_t start_row_id = 0;
     uint32_t start_column_id = 0;
     uint32_t tile_start_id = 0;
@@ -374,7 +373,6 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size_cliff_col;
         }
-        number_blocks_per_core = single_block_size_row_arg * single_block_size_col_arg;
         uint32_t size_per_row_per_block = nblocks_per_core * TILE_WIDTH * a.element_size();
 
         //  reader runtime args
@@ -672,7 +670,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(

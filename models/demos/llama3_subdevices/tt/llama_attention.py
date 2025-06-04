@@ -269,24 +269,11 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         ttnn.deallocate(x)
-        # print("done matmul")
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
-
-        xqkv_reduced = self.tt_ccl.line_all_reduce(
-            xqkv_fused_sharded,
-            cluster_axis=1,
-            num_links=3,
-            memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
-            dtype=ttnn.bfloat16,
-        )
-
-        ttnn.deallocate(xqkv_fused_sharded)
-
-        # print("done all reduce")
 
         ###
         # Reshape and rotary embeddings
@@ -295,19 +282,16 @@ class TtLlamaAttention(LightweightModule):
             q_heads_pre_rot_1BQD,
             k_heads_pre_rot_1BKD,
             v_heads_1BKD,
-        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
-            xqkv_reduced,
-            num_heads=self.n_local_heads,
-            num_kv_heads=self.n_local_kv_heads,
-            memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
-            overlap_qk_coregrid=False,
-            batch_offset=self.batch_offset_tt_tensor,
-            slice_size=self.slice_size,
+        ) = self.tt_ccl.llama_rs_create_heads(
+            xqkv_fused_sharded,
+            cluster_axis=1,
+            num_links=3,
+            dim=3,
+            qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
         )
 
         # print("done create qkv heads")
-
-        ttnn.deallocate(xqkv_reduced)
+        ttnn.deallocate(xqkv_fused_sharded)
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
@@ -377,32 +361,28 @@ class TtLlamaAttention(LightweightModule):
         # attn_output_1G4D_sharded.deallocate(True)
 
         # Note: Persistent output buffer used, do not deallocate output!
-        attn_output_gathered_sharded = self.tt_ccl.line_all_gather(
-            attn_output_1G4D_sharded,
-            dim=1,
-            cluster_axis=1,
-            num_links=3,
-            memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
-            buffer_key="SDPA",
-        )
+
         # ttnn.deallocate(attn_output_1G4D)
 
         # attn_output_gathered_sharded = ttnn.to_memory_config(
         #     attn_output_gathered, self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1])
         # )
         # ttnn.deallocate(attn_output_gathered)
-
-        attn_output_cat_0 = ttnn.experimental.nlp_concat_heads_decode(
-            attn_output_gathered_sharded,
+        attn_output_1G4D_sharded_rm = ttnn.untilize(
+            attn_output_1G4D_sharded,
+        )
+        ttnn.deallocate(attn_output_1G4D_sharded)
+        attn_output_cat = self.tt_ccl.all_gather_concat(
+            attn_output_1G4D_sharded_rm,
+            dim=1,
+            cluster_axis=1,
+            num_links=3,
+            memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
             num_heads=self.n_local_heads,
         )
         # print("done concat heads")
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
-        attn_output_cat = ttnn.to_memory_config(
-            attn_output_cat_0, self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"]
-        )
-        attn_output_cat_0.deallocate(True)
         dense_out_ttnn = ttnn.matmul(
             attn_output_cat,
             self.wo,
@@ -414,7 +394,6 @@ class TtLlamaAttention(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         # [1, 1, 32, 2304]
-        ttnn.deallocate(attn_output_cat)
         # print("done matmul")
 
         dense_out_reduced = self.tt_ccl.line_all_reduce(
@@ -536,7 +515,7 @@ class TtLlamaAttention(LightweightModule):
         else:
             v_fill = v_heads_1VSD_8b
 
-        if self.TG:
+        if self.TG and not page_table:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
         if page_table:
@@ -549,8 +528,17 @@ class TtLlamaAttention(LightweightModule):
             page_len = fill_page_table.shape[1] * block_size
             k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
             v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
+            if isinstance(user_id, int):
+                user_id = ttnn.from_torch(
+                    torch.tensor([user_id], dtype=torch.int32),
+                    device=self.mesh_device,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx_tensor=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx_tensor=user_id)
+
         else:
             ttnn.fill_cache(
                 keys_BKSD,

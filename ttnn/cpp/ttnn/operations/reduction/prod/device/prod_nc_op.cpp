@@ -68,7 +68,10 @@ ttnn::Shape compute_output_shape(const ttnn::Shape& input_shape, const int64_t& 
 
 inline Tensor create_output_tensor(
     const Tensor& input_tensor, const ttnn::Shape& output_shape, const MemoryConfig& mem_config) {
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
+    TT_FATAL(
+        input_tensor.storage_type() == StorageType::DEVICE,
+        "Input tensor must be stored on device. Storage type: {}",
+        input_tensor.storage_type());
     return create_device_tensor(
         output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
 }
@@ -94,10 +97,7 @@ Tensor prod_nc(
     const Tensor& output,
     ttnn::SmallVector<int64_t>& dims,
     const MemoryConfig& output_mem_config) {
-    // reduce for all dims
-    if (dims.empty()) {
-        dims = {0, 1, 2, 3};
-    }
+    TT_FATAL(!dims.empty(), "prod_nc dims should not be empty");
 
     ttnn::SmallVector<int64_t> sorted_dims = dims;
     std::sort(sorted_dims.begin(), sorted_dims.end());

@@ -1,5 +1,8 @@
 name: "Build tt-metal artifacts"
 
+permissions:
+  packages: write
+
 on:
   workflow_call:
     inputs:
@@ -67,6 +70,9 @@ on:
       dev-docker-image:
         description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
         value: ${{ jobs.build-docker-image.outputs.dev-tag }}
+      basic-dev-docker-image:
+        description: "Docker tag for the basic dev Docker image for basic development"
+        value: ${{ jobs.build-docker-image.outputs.basic-dev-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
@@ -142,7 +148,7 @@ jobs:
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
       wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
     container:
-      image: ${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
+      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!' }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -226,7 +232,7 @@ jobs:
             build_command="$build_command --build-umd-tests"
           fi
 
-          nice -n 19 $build_command
+          $build_command
 
       - name: 🛠️ Compile
         run: |
@@ -237,18 +243,18 @@ jobs:
         if: ${{ inputs.profile }}
         run: |
           echo "maxNameLength = 300" > ClangBuildAnalyzer.ini
-          nice -n 19 ClangBuildAnalyzer --all build capture.bin
-          nice -n 19 ClangBuildAnalyzer --analyze capture.bin
+          ClangBuildAnalyzer --all build capture.bin
+          ClangBuildAnalyzer --analyze capture.bin
 
       - name: 📦 Package
         run: |
-          nice -n 19 cmake --build build --target package
+          cmake --build build --target package
           ls -1sh build/*.deb build/*.ddeb || true
 
       - name: 🐍 Build wheel
         if: ${{ inputs.build-wheel }}
         run: |
-          nice -n 19 python3 -m build
+          python3 -m build --wheel
 
       - name: Publish ccache summary
         run: |

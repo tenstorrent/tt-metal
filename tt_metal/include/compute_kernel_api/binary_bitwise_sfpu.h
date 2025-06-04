@@ -29,20 +29,38 @@ namespace ckernel {
  *
  * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
  * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
- // clang-format on
-ALWI void and_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::AND>(idst0, idst1)));
+// clang-format on
+ALWI void bitwise_and_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::AND, InstrModLoadStore::INT32>(
+        idst0, idst1)));
 }
 
-ALWI void or_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::OR>(idst0, idst1)));
+ALWI void bitwise_and_uint16_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::AND, InstrModLoadStore::LO16>(
+        idst0, idst1)));
 }
 
-ALWI void xor_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::XOR>(idst0, idst1)));
+ALWI void bitwise_or_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::OR, InstrModLoadStore::INT32>(
+        idst0, idst1)));
+}
+
+ALWI void bitwise_or_uint16_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::OR, InstrModLoadStore::LO16>(
+        idst0, idst1)));
+}
+
+ALWI void bitwise_xor_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::XOR, InstrModLoadStore::INT32>(
+        idst0, idst1)));
+}
+
+ALWI void bitwise_xor_uint16_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::XOR, InstrModLoadStore::LO16>(
+        idst0, idst1)));
 }
 
 /**

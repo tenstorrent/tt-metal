@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import pytest
@@ -6,6 +6,7 @@ from loguru import logger
 import os
 import math
 import ttnn
+import json
 import pandas as pd
 from collections import defaultdict
 from models.demos.llama3_subdevices.tt.llama_common import (
@@ -20,188 +21,8 @@ from tt_metal.tools.profiler.process_model_log import (
 from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
-DECODE_OP_START_INDEX = 4
-DECODE_OP_END_INDEX = -11
-
-perf_targets = {
-    "RMSAllGather_0": {
-        "op_name": "PreRMS_0",
-        "kernel_duration": 10670.763888888889,
-        "op_to_op": 657.6666666666666,
-        "non-overlapped-dispatch-time": 7260,
-    },
-    "RMSAllGather_1": {
-        "op_name": "PostRMS_0",
-        "kernel_duration": 6131.541666666667,
-        "op_to_op": 634.3333333333334,
-        "non-overlapped-dispatch-time": 6190.6,
-    },
-    "RMSAllGather_2": {
-        "op_name": "PreRMS_1",
-        "kernel_duration": 10528.003472222223,
-        "op_to_op": 661.4444444444445,
-        "non-overlapped-dispatch-time": 7326,
-    },
-    "RMSAllGather_3": {
-        "op_name": "PostRMS_1",
-        "kernel_duration": 6083.21875,
-        "op_to_op": 641.0,
-        "non-overlapped-dispatch-time": 6431.2,
-    },
-    "AllGatherAsync_0": {
-        "op_name": "AllGatherAsync_SDPA_0",
-        "kernel_duration": 11155.885416666666,
-        "op_to_op": 676.4444444444445,
-        "non-overlapped-dispatch-time": 2273.2,
-    },
-    "AllGatherAsync_1": {
-        "op_name": "AllGatherAsync_Binary_Mult",
-        "kernel_duration": 9363.694444444445,
-        "op_to_op": 1698.7777777777778,
-        "non-overlapped-dispatch-time": 4351.1,
-    },
-    "ShardedToInterleavedDeviceOperation_0": {
-        "op_name": "ShardedToInterleavedDeviceOperation_LN_0",
-        "kernel_duration": 4017.222222222222,
-        "op_to_op": 2211.6666666666665,
-        "non-overlapped-dispatch-time": 1919.0,
-    },
-    "ShardedToInterleavedDeviceOperation_1": {
-        "op_name": "ShardedToInterleavedDeviceOperation_LN_1",
-        "kernel_duration": 3417.4444444444443,
-        "op_to_op": 2212.222222222222,
-        "non-overlapped-dispatch-time": 1910.2,
-    },
-    "InterleavedToShardedDeviceOperation_0": {
-        "op_name": "InterleavedToShardedDeviceOperation_LN_0",
-        "kernel_duration": 2935.4444444444443,
-        "op_to_op": 631.8888888888889,
-        "non-overlapped-dispatch-time": 10347.3,
-    },
-    "InterleavedToShardedDeviceOperation_1": {
-        "op_name": "InterleavedToShardedDeviceOperation_LN_1",
-        "kernel_duration": 2048.222222222222,
-        "op_to_op": 637.7777777777778,
-        "non-overlapped-dispatch-time": 10736.0,
-    },
-    "ReshardDeviceOperation_0": {
-        "op_name": "ReshardDeviceOperation_LN_0",
-        "kernel_duration": 2272.6666666666665,
-        "op_to_op": 655.2222222222222,
-        "non-overlapped-dispatch-time": 10074.9,
-    },
-    "Matmul_0": {
-        "op_name": "QKV_MM",
-        "kernel_duration": 10530.555555555555,
-        "op_to_op": 610.7777777777778,
-        "non-overlapped-dispatch-time": 6102.0,
-    },
-    "Matmul_1": {
-        "op_name": "DO_MM",
-        "kernel_duration": 8689.888888888889,
-        "op_to_op": 653.3333333333334,
-        "non-overlapped-dispatch-time": 5641.0,
-    },
-    "Matmul_2": {
-        "op_name": "FF1_MM",
-        "kernel_duration": 10620.333333333334,
-        "op_to_op": 630.4444444444445,
-        "non-overlapped-dispatch-time": 6109.0,
-    },
-    "Matmul_3": {
-        "op_name": "FF3_MM",
-        "kernel_duration": 10802.0,
-        "op_to_op": 737.5555555555555,
-        "non-overlapped-dispatch-time": 6144.8,
-    },
-    "Matmul_4": {
-        "op_name": "FF2_MM",
-        "kernel_duration": 16997.444444444445,
-        "op_to_op": 658.7777777777778,
-        "non-overlapped-dispatch-time": 6029.3,
-    },
-    "AllReduceAsync_0": {
-        "op_name": "AllReduceAsync_QKV",
-        "kernel_duration": 11032.798611111111,
-        "op_to_op": 609.0,
-        "non-overlapped-dispatch-time": 7349.4,
-    },
-    "AllReduceAsync_1": {
-        "op_name": "AllReduceAsync_DO",
-        "kernel_duration": 19969.913194444445,
-        "op_to_op": 626.5555555555555,
-        "non-overlapped-dispatch-time": 8510.2,
-    },
-    "AllReduceAsync_2": {
-        "op_name": "AllReduceAsync_FF2",
-        "kernel_duration": 20541.538194444445,
-        "op_to_op": 637.1111111111111,
-        "non-overlapped-dispatch-time": 6475.9,
-    },
-    "LlamaReduceScatterDeviceOperation_0": {
-        "op_name": "ReduceScatter_FF1",
-        "kernel_duration": 10375.6875,
-        "op_to_op": 708.1111111111111,
-        "non-overlapped-dispatch-time": 8058.9,
-    },
-    "LlamaReduceScatterDeviceOperation_1": {
-        "op_name": "ReduceScatter_FF3",
-        "kernel_duration": 10473.902777777777,
-        "op_to_op": 736.1111111111111,
-        "non-overlapped-dispatch-time": 7359.9,
-    },
-    "NLPCreateHeadsDecodeDeviceOperation_0": {
-        "op_name": "CreateHeads",
-        "kernel_duration": 8238.0,
-        "op_to_op": 761.1111111111111,
-        "non-overlapped-dispatch-time": 8156.7,
-    },
-    "RotaryEmbeddingLlamaFusedQK_0": {
-        "op_name": "RotaryEmbeddingLlamaFusedQK",
-        "kernel_duration": 5026.777777777777,
-        "op_to_op": 540.7777777777778,
-        "non-overlapped-dispatch-time": 2844.3,
-    },
-    "PagedUpdateCacheDeviceOperation_0": {
-        "op_name": "PagedUpdateCache",
-        "kernel_duration": 6057.777777777777,
-        "op_to_op": 773.8888888888889,
-        "non-overlapped-dispatch-time": 4670.5,
-    },
-    "ScaledDotProductAttentionDecode_0": {
-        "op_name": "SDPA",
-        "kernel_duration": 13967.111111111111,
-        "op_to_op": 585.5555555555555,
-        "non-overlapped-dispatch-time": 9741.5,
-    },
-    "NLPConcatHeadsDecodeDeviceOperation_0": {
-        "op_name": "ConcatHeads",
-        "kernel_duration": 6599.888888888889,
-        "op_to_op": 620.5555555555555,
-        "non-overlapped-dispatch-time": 3463.5,
-    },
-    "BinaryDeviceOperation_0": {
-        "op_name": "Binary_Residual_0",
-        "kernel_duration": 2404.3333333333335,
-        "op_to_op": 653.6666666666666,
-        "non-overlapped-dispatch-time": 5907.6,
-    },
-    "BinaryDeviceOperation_1": {
-        "op_name": "Binary_Mult_Silu",
-        "kernel_duration": 4111.666666666667,
-        "op_to_op": 661.0,
-        "non-overlapped-dispatch-time": 6111.2,
-    },
-    "BinaryDeviceOperation_2": {
-        "op_name": "Binary_Residual_1",
-        "kernel_duration": 2414.777777777778,
-        "op_to_op": 647.7777777777778,
-        "non-overlapped-dispatch-time": 6751.9,
-    },
-}
-
-DECODER_OP_START_IDX = 4
-DECODER_OP_END_IDX = -11
+DECODER_OP_START_INDEX = 4
+DECODER_OP_END_INDEX = -13
 
 
 @pytest.mark.parametrize(
@@ -213,11 +34,11 @@ DECODER_OP_END_IDX = -11
             "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             1,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
@@ -242,7 +63,14 @@ DECODER_OP_END_IDX = -11
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872, "worker_l1_size": 1344544}],
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 23887872,
+            "worker_l1_size": 1344544,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
     indirect=True,
 )
 def test_llama_demo(
@@ -271,8 +99,6 @@ def test_llama_demo(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
-    mesh_device.enable_async(True)
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
@@ -377,6 +203,8 @@ def merge_device_rows(df):
 def build_duration_dict(raw_dict, column_name):
     op_code_dict = {}
     for entry in raw_dict:
+        if column_name not in entry:
+            print(f"Warning: {entry} does not have column {column_name}")
         op_code = entry["OP CODE"]
         duration = entry[column_name]
         if op_code not in op_code_dict:
@@ -390,7 +218,10 @@ def build_duration_per_instance_dict(input_dict, num_layers):
     for op_code in input_dict:
         num_ops_with_op_code = len(input_dict[op_code])
         num_instances = num_ops_with_op_code // num_layers
-        assert num_ops_with_op_code % num_layers == 0
+        if num_ops_with_op_code % num_layers != 0:
+            print(f"Warning: {op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers")
+            print_dict(input_dict, "input_dict")
+            assert num_ops_with_op_code % num_layers == 0
         for iteration_id in range(num_layers):
             for instance_id in range(num_instances):
                 op_code_with_id = f"{op_code}_{instance_id}"
@@ -409,30 +240,54 @@ def average_per_instance_dict(input_dict):
     return averaged_dict
 
 
-@pytest.mark.parametrize(
-    "abs_tolerance_ns",
-    (2200,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_all_reduce",
-    (3000,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_reduce_scatter",
-    (2000,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_all_gather",
-    (1700,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_sdpa",
-    (3000,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_op_to_op",
-    (800,),
-)
+def min_per_instance_dict(input_dict):
+    min_dict = {}
+    for op_code_with_id in input_dict:
+        min_dict[op_code_with_id] = min(input_dict[op_code_with_id])
+    return min_dict
+
+
+def max_per_instance_dict(input_dict):
+    max_dict = {}
+    for op_code_with_id in input_dict:
+        max_dict[op_code_with_id] = max(input_dict[op_code_with_id])
+    return max_dict
+
+
+def print_dict(input_dict, dict_name):
+    # print dict as a readable python dict
+    print(f"\n{dict_name} = {{")
+    for op_code_with_id in input_dict:
+        print(f'"{op_code_with_id}": {input_dict[op_code_with_id]},')
+    print("}")
+
+
+def is_collective_op(op_code):
+    return "AllGather" in op_code or "ReduceScatter" in op_code or "AllReduce" in op_code
+
+
+def load_perf_targets(galaxy_type):
+    if galaxy_type == "4U":
+        perf_target_json_filename = "models/demos/llama3_subdevices/tests/decoder_perf_targets_4u.json"
+    elif galaxy_type == "6U":
+        perf_target_json_filename = "models/demos/llama3_subdevices/tests/decoder_perf_targets_6u.json"
+    else:
+        raise Exception(f"Unsupported galaxy type: {galaxy_type}. It must be either '4U' or '6U'.")
+
+    try:
+        with open(perf_target_json_filename, "r", encoding="utf-8") as f:
+            perf_targets = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Performance target file '{perf_target_json_filename}' does not exist.")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON format in '{perf_target_json_filename}': {e}")
+
+    if not isinstance(perf_targets, dict):
+        raise ValueError(f"Expected top-level JSON object to be a dictionary in '{perf_target_json_filename}'.")
+
+    return perf_targets
+
+
 @pytest.mark.models_device_performance_bare_metal
 # To update:
 # Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
@@ -444,13 +299,9 @@ def average_per_instance_dict(input_dict):
 # Run at least once again to verify the new expected values are correct and margins hold
 def test_llama_TG_perf_device(
     reset_seeds,
-    abs_tolerance_ns,
-    abs_tolerance_ns_all_reduce,
-    abs_tolerance_ns_reduce_scatter,
-    abs_tolerance_ns_all_gather,
-    abs_tolerance_ns_sdpa,
-    abs_tolerance_ns_op_to_op,
+    galaxy_type,
 ):
+    perf_targets = load_perf_targets(galaxy_type)
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = "tg-llama-demo-device-perf-default"
@@ -473,83 +324,317 @@ def test_llama_TG_perf_device(
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
     # Excluding compile run and capture trace entries
-    df_model = df[int(len(df) / 3 * 2) :]
+    df_model_compilation = df[: int(len(df) / 3)]
+    df_model_trace = df[int(len(df) / 3 * 2) :]
 
     # Excluding model embeddings and lmhead+sampling ops
-    df_layers = df_model[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
+    df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
-    df_first_layer = df_layers[: int(len(df_layers) / num_layers)]
-    df_mid_layers = df_layers[int(len(df_layers) / num_layers) :]
-    mid_layers_raw_dict = df_mid_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
-        orient="records"
-    )
-    first_layer_raw_dict = df_first_layer[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
-        orient="records"
-    )
+    assert len(df_layers_compilation) % num_layers == 0
+    df_first_layer_compilation = df_layers_compilation[: int(len(df_layers_compilation) / num_layers)]
+    df_first_layer_trace = df_layers_trace[: int(len(df_layers_trace) / num_layers)]
+
+    df_mid_layers_compilation = df_layers_compilation[int(len(df_layers_compilation) / num_layers) :]
+    df_mid_layers_trace = df_layers_trace[int(len(df_layers_trace) / num_layers) :]
+
+    mid_layers_raw_dict_compilation = df_mid_layers_compilation[
+        [
+            "OP CODE",
+            "DEVICE KERNEL DURATION [ns]",
+            "OP TO OP LATENCY [ns]",
+            "DEVICE KERNEL FIRST TO LAST START [ns]",
+        ]
+    ].to_dict(orient="records")
+    mid_layers_raw_dict_trace = df_mid_layers_trace[
+        [
+            "OP CODE",
+            "DEVICE KERNEL DURATION [ns]",
+            "OP TO OP LATENCY [ns]",
+            "DEVICE KERNEL FIRST TO LAST START [ns]",
+        ]
+    ].to_dict(orient="records")
+    first_layer_raw_dict_compilation = df_first_layer_compilation[
+        [
+            "OP CODE",
+            "DEVICE KERNEL DURATION [ns]",
+            "OP TO OP LATENCY [ns]",
+            "DEVICE KERNEL FIRST TO LAST START [ns]",
+        ]
+    ].to_dict(orient="records")
+    first_layer_raw_dict_trace = df_first_layer_trace[
+        [
+            "OP CODE",
+            "DEVICE KERNEL DURATION [ns]",
+            "OP TO OP LATENCY [ns]",
+            "DEVICE KERNEL FIRST TO LAST START [ns]",
+        ]
+    ].to_dict(orient="records")
 
     # Build dicts of op_code to list of durations
-    kernel_duration_dict = build_duration_dict(mid_layers_raw_dict, "DEVICE KERNEL DURATION [ns]")
-    dispatch_duration_dict = build_duration_dict(mid_layers_raw_dict, "OP TO OP LATENCY [ns]")
+    kernel_duration_dict_compilation = build_duration_dict(
+        mid_layers_raw_dict_compilation, "DEVICE KERNEL DURATION [ns]"
+    )
+    kernel_duration_dict_trace = build_duration_dict(mid_layers_raw_dict_trace, "DEVICE KERNEL DURATION [ns]")
+    dispatch_duration_dict = build_duration_dict(mid_layers_raw_dict_trace, "OP TO OP LATENCY [ns]")
+    first_to_last_start_dict = build_duration_dict(mid_layers_raw_dict_trace, "DEVICE KERNEL FIRST TO LAST START [ns]")
+
+    # first layer
+    kernel_duration_dict_compilation_first_layer = build_duration_dict(
+        first_layer_raw_dict_compilation, "DEVICE KERNEL DURATION [ns]"
+    )
+    kernel_duration_dict_trace_first_layer = build_duration_dict(
+        first_layer_raw_dict_trace, "DEVICE KERNEL DURATION [ns]"
+    )
+    dispatch_duration_dict_first_layer = build_duration_dict(first_layer_raw_dict_trace, "OP TO OP LATENCY [ns]")
+    first_to_last_start_dict_first_layer = build_duration_dict(
+        first_layer_raw_dict_trace, "DEVICE KERNEL FIRST TO LAST START [ns]"
+    )
 
     # Build dicts of op_code_with_id to list of durations - one list per op instance
-    kernel_duration_per_instance_dict = build_duration_per_instance_dict(kernel_duration_dict, num_layers - 1)
+    kernel_duration_per_instance_dict_compilation = build_duration_per_instance_dict(
+        kernel_duration_dict_compilation, num_layers - 1
+    )
+    kernel_duration_per_instance_dict_trace = build_duration_per_instance_dict(
+        kernel_duration_dict_trace, num_layers - 1
+    )
     dispatch_duration_per_instance_dict = build_duration_per_instance_dict(dispatch_duration_dict, num_layers - 1)
+    first_to_last_start_per_instance_dict = build_duration_per_instance_dict(first_to_last_start_dict, num_layers - 1)
+
+    # first layer
+    kernel_duration_per_instance_dict_compilation_first_layer = build_duration_per_instance_dict(
+        kernel_duration_dict_compilation_first_layer, 1
+    )
+    kernel_duration_per_instance_dict_trace_first_layer = build_duration_per_instance_dict(
+        kernel_duration_dict_trace_first_layer, 1
+    )
+    dispatch_duration_per_instance_dict_first_layer = build_duration_per_instance_dict(
+        dispatch_duration_dict_first_layer, 1
+    )
+    first_to_last_start_per_instance_dict_first_layer = build_duration_per_instance_dict(
+        first_to_last_start_dict_first_layer, 1
+    )
 
     # Average over all iterations of each op instance
-    kernel_duration_per_instance_averaged_dict = average_per_instance_dict(kernel_duration_per_instance_dict)
+    kernel_duration_per_instance_averaged_dict_compilation = average_per_instance_dict(
+        kernel_duration_per_instance_dict_compilation
+    )
+    kernel_duration_per_instance_averaged_dict_trace = average_per_instance_dict(
+        kernel_duration_per_instance_dict_trace
+    )
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
+    first_to_last_start_per_instance_averaged_dict = average_per_instance_dict(first_to_last_start_per_instance_dict)
 
-    if len(kernel_duration_per_instance_averaged_dict) != len(perf_targets):
+    # first layer
+    kernel_duration_per_instance_averaged_dict_compilation_first_layer = average_per_instance_dict(
+        kernel_duration_per_instance_dict_compilation_first_layer
+    )
+    kernel_duration_per_instance_averaged_dict_trace_first_layer = average_per_instance_dict(
+        kernel_duration_per_instance_dict_trace_first_layer
+    )
+    dispatch_duration_per_instance_averaged_dict_first_layer = average_per_instance_dict(
+        dispatch_duration_per_instance_dict_first_layer
+    )
+
+    # Min over all iterations of each op instance
+    kernel_duration_per_instance_min_dict_compilation = min_per_instance_dict(
+        kernel_duration_per_instance_dict_compilation
+    )
+    kernel_duration_per_instance_min_dict_trace = min_per_instance_dict(kernel_duration_per_instance_dict_trace)
+    dispatch_duration_per_instance_min_dict = min_per_instance_dict(dispatch_duration_per_instance_dict)
+    first_to_last_start_per_instance_min_dict = min_per_instance_dict(first_to_last_start_per_instance_dict)
+
+    # Max over all iterations of each op instance
+    kernel_duration_per_instance_max_dict_compilation = max_per_instance_dict(
+        kernel_duration_per_instance_dict_compilation
+    )
+    kernel_duration_per_instance_max_dict_trace = max_per_instance_dict(kernel_duration_per_instance_dict_trace)
+    dispatch_duration_per_instance_max_dict = max_per_instance_dict(dispatch_duration_per_instance_dict)
+    first_to_last_start_per_instance_max_dict = max_per_instance_dict(first_to_last_start_per_instance_dict)
+
+    if len(kernel_duration_per_instance_averaged_dict_compilation) != len(perf_targets):
         print(f"perf_targets: {perf_targets}")
 
-    print(f"kernel_duration_per_instance_averaged_dict: {kernel_duration_per_instance_averaged_dict}")
-    print(f"dispatch_duration_per_instance_averaged_dict: {dispatch_duration_per_instance_averaged_dict}")
+    print_dict(
+        kernel_duration_per_instance_averaged_dict_compilation, "kernel_duration_per_instance_averaged_dict_compilation"
+    )
+    print_dict(kernel_duration_per_instance_averaged_dict_trace, "kernel_duration_per_instance_averaged_dict_trace")
+    print_dict(dispatch_duration_per_instance_averaged_dict, "dispatch_duration_per_instance_averaged_dict")
+    print_dict(first_to_last_start_per_instance_averaged_dict, "first_to_last_start_per_instance_averaged_dict")
 
-    assert len(kernel_duration_per_instance_averaged_dict) == len(
+    assert len(kernel_duration_per_instance_averaged_dict_compilation) == len(
         perf_targets
-    ), f"Expected {len(perf_targets)} operations, got {len(kernel_duration_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
+    ), f"Expected {len(perf_targets)} operations, got {len(kernel_duration_per_instance_averaged_dict_compilation)}. If the number or type of operations changed, expected times must be updated."
 
     passing = True
-    for op_code_with_id, avg_kernel_duration in kernel_duration_per_instance_averaged_dict.items():
+    for op_code_with_id in kernel_duration_per_instance_averaged_dict_compilation.keys():
         if op_code_with_id in perf_targets:
-            expected_time = perf_targets[op_code_with_id]["kernel_duration"]
             op_name = perf_targets[op_code_with_id]["op_name"]
+
+            # Dependent on the op_name we need to look at compile time or trace time for kernel duration
+            if "AllGather" in op_code_with_id or "ReduceScatter" in op_code_with_id or "AllReduce" in op_code_with_id:
+                avg_kernel_duration = kernel_duration_per_instance_averaged_dict_trace[op_code_with_id]
+                min_kernel_duration = kernel_duration_per_instance_min_dict_trace[op_code_with_id]
+                max_kernel_duration = kernel_duration_per_instance_max_dict_trace[op_code_with_id]
+            else:
+                avg_kernel_duration = kernel_duration_per_instance_averaged_dict_compilation[op_code_with_id]
+                min_kernel_duration = kernel_duration_per_instance_min_dict_compilation[op_code_with_id]
+                max_kernel_duration = kernel_duration_per_instance_max_dict_compilation[op_code_with_id]
+
             avg_dispatch_duration = dispatch_duration_per_instance_averaged_dict[op_code_with_id]
-            benchmark_data.add_measurement(profiler, 0, step_name, op_name, avg_kernel_duration)
-            benchmark_data.add_measurement(profiler, 0, step_name, op_name + "_op_to_op", avg_dispatch_duration)
+            # average
+            benchmark_data.add_measurement(profiler, 0, step_name, op_name + "-model-kernel-avg", avg_kernel_duration)
+            benchmark_data.add_measurement(
+                profiler, 0, step_name, op_name + "-model-op_to_op-avg", avg_dispatch_duration
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-first_to_last-avg",
+                first_to_last_start_per_instance_averaged_dict[op_code_with_id],
+            )
+
+            # min
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-kernel-min",
+                min_kernel_duration,
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-op_to_op-min",
+                dispatch_duration_per_instance_min_dict[op_code_with_id],
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-first_to_last-min",
+                first_to_last_start_per_instance_min_dict[op_code_with_id],
+            )
+
+            # max
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-kernel-max",
+                max_kernel_duration,
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-op_to_op-max",
+                dispatch_duration_per_instance_max_dict[op_code_with_id],
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-first_to_last-max",
+                first_to_last_start_per_instance_max_dict[op_code_with_id],
+            )
 
             # Verify kernel duration is within tolerance
-            if "AllReduceAsync" in op_code_with_id:
-                tolerance = abs_tolerance_ns_all_reduce
-            elif "LlamaReduceScatterDeviceOperation" in op_code_with_id:
-                tolerance = abs_tolerance_ns_reduce_scatter
-            elif "AllGatherAsync" in op_code_with_id:
-                tolerance = abs_tolerance_ns_all_gather
-            elif "ScaledDotProductAttentionDecode" in op_code_with_id:
-                tolerance = abs_tolerance_ns_sdpa
-            else:
-                tolerance = abs_tolerance_ns
-            if avg_kernel_duration > expected_time + tolerance:
+            upper_limit = (
+                perf_targets[op_code_with_id]["kernel_duration"]
+                + perf_targets[op_code_with_id]["kernel_duration_relative_margin"]
+                * perf_targets[op_code_with_id]["kernel_duration"]
+            )
+            lower_limit = (
+                perf_targets[op_code_with_id]["kernel_duration"]
+                - perf_targets[op_code_with_id]["kernel_duration_relative_margin"]
+                * perf_targets[op_code_with_id]["kernel_duration"]
+            )
+            if avg_kernel_duration > upper_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id} kernel: {avg_kernel_duration} ns larger than expected {expected_time} ns by {abs(avg_kernel_duration - expected_time)} ns (tolerance {tolerance} ns)"
+                    f"{op_code_with_id} kernel: {avg_kernel_duration} ns is larger than target "
+                    f"({perf_targets[op_code_with_id]['kernel_duration']}) ns, difference: "
+                    f"{abs(avg_kernel_duration - upper_limit)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']}, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['kernel_duration'] - avg_kernel_duration) / perf_targets[op_code_with_id]['kernel_duration']}"
                 )
-            elif avg_kernel_duration < expected_time - tolerance:
+            elif avg_kernel_duration < lower_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id} kernel: {avg_kernel_duration} ns smaller than expected {expected_time} ns by {abs(expected_time - avg_kernel_duration)} ns (tolerance {tolerance} ns)"
+                    f"{op_code_with_id} kernel: {avg_kernel_duration} ns is smaller than target "
+                    f"({perf_targets[op_code_with_id]['kernel_duration']}) ns, difference: "
+                    f"{abs(lower_limit - avg_kernel_duration)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']}, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['kernel_duration'] - avg_kernel_duration) / perf_targets[op_code_with_id]['kernel_duration']}"
                 )
             # Verify op_to_op latency is within tolerance
-            expected_time = perf_targets[op_code_with_id]["op_to_op"]
-            if avg_dispatch_duration > expected_time + abs_tolerance_ns_op_to_op:
+            upper_limit = (
+                perf_targets[op_code_with_id]["op_to_op"]
+                + perf_targets[op_code_with_id]["op_to_op_duration_relative_margin"]
+                * perf_targets[op_code_with_id]["op_to_op"]
+            )
+            lower_limit = (
+                perf_targets[op_code_with_id]["op_to_op"]
+                - perf_targets[op_code_with_id]["op_to_op_duration_relative_margin"]
+                * perf_targets[op_code_with_id]["op_to_op"]
+            )
+            if avg_dispatch_duration > upper_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id} dispatch: {avg_dispatch_duration} ns larger than expected {expected_time} ns by {abs(avg_dispatch_duration - expected_time)} ns (tolerance {abs_tolerance_ns_op_to_op} ns)"
+                    f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is larger than target "
+                    f"({perf_targets[op_code_with_id]['op_to_op']}) ns, difference: "
+                    f"{abs(avg_dispatch_duration - upper_limit)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']}, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['op_to_op'] - avg_dispatch_duration) / perf_targets[op_code_with_id]['op_to_op']}"
                 )
-            elif avg_dispatch_duration < expected_time - abs_tolerance_ns_op_to_op:
+            elif avg_dispatch_duration < lower_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id} dispatch: {avg_dispatch_duration} ns smaller than expected {expected_time} ns by {abs(expected_time - avg_dispatch_duration)} ns (tolerance {abs_tolerance_ns_op_to_op} ns)"
+                    f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is smaller than target "
+                    f"({perf_targets[op_code_with_id]['op_to_op']}) ns, difference: "
+                    f"{abs(lower_limit - avg_dispatch_duration)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']}, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['op_to_op'] - avg_dispatch_duration) / perf_targets[op_code_with_id]['op_to_op']}"
+                )
+
+            # Verify first_to_last_start is within tolerance
+            avg_first_to_last = first_to_last_start_per_instance_averaged_dict[op_code_with_id]
+            upper_limit = (
+                perf_targets[op_code_with_id]["first_to_last_start"]
+                + perf_targets[op_code_with_id]["first_to_last_start_relative_margin"]
+                * perf_targets[op_code_with_id]["first_to_last_start"]
+            )
+            lower_limit = (
+                perf_targets[op_code_with_id]["first_to_last_start"]
+                - perf_targets[op_code_with_id]["first_to_last_start_relative_margin"]
+                * perf_targets[op_code_with_id]["first_to_last_start"]
+            )
+            if avg_first_to_last > upper_limit:
+                passing = False
+                logger.info(
+                    f"{op_code_with_id} first_to_last_start: {avg_first_to_last} ns is larger than target "
+                    f"({perf_targets[op_code_with_id]['first_to_last_start']}) ns, difference: "
+                    f"{abs(avg_first_to_last - upper_limit)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['first_to_last_start_relative_margin']}, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['first_to_last_start'] - avg_first_to_last) / perf_targets[op_code_with_id]['first_to_last_start']}"
+                )
+            elif avg_first_to_last < lower_limit:
+                passing = False
+                logger.info(
+                    f"{op_code_with_id} first_to_last_start: {avg_first_to_last} ns is smaller than target "
+                    f"({perf_targets[op_code_with_id]['first_to_last_start']}) ns, difference: "
+                    f"{abs(lower_limit - avg_first_to_last)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['first_to_last_start_relative_margin']}, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['first_to_last_start'] - avg_first_to_last) / perf_targets[op_code_with_id]['first_to_last_start']}"
                 )
 
         else:
@@ -558,51 +643,47 @@ def test_llama_TG_perf_device(
 
     # Calculate e2e performance
     e2e_estimate_80l = 0
-    for entry in first_layer_raw_dict:
-        kernel_duration = entry["DEVICE KERNEL DURATION [ns]"]
-        dispatch_duration = entry["OP TO OP LATENCY [ns]"]
-        e2e_estimate_80l += kernel_duration + dispatch_duration
-    for op_code_with_id, avg_kernel_duration in kernel_duration_per_instance_averaged_dict.items():
-        avg_dispatch_duration = dispatch_duration_per_instance_averaged_dict[op_code_with_id]
+    for op_id in kernel_duration_per_instance_dict_trace_first_layer.keys():  # first layer
+        op_to_op_latency = dispatch_duration_per_instance_dict_first_layer[op_id][0]
+        if is_collective_op(op_id):
+            kernel_duration = kernel_duration_per_instance_dict_trace_first_layer[op_id][0]
+        else:
+            kernel_duration = kernel_duration_per_instance_dict_compilation_first_layer[op_id][0]
+
+        if op_to_op_latency < 0:
+            op_to_op_latency = 0
+
+        print(f"op_id: {op_id}, kernel_duration: {kernel_duration}, op_to_op_latency: {op_to_op_latency}")
+
+        e2e_estimate_80l += kernel_duration + op_to_op_latency
+    for op_id in kernel_duration_per_instance_averaged_dict_trace.keys():  # 79 layers based on average of layers 2-9
+        if is_collective_op(op_id):
+            avg_kernel_duration = kernel_duration_per_instance_averaged_dict_trace[op_id]
+        else:
+            avg_kernel_duration = kernel_duration_per_instance_averaged_dict_compilation[op_id]
+        avg_dispatch_duration = dispatch_duration_per_instance_averaged_dict[op_id]
         e2e_estimate_80l += (avg_kernel_duration + avg_dispatch_duration) * 79  # weighting avg for 79 layers
 
-    print(f"e2e estimate: {e2e_estimate_80l}")
+    # Estimated T/s/u is 1000000 / (80L-duration + ~2100 lmhead+sampling+embeddings + ~300 python-overhead
+    tsu_estimate = 1000000 / (e2e_estimate_80l / 1000 + 2100 + 300)
+
+    print(f"80L e2e time estimate: {e2e_estimate_80l}")
+    print(f"80L T/s/u estimate: {tsu_estimate}")
 
     benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
-    # Estimated T/s/u is 1000000 / (80L-duration + ~1240 lmhead+sampling+embeddings + ~300 python-overhead
-    benchmark_data.add_measurement(
-        profiler, 0, step_name, "tsu_estimate", 1000000 / (e2e_estimate_80l / 1000 + 1240 + 300)
-    )
+    benchmark_data.add_measurement(profiler, 0, step_name, "tsu_estimate", tsu_estimate)
 
+    run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+    # Save the results
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg-llama-demo-device-perf-default",
-        ml_model_name="tg-llama",
+        run_type=run_type,
+        ml_model_name="llama70b-tg",
     )
 
     assert passing
 
 
-@pytest.mark.parametrize(
-    "abs_tolerance_ns",
-    (1500,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_all_reduce",
-    (1500,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_reduce_scatter",
-    (1500,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_all_gather",
-    (1500,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_sdpa",
-    (2000,),
-)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
 # Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
@@ -614,12 +695,9 @@ def test_llama_TG_perf_device(
 # Run at least once again to verify the new expected values are correct and margins hold
 def test_llama_TG_perf_device_non_overlapped_dispatch(
     reset_seeds,
-    abs_tolerance_ns,
-    abs_tolerance_ns_all_reduce,
-    abs_tolerance_ns_reduce_scatter,
-    abs_tolerance_ns_all_gather,
-    abs_tolerance_ns_sdpa,
+    galaxy_type,
 ):
+    perf_targets = load_perf_targets(galaxy_type)
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     step_name = "tg-llama-demo-device-perf-non-overlapped-dispatch"
@@ -643,7 +721,10 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = merge_device_rows(df)
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
-    df_layers = df_model[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
+    # Add 1 as early return means
+    df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    assert len(df_layers) % num_layers == 0
+
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
@@ -656,6 +737,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     # Average over all iterations of each op instance
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
+    dispatch_duration_per_instance_min_dict = min_per_instance_dict(dispatch_duration_per_instance_dict)
+    dispatch_duration_per_instance_max_dict = max_per_instance_dict(dispatch_duration_per_instance_dict)
 
     print(f"dispatch_duration_per_instance_averaged_dict: {dispatch_duration_per_instance_averaged_dict}")
 
@@ -668,35 +751,61 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         if op_code_with_id in perf_targets:
             expected_time = perf_targets[op_code_with_id]["non-overlapped-dispatch-time"]
             op_name = perf_targets[op_code_with_id]["op_name"]
-            benchmark_data.add_measurement(profiler, 0, step_name, op_name + "_dispatch", avg_dispatch_duration)
-            if "AllReduceAsync" in op_code_with_id:
-                tolerance = abs_tolerance_ns_all_reduce
-            elif "LlamaReduceScatterDeviceOperation" in op_code_with_id:
-                tolerance = abs_tolerance_ns_reduce_scatter
-            elif "AllGatherAsync" in op_code_with_id:
-                tolerance = abs_tolerance_ns_all_gather
-            elif "ScaledDotProductAttentionDecode" in op_code_with_id:
-                tolerance = abs_tolerance_ns_sdpa
-            else:
-                tolerance = abs_tolerance_ns
-            if avg_dispatch_duration > expected_time + tolerance:
+
+            benchmark_data.add_measurement(
+                profiler, 0, step_name, op_name + "-model-dispatch-avg", avg_dispatch_duration
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-dispatch-min",
+                dispatch_duration_per_instance_min_dict[op_code_with_id],
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-dispatch-max",
+                dispatch_duration_per_instance_max_dict[op_code_with_id],
+            )
+
+            upper_limit = (
+                expected_time + perf_targets[op_code_with_id]["dispatch_duration_relative_margin"] * expected_time
+            )
+            lower_limit = (
+                expected_time - perf_targets[op_code_with_id]["dispatch_duration_relative_margin"] * expected_time
+            )
+            if avg_dispatch_duration > upper_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id}: {avg_dispatch_duration} ns larger than expected {expected_time} ns by {abs(avg_dispatch_duration - expected_time)} ns (tolerance {tolerance} ns)"
+                    f"{op_code_with_id} dispatch: {avg_dispatch_duration} ns is larger than target "
+                    f"({expected_time}) ns, difference: "
+                    f"{abs(avg_dispatch_duration - upper_limit)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']}, "
+                    f"relative margin to pass would be: "
+                    f"{abs(expected_time - avg_dispatch_duration) / expected_time}"
                 )
-            elif avg_dispatch_duration < expected_time - tolerance:
+            elif avg_dispatch_duration < lower_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id}: {avg_dispatch_duration} ns smaller than expected {expected_time} ns by {abs(expected_time - avg_dispatch_duration)} ns (tolerance {tolerance} ns)"
+                    f"{op_code_with_id} dispatch: {avg_dispatch_duration} ns is smaller than target "
+                    f"({expected_time}) ns, difference: "
+                    f"{abs(lower_limit - avg_dispatch_duration)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']}, "
+                    f"relative margin to pass would be: "
+                    f"{abs(expected_time - avg_dispatch_duration) / expected_time}"
                 )
         else:
             passing = False
             logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
 
+    run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+    # Save the results
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg-llama-demo-device-perf-non-overlapped-dispatch",
-        ml_model_name="tg-llama",
+        run_type=run_type,
+        ml_model_name="llama70b-tg",
     )
 
     assert passing

@@ -2,18 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -29,11 +27,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (
-        64 * 1024,
-        32 * 1024,
-        32,
-    ),
+    (64 * 1024, 32 * 1024, 512, 32),
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -42,8 +36,6 @@ from models.utility_functions import skip_for_grayskull
 def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
-
-    mesh_device.enable_async(True)
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
     model_args.n_layers = 1

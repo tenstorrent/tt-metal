@@ -27,8 +27,8 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
@@ -36,7 +36,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
@@ -133,8 +133,8 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     std::shared_ptr<tt_metal::Buffer> src1_dram_buffer;
-    uint32_t dram_buffer_src1_addr;
-    CoreCoord dram_src1_noc_xy;
+    uint32_t dram_buffer_src1_addr{};
+    CoreCoord dram_src1_noc_xy{};
 
     if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
         src1_dram_buffer = CreateBuffer(input_dram_config);
@@ -346,7 +346,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -388,7 +388,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeShortInit) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -417,7 +417,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilize) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -441,7 +441,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -469,7 +469,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilize) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -493,7 +493,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilizeShortInit) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {

@@ -1,24 +1,23 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
 
 import ttnn
-from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
-
+from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
-    preprocess_inputs_prefill,
-    prepare_inputs_ttnn_prefill,
-    prepare_inputs_ttnn,
-    get_rot_transformation_mat,
     get_prefill_rot_mat,
+    get_rot_transformation_mat,
+    prepare_inputs_ttnn,
+    prepare_inputs_ttnn_prefill,
+    preprocess_inputs_prefill,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
-from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 class Emb(torch.nn.Module):
@@ -50,8 +49,6 @@ def test_mixtral_model_perf(
     reset_seeds,
     is_ci_env,
 ):
-    t3k_mesh_device.enable_async(True)
-
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         from tracy import signpost
 
@@ -62,9 +59,7 @@ def test_mixtral_model_perf(
     max_seqlen = 16384
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(
-        t3k_mesh_device.get_device(0), dummy_weights=False, max_batch_size=batch_size, max_seq_len=max_seqlen
-    )
+    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=False, max_batch_size=batch_size, max_seq_len=max_seqlen)
     model_args.n_layers = 32
 
     # Clear global profiler state before starting measurements
@@ -109,8 +104,7 @@ def test_mixtral_model_perf(
     profiler.print(units="ms")
     compile_and_iter_time = profiler.get("e2e_decode_compile")
 
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.DumpDeviceProfiler(t3k_mesh_device.get_device(device_id))
+    ttnn.DumpDeviceProfiler(t3k_mesh_device)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
@@ -166,8 +160,6 @@ def test_mixtral_model_with_prefill_perf(
     reset_seeds,
     is_ci_env,
 ):
-    t3k_mesh_device.enable_async(True)
-
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         from tracy import signpost
 
@@ -186,9 +178,7 @@ def test_mixtral_model_with_prefill_perf(
         batch_size = 32
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(
-        t3k_mesh_device.get_device(0), dummy_weights=False, max_batch_size=batch_size, max_seq_len=seq_len
-    )
+    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=False, max_batch_size=batch_size, max_seq_len=seq_len)
     model_args.n_layers = 32
 
     # Clear global profiler state before starting measurements
@@ -253,8 +243,7 @@ def test_mixtral_model_with_prefill_perf(
     prefill_warmup_time = profiler.get("e2e_prefill_warmup")
 
     # Profiler dump, ready for real run
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.DumpDeviceProfiler(t3k_mesh_device.get_device(device_id))
+    ttnn.DumpDeviceProfiler(t3k_mesh_device)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("prefill perf run")
@@ -267,8 +256,7 @@ def test_mixtral_model_with_prefill_perf(
     prefill_time = profiler.get("e2e_prefill_1_user")
 
     # profile dump
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.DumpDeviceProfiler(t3k_mesh_device.get_device(device_id))
+    ttnn.DumpDeviceProfiler(t3k_mesh_device)
 
     # Decode (Run 1 warmup iteration before running 1 perf iteration)
     generation_start_pos = prefill_seqlen
@@ -284,8 +272,7 @@ def test_mixtral_model_with_prefill_perf(
     decode_warmup_time = profiler.get("e2e_decode_warmup")
 
     # Profiler dump, ready for real run
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.DumpDeviceProfiler(t3k_mesh_device.get_device(device_id))
+    ttnn.DumpDeviceProfiler(t3k_mesh_device)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("decode perf run")

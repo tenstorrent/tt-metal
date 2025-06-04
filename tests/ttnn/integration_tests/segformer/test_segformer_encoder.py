@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -89,9 +89,6 @@ def move_to_device(object, device):
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_encoder(batch_size, num_channels, height, width, device, reset_seeds, is_ci_env):
-    if is_ci_env:
-        pytest.skip("Skip in CI, model is WIP, issue# 13357")
-
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
     torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     config = torch_model.config
@@ -129,14 +126,11 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             device=device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
     else:
         torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-        torch_input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, 13, 0, 0, 0, 0, 0, 0))
         N, H, W, C = torch_input_tensor.shape
-        torch_input_tensor = torch.reshape(torch_input_tensor, (N, 1, H * W, C))
-
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -158,7 +152,7 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
             memory_config=input_mem_config,
         )
 
-    ttnn_output = ttnn_model(ttnn_input_tensor, parameters=parameters)
+    ttnn_output = ttnn_model(device, ttnn_input_tensor, parameters=parameters)
 
     ttnn_final_output = ttnn.to_torch(ttnn_output.last_hidden_state)
     torch_final_output = torch.permute(torch_output.last_hidden_state, (0, 2, 3, 1))

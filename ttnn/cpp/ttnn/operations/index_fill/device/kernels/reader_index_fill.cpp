@@ -6,10 +6,10 @@
 
 #include "dataflow_api.h"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
-typedef union {
+union value {
     float f;
     uint32_t u;
-} value;
+};
 
 bool is_in_indices(uint32_t* index_ptr, uint32_t size, uint32_t row_id) {
     for (uint32_t i = 0; i < size; i++) {

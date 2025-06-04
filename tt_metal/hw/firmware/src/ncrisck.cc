@@ -23,6 +23,7 @@
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "remote_circular_buffer_api.h"
 #endif
+#include "debug/stack_usage.h"
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -30,7 +31,8 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 uint32_t noc_posted_writes_num_issued[NUM_NOCS];
 
-void kernel_launch(uint32_t kernel_base_addr) {
+uint32_t kernel_launch(uint32_t kernel_base_addr) {
+    mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
@@ -56,16 +58,21 @@ void kernel_launch(uint32_t kernel_base_addr) {
     WAYPOINT("K");
     kernel_main();
     WAYPOINT("KD");
+    // Checking is disabled on NCRISC for dispatch because dispatch_s, which
+    // runs on NCRISC, does not track all transactions correctly.
+#ifndef DISPATCH_KERNEL
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         WAYPOINT("NKFW");
         // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the NOC
         // interface is in a known idle state for the next kernel.
-        ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX));
-        ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX));
-        ASSERT(ncrisc_noc_nonposted_writes_flushed(NOC_INDEX));
-        ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX));
-        ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX));
+        ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
+        ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
+        ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
+        ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
         WAYPOINT("NKFD");
     }
 #endif
+    EARLY_RETURN_FOR_DEBUG_EXIT;
+#endif
+    return measure_stack_usage();
 }

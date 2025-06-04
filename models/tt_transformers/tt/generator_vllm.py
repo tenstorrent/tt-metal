@@ -1,34 +1,24 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import os
 from typing import List, Union
-import torch
+
 import PIL
-from tqdm import tqdm
+import torch
 from llama_models.llama3.api.chat_format import create_vision_mask
-import ttnn
-
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
-from models.utility_functions import nearest_32
-
+from tqdm import tqdm
 from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext
 from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN_ID, MLLAMA_IMAGE_TOKEN
+from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN, MLLAMA_IMAGE_TOKEN_ID
 
-
-def generate_submeshes(mesh_device, data_parallel):
-    if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
-        return [mesh_device]
-
-    num_devices = mesh_device.get_num_devices()
-    assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
-
-    return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+import ttnn
+from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+from models.tt_transformers.tt.generator import Generator, create_submeshes
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.utility_functions import nearest_32
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -68,7 +58,7 @@ def initialize_vllm_text_transformer(
     dtype=ttnn.bfloat8_b,
     optimizations=DecodersPrecision.performance,
 ):
-    submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
+    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
     # Load model args, weights
     model_args = []
     for submesh in submesh_devices:
@@ -78,7 +68,7 @@ def initialize_vllm_text_transformer(
                 "Instruct" in hf_config._name_or_path or "DeepSeek-R1-Distill-Llama-70B" in hf_config._name_or_path
             ),
             max_batch_size=max_batch_size // tt_data_parallel,
-            optimizations=lambda model_args: optimizations(model_args.n_layers),
+            optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
             max_seq_len=max_seq_len,
         )
 
@@ -176,7 +166,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, tt_data_parallel=1):
         max_seq_len = 131072
 
-        submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
         model_args = []
         model = []
@@ -288,6 +278,38 @@ class Qwen2ForCausalLM(Generator):
             mesh_device,
             max_batch_size,
             max_seq_len=131072,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward_text(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+class MistralForCausalLM(Generator):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None, tt_data_parallel=1):
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=32768,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
             optimizations=DecodersPrecision.performance,

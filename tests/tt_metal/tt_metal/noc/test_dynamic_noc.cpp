@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -22,7 +22,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
 
@@ -120,7 +120,7 @@ void build_and_run_program(
                 (std::uint32_t)neighbour_core_physical.x,
                 (std::uint32_t)neighbour_core_physical.y,
                 // mcast
-                (core_idx_x == 0 && core_idx_y == 0) ? true : false,
+                core_idx_x == 0 && core_idx_y == 0,
                 top_left_core_physical.x,
                 top_left_core_physical.y,
                 bottom_right_core_physical.x,

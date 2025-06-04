@@ -11,7 +11,7 @@
 #include <memory>
 #include <utility>
 
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "tt_metal/detail/reports/report_utils.hpp"
 
 namespace fs = std::filesystem;

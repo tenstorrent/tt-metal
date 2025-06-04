@@ -11,12 +11,7 @@
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "core/ttnn_all_includes.hpp"
-#include "core/xtensor_utils.hpp"
-#include "ttnn/tensor/xtensor/xtensor_all_includes.hpp"
-#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
 
@@ -44,12 +39,12 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
             params.sequence_length));
     }
 
-    auto trans_mat_shape = params.trans_mat.get_logical_shape();
+    auto trans_mat_shape = params.trans_mat.logical_shape();
     auto trig_param_shapes = std::array{
-        params.cos_cache.get_logical_shape(),
-        params.sin_cache.get_logical_shape(),
-        params.neg_cos_cache.get_logical_shape(),
-        params.neg_sin_cache.get_logical_shape()};
+        params.cos_cache.logical_shape(),
+        params.sin_cache.logical_shape(),
+        params.neg_cos_cache.logical_shape(),
+        params.neg_sin_cache.logical_shape()};
 
     auto expected_trig_shape = ttnn::Shape{1U, 1U, input_seq_len, input_head_dim};
     if (!std::ranges::all_of(
@@ -59,10 +54,10 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
             "cos_cache: {}, sin_cache: {}, neg_cos_cache: {}, neg_sin_cache: {}",
             input_seq_len,
             input_head_dim,
-            params.cos_cache.get_logical_shape(),
-            params.sin_cache.get_logical_shape(),
-            params.neg_cos_cache.get_logical_shape(),
-            params.neg_sin_cache.get_logical_shape()));
+            params.cos_cache.logical_shape(),
+            params.sin_cache.logical_shape(),
+            params.neg_cos_cache.logical_shape(),
+            params.neg_sin_cache.logical_shape()));
     }
 
     auto expected_trans_mat_shape = ttnn::Shape{1U, 1U, ttnn::TILE_SIZE, ttnn::TILE_SIZE};
@@ -72,18 +67,54 @@ void validate_rope_input_and_params(const autograd::TensorPtr& input, const Rota
     }
 }
 
+template <typename E>
+E apply_rope_scaling(const E& freqs, const RopeScalingParams& scaling_params) {
+    // Typical values for low_freq_factor and high_freq_factor are 1 and 4, respectively.
+    assert(scaling_params.low_freq_factor != scaling_params.high_freq_factor);
+    assert(scaling_params.low_freq_factor < scaling_params.high_freq_factor);
+
+    // These wavelengths are used as thresholds to determine whether to scale the frequency.
+    // For example, if the low_freq_factor is 1, then every frequency after the
+    auto low_freq_wavelength = scaling_params.original_context_length / scaling_params.low_freq_factor;
+    auto high_freq_wavelength = scaling_params.original_context_length / scaling_params.high_freq_factor;
+    if (low_freq_wavelength == high_freq_wavelength) {
+        throw std::invalid_argument("RoPE scaling requires low and high frequency wavelengths to be different.");
+    }
+
+    auto wavelengths = 2 * std::numbers::pi / freqs;
+
+    // for high frequencies, we're capturing short-range dependencies and needn't scale.
+    auto high_freqs = freqs;
+    // for low frequencies, we're capturing long-range dependencies and need to scale by the full scaling factor.
+    auto low_freqs = freqs / scaling_params.scaling_factor;
+
+    // for frequencies in between, we smoothly interpolate.
+    auto smooths = (scaling_params.original_context_length / wavelengths - scaling_params.low_freq_factor) /
+                   (scaling_params.high_freq_factor - scaling_params.low_freq_factor);
+    auto mid_freqs = (1.0F - smooths) * freqs / scaling_params.scaling_factor + smooths * freqs;
+
+    // if we're between the low and high freqs, use the smoothly interpolated mid-freqs,
+    // otherwise use low_freqs for the low freq wavelengths and high_freqs otherwise.
+    return xt::where(
+        (wavelengths < low_freq_wavelength) && (wavelengths > high_freq_wavelength),
+        mid_freqs,
+        xt::where(wavelengths > low_freq_wavelength, low_freqs, high_freqs));
+}
+
 // trans_mat, sin_cache, cos_cache are all precomputed and stored somewhere in
 // the module hierarchy and passed to the operation.
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& params) {
     validate_rope_input_and_params(input, params);
-    auto input_logical_shape = input->get_value().get_logical_shape();
+
+    auto input_logical_shape = input->get_value().logical_shape();
     auto num_batch = input_logical_shape[0];
     auto num_heads = input_logical_shape[1];
     auto seq_len = input_logical_shape[2];
     auto head_dim = input_logical_shape[3];
+    auto device = &autograd::ctx().get_device();
 
     auto squish_batch = [num_batch, num_heads, seq_len, head_dim](const ttnn::Tensor& input) {
-        auto shape = input.get_logical_shape();
+        auto shape = input.logical_shape();
         auto seq_len = shape[2];
         auto head_dim = shape[3];
         auto unbatched_input = ttnn::reshape(input, ttnn::Shape{1U, num_batch * num_heads, seq_len, head_dim});
@@ -121,7 +152,8 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
             /*is_decode_mode=*/false,
             /*memory_config=*/std::nullopt,
             /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
-        input->add_grad(unsquish_batch(dL_dinput));
+        auto unsquished = unsquish_batch(dL_dinput);
+        input->add_grad(unsquished);
     };
 
     auto links = autograd::get_links(input);
@@ -130,10 +162,10 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     return out;
 }
 
-std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequence_length, float theta = 10000.0F) {
-    int d = head_dim;
+std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
+    uint32_t head_dim, uint32_t sequence_length, float theta, const RopeScalingParams& scaling_params) {
     // compute freqs: 1.0 / (theta ** (2 * (i-1) / head_dim)) for i in [1, head_dim/2]
-    xt::xarray<uint32_t> expt_data = xt::arange(0, d) / 2;
+    xt::xarray<uint32_t> expt_data = xt::arange(0, static_cast<int>(head_dim)) / 2;
     xt::xarray<float> expt_xt = xt::cast<float>(expt_data);
 
     expt_xt *= 2.0F / static_cast<float>(head_dim);
@@ -143,9 +175,13 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequ
 
     xt::xarray<float> seq_pos = xt::arange<float>(sequence_length);
     xt::xarray<float> seq_pos_repeated_to_head = xt::repeat(seq_pos, head_dim, seq_pos.dimension() - 1U);
-    xt::xarray<float> scales = seq_pos_repeated_to_head.reshape({sequence_length, static_cast<uint32_t>(head_dim)});
+    xt::xarray<float> scales = seq_pos_repeated_to_head.reshape({sequence_length, head_dim});
 
     xt::xarray<float> scaled_freqs = scales * freqs;
+
+    if (scaling_params.scaling_factor != 0.0F) {
+        scaled_freqs = apply_rope_scaling(scaled_freqs, scaling_params);
+    }
 
     // take the scaled freqs mod 2π to satisfy ttnn inputs constraints for sin/cos
     auto pi = static_cast<float>(std::numbers::pi);
@@ -172,7 +208,8 @@ ttnn::Tensor gen_trans_mat() {
     return core::from_xtensor(trans_mat, device);
 }
 
-RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_dim, float theta) {
+RotaryEmbeddingParams build_rope_params(
+    uint32_t sequence_length, uint32_t head_dim, float theta, RopeScalingParams scaling_params) {
     if (head_dim % 32U != 0U) {
         throw std::invalid_argument(fmt::format("RoPE head_dim must be divisible by 32, but is {}", head_dim));
     }
@@ -183,7 +220,7 @@ RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_
     if (head_dim == 0U) {
         throw std::invalid_argument("RoPE head_dim must be non-zero.");
     }
-    auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta);
+    auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta, scaling_params);
     auto trans_mat = gen_trans_mat();
     return {
         .cos_cache = cos_freqs,
@@ -194,6 +231,8 @@ RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_
 
         .sequence_length = sequence_length,
         .head_dim = head_dim,
+
+        .rope_scaling_params = scaling_params,
     };
 }
 

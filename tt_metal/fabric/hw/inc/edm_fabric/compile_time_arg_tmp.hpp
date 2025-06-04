@@ -99,7 +99,7 @@ template <typename T, size_t INPUT_ARR_START_IDX, size_t NUM_ELEMS_TO_TAKE, size
 struct ArraySliceCopier {
     static constexpr void copy(std::array<T, NUM_ELEMS_TO_TAKE>& arr) {
         // Fill the current element
-        arr[TAKEN_SO_FAR] = get_compile_time_arg_val(INPUT_ARR_START_IDX + TAKEN_SO_FAR);
+        arr[TAKEN_SO_FAR] = static_cast<T>(get_compile_time_arg_val(INPUT_ARR_START_IDX + TAKEN_SO_FAR));
 
         // Recurse to fill the next element (if any)
         if constexpr (TAKEN_SO_FAR + 1 < NUM_ELEMS_TO_TAKE) {

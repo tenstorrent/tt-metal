@@ -6,7 +6,6 @@
 
 #include <assert.hpp>
 
-#include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include <umd/device/types/arch.h>
 
@@ -16,17 +15,15 @@ namespace tt_metal {
 
 // Hal Constructor determines the platform architecture by using UMD
 // Once it knows the architecture it can self initialize architecture specific memory maps
-Hal::Hal() : arch_(get_platform_architecture()) {
+Hal::Hal(tt::ARCH arch, bool is_base_routing_fw_enabled) : arch_(arch) {
     switch (this->arch_) {
-        case tt::ARCH::GRAYSKULL: /*TT_THROW("Unsupported arch for HAL")*/; break;
-
-        case tt::ARCH::WORMHOLE_B0: initialize_wh(); break;
+        case tt::ARCH::WORMHOLE_B0: initialize_wh(is_base_routing_fw_enabled); break;
 
         case tt::ARCH::BLACKHOLE: initialize_bh(); break;
 
         case tt::ARCH::QUASAR: TT_THROW("HAL doesn't support Quasar"); break;
 
-        case tt::ARCH::Invalid: /*TT_THROW("Unsupported arch for HAL")*/; break;
+        default: /*TT_THROW("Unsupported arch for HAL")*/; break;
     }
 }
 
@@ -59,13 +56,15 @@ HalCoreInfoType::HalCoreInfoType(
     const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
     const std::vector<DeviceAddr>& mem_map_bases,
     const std::vector<uint32_t>& mem_map_sizes,
-    bool supports_cbs) :
+    bool supports_cbs,
+    bool supports_receiving_multicast_cmds) :
     programmable_core_type_(programmable_core_type),
     core_type_(core_type),
     processor_classes_(processor_classes),
     mem_map_bases_(mem_map_bases),
     mem_map_sizes_(mem_map_sizes),
-    supports_cbs_(supports_cbs) {}
+    supports_cbs_(supports_cbs),
+    supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds) {}
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
     // Options for handling brisc fw not starting at mem[0]:

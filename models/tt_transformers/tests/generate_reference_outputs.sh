@@ -33,6 +33,7 @@ LLAMA_DIRS=(
     "${LLAMA_31_8B_DIR:-/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct}"
     "${LLAMA_32_11B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct}"
     "${LLAMA_31_70B_DIR:-/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked}"
+    "${LLAMA_32_90B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-90B-Vision-Instruct}"
     "${QWEN_25_7B_DIR:-/proj_sw/user_dev/Qwen/Qwen2.5-7B-Instruct}"
     "${QWEN_25_72B_DIR:-/proj_sw/user_dev/Qwen/Qwen2.5-72B-Instruct}"
 )

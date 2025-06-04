@@ -267,7 +267,6 @@ def run(
     device,
 ) -> list:
     torch_input_tensors = []
-    device.enable_async(False)
     if input_mem_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
         input_mem_config_a = ttnn.create_sharded_memory_config(
             shape=concat_specs["shape1"],

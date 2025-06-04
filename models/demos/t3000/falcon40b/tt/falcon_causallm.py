@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from typing import Optional, Tuple
 
-import ttnn
-from ttnn import ShardTensorToMesh
-from models.demos.t3000.falcon40b.tt.falcon_model import TtFalconModelShared
+import torch
 
-from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
+import ttnn
+from models.demos.t3000.falcon40b.tt.falcon_model import TtFalconModelShared
+from models.demos.t3000.falcon40b.tt.model_utils import determine_tensor_deallocation, falcon_prefill_matmul
+from ttnn import ShardTensorToMesh
 
 
 class TtFalconCausalLM(TtFalconModelShared):
@@ -54,9 +54,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             cache_file_name=lm_head_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
-        self.perf_e2e_test_tile_tensor = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 32)), device=mesh_device.get_devices()[0]
-        )
+        self.perf_e2e_test_tile_tensor = ttnn.from_torch(torch.zeros((1, 1, 32, 32)), device=mesh_device)
 
     def __call__(
         self,

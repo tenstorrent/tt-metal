@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 #include "noc_parameters.h"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "debug/assert.h"
 
@@ -19,11 +19,11 @@ constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
 #endif
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
-#define NOC_0_X(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x - 1 - (x)))
-#define NOC_0_Y(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y - 1 - (y)))
-#define NOC_0_X_PHYS_COORD(noc_index, noc_size_x, x) NOC_0_X(noc_index, noc_size_x, x)
-#define NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y) NOC_0_Y(noc_index, noc_size_y, y)
-#define MY_NOC_ENCODING(noc_index) NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_NODE_ID)
+#define NOC_0_X(noc_index, noc_size_x, x) x
+#define NOC_0_Y(noc_index, noc_size_y, y) y
+#define NOC_0_X_PHYS_COORD(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x - 1 - (x)))
+#define NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y - 1 - (y)))
+#define MY_NOC_ENCODING(noc_index) NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_CFG(NOC_ID_LOGICAL))
 
 ////
 /*TODO: RT review this file, currently using wormhole b0 copy, check if any changes needed for BH*/
@@ -387,7 +387,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 #pragma GCC unroll 0
     for (int noc = 0; noc < NUM_NOCS; noc++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(NOC_ID_LOGICAL));
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
@@ -429,7 +429,7 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 inline __attribute__((always_inline)) void dynamic_noc_init() {
 #pragma GCC unroll 0
     for (int noc = 0; noc < NUM_NOCS; noc++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(NOC_ID_LOGICAL));
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
@@ -646,52 +646,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
-inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_exclude_region(
-    uint32_t noc,
-    uint32_t cmd_buf,
-    uint32_t src_addr,
-    uint64_t dest_addr,
-    uint32_t len_bytes,
-    uint32_t vc,
-    bool mcast,
-    bool linked,
-    uint32_t num_dests,
-    bool multicast_path_reserve,
-    uint32_t exclude_region = 0) {
-    while (len_bytes > NOC_MAX_BURST_SIZE) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_write_exclude_region<noc_mode>(
-            noc,
-            cmd_buf,
-            src_addr,
-            dest_addr,
-            NOC_MAX_BURST_SIZE,
-            vc,
-            mcast,
-            linked,
-            num_dests,
-            multicast_path_reserve,
-            exclude_region);
-        src_addr += NOC_MAX_BURST_SIZE;
-        dest_addr += NOC_MAX_BURST_SIZE;
-        len_bytes -= NOC_MAX_BURST_SIZE;
-    }
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_write_exclude_region<noc_mode>(
-        noc,
-        cmd_buf,
-        src_addr,
-        dest_addr,
-        len_bytes,
-        vc,
-        mcast,
-        linked,
-        num_dests,
-        multicast_path_reserve,
-        exclude_region);
-}
-
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -793,10 +747,10 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
 }
 
 // issue noc reads while wait for outstanding transactions done
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_ptr_update = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC && !skip_ptr_update) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
     uint32_t src_addr_;
@@ -808,7 +762,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr_);  // (uint32_t)src_addr
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+    if constexpr (noc_mode == DM_DEDICATED_NOC && !skip_ptr_update) {
         noc_reads_num_issued[noc] += 1;
     }
 }

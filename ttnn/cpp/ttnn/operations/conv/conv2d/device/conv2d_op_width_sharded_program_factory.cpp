@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/compute_throttle_utils.hpp"
 
 using namespace tt::constants;
 
@@ -150,9 +151,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
     auto shard_shape = a.shard_spec().value().shape;
 
-    CoreRangeSet input_cores = a.memory_config().shard_spec.value().grid;
-    CoreRangeSet output_cores = output.memory_config().shard_spec.value().grid;
-    CoreRangeSet all_cores = output.memory_config().shard_spec.value().grid;
+    CoreRangeSet input_cores = a.memory_config().shard_spec().value().grid;
+    CoreRangeSet output_cores = output.memory_config().shard_spec().value().grid;
+    CoreRangeSet all_cores = output.memory_config().shard_spec().value().grid;
     if (input_cores.num_cores() > output_cores.num_cores()) {
         all_cores = input_cores;
     }
@@ -176,7 +177,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         input_channels_padded % 16 == 0,
         "Expected input channels to be padded for 16 byte alignment in L1");  // TODO: For bfp16, check if its divisible
                                                                               // by 8 not 16.
-    // Always use split reader for first conv in resnet which has input channels = 16
     // TODO: Expose option to split readers for 1D convs to python?
     if (enable_split_reader) {
         TT_FATAL(not weight_width_sliced, "split reader does not work with 2d conv");
@@ -207,11 +207,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t pad_h = (uint32_t)sliding_window_config.get_pad_h();
     uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
 
-    uint32_t input_size_h = conv_act_size_h + pad_h;
     uint32_t input_size_w = conv_act_size_w + pad_w;
     if (sliding_window_config.is_transpose) {
         auto input_shape = sliding_window_config.get_transposed_full_input_shape();
-        input_size_h = input_shape[1];
         input_size_w = input_shape[2];
     }
 
@@ -600,6 +598,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (packer_l1_acc) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
+    if (weight_block_w_ntiles <= 8) {
+        compute_defines["PACKER_UNTILIZE"] = "1";
+    }
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), all_cores.num_cores(), compute_defines);
 
     for (auto elem : compute_defines) {
         log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
@@ -674,7 +676,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         act_block_num_tiles_split,
         act_tile_size);
 
-    auto conv_reader_indices_buffer = conv_reader_indices.value().device_buffer();
+    auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
 
     cb_indices.cb_for_reader_indices = cb_indices.get_next_cb_index();
     tt::tt_metal::create_cb(
@@ -684,7 +686,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         out_block_h_datums * 2,
         1,
         tt::DataFormat::Float16_b,
-        &*conv_reader_indices_buffer);
+        conv_reader_indices_storage.get_buffer());
 
     if (has_bias) {
         uint32_t bias_tile_size = tt_metal::detail::TileSize(bias_df);
@@ -702,7 +704,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     // Share buffer if same data format
     CBHandle cb_output = 0;
     CBHandle cb_matmul_partials = 0;
-    if (untilize_out == false && interm0_df == out_df) {
+    if (!untilize_out && interm0_df == out_df) {
         cb_indices.out0_cb = cb_indices.get_next_cb_index();
         auto cb_tuple = tt::tt_metal::create_cb(
             {cb_indices.matmul_partials_cb, cb_indices.out0_cb},
@@ -917,9 +919,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         }
     }
 
-    // Capture conv_reader_indices_buffer to cache this with the program
     auto override_runtime_arguments_callback =
-        [conv_reader_indices_buffer, cb_input, cb_output, has_bias, full_core_grid, total_num_cores, weights_kernel_id](
+        [cb_input,
+         cb_output,
+         has_bias,
+         full_core_grid,
+         weights_kernel_id,
+         total_num_active_cores,
+         conv_reader_indices_storage](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -932,12 +939,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             auto src_buffer_b = input_tensors.at(1).buffer();
             auto dst_buffer = output_tensors.at(0).buffer();
 
-            auto weights_kernel_runtime_args = GetRuntimeArgs(program, weights_kernel_id);
-            for (uint32_t core_index = 0; core_index < total_num_cores; core_index++) {
+            auto& weights_kernel_runtime_args = GetRuntimeArgs(program, weights_kernel_id);
+            for (uint32_t core_index = 0; core_index < total_num_active_cores; core_index++) {
                 uint32_t core_x = core_index % full_core_grid.x;
                 uint32_t core_y = core_index / full_core_grid.x;
 
-                auto this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
+                auto& this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
                 this_core_weights_kernel_runtime_args[1] = src_buffer_b->address();
                 if (has_bias) {
                     this_core_weights_kernel_runtime_args[2] = optional_input_tensors.at(0).value().buffer()->address();

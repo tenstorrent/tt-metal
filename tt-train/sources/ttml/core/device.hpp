@@ -24,6 +24,6 @@ public:
     [[nodiscard]] tt::tt_metal::IDevice& get_device();
 
 private:
-    std::unique_ptr<tt::tt_metal::IDevice, void (*)(tt::tt_metal::IDevice*)> m_device;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> m_device;
 };
 }  // namespace ttml::core

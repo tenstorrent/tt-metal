@@ -3,25 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-
-
-def get_default_conv_config():
-    return ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat8_b,
-        activation="",
-    )
-
-
-def get_default_compute_config(device):
-    return ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
 
 
 def prepare_split_conv_weights_bias(
@@ -56,7 +39,7 @@ def prepare_split_conv_weights_bias(
     ]
 
     # Split bias
-    if conv_in_channel_split_factor > 1:
+    if conv_out_channel_split_factor > 1:
         split_bias_tensors = list(torch.split(torch_bias_tensor, split_output_channels, 3))
     else:
         split_bias_tensors = [torch_bias_tensor]
@@ -96,10 +79,6 @@ def split_conv_and_run(
     padding=1,
     return_weights_and_bias=False,
 ):
-    # The function currently accepts input in ROW_MAJOR layout only
-    # since ttnn.split has some issues with TILED version, to be debugged
-    assert hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT, "Input tensor must be in ROW_MAJOR layout"
-
     split_input_channels = in_channels // conv_in_channel_split_factor
     split_output_channels = out_channels // conv_out_channel_split_factor
 
@@ -118,13 +97,6 @@ def split_conv_and_run(
         "conv_config": conv_config,
     }
 
-    # Split input tensor if needed
-    if conv_in_channel_split_factor > 1:
-        hidden_states_split = ttnn.split(hidden_states, split_input_channels, 3)
-        hidden_states.deallocate(True)
-    else:
-        hidden_states_split = [hidden_states]
-
     outputs = []
     device_weights = []
     device_bias = []
@@ -134,14 +106,18 @@ def split_conv_and_run(
         device_weights.append([])
         # Second loop goes over input channel slices and accumulates the outputs
         for in_channel_slice_id in range(conv_in_channel_split_factor):
+            hidden_states_slice = hidden_states[
+                :, :, :, in_channel_slice_id * split_input_channels : (in_channel_slice_id + 1) * split_input_channels
+            ]
             results = ttnn.conv2d(
-                input_tensor=hidden_states_split[in_channel_slice_id],
+                input_tensor=hidden_states_slice,
                 weight_tensor=conv_weight[out_channel_slice_id][in_channel_slice_id],
                 bias_tensor=conv_bias[out_channel_slice_id],
                 **conv_kwargs,
                 compute_config=compute_config,
                 return_weights_and_bias=return_weights_and_bias,
             )
+            hidden_states_slice.deallocate(True)
 
             if return_weights_and_bias:
                 # First time we call this function, weights and biases are passed in on host;
@@ -154,17 +130,25 @@ def split_conv_and_run(
                 in_channel_slice_output = results
 
             if in_channel_slice_id == 0:
-                out_channel_slice_output = ttnn.to_memory_config(in_channel_slice_output, ttnn.DRAM_MEMORY_CONFIG)
-                in_channel_slice_output.deallocate(True)
+                if in_channel_slice_output.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                    out_channel_slice_output = ttnn.to_memory_config(in_channel_slice_output, ttnn.DRAM_MEMORY_CONFIG)
+                    in_channel_slice_output.deallocate(True)
+                else:
+                    out_channel_slice_output = in_channel_slice_output
             else:
                 out_channel_slice_output = ttnn.add(
-                    out_channel_slice_output, in_channel_slice_output, output_tensor=out_channel_slice_output
+                    out_channel_slice_output,
+                    in_channel_slice_output,
+                    output_tensor=out_channel_slice_output,
+                    use_legacy=True,  # until fix for https://github.com/tenstorrent/tt-metal/issues/22307
                 )
                 in_channel_slice_output.deallocate(True)
 
         if out_channel_slice_output.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
             out_channel_slice_output = ttnn.to_memory_config(out_channel_slice_output, ttnn.DRAM_MEMORY_CONFIG)
         outputs.append(out_channel_slice_output)
+
+    hidden_states.deallocate(True)
 
     # Concatenate the outputs, if we split by output channels
     if len(outputs) > 1:
@@ -178,3 +162,29 @@ def split_conv_and_run(
         return output, device_weights, device_bias
 
     return output
+
+
+def prepare_group_norm(device, in_channels, core_grid, torch_weights, torch_bias, num_groups=32):
+    num_cores_across_channel = core_grid.y
+    torch_input_mask = ttnn.create_group_norm_input_mask(in_channels, num_groups, num_cores_across_channel)
+    input_mask = ttnn.from_torch(
+        torch_input_mask,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weights = ttnn.from_torch(
+        ttnn.create_group_norm_weight_bias_rm(torch_weights, in_channels, num_cores_across_channel),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    bias = ttnn.from_torch(
+        ttnn.create_group_norm_weight_bias_rm(torch_bias, in_channels, num_cores_across_channel),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    return input_mask, weights, bias

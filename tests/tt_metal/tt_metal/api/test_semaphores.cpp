@@ -14,7 +14,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
@@ -93,7 +93,7 @@ void create_and_read_max_num_semaphores(
     }
 
     tt_metal::detail::CompileProgram(device, program);
-    tt::tt_metal::program_dispatch::finalize_program_offsets(program, device);
+    program.finalize_offsets(device);
 
     ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, program));
 
@@ -103,8 +103,9 @@ void create_and_read_max_num_semaphores(
             std::vector<uint32_t> res;
             for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
                 std::vector<uint32_t> single_val;
-                uint32_t semaphore_addr = program.get_sem_base_addr(device, logical_core, CoreType::WORKER) +
-                                          (tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1) * i);
+                uint32_t semaphore_addr =
+                    program.get_sem_base_addr(device, logical_core, CoreType::WORKER) +
+                    (tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1) * i);
                 uint32_t semaphore_size = sizeof(uint32_t);
                 tt_metal::detail::ReadFromDeviceL1(device, logical_core, semaphore_addr, semaphore_size, single_val);
                 ASSERT_TRUE(single_val.size() == 1);

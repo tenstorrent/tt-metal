@@ -1,4 +1,6 @@
 .cache
+.clangd
+.devcontainer/
 .vscode
 .idea
 runtime
@@ -15,7 +17,6 @@ build
 build_*
 /python_env/
 CMakeUserPresets.json
-
 /llk_out/
 /out/
 

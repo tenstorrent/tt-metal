@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
@@ -21,7 +21,9 @@ namespace ttnn::operations::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const Tensor& input_tensor) {
+    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+}
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
@@ -29,7 +31,7 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
-    TT_ASSERT(sizeof float_num == sizeof uint32_data);
+    TT_FATAL(sizeof float_num == sizeof uint32_data, "sizeof data types not equal");
 
     uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
     // just move upper 16 to lower 16 (truncate)
@@ -238,33 +240,26 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         }
     }
 
-    TT_ASSERT(
-        in0_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        in1_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        out0_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        im0_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        im3_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        in5_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        in6_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        im6_t % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(Wt % block_size == 0);
-    TT_ASSERT(num_gamma_tiles % block_size == 0);
-    TT_ASSERT(num_beta_tiles % block_size == 0);
+    TT_FATAL(in0_t % block_size == 0, "Buffer size in0_t ({}) must be divisible by block_size ({})", in0_t, block_size);
+    TT_FATAL(in1_t % block_size == 0, "Buffer size in1_t ({}) must be divisible by block_size ({})", in1_t, block_size);
+    TT_FATAL(
+        out0_t % block_size == 0, "Buffer size out0_t ({}) must be divisible by block_size ({})", out0_t, block_size);
+    TT_FATAL(im0_t % block_size == 0, "Buffer size im0_t ({}) must be divisible by block_size ({})", im0_t, block_size);
+    TT_FATAL(im3_t % block_size == 0, "Buffer size im3_t ({}) must be divisible by block_size ({})", im3_t, block_size);
+    TT_FATAL(in5_t % block_size == 0, "Buffer size in5_t ({}) must be divisible by block_size ({})", in5_t, block_size);
+    TT_FATAL(in6_t % block_size == 0, "Buffer size in6_t ({}) must be divisible by block_size ({})", in6_t, block_size);
+    TT_FATAL(im6_t % block_size == 0, "Buffer size im6_t ({}) must be divisible by block_size ({})", im6_t, block_size);
+    TT_FATAL(Wt % block_size == 0, "Width (Wt={}) must be divisible by block_size ({})", Wt, block_size);
+    TT_FATAL(
+        num_gamma_tiles % block_size == 0,
+        "Number of gamma tiles ({}) must be divisible by block_size ({})",
+        num_gamma_tiles,
+        block_size);
+    TT_FATAL(
+        num_beta_tiles % block_size == 0,
+        "Number of beta tiles ({}) must be divisible by block_size ({})",
+        num_beta_tiles,
+        block_size);
 
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
@@ -470,7 +465,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t tile_offset = curr_row * Wt;
@@ -572,7 +567,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    if (dst_full_sync_en == false) {
+    if (!dst_full_sync_en) {
         if (fp32_dest_acc_en) {
             TT_FATAL(
                 subblock_wt <= 4,
@@ -690,13 +685,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     // get sharded addr
     auto in0_addr = a.buffer()->address();
-    uint32_t in1_addr;
     bool b_sharded;
-    if (b) {
-        in1_addr = b.value().buffer()->address();
-    } else {
-        in1_addr = 0;
-    }
     auto out_addr = output.buffer()->address();
     // b, gamma, beta addr
     auto in1_dram_addr = b ? b.value().buffer()->address() : 0;
@@ -1480,14 +1469,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::tt_metal::CircularBufferConfig output_reshard_cb_config =
         tt::tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_reshard_cb_index, out_data_format}})
             .set_page_size(output_reshard_cb_index, out_single_tile_size);
-    CBHandle cb_output_reshard = 0;
     if (is_post_all_gather && !skip_write_back) {
         output_reshard_cb_config = output_reshard_cb_config.set_globally_allocated_address(*output.buffer());
-        cb_output_reshard =
+
             tt::tt_metal::CreateCircularBuffer(program, all_worker_and_storage_cores, output_reshard_cb_config);
     }
 
-    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise = row_wise);
+    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise);
 
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
@@ -1657,10 +1645,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             std::vector<uint32_t> mcast_receiver_args;
             bool is_last_all_to_all_worker;
             if (use_two_stage_reduce) {
-                is_last_all_to_all_worker =
-                    width_index_two_stage == num_cores_all_to_all_first_stage - 1 ? true : false;
+                is_last_all_to_all_worker = width_index_two_stage == num_cores_all_to_all_first_stage - 1;
             } else {
-                is_last_all_to_all_worker = width_index == num_cores_all_to_all - 1 ? true : false;
+                is_last_all_to_all_worker = width_index == num_cores_all_to_all - 1;
             }
             mcast_receiver_args.push_back(is_last_all_to_all_worker);
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
@@ -1761,14 +1748,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                     current_storage_core += 1;        // Move to next storage core
                     current_storage_core_offset = 0;  // Reset offset on new storage core
 
-                    TT_ASSERT(
+                    TT_FATAL(
                         current_storage_core <= num_storage_cores,
                         "current_storage_core {} is exceeding number of storage cores {}",
                         current_storage_core,
                         num_storage_cores);
                 }
             }
-            TT_ASSERT(
+            TT_FATAL(
                 worker_core_current_offset == block_wt,
                 "All worker core data should be written, but worker_core_current_offset {} != block_wt {}",
                 worker_core_current_offset,

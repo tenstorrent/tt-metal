@@ -25,7 +25,6 @@ def run_conv(
     padding,
     use_1d_systolic_array,
     config_override,
-    use_shallow_conv_variant=False,
     transpose_mcast=True,
     enable_auto_formatting=False,
     padded_input_channels=None,
@@ -78,7 +77,6 @@ def run_conv(
         dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
-        input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -96,7 +94,7 @@ def run_conv(
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
 
-    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.Conv1d(
+    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.conv1d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -132,17 +130,16 @@ def run_conv(
         pcc = 0.998
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
-    print(pcc_msg)
     assert passing
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override",
     (
-        (1, 5120, 5120, 32, 4, 1, 3, 5120, True, None, False),
-        (1, 5120, 5120, 1024, 4, 1, 3, 5120, True, None, False),
-        (1, 2560, 2560, 1027, 4, 1, 0, 2560, True, None, False),
+        (1, 5120, 5120, 32, 4, 1, 3, 5120, True, None),
+        (1, 5120, 5120, 1024, 4, 1, 3, 5120, True, None),
+        (1, 2560, 2560, 1027, 4, 1, 0, 2560, True, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -179,7 +176,6 @@ def test_conv1d_mamba(
     groups,
     use_1d_systolic_array,
     config_override,
-    use_shallow_conv_variant,
     output_layout,
 ):
     if activations_dtype == ttnn.bfloat8_b:
@@ -204,7 +200,6 @@ def test_conv1d_mamba(
         padding,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         padded_input_channels=None,
         output_layout=output_layout,
@@ -215,12 +210,12 @@ def test_conv1d_mamba(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override",
     (
-        (1, 32, 3, 32, 3, 1, 1, 1, True, None, False),
-        (1, 128, 32, 1024, 5, 1, 2, 1, True, None, False),
-        (1, 512, 32, 5120, 3, 1, 1, 1, True, None, False),
-        (1, 64, 64, 2560, 3, 1, 1, 32, True, None, False),
+        (1, 32, 3, 32, 3, 1, 1, 1, True, None),
+        (1, 128, 32, 1024, 5, 1, 2, 1, True, None),
+        (1, 512, 32, 5120, 3, 1, 1, 1, True, None),
+        (1, 64, 64, 2560, 3, 1, 1, 32, True, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -253,7 +248,6 @@ def test_conv1d(
     groups,
     use_1d_systolic_array,
     config_override,
-    use_shallow_conv_variant,
     output_layout,
 ):
     if activations_dtype == ttnn.bfloat8_b:
@@ -278,7 +272,6 @@ def test_conv1d(
         padding,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         padded_input_channels=None,
         output_layout=output_layout,
@@ -288,11 +281,11 @@ def test_conv1d(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, shard_layout, config_override, use_shallow_conv_variant",
+    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, shard_layout, config_override",
     (
         # (8, 768, 768, 384, 1, 1, 0, 4, True, None, False), #Pass
-        (8, 768, 3072, 384, 1, 1, 0, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED, {"act_block_h": 1536}, False),
-        (8, 3072, 768, 384, 1, 1, 0, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        (8, 768, 3072, 384, 1, 1, 0, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED, {"act_block_h": 1536}),
+        (8, 3072, 768, 384, 1, 1, 0, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -327,7 +320,6 @@ def test_squeezebert_conv1d(
     groups,
     shard_layout,
     config_override,
-    use_shallow_conv_variant,
     output_layout,
 ):
     if activations_dtype == ttnn.bfloat8_b:
@@ -352,9 +344,108 @@ def test_squeezebert_conv1d(
         padding,
         False,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
         shard_layout=shard_layout,
         padded_input_channels=None,
         output_layout=output_layout,
         groups=groups,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups",
+    ((1, 32, 32, 1024, 3, 1, 1, 1),),
+)
+@pytest.mark.parametrize("prepare_weights", [True, False])
+@pytest.mark.parametrize(
+    "preprocess_weights_on_device",
+    [True, False],
+)
+def test_with_prepare_weights(
+    device,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_length,
+    kernel_size,
+    stride,
+    padding,
+    groups,
+    prepare_weights,
+    preprocess_weights_on_device,
+):
+    if prepare_weights and preprocess_weights_on_device:
+        pytest.skip("preprocess_weights_on_device isn't needed when prepare_weights is True")
+
+    torch.manual_seed(0)
+    conv_input_shape = [batch_size, input_channels, input_length]
+    conv_weight_shape = [output_channels, input_channels // groups, kernel_size]
+    torch_input_tensor_ncl = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+
+    torch_input_tensor = torch.permute(torch_input_tensor_ncl, (0, 2, 1))
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_out_golden_tensor = torch.nn.functional.conv1d(
+        torch_input_tensor_ncl,
+        torch_weight_tensor,
+        stride=stride,
+        padding=padding,
+        groups=groups,
+    )
+
+    tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, dtype=ttnn.bfloat16)
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+
+    if prepare_weights:
+        tt_weight_tensor = ttnn.prepare_conv_weights(
+            weight_tensor=tt_weight_tensor,
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            weights_format="OIHW",
+            in_channels=input_channels,
+            out_channels=output_channels,
+            batch_size=batch_size,
+            input_height=input_length,
+            input_width=1,
+            kernel_size=(kernel_size, 1),
+            stride=(1, 1),
+            padding=(1, 0),
+            dilation=(1, 1),
+            has_bias=False,
+            groups=1,
+            device=device,
+        )
+
+    conv_config = ttnn.Conv1dConfig(
+        dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        shard_layout=None,
+        deallocate_activation=False,
+        preprocess_weights_on_device=preprocess_weights_on_device,
+    )
+
+    tt_output_tensor_on_device, out_length = ttnn.conv1d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        batch_size=batch_size,
+        input_length=input_length,
+        conv_config=conv_config,
+        groups=groups,
+        return_output_dim=True,
+    )
+
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor_on_device)
+
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_length, output_channels)
+
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 2, 1))
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.995)
+    print(pcc_msg)
+    assert passing

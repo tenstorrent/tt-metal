@@ -3,14 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.utility_functions import skip_for_grayskull
-from models.demos.wormhole.stable_diffusion.demo.demo import test_demo as demo
-from models.demos.wormhole.stable_diffusion.demo.demo import test_demo_diffusiondb as demo_db
+
+from models.demos.wormhole.stable_diffusion.demo.demo import run_demo_inference as demo
+from models.demos.wormhole.stable_diffusion.demo.demo import run_demo_inference_diffusiondb as demo_db
 
 
 @pytest.mark.timeout(600)
-@skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 11 * 8192}], indirect=True)
 @pytest.mark.parametrize(
     "input_path",
     (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),
@@ -35,8 +34,7 @@ def test_demo_sd(device, reset_seeds, input_path, num_prompts, num_inference_ste
 
 
 @pytest.mark.timeout(600)
-@skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 11 * 8192}], indirect=True)
 @pytest.mark.parametrize(
     "num_prompts",
     ((1),),

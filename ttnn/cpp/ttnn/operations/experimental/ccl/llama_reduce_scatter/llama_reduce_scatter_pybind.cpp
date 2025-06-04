@@ -3,10 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "llama_reduce_scatter_pybind.hpp"
+
+#include <cstdint>
+#include <optional>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "ttnn-pybind/decorators.hpp"
 #include "llama_reduce_scatter.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
+
+
 namespace ttnn::operations::experimental::ccl {
-namespace py = pybind11;
 
 void py_bind_llama_reduce_scatter(py::module& module) {
     auto doc =
@@ -18,7 +28,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                 input_tensor (ttnn.Tensor): the input tensor.
                 intermediate_packet_buffer (ttnn.Tensor): the intermediate packet buffer tensor.
                 dim (number): the reduce dimension
-                cross_device_semaphore (ttnn.MultiDeviceGlobalSemaphore): the cross device semaphore.
+                cross_device_semaphore (ttnn.GlobalSemaphore): the cross device semaphore.
                 subdevice_id (ttnn.SubDeviceId): the subdevice id.
                 cluster_axis (number): the cluster axis.
                 mesh_device (ttnn.MeshDevice): the mesh device.
@@ -54,12 +64,13 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                const ttnn::Tensor& input_tensor,
                ttnn::Tensor& intermediate_packet_buffer,
                uint32_t dim,
-               const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
+               const GlobalSemaphore& cross_device_semaphore,
                const tt::tt_metal::SubDeviceId& subdevice_id,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
+               tt::tt_fabric::Topology topology,
                QueueId queue_id) {
                 return self(
                     queue_id,
@@ -71,7 +82,8 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                     cluster_axis,
                     mesh_device,
                     num_links,
-                    memory_config);
+                    memory_config,
+                    topology);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("intermediate_packet_buffer").noconvert(),
@@ -83,7 +95,9 @@ void py_bind_llama_reduce_scatter(py::module& module) {
             py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
+            py::arg("topology") = tt::tt_fabric::Topology::Linear,
             py::arg("queue_id") = DefaultQueueId,
+
         });
 }
 

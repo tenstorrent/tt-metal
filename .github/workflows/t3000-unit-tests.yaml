@@ -2,12 +2,18 @@ name: "(T3K) T3000 unit tests"
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
+  push:
+    branches: ["main"]
+
+permissions:
+  packages: write
+  contents: write
 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-wheel: true

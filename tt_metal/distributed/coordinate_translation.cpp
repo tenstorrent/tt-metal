@@ -11,7 +11,7 @@
 
 #include "assert.hpp"
 #include "control_plane.hpp"
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "logger.hpp"
 #include "mesh_coord.hpp"
 #include "impl/context/metal_context.hpp"
@@ -41,14 +41,14 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
         physical_coordinates.reserve(mesh_shape.mesh_size());
         for (int logical_chip_id = 0; logical_chip_id < mesh_shape.mesh_size(); ++logical_chip_id) {
             // Query the control plane to get the physical chip id from logical chip id
-            const auto physical_chip_id =
-                control_plane->get_physical_chip_id_from_mesh_chip_id({mesh_id, logical_chip_id});
+            const auto physical_chip_id = control_plane->get_physical_chip_id_from_fabric_node_id(
+                tt::tt_fabric::FabricNodeId(mesh_id, logical_chip_id));
             TT_FATAL(
                 unique_chip_ids.insert(physical_chip_id).second,
                 "Found duplicate physical chip id: {}, mesh id: {}",
                 physical_chip_id,
                 mesh_id);
-            physical_coordinates.push_back(PhysicalMeshCoordinate(/*mesh_id=*/mesh_id, /*chip_id=*/physical_chip_id));
+            physical_coordinates.push_back(PhysicalMeshCoordinate(/*mesh_id=*/*mesh_id, /*chip_id=*/physical_chip_id));
         }
         return MeshContainer<PhysicalMeshCoordinate>(mesh_shape, std::move(physical_coordinates));
     }());

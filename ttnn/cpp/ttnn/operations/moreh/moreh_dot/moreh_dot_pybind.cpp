@@ -4,14 +4,13 @@
 
 #include "moreh_dot_pybind.hpp"
 
+#include <optional>
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "device/moreh_dot_device_operation.hpp"
 #include "moreh_dot.hpp"
-#include "cpp/pybind11/decorators.hpp"
-
-namespace py = pybind11;
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot {
 

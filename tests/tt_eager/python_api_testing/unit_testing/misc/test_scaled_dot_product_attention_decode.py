@@ -491,7 +491,6 @@ def run_test_sdpa_decode_single_iter(
     assert out_pass
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -541,7 +540,6 @@ def test_sdpa_decode(
         )
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -574,7 +572,6 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
     assert device.num_program_cache_entries() == 1
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -852,6 +849,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     sharded_out=True,
     start_core=ttnn.CoreCoord(0, 0),
     sub_core_grids=None,
+    q_layout=ttnn.TILE_LAYOUT,
 ):
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -931,8 +929,16 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         )
 
     shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
-
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    if q_layout == ttnn.ROW_MAJOR_LAYOUT:
+        shard_spec_rm = ttnn.ShardSpec(shard_grid, (nh, d), ttnn.ShardOrientation.ROW_MAJOR)
+        Q_height_sharded_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec_rm
+        )
+    else:
+        Q_height_sharded_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
+        )
 
     tt_K = ttnn.as_tensor(
         paged_k_shuffled, device=device, dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
@@ -961,10 +967,9 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         Q[:, :, :nh],
         device=device,
         dtype=q_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
+        layout=q_layout,
+        memory_config=Q_height_sharded_memcfg if sharded_in else dram_memcfg,
     )
-
     start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
 
     tt_back = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -1017,7 +1022,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     assert out_pass
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "kv_dtype, q_dtype",
@@ -1043,6 +1047,8 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         # [32, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
         [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
         [1, 8, 1, 128 * 1024, 128, (8, 4), True],  # llama 3.1 8b N300
+        [1, 32, 8, 32 * 1024, 128, (8, 8), True],  # llama3.1 8b (performance-batch-1 settings)
+        # [32, 32, 8, 1024, 128, (8, 8), True],  # llama 3.1 8b (performance-batch-32 settings) -- Issue 21534: Breaking blackhole post commit tests
         # [1, 8, 1, 32768, 128, (8, 1), True],  # Llama2-70B
         # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
         # [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
@@ -1050,7 +1056,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         # [32, 8, 1, 32768, 128, (8, 8), True, True],  # Mixtral8x7b
     ),
 )
-@pytest.mark.parametrize("block_size", (64, 128), ids=["paged_64", "paged_128"])
+@pytest.mark.parametrize("block_size", (32, 64, 128), ids=["paged_32", "paged_64", "paged_128"])
 def test_sdpa_decode_paged_attention(
     device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, use_program_cache
 ):
@@ -1077,7 +1083,6 @@ def test_sdpa_decode_paged_attention(
     assert device.num_program_cache_entries() == 4
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -1110,7 +1115,6 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     )
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize(
@@ -1179,7 +1183,6 @@ def test_sdpa_decode_sharded_on_subcoregrids(
     assert device.num_program_cache_entries() == 1
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.skip("Skipping Perf Test in CI")
 def test_sdpa_decode_perf(device, use_program_cache):
@@ -1234,7 +1237,6 @@ def test_sdpa_decode_perf(device, use_program_cache):
         )
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype",
@@ -1453,7 +1455,6 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     logger.info(f"PCC failed Start Pos: {failed_start_pos}")
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
 @pytest.mark.timeout(600)
 @pytest.mark.skip("Skipping due to causing 45 minutes timeout on tt eager unit tests")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")

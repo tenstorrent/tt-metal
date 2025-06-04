@@ -5,15 +5,25 @@
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
-#include "cpp/ttnn/tensor/types.hpp"
-#include "cpp/ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace data_movement {
 
-ttnn::Shape squeeze_shape_to_4D(ttnn::Shape output_shape);
+ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& output_shape, const uint32_t);
+
+ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& output_shape);
+ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& output_shape);
+
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
+ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape);
+ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
+
+ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, const uint32_t n);
+
+ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n);
 
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
@@ -164,12 +174,10 @@ private:
     OpType operation_;
 };
 
-ttnn::Tensor pad_to_tile_vol(
-    QueueId queue_id,
-    const ttnn::Tensor& tensor,
-    const float value,
-    const bool use_multicore,
-    const std::optional<MemoryConfig>& memory_config);
+ttnn::Shape compute_padded_shape(
+    const ttnn::Shape& logical_shape,
+    const uint32_t tile_height = tt::constants::TILE_HEIGHT,
+    const uint32_t tile_width = tt::constants::TILE_WIDTH);
 
 enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
 

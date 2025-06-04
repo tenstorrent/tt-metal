@@ -72,9 +72,9 @@ ALWI void tilizeA_B_reduce_init(
  *
  * | Argument       | Description                                              | Data type | Valid range | Required |
  * |----------------|----------------------------------------------------------|-----------|-------------|----------|
- * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31     | Yes      | 
- * | icb1           | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31     | Yes      | 
- * | block          | Size of tile block to work on for source A               | uint32_t  | > 0         | Yes      | 
+ * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31     | Yes      |
+ * | icb1           | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31     | Yes      |
+ * | block          | Size of tile block to work on for source A               | uint32_t  | > 0         | Yes      |
  * | ocb            | The identifier of the output circular buffer (CB)        | uint32_t  | 0 to 31     | Yes      |
  * | num_faces      | The number of faces to in each tile being unpacked       | uint32_t  | 1 to 4      | Yes      |
  * | face_r_dim     | The number of rows in each face                          | uint32_t  | 1 to 16     | Yes      |
@@ -146,7 +146,8 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb) {
         PACK((llk_packer_wait_for_math_done()));
 
         // Datacopy
-        MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE>(0 /*dst index*/)));
+        MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(
+            0 /*dst index*/)));
         PACK((llk_pack<false, false>(0 /*tile index*/, ocb)));
 
         // Release dest
@@ -157,6 +158,7 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb) {
 
 ALWI void unpack_tilize_block(uint32_t icb, uint32_t block) { UNPACK((llk_unpack_tilize_block(icb, block))); }
 
+template <bool neginf_srcA = true, std::uint32_t reload_srcB = true, bool zero_srcA = false, bool zero_srcA_reduce = false>
 ALWI void unpack_tilizeA_B_block(
     uint32_t icb0,
     uint32_t icb1,
@@ -164,7 +166,8 @@ ALWI void unpack_tilizeA_B_block(
     uint32_t tile_idx_b,
     uint32_t num_faces = 4,
     uint32_t srca_face_r_dim = 16) {
-    UNPACK((llk_unpack_tilizeA_B_block<true, true>(icb0, icb1, block, tile_idx_b, num_faces, srca_face_r_dim)));
+    UNPACK((llk_unpack_tilizeA_B_block<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+        icb0, icb1, block, tile_idx_b, num_faces, srca_face_r_dim)));
 }
 
 // clang-format off
@@ -184,9 +187,9 @@ ALWI void unpack_tilizeA_B_block(
  *
  * | Argument       | Description                                              | Data type | Valid range                          | Required |
  * |----------------|----------------------------------------------------------|-----------|--------------------------------------|----------|
- * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31                              | Yes      | 
- * | icb1.          | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31                              | Yes      | 
- * | block          | Size of tile block to work on for source A               | uint32_t  | > 0                                  | Yes      | 
+ * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31                              | Yes      |
+ * | icb1.          | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31                              | Yes      |
+ * | block          | Size of tile block to work on for source A               | uint32_t  | > 0                                  | Yes      |
  * | tile_idx_b     | The index of the tile to copy from the source B input CB | uint32_t  | Must be less than the size of the CB | Yes      |
  * | num_faces      | The number of faces to in each tile being unpacked       | uint32_t  | 1 to 4                               | Yes      |
  * */

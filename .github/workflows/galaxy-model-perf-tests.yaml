@@ -1,0 +1,27 @@
+name: "Galaxy model perf tests"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 4" # Runs every Thursday at 12am UTC
+
+jobs:
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      tracy: true
+      build-wheel: true
+      version: 22.04
+      toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
+  tg-model-perf-tests:
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      topology: topology-6u

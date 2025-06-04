@@ -62,37 +62,7 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
         outputs.push_back(std::nullopt);
         outputs.push_back(std::nullopt);
     }
-    return std::move(outputs);
+    return outputs;
 }
 
-OptionalTensors MorehGroupNormBackward::create_async_optional_output_tensors(
-    const Tensor& output_grad,
-    const Tensor& input,
-    const Tensor& mean,
-    const Tensor& rstd,
-    const uint32_t num_groups,
-    const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& input_grad,
-    const std::optional<const Tensor>& gamma_grad,
-    const std::optional<const Tensor>& beta_grad,
-    const std::optional<MemoryConfig>& input_grad_memory_config,
-    const std::optional<MemoryConfig>& gamma_grad_memory_config,
-    const std::optional<MemoryConfig>& beta_grad_memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    TT_FATAL(
-        are_required_outputs[0] or are_required_outputs[1] or are_required_outputs[2],
-        "backward is called, but all gradients are not required");
-
-    return {
-        are_required_outputs.at(0)
-            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))
-            : std::nullopt,
-        are_required_outputs.at(1)
-            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))
-            : std::nullopt,
-        are_required_outputs.at(2)
-            ? std::optional<Tensor>(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))
-            : std::nullopt};
-}
 }  // namespace ttnn::operations::moreh::moreh_group_norm_backward

@@ -1,18 +1,31 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
 import ttnn
 
-from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
+    prepare_conv_params,
+)
 
 
 class TtUpsample2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, stride, padding, dilation, groups):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        module_path,
+        stride,
+        padding,
+        dilation,
+        groups,
+        model_config,
+    ):
         super().__init__()
 
         self.device = device
+
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
@@ -22,14 +35,15 @@ class TtUpsample2D(nn.Module):
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        self.compute_config, self.conv_config, self.tt_weights, self.tt_bias = prepare_conv_params(
-            device, weights, bias, ttnn.bfloat8_b
+        self.conv_config = model_config.get_conv_config(conv_path=module_path)
+        self.compute_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
+            device,
+            weights,
+            bias,
+            self.conv_config.weights_dtype,
+            fp32_dest_acc_en=(self.conv_config.weights_dtype == ttnn.bfloat8_b)
+            and (self.conv_config.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         )
-
-        self.input_channels = self.tt_weights.shape[1]
-        self.output_channels = self.tt_weights.shape[0]
-        self.kernel_w = self.tt_weights.shape[2]
-        self.kernel_h = self.tt_weights.shape[3]
 
     def interpolate(self, hidden_states):
         hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
@@ -40,14 +54,14 @@ class TtUpsample2D(nn.Module):
         hidden_states, input_shape = self.interpolate(hidden_states)
         B, C, H, W = input_shape
 
-        [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
+        [hidden_states, [H, W], [self.tt_weights, self.tt_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_weights,
-            in_channels=self.input_channels,
-            out_channels=self.output_channels,
+            in_channels=self.conv_params["input_channels"],
+            out_channels=self.conv_params["output_channels"],
             device=self.device,
             bias_tensor=self.tt_bias,
-            kernel_size=(self.kernel_h, self.kernel_w),
+            kernel_size=self.conv_params["kernel_size"],
             stride=self.stride,
             padding=self.padding,
             dilation=self.dilation,
@@ -61,5 +75,7 @@ class TtUpsample2D(nn.Module):
             return_output_dim=True,
             return_weights_and_bias=True,
         )
+        C = self.conv_params["output_channels"]
 
-        return tt_output_tensor_on_device, [self.output_channels, out_height, out_width]
+        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        return hidden_states, [C, H, W]

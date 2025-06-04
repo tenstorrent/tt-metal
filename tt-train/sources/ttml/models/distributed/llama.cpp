@@ -23,7 +23,7 @@ void initialize_weights(DistributedLlama& model) {
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
         if (name.find("weight") != std::string::npos) {
-            auto tensor_shape = tensor.get_logical_shape();
+            auto tensor_shape = tensor.logical_shape();
             auto* device = &autograd::ctx().get_device();
             auto num_devices = static_cast<uint32_t>(device->num_devices());
             tensor_shape[0] *= num_devices;
@@ -32,7 +32,7 @@ void initialize_weights(DistributedLlama& model) {
             tensor_ptr->set_value(
                 core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight_xtensor, device, shard_composer));
         } else if (name.find("bias") != std::string::npos) {
-            init::constant_init(tensor_ptr, tensor.get_logical_shape(), 0.F);
+            init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
         }
     }
 }
@@ -48,6 +48,7 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     float dropout_prob = config.dropout_prob;
     uint32_t num_blocks = config.num_blocks;
     runner_type = config.runner_type;
+    float theta = config.theta;
 
     fmt::print("Llama configuration:\n");
     fmt::print("    Vocab size: {}\n", vocab_size);
@@ -59,6 +60,7 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     fmt::print("    Num blocks: {}\n", num_blocks);
     fmt::print("    Positional embedding type: RoPE\n");
     fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
+    fmt::print("    Theta: {}\n", theta);
 
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
@@ -75,7 +77,26 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     }
     tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
 
-    m_rope_params = ops::build_rope_params(max_sequence_length, embedding_dim / num_heads);
+    // Create RoPE scaling params if they are set
+    ops::RopeScalingParams rope_scaling_params;
+    if (config.scaling_factor != 0.0F && config.original_context_length != 0U) {
+        rope_scaling_params.original_context_length = config.original_context_length;
+        rope_scaling_params.scaling_factor = config.scaling_factor;
+        rope_scaling_params.high_freq_factor = config.high_freq_factor;
+        rope_scaling_params.low_freq_factor = config.low_freq_factor;
+
+        fmt::print("    RoPE scaling enabled:\n");
+        fmt::print("        Scaling factor: {}\n", config.scaling_factor);
+        fmt::print("        Original context length: {}\n", config.original_context_length);
+        fmt::print("        High freq factor: {}\n", config.high_freq_factor);
+        fmt::print("        Low freq factor: {}\n", config.low_freq_factor);
+    }
+
+    m_rope_params = ops::build_rope_params(
+        /*sequence_length=*/max_sequence_length,
+        /*head_dim=*/embedding_dim / num_heads,
+        /*theta=*/theta,
+        /*rope_scaling_params=*/rope_scaling_params);
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         blocks.push_back(std::make_shared<modules::distributed::DistributedLlamaBlock>(
@@ -111,8 +132,7 @@ autograd::TensorPtr DistributedLlama::operator()(
     }
     out = (*ln_fc)(out);
     auto logits = (*fc)(out);
-    auto log_softmax = ttml::ops::log_softmax_moreh(logits, 3);
-    return log_softmax;
+    return logits;
 }
 
 std::shared_ptr<DistributedLlama> create(const LlamaConfig& config) {

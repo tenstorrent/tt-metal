@@ -75,10 +75,10 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt_metal::Buffer* src_buffer = a.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, packed_scaler_value};
     tt_metal::Buffer* dst_buffer = output.buffer();
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::W);
@@ -140,7 +140,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
         } else if (core_group_2.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
         uint32_t num_tensor_tiles_per_core = num_rows_per_core * Wt;
         tt_metal::SetRuntimeArgs(

@@ -22,35 +22,6 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-namespace test {
-// Given a tensor that is row-major datums, make it tilized
-// so that its row major within a tile, and each tile's data
-// is contiguous
-template <typename T>
-std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0, "Error");
-    TT_FATAL(cols % 32 == 0, "Error");
-    int num_tiles_r = rows / 32;
-    int num_tiles_c = cols / 32;
-    std::vector<T> result;
-    for (auto r = 0; r < num_tiles_r; r++) {
-        for (auto c = 0; c < num_tiles_c; c++) {
-            for (auto j = 0; j < 32; j++) {      // tile rows
-                for (auto i = 0; i < 32; i++) {  // tile cols
-                    // each row of tiles is 32x32 * num_tiles_c
-                    // each row within the row of tiles is cols
-                    // each col of tiles is 32
-                    // pick row of tiles, pick the row within the tile, pick col tile
-                    int index = r * 32 * 32 * num_tiles_c + j * cols + c * 32 + i;
-                    result.push_back(data.at(index));
-                }
-            }
-        }
-    }
-    return result;
-}
-}  // namespace test
-
 void print_vec(const std::vector<bfloat16>& data, int rows, int cols, string name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
@@ -401,15 +372,15 @@ int main(int argc, char** argv) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         log_info(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
-        auto activations_tilized = test::tilize(tensor.get_values(), M * 32, K * 32);
-        auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
+        auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
+        auto activations_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
 
         Buffer activation_buffer(device, activations.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
         pass &= move_tiles_to_dram(cq, activation_buffer, activations, M, K);
 
-        auto identity_tilized = test::tilize(identity, K * 32, N * 32);
-        auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
+        auto identity_tilized = tilize(identity, K * 32, N * 32);
+        auto weights_tile_layout = convert_to_tile_layout(tt::stl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
 
         Buffer weight_buffer(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
@@ -461,7 +432,7 @@ int main(int argc, char** argv) {
                 result_vec.insert(result_vec.end(), result_iter, result_iter + 512);
                 result_iter += 512;
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
+                auto result_flat_layout = convert_to_flat_layout(tt::stl::make_const_span(result_bfp16));
 
                 pass &= (golden_tile == result_flat_layout);
             }

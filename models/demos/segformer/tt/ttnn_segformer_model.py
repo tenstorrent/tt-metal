@@ -1,11 +1,12 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+from typing import Optional, Tuple, Union
+
 import ttnn
 from models.demos.segformer.tt.ttnn_segformer_encoder import TtSegformerEncoder
-from typing import Optional, Tuple, Union
-from dataclasses import dataclass
 
 
 @dataclass
@@ -35,6 +36,7 @@ class TtSegformerModel:
 
     def __call__(
         self,
+        device,
         pixel_values: ttnn.Tensor,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
@@ -48,6 +50,7 @@ class TtSegformerModel:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         encoder_outputs = self.encoder(
+            device,
             pixel_values,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,

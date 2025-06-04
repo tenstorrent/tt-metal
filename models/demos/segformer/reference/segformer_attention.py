@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-from models.demos.segformer.reference.segformer_efficient_selfattention import (
-    SegformerEfficientSelfAttention,
-)
+
+from models.demos.segformer.reference.segformer_efficient_selfattention import SegformerEfficientSelfAttention
 from models.demos.segformer.reference.segformer_selfoutput import SegformerSelfOutput
 
 

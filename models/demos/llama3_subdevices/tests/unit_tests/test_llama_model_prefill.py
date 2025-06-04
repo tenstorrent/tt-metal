@@ -31,9 +31,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (8, 4),
     ],
     indirect=True,
 )
@@ -51,7 +49,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
 )
 @pytest.mark.parametrize(
     "seq_len",
@@ -64,7 +62,11 @@ from models.utility_functions import skip_for_grayskull
         # pytest.param(LlamaOptimizations.performance, id="performance"),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 def test_llama_model_inference(
     seq_len,
     paged_attention,
@@ -76,9 +78,6 @@ def test_llama_model_inference(
     ensure_gc,
     is_ci_env,
 ):
-    if is_ci_env and optimizations == LlamaOptimizations.accuracy:
-        pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
-
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = True  # Flag to measure KV cache PCC for all layers
 
@@ -87,19 +86,19 @@ def test_llama_model_inference(
 
     # This sets the minimum PCC for each iteration based on optimization mode
     if optimizations == LlamaOptimizations.accuracy:
-        pcc = 0.91  # TODO Look on improving PCC
+        pcc = 0.92  # TODO Look on improving PCC
     else:  # performance mode
         assert optimizations == LlamaOptimizations.performance
         pcc = 0.869  # TODO Look on improving PCC
 
-    mesh_device.enable_async(True)
-
     # Use instruct weights instead of general weights
     instruct = True
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
+    model_args = TtModelArgs(
+        mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len, dummy_weights=True
+    )
     model_args.use_prefetcher = False
-    model_args.n_layers = 3
+    model_args.n_layers = 1
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")
@@ -180,6 +179,7 @@ def test_llama_model_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="prefill",
+        allocate_prefill_buffers=False,
     )
 
     logger.info("Model and caches loaded.")

@@ -77,7 +77,7 @@ def test_bw_addalpha_with_opt_output(input_shapes, alpha, device, are_required_o
 
     cq_id = 0
 
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.addalpha_bw(
         grad_tensor,
         input_tensor,
@@ -88,7 +88,7 @@ def test_bw_addalpha_with_opt_output(input_shapes, alpha, device, are_required_o
         input_b_grad=other_grad,
         queue_id=cq_id,
     )
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     tt_output_tensor_on_device = [input_grad, other_grad]
 

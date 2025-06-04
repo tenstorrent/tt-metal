@@ -46,7 +46,7 @@ jobs:
         id: generate-tag-name
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-release-amd64
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
@@ -97,15 +97,22 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: Install Tools
+        run: |
+          apt-get update && apt-get install -y git
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      - name: Test ttnn import
+        timeout-minutes: 1
+        run: |
+            python -c "import ttnn"
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-            pip install pytest
+            pip install 'torch==2.2.1+cpu' 'numpy>=1.24.4,<2' pytest
             ${{ matrix.test_group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
@@ -133,7 +140,7 @@ jobs:
             LATEST_TAG=latest-rc
           fi
           echo "Determined that the current tag is " $LATEST_TAG
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-release-amd64
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
           echo "Tagging the image as " $REPO_IMAGE_NAME:$LATEST_TAG

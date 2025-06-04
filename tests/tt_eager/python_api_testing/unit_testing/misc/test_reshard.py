@@ -514,6 +514,50 @@ def test_reshard_with_program_cache(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
         ),
+        (
+            [1, 1, 1, 96],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
+                }
+            ),
+            (1, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                }
+            ),
+            (1, 96),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+        ),
+        (
+            [1, 1, 4, 84480],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3)),
+                }
+            ),
+            (4, 2656),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                }
+            ),
+            (4, 21120),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+        ),
     ],
 )
 def test_dram_reshard(
@@ -537,7 +581,7 @@ def test_dram_reshard(
     output_mem_config = ttnn.MemoryConfig(output_sharding_scheme, output_buffer_type, output_shard_spec)
 
     input = torch.randn(input_shape).bfloat16()
-    input_tensor = ttnn.Tensor(input, ttnn.bfloat16).to(input_layout).to(device, input_mem_config)
+    input_tensor = ttnn.Tensor(input, ttnn.bfloat16, device=device, layout=input_layout, mem_config=input_mem_config)
 
     output_tensor = ttnn.reshard(input_tensor, output_mem_config)
 

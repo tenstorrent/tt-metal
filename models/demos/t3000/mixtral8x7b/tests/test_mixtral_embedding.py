@@ -5,13 +5,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
+from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 class Emb(torch.nn.Module):
@@ -24,8 +21,6 @@ class Emb(torch.nn.Module):
 
 
 def test_mixtral_embedding(device, use_program_cache, reset_seeds):
-    device.enable_async(True)
-
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(device)

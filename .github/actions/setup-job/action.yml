@@ -13,6 +13,10 @@ inputs:
     required: false
     description: Where to checkout
     default: docker-job
+  enable-watcher:
+    description: 'Enable watcher'
+    default: false
+    type: boolean
 runs:
   using: "composite"
   steps:
@@ -59,4 +63,14 @@ runs:
         WHEEL_FILENAME=$(ls -1 *.whl)
         echo "📦 Installing $WHEEL_FILENAME"
         pip3 install "$WHEEL_FILENAME"
+      shell: bash
+
+    - name: Set up env vars for watcher
+      if: ${{ inputs.enable-watcher == 'true' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling TT Metal Watcher"
+        echo "TT_METAL_WATCHER=1" >> $GITHUB_ENV
+        echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
+        echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
       shell: bash

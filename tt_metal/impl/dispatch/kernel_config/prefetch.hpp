@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,15 +8,16 @@
 #include <optional>
 
 #include "core_coord.hpp"
-#include "impl/context/metal_context.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
-#include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 
-typedef struct prefetch_static_config {
+namespace tt {
+namespace tt_metal {
+
+struct prefetch_static_config_t {
     std::optional<uint32_t> my_downstream_cb_sem_id;
 
     std::optional<uint32_t> pcie_base;
@@ -33,6 +34,7 @@ typedef struct prefetch_static_config {
     std::optional<uint32_t> scratch_db_base;
     std::optional<uint32_t> scratch_db_size;
     std::optional<uint32_t> downstream_sync_sem_id;
+    std::optional<uint32_t> ringbuffer_size;
 
     // Used for prefetch_d
     std::optional<uint32_t> cmddat_q_pages;
@@ -51,9 +53,9 @@ typedef struct prefetch_static_config {
 
     // Populated if fabric is being used to talk to downstream
     std::optional<uint32_t> client_interface_addr;
-} prefetch_static_config_t;
+};
 
-typedef struct prefetch_dependent_config {
+struct prefetch_dependent_config_t {
     std::optional<tt_cxy_pair> upstream_logical_core;
     std::optional<tt_cxy_pair> downstream_logical_core;
     std::optional<tt_cxy_pair> downstream_s_logical_core;
@@ -74,7 +76,7 @@ typedef struct prefetch_dependent_config {
     std::optional<uint32_t> downstream_mesh_id;
     std::optional<uint32_t> downstream_dev_id;
     std::optional<uint32_t> outbound_eth_chan;
-} prefetch_dependent_config_t;
+};
 
 class PrefetchKernel : public FDKernel {
 public:
@@ -102,6 +104,7 @@ public:
         } else if (d_variant) {
             this->logical_core_ = core_manager.prefetcher_d_core(device_id, channel, cq_id);
         }
+        this->kernel_type_ = FDKernelType::DISPATCH;
     }
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
@@ -110,9 +113,9 @@ public:
     void UpdateArgsForFabric(
         const CoreCoord& fabric_router,
         uint32_t outbound_eth_chan,
-        tt::tt_fabric::mesh_id_t src_mesh_id,
+        tt::tt_fabric::MeshId src_mesh_id,
         chip_id_t src_chip_id,
-        tt::tt_fabric::mesh_id_t dst_mesh_id,
+        tt::tt_fabric::MeshId dst_mesh_id,
         chip_id_t dst_chip_id) override;
     const prefetch_static_config_t& GetStaticConfig() { return static_config_; }
 
@@ -120,3 +123,6 @@ private:
     prefetch_static_config_t static_config_;
     prefetch_dependent_config_t dependent_config_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt

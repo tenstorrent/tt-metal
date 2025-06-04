@@ -1,0 +1,19 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Find all required dependencies
+find_dependency(fmt REQUIRED)
+find_dependency(nlohmann_json REQUIRED)
+find_dependency(umd REQUIRED)
+
+# Set package as found
+set(TT-@PROJECT_NAME@_FOUND TRUE)
+
+# Include the exported targets
+include("${CMAKE_CURRENT_LIST_DIR}/@PROJECT_NAME@.cmake")
+
+# Set the directory containing the CMake files for the project
+get_filename_component(@PROJECT_NAME@_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
+
+message(STATUS "Found TT-@PROJECT_NAME@ at ${@PROJECT_NAME@_CMAKE_DIR}")

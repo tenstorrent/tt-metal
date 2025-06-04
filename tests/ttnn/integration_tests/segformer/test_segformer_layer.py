@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -108,9 +108,6 @@ def test_segformer_layer(
     reset_seeds,
     is_ci_env,
 ):
-    if is_ci_env:
-        pytest.skip("Skip in CI, model is WIP, issue# 13357")
-
     torch_input_tensor = torch.randn(batch_size, 1, seq_len, hidden_size)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -148,11 +145,11 @@ def test_segformer_layer(
     ttnn_model = TtSegformerLayer(hidden_size, num_attention_heads, sequence_reduction_ratio, parameters, mlp_ratio)
 
     ttnn_output = ttnn_model(
+        device,
         ttnn_input_tensor,
         height,
         width,
         parameters=parameters,
-        device=device,
     )
     ttnn_final_output = ttnn.to_torch(ttnn_output[0])
     if len(ttnn_final_output.shape) == 4:

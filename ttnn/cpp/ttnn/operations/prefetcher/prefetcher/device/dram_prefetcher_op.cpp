@@ -21,7 +21,7 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(global_cb.has_value(), "Global circular buffer must be provided");
     ttnn::Tensor tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
-    auto global_cb = tt::tt_metal::get_global_circular_buffer(*this->global_cb, input_tensors[0].device()->id());
+    auto global_cb = *this->global_cb;
 
     // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
     const auto& sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping();
@@ -40,9 +40,9 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(tensor.device() == input_tensors[0].device(), "All tensors must be on the same device");
         TT_FATAL(tensor.get_layout() == Layout::TILE, "All tensors must be tilized");
         TT_FATAL(
-            tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+            tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
             "Input tensors must be width sharded");
-        TT_FATAL(tensor.memory_config().buffer_type == BufferType::DRAM, "Input tensors must be in DRAM");
+        TT_FATAL(tensor.memory_config().buffer_type() == BufferType::DRAM, "Input tensors must be in DRAM");
 
         // Check that all tensors' N (per shard) is divisible by number of cores in global CB receiver
         TT_FATAL(
@@ -64,9 +64,9 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
         "tensors_addrs must be on the same device as the input tensors");
     TT_FATAL(tensor_addrs.get_layout() == Layout::ROW_MAJOR, "Tensor containing addresses must be row major");
     TT_FATAL(
-        tensor_addrs.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        tensor_addrs.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Tensor containing addresses must be height sharded");
-    TT_FATAL(tensor_addrs.memory_config().buffer_type == BufferType::L1, "Tensor containing addresses must be in L1");
+    TT_FATAL(tensor_addrs.memory_config().buffer_type() == BufferType::L1, "Tensor containing addresses must be in L1");
 
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.get_dtype());
     TT_FATAL(tensor_addrs_data_format == tt::DataFormat::UInt32, "Tensor containing addresses must be of type UInt32");
@@ -80,8 +80,7 @@ std::vector<ttnn::TensorSpec> DramPrefetcher::compute_output_specs(const std::ve
 }
 tt::tt_metal::operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    auto global_cb = tt::tt_metal::get_global_circular_buffer(*this->global_cb, input_tensors[0].device()->id());
-    return dram_prefetcher_multi_core(input_tensors, this->num_layers, global_cb);
+    return dram_prefetcher_multi_core(input_tensors, this->num_layers, *this->global_cb, this->enable_performance_mode);
 }
 
 }  // namespace ttnn::operations::dram_prefetcher

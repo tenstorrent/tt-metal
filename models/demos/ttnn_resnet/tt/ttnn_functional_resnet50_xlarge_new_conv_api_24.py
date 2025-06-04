@@ -2,16 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import get_conv_input_memory_config
-from models.utility_functions import (
-    is_grayskull,
-    is_wormhole_b0,
-    pad_and_fold_conv_activation_for_unity_stride,
-)
 from typing import List
+
+import torch
 from loguru import logger
+
+import ttnn
+from models.utility_functions import is_grayskull, is_wormhole_b0, pad_and_fold_conv_activation_for_unity_stride
 
 hardcoded_matmul_config_linear = {
     1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -404,19 +401,6 @@ class resnet50:
         self.conv1_output_width = ttnn.get_conv_output_dim(self.conv1_input_width, 4, 1, 0)
         assert self.conv1_weight_tensor.shape[2] == 4
 
-        self.grayskull_conv1_input_memory_config = get_conv_input_memory_config(
-            self.batch_size,
-            self.conv1_input_channels,
-            self.conv1_input_height,
-            self.conv1_input_width,
-            self.conv1_output_channels,
-            self.conv1_output_height,
-            self.conv1_output_width,
-            device.compute_with_storage_grid_size(),
-            16,
-            True,
-        )
-
         self.layer1 = self._make_layer(
             parameters=parameters.layer1,
             planes=64,
@@ -540,11 +524,6 @@ class resnet50:
             elif batch_size == 20:
                 act_block_h_override = 640
 
-        if is_grayskull():
-            input_tensor = ttnn.to_device(
-                input_tensor, device=device, memory_config=self.grayskull_conv1_input_memory_config
-            )
-
         x, [x_height, x_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -563,7 +542,6 @@ class resnet50:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
-                input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
             ),
             compute_config=ttnn.init_device_compute_kernel_config(
@@ -894,7 +872,6 @@ class resnet50:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
-                input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
             ),
             compute_config=ttnn.init_device_compute_kernel_config(

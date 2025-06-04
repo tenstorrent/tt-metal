@@ -19,31 +19,18 @@ Tensor _fast_reduce_nc(
     const std::optional<const ttnn::Tensor>& output,
     const MemoryConfig& output_mem_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
-
-    TT_FATAL(input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE, "Error");
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Error");
     auto kernel_config_val =
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    operation::launch_op(
-        [dim, output_mem_config, kernel_config_val, queue_id](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            return operation::run(
-                FastReduceNCDeviceOperation{
-                    .dim = dim, .output_mem_config = output_mem_config, .compute_kernel_config = kernel_config_val},
-                input_tensors,
-                optional_input_tensors,
-                optional_output_tensors,
-                queue_id);
-        },
-        {input},
-        output_tensors,
-        {},
-        {output});
-
-    return output_tensors.at(0);
+    return operation::run(
+               FastReduceNCDeviceOperation{
+                   .dim = dim, .output_mem_config = output_mem_config, .compute_kernel_config = kernel_config_val},
+               {input},
+               {},
+               {output},
+               queue_id)
+        .at(0);
 }
 
 void FastReduceNCDeviceOperation::validate_with_output_tensors(

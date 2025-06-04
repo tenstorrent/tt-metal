@@ -44,6 +44,9 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     const uint32_t seq_len_t = input.get_padded_shape()[2] / TILE_HEIGHT;
     const uint32_t head_dim_t = input.get_padded_shape()[3] / TILE_WIDTH;
 
+    // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
+    const bool freq_per_head = cos.get_padded_shape()[1] == n_heads;
+
     const uint32_t Wbytes = input.get_padded_shape()[-1] * sizeof(bfloat16);
 
     tt_metal::IDevice* device = input.device();
@@ -80,9 +83,10 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     uint32_t input_cb_num_tiles = num_sin_cos_rows_per_core * num_input_tiles;
 
-    const bool use_reload_impl = num_rows_per_core > 8;
+    // Reload implementation is used if sequence length is larger than some heuristic threshold where
+    // the buffer size will be too large or if sin/cos are not broadcasted across heads.
+    const bool use_reload_impl = num_rows_per_core > 8 || freq_per_head;
     if (use_reload_impl) {
-        // Do reload implementation of kernel to reduce buffer sizes
         // Only size CBs to double buffer head_dim_t tiles for all inputs
         input_cb_num_tiles = num_input_tiles;
         num_cos_sin_tiles = num_input_tiles;
@@ -154,10 +158,10 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     auto trans_mat_buffer = trans_mat.buffer();
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool cos_is_dram = cos_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool sin_is_dram = sin_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool trans_mat_is_dram = trans_mat_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool cos_is_dram = cos_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool sin_is_dram = sin_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool trans_mat_is_dram = trans_mat_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_cb_index,
@@ -171,8 +175,9 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         (std::uint32_t)n_heads,
         (std::uint32_t)seq_len_t,
         (std::uint32_t)head_dim_t,
+        (std::uint32_t)freq_per_head,
     };
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
         (std::uint32_t)dst_is_dram,

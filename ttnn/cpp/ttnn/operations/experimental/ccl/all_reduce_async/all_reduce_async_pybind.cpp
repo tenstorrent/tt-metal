@@ -7,16 +7,16 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
+namespace {
 
 template <typename ccl_operation_t>
 void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -27,9 +27,9 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& gather_multi_device_global_semaphore,
+               const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& to_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& gather_multi_device_global_semaphore,
                ttnn::operations::reduction::ReduceType math_op,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
@@ -62,9 +62,9 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
                const ttnn::Tensor& input_tensor,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
-               const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& gather_multi_device_global_semaphore,
+               const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& to_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& gather_multi_device_global_semaphore,
                ttnn::operations::reduction::ReduceType math_op,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
@@ -102,7 +102,7 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
                ttnn::Tensor& buffer_tensor,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
-               const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               const GlobalSemaphore& multi_device_global_semaphore,
                const std::optional<const DataType> dtype,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
@@ -133,10 +133,10 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("subdevice_id") = std::nullopt});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_all_reduce_async(pybind11::module& module) {
-    detail::bind_all_reduce_async(
+    bind_all_reduce_async(
         module,
         ttnn::experimental::all_reduce_async,
         R"doc(

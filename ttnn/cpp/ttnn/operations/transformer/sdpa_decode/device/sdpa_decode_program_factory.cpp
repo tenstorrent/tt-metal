@@ -50,7 +50,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     const bool is_paged_attention = page_table_tensor.has_value();
 
-    const auto q_shape = input_tensor_q.get_padded_shape();
+    auto q_shape = input_tensor_q.get_padded_shape();
+    const bool tilize_q = input_tensor_q.get_layout() == Layout::ROW_MAJOR;
+    q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);  // round up for row major Q tensor.
     const auto q_shape_unpadded = input_tensor_q.get_logical_shape();
     const auto k_shape = input_tensor_k.get_padded_shape();
     // Use k_shape for S and DH since Q might be different for decode
@@ -368,14 +370,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         auto cb_in8_id = CreateCircularBuffer(program, core_grid, c_in8_config);
     }
 
-    uint32_t page_table_tile_size = 0;
     uint32_t log2_page_table_page_size = 0;
     uint32_t page_table_stick_size = 0;
     if (is_paged_attention) {
         auto page_table_buffer = page_table_tensor.value().buffer();
         tt::DataFormat page_table_df =
             tt_metal::datatype_to_dataformat_converter(page_table_tensor.value().get_dtype());
-        page_table_tile_size = tt_metal::detail::TileSize(page_table_df);
         page_table_stick_size = page_table_buffer->aligned_page_size();
 
         // cb page_table
@@ -438,6 +438,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                             .set_page_size(CBIndex::c_7, stats_tile_size)
                             .set_tile_dims(CBIndex::c_7, stats_tile);
     auto c_in7_id = CreateCircularBuffer(program, core_grid, c_in7_config);
+
+    // tilizedQ input
+    auto c_in8_config = CircularBufferConfig(q_tiles * q_tile_size, {{CBIndex::c_10, q_df}})
+                            .set_page_size(CBIndex::c_10, q_tile_size)
+                            .set_tile_dims(CBIndex::c_10, q_tile);
+    auto cb_in8_id = CreateCircularBuffer(program, core_grid, c_in8_config);
 
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{CBIndex::c_24, im_df}})
@@ -630,6 +636,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         is_causal,
         use_attention_mask,
         max_dynamic_chunk_size,
+        tilize_q,
     };
 
     std::vector<uint32_t> writer_compile_time_args_common = {
@@ -681,6 +688,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         is_causal,
         use_attention_mask,
         max_dynamic_chunk_size,
+        tilize_q,
     };
 
     // Determine granularity for compute loops

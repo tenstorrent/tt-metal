@@ -18,7 +18,6 @@
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "metal_soc_descriptor.h"
-#include "rtoptions.hpp"
 #include "tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -43,23 +42,21 @@ inline std::string get_core_descriptor_file(
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
-    bool targeting_sim = llrt::RunTimeOptions::get_instance().get_simulator_enabled();
+    bool targeting_sim = tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
     if (targeting_sim) {
         switch (arch) {
-            case tt::ARCH::Invalid:
+            default:
                 throw std::runtime_error(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
-            case tt::ARCH::GRAYSKULL: return core_desc_dir + "grayskull_versim_1x1_arch.yaml";
             case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
             case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
             case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
         };
     } else {
         switch (arch) {
-            case tt::ARCH::Invalid:
+            default:
                 throw std::runtime_error(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
-            case tt::ARCH::GRAYSKULL: return core_desc_dir + "grayskull_120_arch.yaml";
             case tt::ARCH::WORMHOLE_B0:
                 return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
                                             ? "wormhole_b0_80_arch_eth_dispatch.yaml"
@@ -87,16 +84,14 @@ const core_descriptor_t& get_core_descriptor_config(
     ARCH arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
     uint32_t harvesting_mask = tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
     std::bitset<32> mask_bitset(harvesting_mask);
-    uint32_t num_harvested_rows = mask_bitset.count();
+    uint32_t num_harvested_on_axis = mask_bitset.count();
 
-    if (num_harvested_rows > 2) {
-        TT_THROW("At most two rows can be harvested, but detected {} harvested rows", num_harvested_rows);
-    }
-    if (num_harvested_rows == 1 and arch == tt::ARCH::GRAYSKULL) {
-        TT_THROW("One row harvested Grayskull is not supported");
+    if (num_harvested_on_axis > 2) {
+        TT_THROW(
+            "At most two rows or cols can be harvested, but detected {} along harvested axis", num_harvested_on_axis);
     }
 
-    std::string product_name = get_product_name(arch, num_harvested_rows);
+    std::string product_name = get_product_name(arch, num_harvested_on_axis);
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(device_id) == BoardType::N150) {
             // some Galaxy machines are setup with N150s that have 0 harvested rows.
@@ -195,7 +190,7 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        dispatch_cores.size() || llrt::RunTimeOptions::get_instance().get_simulator_enabled(),
+        dispatch_cores.size() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled(),
         "Dispatch cores size must be positive");
 
     std::vector<CoreCoord> logical_compute_cores;
@@ -270,9 +265,11 @@ std::optional<uint32_t> get_storage_core_bank_size(
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     if (core_desc.storage_core_bank_size.has_value()) {
         TT_FATAL(
-            core_desc.storage_core_bank_size.value() % tt_metal::hal_ref.get_alignment(tt_metal::HalMemType::L1) == 0,
+            core_desc.storage_core_bank_size.value() %
+                    tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::L1) ==
+                0,
             "Storage core bank size must be {} B aligned",
-            tt_metal::hal_ref.get_alignment(tt_metal::HalMemType::L1));
+            tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::L1));
     }
     return core_desc.storage_core_bank_size;
 }

@@ -24,8 +24,8 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/data_types.hpp>
 #include "dispatch_test_utils.hpp"
@@ -39,8 +39,8 @@
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
-#include "span.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
 #include "sub_device_test_utils.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>

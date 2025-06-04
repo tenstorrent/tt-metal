@@ -14,7 +14,11 @@ namespace ttnn::operations::experimental::dropout {
 
 DropoutDeviceOperation::program_factory_t DropoutDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return program::DropoutProgramFactory{};
+    if (args.use_per_device_seed) {
+        return program::DropoutMeshWorkloadFactory{};
+    } else {
+        return program::DropoutProgramFactory{};
+    }
 }
 
 void DropoutDeviceOperation::validate_on_program_cache_hit(
@@ -49,10 +53,10 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
         "Operands to dropout need to be allocated in buffers on the device. Buffer is null.");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == out_memory_config.memory_layout,
+        input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
         "Dropout operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout),
-        static_cast<int>(out_memory_config.memory_layout));
+        static_cast<int>(input_tensor.memory_config().memory_layout()),
+        static_cast<int>(out_memory_config.memory_layout()));
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
@@ -62,10 +66,10 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
             static_cast<int>(input_tensor.get_layout()));
 
         TT_FATAL(
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Dropout operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
             "memory layout: `{}`",
-            static_cast<int>(input_tensor.memory_config().memory_layout));
+            static_cast<int>(input_tensor.memory_config().memory_layout()));
     }
 
     if (preallocated_output_tensor.has_value()) {
@@ -132,6 +136,7 @@ DropoutDeviceOperation::invoke(
     float prob,
     float scale,
     uint32_t seed,
+    bool use_per_device_seed,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
@@ -140,6 +145,7 @@ DropoutDeviceOperation::invoke(
             .output_dtype = output_dtype,
             .output_memory_config = output_memory_config,
             .seed = seed,
+            .use_per_device_seed = use_per_device_seed,
             .prob = prob,
             .scale = scale,
         },

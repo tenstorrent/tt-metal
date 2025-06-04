@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
@@ -129,10 +129,11 @@ TEST(DeviceCommandTest, AddDispatchSetGoSignalNocData) {
 
 TEST(DeviceCommandTest, AddDispatchSetWriteOffsets) {
     DeviceCommandCalculator calculator;
-    calculator.add_dispatch_set_write_offsets();
+    calculator.add_dispatch_set_write_offsets(CQ_DISPATCH_MAX_WRITE_OFFSETS);
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
-    command.add_dispatch_set_write_offsets(0, 0, 0);
+    std::vector<uint32_t> offsets(CQ_DISPATCH_MAX_WRITE_OFFSETS, 0);
+    command.add_dispatch_set_write_offsets(offsets);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 

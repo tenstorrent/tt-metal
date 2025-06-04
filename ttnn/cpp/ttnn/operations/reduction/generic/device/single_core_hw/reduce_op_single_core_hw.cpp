@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     tt_metal::IDevice* device = a.device();
 
     tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -77,10 +77,10 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
 
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, packed_scaler_value};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index, (std::uint32_t)dst_is_dram};
     std::map<string, string> reader_defines;
 

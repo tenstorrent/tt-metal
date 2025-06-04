@@ -2,20 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
-import torch
-import pytest
 import re
-import os
-import ttnn
-from models.demos.qwen.tt.qwen_common import (
-    HostEmbedding,
-    get_single_rot_mat,
-)
-from models.demos.qwen.tt.qwen_model import TtTransformer
-from models.demos.qwen.tt.qwen_embedding import TtQwenEmbedding
-from models.demos.qwen.tt.model_config import TtModelArgs
-from models.demos.qwen.reference.tokenizer import Tokenizer
 
+import pytest
+import torch
+
+import ttnn
+from models.demos.qwen.reference.tokenizer import Tokenizer
+from models.demos.qwen.tt.model_config import TtModelArgs
+from models.demos.qwen.tt.qwen_common import HostEmbedding, get_single_rot_mat
+from models.demos.qwen.tt.qwen_embedding import TtQwenEmbedding
+from models.demos.qwen.tt.qwen_model import TtTransformer
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler, skip_for_grayskull
 
@@ -42,8 +39,6 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
 )
 def test_qwen_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
-
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
     tokenizer = Tokenizer(model_args.tokenizer_path)
@@ -97,7 +92,7 @@ def test_qwen_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_p
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
-    ttnn.DumpDeviceProfiler(mesh_device.get_devices()[0])
+    ttnn.DumpDeviceProfiler(mesh_device)
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
@@ -176,7 +171,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
         ttnn.deallocate(tt_out)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok)
         ttnn.deallocate(tt_out_rm)
 
         # Update the rotation matrix for the next iteration

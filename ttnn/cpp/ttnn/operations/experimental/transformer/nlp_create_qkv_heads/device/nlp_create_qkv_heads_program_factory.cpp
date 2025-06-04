@@ -97,14 +97,14 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     tt_metal::Program program = tt_metal::CreateProgram();
 
     bool tile_dtype_is_bfloat16 = input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in1_is_dram = false;
     if (read_from_input_tensor_kv) {
-        in1_is_dram = in1_buffer_type == tt_metal::BufferType::DRAM ? true : false;
+        in1_is_dram = in1_buffer_type == tt_metal::BufferType::DRAM;
     }
 
     // TODO: Q, K, V doesn't necessarily need to be the same output mem config
-    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in0_is_dram,
@@ -626,11 +626,6 @@ void NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto src_buffer = tensor_args.input_tensor_q.buffer();
-
-    uint32_t src_kv_buffer_addr = 0;
-    if (cached_program.shared_variables.read_from_input_tensor_kv) {
-        src_kv_buffer_addr = tensor_args.input_tensor_kv.value().buffer()->address();
-    }
 
     auto dst_buffer_query = std::get<0>(tensor_return_value).buffer();
     auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();

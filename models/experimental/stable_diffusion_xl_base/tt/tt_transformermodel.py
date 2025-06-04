@@ -15,7 +15,9 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 
 
 class TtTransformer2DModel(nn.Module):
-    def __init__(self, device, state_dict, module_path, query_dim, num_attn_heads, out_dim):
+    def __init__(
+        self, device, state_dict, module_path, query_dim, num_attn_heads, out_dim, weights_dtype=ttnn.bfloat16
+    ):
         super().__init__()
 
         self.device = device
@@ -32,27 +34,32 @@ class TtTransformer2DModel(nn.Module):
         for i in range(self.num_layers):
             self.transformer_blocks.append(
                 TtBasicTransformerBlock(
-                    device, state_dict, f"{module_path}.transformer_blocks.{i}", query_dim, num_attn_heads, out_dim
+                    device,
+                    state_dict,
+                    f"{module_path}.transformer_blocks.{i}",
+                    query_dim,
+                    num_attn_heads,
+                    out_dim,
+                    weights_dtype=weights_dtype,
                 )
             )
 
         norm_weights = state_dict[f"{module_path}.norm.weight"]
         norm_bias = state_dict[f"{module_path}.norm.bias"]
         self.gamma_t, self.beta_t = prepare_gn_beta_gamma(device, norm_weights, norm_bias, self.norm_core_grid.y)
+        self.input_mask = prepare_gn_mask(self.device, norm_weights.shape[0], self.norm_groups, self.norm_core_grid.y)
 
         weights = state_dict[f"{module_path}.proj_in.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.proj_in.bias"]
-        self.tt_weights_in, self.tt_bias_in = prepare_linear_params(device, weights, bias, ttnn.bfloat8_b)
+        self.tt_weights_in, self.tt_bias_in = prepare_linear_params(device, weights, bias, weights_dtype)
 
         weights = state_dict[f"{module_path}.proj_out.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.proj_out.bias"]
-        self.tt_weights_out, self.tt_bias_out = prepare_linear_params(device, weights, bias, ttnn.bfloat8_b)
+        self.tt_weights_out, self.tt_bias_out = prepare_linear_params(device, weights, bias, weights_dtype)
 
     def forward(self, input_tensor, input_shape, attention_mask=None, encoder_hidden_states=None):
         B, C, H, W = input_shape
         hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-
-        input_mask_tensor = prepare_gn_mask(self.device, C, self.norm_groups, self.norm_core_grid.y)
 
         grid_coord = ttnn.CoreCoord(self.norm_core_grid.x - 1, self.norm_core_grid.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
@@ -66,14 +73,13 @@ class TtTransformer2DModel(nn.Module):
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
-            input_mask=input_mask_tensor,
+            input_mask=self.input_mask,
             weight=self.gamma_t,
             bias=self.beta_t,
             memory_config=sharded_mem_config,
             core_grid=self.norm_core_grid,
             epsilon=self.norm_eps,
         )
-        ttnn.deallocate(input_mask_tensor)
 
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
 

@@ -294,7 +294,7 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
     }
     TT_ASSERT(v.img_h < img_height && v.img_w < img_width);
 
-    if (false) {
+    if (false) { // NOLINT(readability-simplify-boolean-expr)
         log_debug(tt::LogOp, "   top_partial_middle_aligned_row_width: {}", top_partial_middle_aligned_row_width);
         log_debug(tt::LogOp, "   skip_top_partial_middle_aligned_row: {}", skip_top_partial_middle_aligned_row);
         log_debug(tt::LogOp, "   top_partial_right_aligned_row_width: {}", top_partial_right_aligned_row_width);
@@ -367,12 +367,12 @@ operation::ProgramWithCallbacks downsample_single_core(
 
     uint32_t ncores_x_full_grid = device->compute_with_storage_grid_size().x;
     auto [num_cores_height_sliced, num_cores_width_sliced] = get_num_cores_height_width_sliced(
-        a.shard_spec().value().grid, a.memory_config().memory_layout, a.shard_spec().value().orientation);
+        a.shard_spec().value().grid, a.memory_config().memory_layout(), a.shard_spec().value().orientation);
     uint32_t num_cores = num_cores_height_sliced * num_cores_width_sliced;
     auto all_cores = a.shard_spec().value().grid;
-    auto memory_layout = a.memory_config().memory_layout;
+    auto memory_layout = a.memory_config().memory_layout();
     TT_ASSERT(all_cores == output.shard_spec().value().grid);
-    TT_ASSERT(memory_layout == output.memory_config().memory_layout);
+    TT_ASSERT(memory_layout == output.memory_config().memory_layout());
     TT_ASSERT(
         memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -720,11 +720,7 @@ operation::ProgramWithCallbacks downsample_single_core(
             TT_ASSERT(local_read_pattern_offset == 0);
             local_read_pattern_offset = local_start_h % TILE_HEIGHT;
         }
-        if (v.input_flat_h != 0) {
-            input_flat_h_is_of_current_core = false;
-        } else {
-            input_flat_h_is_of_current_core = true;  // updating flag for next core
-        }
+        input_flat_h_is_of_current_core = (v.input_flat_h == 0);  // updating flag for next core
         TT_ASSERT(local_input_num_rows_of_tiles <= num_rows_of_input_tiles);
 
         if (v.output_flat_h != 0) {

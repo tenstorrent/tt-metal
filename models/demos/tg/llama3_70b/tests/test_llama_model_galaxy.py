@@ -2,33 +2,32 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-from loguru import logger
-import torch
-import ttnn
+import gc
 import os
 
-import scipy
-from sklearn.metrics import top_k_accuracy_score
 import numpy as np
+import pytest
+import scipy
+import torch
+from loguru import logger
+from sklearn.metrics import top_k_accuracy_score
 
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy
-from models.demos.tg.llama3_70b.tt.llama_common import PytorchLlamaModel
-from models.utility_functions import skip_for_grayskull
-from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    check_mesh_device,
-    extract_pcc_from_log,
     BASE_URL,
-    UNIT_TEST_START_POS,
     UNIT_TEST_GENERATION_LENGTH,
-    comp_pcc,
-    should_skip_model_load,
-    check_kv_cache,
+    UNIT_TEST_START_POS,
     ConcatMesh2DToTensor,
+    check_kv_cache,
+    check_mesh_device,
+    comp_pcc,
+    extract_pcc_from_log,
+    should_skip_model_load,
 )
-import gc
+from models.demos.tg.llama3_70b.tt.llama_common import PytorchLlamaModel, setup_llama_env
+from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy
+from models.utility_functions import skip_for_grayskull
 
 
 def run_test_LlamaModel_inference(

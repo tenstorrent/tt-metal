@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,12 +11,13 @@ class TtSegformerMixFFN:
         super().__init__()
         self.dwconv = TtSegformerDWConv(parameters["dwconv"], hidden_features)
 
-    def __call__(self, hidden_states: ttnn.Tensor, height: int, width: int, parameters, device):
+    def __call__(self, device, hidden_states: ttnn.Tensor, height: int, width: int, parameters):
         if len(hidden_states.shape) == 4:
             batch_size, __, seq_len, hidden_size = hidden_states.shape
         elif len(hidden_states.shape) == 3:
             batch_size, seq_len, hidden_size = hidden_states.shape
 
+        do_reshard = 1
         mm_f_x_strategy = ttnn.ShardStrategy.HEIGHT
         mm_f_x_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         mm_f_y = 8
@@ -34,19 +35,22 @@ class TtSegformerMixFFN:
             mm_f_x_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
         elif (seq_len == 16384) and (hidden_size == 32):
             mm_f_x = 8
+            do_reshard = 0
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
-        hidden_states = ttnn.to_memory_config(
-            hidden_states,
-            memory_config=ttnn.create_sharded_memory_config(
-                hidden_states.shape,
-                core_grid=ttnn.CoreGrid(y=mm_f_y, x=mm_f_x),
-                strategy=mm_f_x_strategy,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-            dtype=ttnn.bfloat8_b,
-        )
+        if do_reshard:
+            hidden_states = ttnn.to_memory_config(
+                hidden_states,
+                memory_config=ttnn.create_sharded_memory_config(
+                    hidden_states.shape,
+                    core_grid=ttnn.CoreGrid(y=mm_f_y, x=mm_f_x),
+                    strategy=mm_f_x_strategy,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+                dtype=ttnn.bfloat8_b,
+            )
+
         hidden_states = ttnn.linear(
             hidden_states,
             parameters.dense1.weight,
@@ -57,8 +61,8 @@ class TtSegformerMixFFN:
         )
 
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
-        hidden_states, __, __ = self.dwconv(hidden_states, height, width, device)
-        # # TODO: GeLU on sharded data
+        hidden_states, __, __ = self.dwconv(device, hidden_states, height, width)
+        # TODO: GeLU on sharded data
         hidden_states = ttnn.gelu(hidden_states)
 
         hidden_states = ttnn.to_memory_config(

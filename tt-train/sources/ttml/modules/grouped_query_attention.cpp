@@ -15,11 +15,11 @@ namespace ttml::modules {
 GroupedQueryAttention::GroupedQueryAttention(const GQAConfig& config) :
     m_embedding_dim(config.embedding_dim), m_num_heads(config.num_heads), m_num_groups(config.num_groups) {
     // create layers
-    m_q_linear = std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, m_embedding_dim);
+    m_q_linear = std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, m_embedding_dim, config.bias_linears);
     auto concat_kv_dim = 2U * m_num_groups * (m_embedding_dim / m_num_heads);
-    m_kv_linear = std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, concat_kv_dim);
+    m_kv_linear = std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, concat_kv_dim, config.bias_linears);
     m_dropout = std::make_shared<ttml::modules::DropoutLayer>(config.dropout_prob);
-    m_out_linear = std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, m_embedding_dim);
+    m_out_linear = std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, m_embedding_dim, config.bias_linears);
     m_embedding = std::make_shared<ttml::modules::RotaryEmbedding>(config.rope_params);
 
     // register modules

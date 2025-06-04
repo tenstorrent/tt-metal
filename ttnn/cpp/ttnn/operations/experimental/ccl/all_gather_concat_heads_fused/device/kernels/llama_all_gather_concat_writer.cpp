@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
@@ -25,112 +25,12 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
-constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(8);
-constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(9);
-constexpr uint32_t cb_id_q_out = get_compile_time_arg_val(10);
-constexpr uint32_t head_size = get_compile_time_arg_val(11);
-constexpr uint32_t batch = get_compile_time_arg_val(12);
-constexpr uint32_t head_size_num_tiles = get_compile_time_arg_val(13);
-constexpr uint32_t PHASES_TO_READ =
-    get_compile_time_arg_val(14);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
-
-constexpr uint32_t in_num_cores = get_compile_time_arg_val(15);
-constexpr uint32_t face_h = get_compile_time_arg_val(16);
-constexpr uint32_t face_hw = get_compile_time_arg_val(17);
-
-constexpr uint32_t temp_cb_id = get_compile_time_arg_val(18);
-
-constexpr uint32_t batch_size = get_compile_time_arg_val(19);
-constexpr uint32_t batch_start_1 = get_compile_time_arg_val(20);
-constexpr uint32_t batch_end_1 = get_compile_time_arg_val(21);
-constexpr uint32_t batch_start_2 = get_compile_time_arg_val(22);
-constexpr uint32_t batch_end_2 = get_compile_time_arg_val(23);
-constexpr uint32_t start_local = get_compile_time_arg_val(24);
-constexpr uint32_t num_sem_ranges = get_compile_time_arg_val(25);
-constexpr uint32_t tile_size = get_compile_time_arg_val(26);
-constexpr uint32_t num_tiles_per_core_concat = get_compile_time_arg_val(27);
-
-void batch_loop(
-    uint32_t q_start_addr,
-    const uint32_t cb_write_ptr_base,
-    uint64_t qkv_read_addr,
-    uint32_t num_tiles_read_cur_core,
-    uint32_t cur_core_idx,
-    uint32_t start,
-    uint32_t end,
-    uint32_t concat_arg_start,
-    tt_l1_ptr uint32_t* in0_mcast_noc_x,
-    tt_l1_ptr uint32_t* in0_mcast_noc_y,
-    uint32_t& in_tile_offset_by_head) {
-    for (uint32_t q = start; q < end; ++q) {
-        uint32_t wptr_offset = q < face_h ? q * SUBTILE_LINE_BYTES : (q + face_h) * SUBTILE_LINE_BYTES;
-        uint32_t q_write_addr = cb_write_ptr_base + wptr_offset;
-        for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
-            noc_async_read(
-                qkv_read_addr + face_hw * ELEMENT_SIZE, q_write_addr + face_hw * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
-
-            qkv_read_addr += tile_size;
-            q_write_addr += tile_size;
-            num_tiles_read_cur_core++;
-
-            if (num_tiles_read_cur_core == num_tiles_per_core_concat) {
-                cur_core_idx++;
-                qkv_read_addr =
-                    get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                    in_tile_offset_by_head;
-                num_tiles_read_cur_core = 0;
-            }
-        }
-    }
-};
-
-void nlp_concat(
-    uint32_t batch,
-    uint32_t q_start_addr,
-    uint32_t head_size,
-    uint32_t cb_id_q_out,
-    uint32_t concat_arg_start,
-    bool nlp_local,
-    uint32_t start_local,
-    tt_l1_ptr uint32_t* in0_mcast_noc_x,
-    tt_l1_ptr uint32_t* in0_mcast_noc_y,
-    uint32_t& in_tile_offset_by_head) {
-    // Q
-    uint32_t cur_core_idx = batch_start_1;
-
-    uint64_t qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                             in_tile_offset_by_head;
-
-    uint32_t num_tiles_read_cur_core = 0;
-    uint32_t q_write_addr = 0;
-    const uint32_t cb_write_ptr_base = get_write_ptr(cb_id_q_out);
-
-    uint32_t start = nlp_local ? start_local : batch_start_1;
-    uint32_t end = nlp_local ? start_local + 8 : batch_end_1;
-    uint32_t idx_end = nlp_local ? 1 : batch_size;
-
-    for (uint32_t batch_range = 0; batch_range < idx_end; batch_range++) {
-        batch_loop(
-            q_start_addr,
-            cb_write_ptr_base,
-            qkv_read_addr,
-            num_tiles_read_cur_core,
-            cur_core_idx,
-            start,
-            end,
-            concat_arg_start,
-            in0_mcast_noc_x,
-            in0_mcast_noc_y,
-            in_tile_offset_by_head);
-        start = batch_start_2;
-        end = batch_end_2;
-        cur_core_idx = batch_start_2;
-        qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                        in_tile_offset_by_head;
-    }
-
-    noc_async_read_barrier();
-};
+constexpr bool dynamic_alternate = get_compile_time_arg_val(8);
+constexpr uint32_t num_sem_ranges = get_compile_time_arg_val(9);
+constexpr uint32_t out_ready_sem_wait_value = get_compile_time_arg_val(10);
+constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
+constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
+constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -141,21 +41,21 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
 
-    size_t arg_idx = 1;
+    size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
-    constexpr uint32_t num_tiles_per_core = 4;  // get_arg_val<uint32_t>(arg_idx++);
+    uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
     bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
     bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    constexpr uint8_t out_ready_sem_noc0_x = 19;       // get_arg_val<uint32_t>(arg_idx++);
-    constexpr uint8_t out_ready_sem_noc0_y = 18;       // get_arg_val<uint32_t>(arg_idx++);
-    constexpr uint32_t out_ready_sem_wait_value = 12;  // get_arg_val<uint32_t>(arg_idx++);
+    uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
     const uint32_t concat_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t concat_semaphore_send_addr2 = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
@@ -172,16 +72,10 @@ void kernel_main() {
     arg_idx += num_sem_ranges;
 
     size_t arg_for_fab = arg_idx;
+    constexpr bool connect_to_fabric_when_creating = true;
     auto fabric_connection =
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
             arg_idx);
-
-    uint32_t concat_arg_start = get_arg_val<uint32_t>(0);
-    uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(concat_arg_start);
-    uint32_t q_start_addr = get_arg_val<uint32_t>(concat_arg_start + 1);
-
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + concat_arg_start));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + in_num_cores + concat_arg_start));
 
     // packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
@@ -191,6 +85,8 @@ void kernel_main() {
     auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
     cb_reserve_back(reserved_packet_header_cb_id, 1);
+    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
+    cb_push_back(reserved_packet_header_cb_id, 1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -226,6 +122,12 @@ void kernel_main() {
             fabric_connection,
             l1_read_addr,
             num_tiles_to_read_this_core * tensor0_page_size);
+        if constexpr (dynamic_alternate) {
+            std::swap(
+                pkt_hdr_forward->routing_fields.value,
+                pkt_hdr_backward->routing_fields.value);  // alternate the packet header distance for better balancing
+        }
+        cb_pop_front(cb0_id, num_tiles_to_read_this_core);
 
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id += num_tiles_to_read_this_core;
@@ -233,41 +135,31 @@ void kernel_main() {
             shard_tile_id = 0;
             core_id++;
         }
-
-        noc_async_writes_flushed();
-        cb_pop_front(cb0_id, num_tiles_to_read_this_core);
     }
 
     // 2. mcast output ready semaphore
+    auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
+    pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        out_ready_sem_noc_addr_in_pkt,
+        static_cast<uint16_t>(1),  // increment 1
+        32});
     // Write the mcast packet (forward)
     if (fabric_connection.has_forward_connection()) {
-        auto* pkt_hdr_fwd = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
-        pkt_hdr_fwd->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            out_ready_sem_noc_addr_in_pkt,
-            static_cast<uint16_t>(1),  // increment 1
-            32});
-
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr_fwd->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-        fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
-            reinterpret_cast<uint32_t>(pkt_hdr_fwd), sizeof(PACKET_HEADER_TYPE));
+        pkt_hdr->to_chip_multicast(
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_forward)});
+        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // Write the mcast packet (backward)
     if (fabric_connection.has_backward_connection()) {
-        auto* pkt_hdr_bwd = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
-        pkt_hdr_bwd->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            out_ready_sem_noc_addr_in_pkt,
-            static_cast<uint16_t>(1),  // increment 1
-            32});
-
-        pkt_hdr_bwd->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+        pkt_hdr->to_chip_multicast(
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-            reinterpret_cast<uint32_t>(pkt_hdr_bwd), sizeof(PACKET_HEADER_TYPE));
+            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // increment locally
     uint64_t out_ready_sem_noc_addr =
@@ -283,11 +175,27 @@ void kernel_main() {
     if (wait_output_semaphore) {
         volatile tt_l1_ptr uint32_t* concat_semaphore_send_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr);
-        noc_semaphore_set(concat_semaphore_send_addr_ptr, VALID);
+        volatile tt_l1_ptr uint32_t* concat_semaphore_send_addr_ptr2 =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr2);
+
+        noc_semaphore_set(concat_semaphore_send_addr_ptr, 1);
+        noc_semaphore_set(concat_semaphore_send_addr_ptr2, 1);
+        if (concat_semaphore_send_addr_ptr[0] != 1) {
+            noc_semaphore_set(concat_semaphore_send_addr_ptr, 1);
+        }
+        if (concat_semaphore_send_addr_ptr2[0] != 1) {
+            noc_semaphore_set(concat_semaphore_send_addr_ptr2, 1);
+        }
     }
 
     if (wait_output_semaphore) {
         for (uint32_t i = 0; i < 3; i++) {
+            uint32_t mcast_dest_num = 2;
+            if (i == 1) {
+                mcast_dest_num = 6;
+            } else if (i == 2) {
+                mcast_dest_num = 8;
+            }
             const uint64_t concat_sem_rcv_addr = get_noc_multicast_addr(
                 mcast_dest_noc_start_x[i],
                 mcast_dest_noc_start_y[i],
@@ -297,33 +205,27 @@ void kernel_main() {
             noc_semaphore_set_multicast(
                 concat_semaphore_send_addr,
                 concat_sem_rcv_addr,
-                i == 1 ? 3 : 2,
-                false,  // linked = false
-                true);  // multicast_path_reserve = true
+                mcast_dest_num,
+                false);  // linked = false
+
+            const uint64_t concat_sem_rcv_addr2 = get_noc_multicast_addr(
+                mcast_dest_noc_start_x[i],
+                mcast_dest_noc_start_y[i],
+                mcast_dest_noc_end_x[i],
+                mcast_dest_noc_end_y[i],
+                concat_semaphore_send_addr2);
+
+            noc_semaphore_set_multicast(
+                concat_semaphore_send_addr2,
+                concat_sem_rcv_addr2,
+                mcast_dest_num,
+                false);  // linked = false
         }
     }
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close_start();
     }
-
-    if (!wait_output_semaphore) {
-        volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr);
-        noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
-    }
-
-    nlp_concat(
-        batch,
-        q_start_addr,
-        head_size,
-        cb_id_q_out,
-        concat_arg_start,
-        0,
-        start_local,
-        in0_mcast_noc_x,
-        in0_mcast_noc_y,
-        in_tile_offset_by_head);
 
     if (reset_global_semaphore) {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;

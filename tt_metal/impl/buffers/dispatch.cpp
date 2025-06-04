@@ -5,7 +5,6 @@
 #include <boost/core/span.hpp>
 #include <device.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <algorithm>
 #include <array>
 #include <optional>
@@ -14,20 +13,22 @@
 #include <utility>
 
 #include "assert.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "dispatch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
-#include "dispatch_mem_map.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include "math.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/event/dispatch.hpp"
+#include "tt_metal/impl/device/dispatch.hpp"
 
 enum class CoreType;
 
@@ -266,14 +267,9 @@ int32_t calculate_num_pages_available_in_cq(
     return num_pages_available;
 }
 
-uint32_t calculate_max_data_size(const CoreType& dispatch_core_type) {
-    return DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size() -
-           (hal_ref.get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
-}
-
 bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer) {
     const CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    const uint32_t max_data_size = calculate_max_data_size(dispatch_core_type);
+    const uint32_t max_data_size = calculate_max_prefetch_data_size_bytes(dispatch_core_type);
     return buffer.aligned_page_size() > max_data_size;
 }
 
@@ -283,8 +279,9 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
     BufferDispatchConstants buf_dispatch_constants;
 
     buf_dispatch_constants.issue_queue_cmd_limit = sysmem_manager.get_issue_queue_limit(cq_id);
-    buf_dispatch_constants.max_prefetch_cmd_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
-    buf_dispatch_constants.max_data_sizeB = calculate_max_data_size(dispatch_core_type);
+    buf_dispatch_constants.max_prefetch_cmd_size =
+        MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    buf_dispatch_constants.max_data_sizeB = calculate_max_prefetch_data_size_bytes(dispatch_core_type);
 
     return buf_dispatch_constants;
 }
@@ -292,7 +289,7 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
 void update_offset_on_issue_wait_cmd(uint32_t& byte_offset, bool issue_wait, uint32_t num_sub_devices) {
     if (issue_wait) {
         // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        byte_offset += (hal_ref.get_alignment(HalMemType::HOST) * num_sub_devices);
+        byte_offset += (MetalContext::instance().hal().get_alignment(HalMemType::HOST) * num_sub_devices);
     }
 }
 
@@ -328,7 +325,8 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
     const HalMemType buffer_mem_type = buffer.memory_type();
     const uint32_t partial_page_size = tt::align(
-        DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH, hal_ref.get_common_alignment_with_pcie(buffer_mem_type));
+        DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH,
+        MetalContext::instance().hal().get_common_alignment_with_pcie(buffer_mem_type));
     return partial_page_size;
 }
 
@@ -505,7 +503,7 @@ void issue_buffer_dispatch_command_sequence(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
-                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
                 dispatch_params.expected_num_workers_completed[offset_index]);
         }
     }
@@ -528,9 +526,9 @@ void write_interleaved_buffer_to_device(
     const BufferDispatchConstants& buf_dispatch_constants,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type) {
-    uint32_t byte_offset_in_cq =
-        hal_ref.get_alignment(HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
-                                                  // + CQ_DISPATCH_CMD_WRITE_PAGED
+    uint32_t byte_offset_in_cq = MetalContext::instance().hal().get_alignment(
+        HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
+                            // + CQ_DISPATCH_CMD_WRITE_PAGED
     while (dispatch_params.total_pages_to_write > 0) {
         dispatch_params.calculate_issue_wait();
 
@@ -743,6 +741,8 @@ void write_to_device_buffer(
     const BufferDispatchConstants buf_dispatch_constants =
         generate_buffer_dispatch_constants(sysmem_manager, dispatch_core_type, cq_id);
 
+    // TODO: When writing to L1, modify this function to use enqueue_write_to_core
+
     if (is_sharded(buffer.buffer_layout())) {
         ShardedBufferWriteDispatchParams dispatch_params = initialize_sharded_buf_dispatch_params(
             buffer, cq_id, expected_num_workers_completed, buf_dispatch_constants, region);
@@ -874,14 +874,14 @@ void issue_read_buffer_dispatch_command_sequence(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
             dispatch_params.expected_num_workers_completed[offset_index]);
     }
     auto offset_index = *sub_device_ids[last_index];
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),
+        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
         dispatch_params.expected_num_workers_completed[offset_index]);
 
     bool flush_prefetch = false;

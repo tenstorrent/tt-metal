@@ -84,10 +84,11 @@ protected:
             }
             ids.push_back(id);
         }
-        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         tt::DevicePool::initialize(
             ids,
-            tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs(),
+            tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs(),
             l1_small_size_,
             DEFAULT_TRACE_REGION_SIZE,
             dispatch_core_config);

@@ -21,12 +21,11 @@ jobs:
   metalium-smoke:
     runs-on: >-
       ${{
-        startsWith(inputs.runner, 'tt-beta-ubuntu')
-        && fromJSON(format('["{0}"]', inputs.runner))
+        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner))
       }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ (inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
@@ -60,7 +59,7 @@ jobs:
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |
-          /usr/libexec/tt-metalium/validation/tt-metalium-validation-smoke
+          /usr/bin/tt-metalium-validation-smoke
 
       - name: workaround
         run: |
@@ -73,7 +72,7 @@ jobs:
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
         with:
-          name: Metalium ${{ matrix.platform }} smoke tests
+          name: Metalium ${{ inputs.runner }} smoke tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
           path: /work/test-reports/*.xml
           reporter: jest-junit
           working-directory: /work

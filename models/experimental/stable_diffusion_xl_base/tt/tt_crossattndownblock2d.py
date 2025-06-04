@@ -1,7 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ttnn
 import torch.nn as nn
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
 from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
@@ -9,7 +10,18 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDo
 
 
 class TtCrossAttnDownBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path, query_dim, num_attn_heads, out_dim, has_downsample=False):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        module_path,
+        model_config,
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        has_downsample=False,
+        transformer_weights_dtype=ttnn.bfloat16,
+    ):
         super().__init__()
 
         num_layers = 2
@@ -19,15 +31,34 @@ class TtCrossAttnDownBlock2D(nn.Module):
         for i in range(num_layers):
             self.attentions.append(
                 TtTransformer2DModel(
-                    device, state_dict, f"{module_path}.attentions.{i}", query_dim, num_attn_heads, out_dim
+                    device,
+                    state_dict,
+                    f"{module_path}.attentions.{i}",
+                    query_dim,
+                    num_attn_heads,
+                    out_dim,
+                    weights_dtype=transformer_weights_dtype,
                 )
             )
 
         for i in range(num_layers):
-            self.resnets.append(TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", i == 0))
+            self.resnets.append(
+                TtResnetBlock2D(
+                    device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config, conv_shortcut=(i == 0)
+                )
+            )
 
         self.downsamplers = (
-            TtDownsample2D(device, state_dict, f"{module_path}.downsamplers.0", (2, 2), (1, 1), (1, 1), 1)
+            TtDownsample2D(
+                device,
+                state_dict,
+                f"{module_path}.downsamplers.0",
+                (2, 2),
+                (1, 1),
+                (1, 1),
+                1,
+                model_config=model_config,
+            )
             if has_downsample
             else None
         )
@@ -41,9 +72,11 @@ class TtCrossAttnDownBlock2D(nn.Module):
         for resnet, attn in tt_blocks:
             hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
             hidden_states = attn.forward(hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states)
-            output_states = output_states + (hidden_states,)
+            residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            output_states = output_states + (residual,)
 
         if self.downsamplers is not None:
             hidden_states, [C, H, W] = self.downsamplers.forward(hidden_states, [B, C, H, W])
-            output_states = output_states + (hidden_states,)
+            residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            output_states = output_states + (residual,)
         return hidden_states, [C, H, W], output_states

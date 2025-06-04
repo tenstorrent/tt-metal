@@ -2,16 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "pybind11/decorators.hpp"
-
 #include "quantization_pybind.hpp"
-#include "quantization.hpp"
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 
+#include <fmt/format.h>
+#include <pybind11/pybind11.h>
+#include "ttnn-pybind/decorators.hpp"
+
+#include "quantization.hpp"
+
 namespace ttnn::operations::quantization {
-namespace detail {
+namespace {
 
 template <typename T>
 void bind_quantize_operation(
@@ -26,7 +31,7 @@ void bind_quantize_operation(
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             scale (ttnn.Tensor or Number): the quantization scale.
-            zero_point (Number): the quantization zero point.
+            zero_point (ttnn.Tensor or Number): the quantization zero point.
 
         Keyword Args:
             axis (Number, optional): the axis of the quantization dimension of the input tensor.
@@ -69,7 +74,7 @@ void bind_quantize_operation(
             [](const T& self,
                const ttnn::Tensor& input_tensor,
                const std::variant<ttnn::Tensor, float>& scale,
-               const int32_t zero_point,
+               const std::variant<Tensor, int32_t>& zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -101,9 +106,9 @@ void bind_requantize_operation(
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             in_scale (ttnn.Tensor or Number): the input quantization scale.
-            in_zero_point (Number): the input quantization zero point.
+            in_zero_point (ttnn.Tensor or Number): the input quantization zero point.
             out_scale (ttnn.Tensor or Number): the output quantization scale.
-            out_zero_point (Number): the output quantization zero point.
+            out_zero_point (ttnn.Tensor or Number): the output quantization zero point.
 
         Keyword Args:
             axis (Number, optional): the axis of the quantization dimension of the input tensor.
@@ -148,9 +153,9 @@ void bind_requantize_operation(
             [](const T& self,
                const ttnn::Tensor& input_tensor,
                const std::variant<ttnn::Tensor, float>& in_scale,
-               const int32_t in_zero_point,
+               const std::variant<Tensor, int32_t>& in_zero_point,
                const std::variant<ttnn::Tensor, float>& out_scale,
-               const int32_t out_zero_point,
+               const std::variant<Tensor, int32_t>& out_zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -194,7 +199,7 @@ void bind_dequantize_operation(
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             scale (ttnn.Tensor or Number): the quantization scale.
-            zero_point (Number): the quantization zero point.
+            zero_point (ttnn.Tensor or Number): the quantization zero point.
 
         Keyword Args:
             axis (Number, optional): the axis of the quantization dimension of the input tensor.
@@ -237,7 +242,7 @@ void bind_dequantize_operation(
             [](const T& self,
                const ttnn::Tensor& input_tensor,
                const std::variant<ttnn::Tensor, float>& scale,
-               const int32_t zero_point,
+               const std::variant<Tensor, int32_t>& zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -256,11 +261,11 @@ void bind_dequantize_operation(
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_module(py::module& module) {
-    detail::bind_quantize_operation(module, ttnn::quantize, "Quantize Operation");
-    detail::bind_requantize_operation(module, ttnn::requantize, "Re-quantize Operation");
-    detail::bind_dequantize_operation(module, ttnn::dequantize, "De-quantize Operation");
+    bind_quantize_operation(module, ttnn::quantize, "Quantize Operation");
+    bind_requantize_operation(module, ttnn::requantize, "Re-quantize Operation");
+    bind_dequantize_operation(module, ttnn::dequantize, "De-quantize Operation");
 }
 }  // namespace ttnn::operations::quantization

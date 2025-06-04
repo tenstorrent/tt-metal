@@ -25,7 +25,11 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -48,7 +52,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -69,8 +73,6 @@ def test_llama_attention_inference(
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
-
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1  # For the unit test, just run a sigle layer
@@ -195,7 +197,7 @@ def test_llama_attention_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mats = rope_setup.get_rm_rot_mats(current_pos)
 
         ttnn.dram_prefetcher(
             prefetcher_setup.get_input_tensors(),
@@ -234,7 +236,7 @@ def test_llama_attention_inference(
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,

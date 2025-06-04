@@ -9,7 +9,6 @@ import ttnn
 
 from ttnn.types import (
     DEVICE_STORAGE_TYPE,
-    MULTI_DEVICE_STORAGE_TYPE,
     MemoryConfig,
     ShardStrategy,
     ShardOrientation,
@@ -34,7 +33,7 @@ def has_storage_type_of(tensor: "ttnn.Tensor", storage_type) -> bool:
 
 
 def is_tensor_storage_on_device(tensor: "ttnn.Tensor") -> bool:
-    return tensor.storage_type() in (DEVICE_STORAGE_TYPE, MULTI_DEVICE_STORAGE_TYPE)
+    return tensor.storage_type() == DEVICE_STORAGE_TYPE
 
 
 def is_sharded(tensor) -> bool:

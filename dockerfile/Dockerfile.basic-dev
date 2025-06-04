@@ -1,0 +1,31 @@
+ARG UBUNTU_VERSION=22.04
+FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
+# Re-declare ARG make it available in the build stage
+ARG UBUNTU_VERSION
+
+# Install basic tools to build
+# The Boost PPA is because TT-Metalium depends on a Boost too new for Ubuntu 22.04
+# It should not be used in 24.04.
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && if [ "${UBUNTU_VERSION}" = "22.04" ]; then \
+        add-apt-repository -y ppa:mhier/libboost-latest; \
+    fi \
+    && apt-get update && apt-get install -y \
+    cmake \
+    ninja-build \
+    g++-12 \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install mpi-ulfm from the tenstorrent repository
+RUN set -eux; \
+    apt-get update && \
+    apt-get install -y -f \
+        wget ca-certificates && \
+    TMP_DIR="$(mktemp -d)" && \
+    DEB_URL="https://github.com/tenstorrent/ompi/releases/download/v5.0.7/openmpi-ulfm_5.0.7-1_amd64.deb" && \
+    wget -qO "$TMP_DIR/ompi.deb" "$DEB_URL" && \
+    apt-get install -f -y "$TMP_DIR/ompi.deb" && \
+    rm -rf "$TMP_DIR" && \
+    rm -rf /var/lib/apt/lists/*
