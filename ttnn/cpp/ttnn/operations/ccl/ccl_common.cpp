@@ -26,19 +26,19 @@ void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
 
 LineTopology::LineTopology(size_t line_size, size_t line_index) : _line_size(line_size), _line_index(line_index) {}
 
-bool LineTopology::is_first_device_in_line(ttnn::ccl::LineDirection direction) const {
-    if (direction == ttnn::ccl::LineDirection::FORWARD) {
+bool LineTopology::is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
+    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD) {
         return _line_index == 0;
     } else {
-        TT_ASSERT(direction == ttnn::ccl::LineDirection::BACKWARD);
+        TT_ASSERT(direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
         return _line_index == _line_size - 1;
     }
 }
-bool LineTopology::is_last_device_in_line(ttnn::ccl::LineDirection direction) const {
-    if (direction == ttnn::ccl::LineDirection::BACKWARD) {
+bool LineTopology::is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
+    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD) {
         return _line_index == 0;
     } else {
-        TT_ASSERT(direction == ttnn::ccl::LineDirection::FORWARD);
+        TT_ASSERT(direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
         return _line_index == _line_size - 1;
     }
 }
@@ -49,8 +49,8 @@ size_t LineTopology::line_size() const { return _line_size; }
 
 size_t LineTopology::line_index() const { return _line_index; }
 
-size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::LineDirection direction) const {
-    if (direction == ttnn::ccl::LineDirection::FORWARD) {
+size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
+    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD) {
         return (_line_size - _line_index) - 1;
     } else {
         return _line_index;
@@ -1501,8 +1501,10 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
     size_t num_targets_backward = 0;
     if (topology == Topology::Linear) {
         LineTopology line_topology(ring_size, ring_index);
-        num_targets_forward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
-        num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
+        num_targets_forward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+        num_targets_backward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
         // TODO: Commonize
         num_targets_forward = tt::div_up(ring_size - 1, 2);
