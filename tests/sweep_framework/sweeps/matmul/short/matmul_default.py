@@ -107,7 +107,7 @@ def run_matmul(
 
     expected_pcc = 0.99
     tensors = [input_tensor_a, input_tensor_b, op_output_tensor]
-    flop_counts = list(m_n_sizes) + [2, k_size, batch_sizes[0]]
+    flop_counts = list(m_n_sizes) + [2, k_size] + list(batch_sizes)
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf, flop_counts)
 
 

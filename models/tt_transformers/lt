@@ -399,7 +399,7 @@ def main(stdscr):
     # Input fields positions (reordered)
     input_fields = [
         {"label": "Command [demo]", "value": "", "x": 0, "y": 0},
-        {"label": "Model (1b, 3b, 8b, 11b, 70b, 70b-r1, q7b, q72b) [all]", "value": "", "x": 0, "y": 1},
+        {"label": "Model (1b, 3b, 8b, 11b, 70b, q2-7b, q2-72b, q3-32b) [all]", "value": "", "x": 0, "y": 1},
         {
             "label": f"Device ({list_supported_devices(host_device)}) [all]",
             "value": "",
@@ -514,7 +514,7 @@ def main(stdscr):
                     if current_field == len(input_fields) - 1:
                         # Submit command
                         command_input = input_fields[0]["value"] or "demo"
-                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b,70b-r1,q7b,q72b"
+                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b,q2-7b,q2-72b,q3-32b"
                         device_input = input_fields[2]["value"] or list_supported_devices(host_device)
 
                         if command_input == "modules":
@@ -543,9 +543,10 @@ def main(stdscr):
                         # Generate combinations (reordered)
                         # Ignore invalid combinations:
                         # - 11b and 11b-b models on n150/p150 device
-                        # - 70b and 70b-r1 model on n150/n300 & p150/p300 devices
+                        # - 70b model on n150/n300 & p150/p300 devices
                         # - 72b model on n150/n300 and p150/p300 devices
-                        # - q7b on anything other than n300/p300
+                        # - q2-7b on anything other than n300/p300
+                        # - q3-32b on anything other than t3k/p300
                         # - Vision commands on non-vision (11b) models
                         combinations = [
                             (c, m, d)
@@ -554,10 +555,10 @@ def main(stdscr):
                             for d in devices
                             if not (
                                 (m in ["11b", "11b-b"] and d in ["n150", "p150"])
-                                or (m == "70b" and d in ["n150", "n300", "p150", "p300"])
-                                or (m == "70b-r1" and d in ["n150", "n300", "p150", "p300"])
-                                or (m == "q72b" and d in ["n150", "n300", "p150", "p300"])
-                                or (m == "q7b" and d in ["n150", "t3k"])
+                                or (m.startswith("70b") and d in ["n150", "n300", "p150", "p300"])
+                                or (m == "q2-72b" and d in ["n150", "n300", "p150", "p300"])
+                                or (m == "q2-7b" and d in ["n150", "t3k"])
+                                or (m == "q3-32b" and d in ["n150", "n300", "p150"])
                                 or ("vision" in c and m not in ["11b", "11b-b"])
                             )
                         ]
@@ -792,7 +793,7 @@ def draw_input_field(stdscr, field, is_selected, max_x):
 def draw_output_entry(stdscr, entry, y, is_selected, max_x):
     cols = [
         entry.command_name,
-        entry.model,
+        entry.model.split("hf:", 1)[1] if entry.model.startswith("hf:") else entry.model,
         entry.device,
         entry.status,
         entry.speed if entry.speed else "",
@@ -800,7 +801,7 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
         entry.pcc if entry.pcc else "",
         entry.output,
     ]
-    col_widths = [20, 10, 10, 20, 10, 10, max_x - 85]  # Adjusted widths to accommodate the PCC column
+    col_widths = [20, 20, 10, 20, 10, 10, max_x - 95]
 
     x = 0
     for i, (col, width) in enumerate(zip(cols, col_widths)):
@@ -848,7 +849,7 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
 
 def format_header(max_x):
     cols = ["Command", "Model", "Device", "Status", "Speed", "TTFT(ms)", "PCC", "Output"]
-    col_widths = [20, 10, 10, 20, 10, 10, max_x - 85]  # Adjusted widths to accommodate the PCC column
+    col_widths = [20, 20, 10, 20, 10, 10, max_x - 95]  # Adjusted widths to accommodate the PCC column
     formatted_cols = []
     for col, width in zip(cols, col_widths):
         formatted_cols.append(col[:width].ljust(width))
@@ -899,7 +900,13 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     # Set environment variables
     env = os.environ.copy()
     env["MESH_DEVICE"] = entry["device"]
-    env["LLAMA_DIR"] = get_dir(entry["model"])
+    model_dir = get_dir(entry["model"])
+    if model_dir.startswith("hf:"):
+        dir_env = "HF_MODEL"
+        model_dir = model_dir.split("hf:", 1)[1]
+    else:
+        dir_env = "LLAMA_DIR"
+    env[dir_env] = model_dir
 
     # Open log file
     entry.open_log_file()
@@ -975,8 +982,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
     # Write the command to the log file
     entry["log_file"].write(
-        f"MESH_DEVICE={entry['device']} LLAMA_DIR={get_dir(entry['model'])} ACTUAL_DEVICE={get_device()} {command_input}"
-        + "\n"
+        f"MESH_DEVICE={entry['device']} {dir_env}={model_dir} ACTUAL_DEVICE={get_device()} {command_input}" + "\n"
     )
 
     # Start the subprocess
@@ -1128,6 +1134,9 @@ def parse_output_line(line, previous_line, current_status):
 
 
 def get_dir(model):
+    if model.startswith("hf:"):
+        return model
+
     llama_dir = {
         "1b": os.environ.get("LLAMA_32_1B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct"),
         "3b": os.environ.get("LLAMA_32_3B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct"),
@@ -1136,8 +1145,9 @@ def get_dir(model):
         "11b-b": os.environ.get("LLAMA_32_11B_BASE_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision"),
         "70b": os.environ.get("LLAMA_31_70B_DIR", "/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked"),
         "70b-r1": os.environ.get("DEEPSEEK_R1_LLAMA_70B_DIR", "/proj_sw/deepseek/DeepSeek-R1-Distill-Llama-70B"),
-        "q7b": os.environ.get("QWEN_7B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-7B-Instruct"),
-        "q72b": os.environ.get("QWEN_72B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-72B-Instruct"),
+        "q2-7b": os.environ.get("QWEN_7B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-7B-Instruct"),
+        "q2-72b": os.environ.get("QWEN_72B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-72B-Instruct"),
+        "q3-32b": os.environ.get("QWEN_32B_DIR", "/proj_sw/user_dev/Qwen/Qwen3-32B"),
     }.get(model.lower(), "")
 
     if not llama_dir or not os.path.exists(llama_dir):
@@ -1275,7 +1285,11 @@ def draw_help_bar(stdscr, current_line, num_input_fields, num_output_entries):
 
 def get_help_text(current_line, num_input_fields, num_output_entries):
     if current_line == 0:
-        return "Shortcuts: demo, demo-1layer, attention, mlp, rmsnorm, decoder, model, model-quick, 'help' for full list | Enter: Submit | ↑↓: Navigate fields | Esc: Exit"
+        return (
+            "Shortcuts: demo, tests, accuracy, 'help' for full list | Enter: Submit | ↑↓: Navigate fields | Esc: Exit"
+        )
+    elif current_line == 1:
+        return 'New: prefix with "hf:" to run a HF model e.g. "hf:Qwen/Qwen3-4B" | Enter: Submit | ↑↓: Navigate fields | Esc: Exit'
     elif current_line <= num_input_fields - 1:
         return "Enter: Next field | ↑↓: Navigate fields | Esc: Exit"
     else:
@@ -1394,8 +1408,9 @@ def export_results_to_markdown(output_entries, stdscr):
         "11b": "Llama3.2-11B",
         "70b": "Llama3.1-70B",
         "70b-r1": "DeepSeek-R1-Llama-70B",
-        "q7b": "Qwen2.5-7B",
-        "q72b": "Qwen2.5-72B",
+        "q2-7b": "Qwen2.5-7B",
+        "q2-72b": "Qwen2.5-72B",
+        "q3-32b": "Qwen3-32B",
     }
 
     markdown_lines = []
