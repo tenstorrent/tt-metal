@@ -63,7 +63,6 @@ Tensor tensor_reshape(
                         const auto& tensor_spec = tensor.tensor_spec();
                         auto page_size_bytes = tensor_spec.compute_page_size_bytes();
                         device_buffer->set_page_size(page_size_bytes);
-                        device_storage.update_specs(new_spec);
                         return Tensor(std::move(device_storage), new_spec, tensor.get_distributed_tensor_config());
                     } else {
                         auto device_buffer = device_storage.get_buffer();
@@ -104,11 +103,9 @@ Tensor tensor_reshape(
                         auto page_size_bytes = upd_spec.compute_page_size_bytes();
                         device_buffer->set_page_size(page_size_bytes);
 
-                        device_storage.update_specs(upd_spec);
                         return Tensor(std::move(device_storage), upd_spec, tensor.get_distributed_tensor_config());
                     }
                 } else {
-                    device_storage.update_specs(new_spec);
                     return Tensor(std::move(device_storage), new_spec, tensor.get_distributed_tensor_config());
                 }
             } else if constexpr (std::is_same_v<T, tt::tt_metal::HostStorage>) {

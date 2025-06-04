@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -141,6 +141,7 @@ void create_mux_kernel(
     // std::vector<uint32_t> mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
     auto default_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     size_t mux_status_address = mux_kernel_config->get_status_address();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     std::vector<uint32_t> mux_ct_args = {
         test_params.num_full_size_channels,
         test_params.num_buffers_full_size_channel,
@@ -157,7 +158,8 @@ void create_mux_kernel(
         drainer_kernel_config->get_status_address(),
         drainer_kernel_config->num_buffers_full_size_channel,
         test_params.num_full_size_channel_iters,
-        test_params.num_iters_between_teardown_checks};
+        test_params.num_iters_between_teardown_checks,
+        hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)};
 
     // semaphores needed to build connection with drainer core using the build_from_args API
     auto worker_flow_control_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
@@ -242,7 +244,8 @@ void create_worker_kernel(
         mux_kernel_config->get_buffer_index_address(channel_type, worker_id),
         mux_kernel_config->get_status_address(),
         worker_test_config.mcast_encoding.has_value(),
-        channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL};
+        channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+        mux_kernel_config->get_channel_credits_stream_id(channel_type, worker_id)};
 
     auto worker_memory_map = worker_test_config.memory_map;
     std::vector<uint32_t> worker_rt_args = {

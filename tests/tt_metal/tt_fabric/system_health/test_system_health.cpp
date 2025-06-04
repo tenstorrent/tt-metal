@@ -28,8 +28,7 @@ std::pair<std::uint32_t, std::uint32_t> get_ubb_ids(chip_id_t chip_id) {
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
     auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), cluster.get_bus_id(chip_id) & 0xF0);
     if (tray_bus_id_it != tray_bus_ids.end()) {
-        auto unique_chip_id = cluster.get_unique_chip_ids().at(chip_id);
-        auto ubb_asic_id = ((unique_chip_id >> 56) & 0xFF);
+        auto ubb_asic_id = cluster.get_ubb_asic_id(chip_id);
         return std::make_pair(tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id);
     }
     return std::make_pair(0, 0);
@@ -44,7 +43,6 @@ TEST(Cluster, ReportSystemHealth) {
 
     auto unique_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
     std::stringstream ss;
-    ss << "Found " << unique_chip_ids.size() << " chips in cluster:" << std::endl;
     std::vector<std::uint32_t> read_vec;
     auto retrain_count_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
@@ -54,6 +52,7 @@ TEST(Cluster, ReportSystemHealth) {
             unique_chip_ids[chip_id] = chip_id;
         }
     }
+    ss << "Found " << unique_chip_ids.size() << " chips in cluster:" << std::endl;
 
     auto cluster_type = cluster.get_cluster_type();
 
@@ -73,27 +72,29 @@ TEST(Cluster, ReportSystemHealth) {
             std::stringstream eth_ss;
             cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);
             eth_ss << " eth channel " << std::dec << (uint32_t)chan << " " << eth_core.str();
+            std::string connection_type =
+                cluster.is_external_cable(chip_id, eth_core) ? "(external connector)" : "(internal trace)";
             if (cluster.is_ethernet_link_up(chip_id, eth_core)) {
                 if (eth_connections.at(chip_id).find(chan) != eth_connections.at(chip_id).end()) {
                     const auto& [connected_chip_id, connected_eth_core] =
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
                     std::cout << "Connected chip: " << connected_chip_id
                               << " connected eth core: " << connected_eth_core.str() << std::endl;
-                    eth_ss << " link UP, retrain: " << read_vec[0] << ", connected to chip " << connected_chip_id << " "
-                           << connected_eth_core.str();
+                    eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
+                           << connected_chip_id << " " << connected_eth_core.str();
                 } else {
                     const auto& [connected_chip_unique_id, connected_eth_core] =
                         cluster.get_connected_ethernet_core_to_remote_mmio_device(std::make_tuple(chip_id, eth_core));
                     std::cout << "Connected unique chip: " << connected_chip_unique_id
                               << " connected eth core: " << connected_eth_core.str() << std::endl;
-                    eth_ss << " link UP, retrain: " << read_vec[0] << ", connected to chip " << connected_chip_unique_id
-                           << " " << connected_eth_core.str();
+                    eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
+                           << connected_chip_unique_id << " " << connected_eth_core.str();
                 }
                 if (read_vec[0] > 0) {
                     unexpected_system_states.push_back(chip_id_ss.str() + eth_ss.str());
                 }
             } else {
-                eth_ss << " link DOWN";
+                eth_ss << " link DOWN/unconnected " << connection_type;
                 unexpected_system_states.push_back(chip_id_ss.str() + eth_ss.str());
             }
             ss << eth_ss.str() << std::endl;
@@ -119,6 +120,9 @@ TEST(Cluster, TestMeshFullConnectivity) {
         num_connections_per_side = 2;
     } else if (cluster_type == tt::ClusterType::GALAXY) {
         num_expected_chips = 32;
+        num_connections_per_side = 4;
+    } else if (cluster_type == tt::ClusterType::P150_X4) {
+        num_expected_chips = 4;
         num_connections_per_side = 4;
     } else {
         GTEST_SKIP() << "Mesh check not supported for system type " << magic_enum::enum_name(cluster_type);
@@ -176,9 +180,13 @@ TEST(Cluster, TestMeshFullConnectivity) {
             auto [tray_id, ubb_asic_id] = get_ubb_ids(chip);
             chip_ss << " Tray: " << tray_id << " N" << ubb_asic_id;
         }
+        const auto& soc_desc = cluster.get_soc_desc(chip);
         std::map<chip_id_t, int> num_connections_to_chip;
         for (const auto& [channel, remote_chip_and_channel] : connections) {
-            num_connections_to_chip[std::get<0>(remote_chip_and_channel)]++;
+            tt::umd::CoreCoord logical_active_eth = soc_desc.get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
+            if (cluster.is_ethernet_link_up(chip, logical_active_eth)) {
+                num_connections_to_chip[std::get<0>(remote_chip_and_channel)]++;
+            }
         }
         if (target_system_topology.has_value()) {
             if (*target_system_topology == FabricType::TORUS_2D) {

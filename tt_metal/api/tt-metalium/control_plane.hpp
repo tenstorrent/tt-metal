@@ -35,8 +35,8 @@ public:
     FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id) const;
     chip_id_t get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
-    std::vector<mesh_id_t> get_user_physical_mesh_ids() const;
-    MeshShape get_physical_mesh_shape(mesh_id_t mesh_id) const;
+    std::vector<MeshId> get_user_physical_mesh_ids() const;
+    MeshShape get_physical_mesh_shape(MeshId mesh_id) const;
 
     // Return valid ethernet channels on the specificed routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
@@ -60,7 +60,7 @@ public:
 
     stl::Span<const chip_id_t> get_intra_chip_neighbors(
         FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const;
-    std::unordered_map<mesh_id_t, std::vector<chip_id_t>> get_chip_neighbors(
+    std::unordered_map<MeshId, std::vector<chip_id_t>> get_chip_neighbors(
         FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const;
 
     routing_plane_id_t get_routing_plane_id(FabricNodeId fabric_node_id, chan_id_t eth_chan_id) const;
@@ -120,7 +120,7 @@ private:
     void load_physical_chip_mapping(
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
 
-    void validate_mesh_connections(mesh_id_t mesh_id) const;
+    void validate_mesh_connections(MeshId mesh_id) const;
     void validate_mesh_connections() const;
 
     std::vector<chip_id_t> get_mesh_physical_chip_ids(
@@ -132,7 +132,7 @@ private:
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
 
-    void write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chip_id) const;
+    void write_routing_tables_to_chip(MeshId mesh_id, chip_id_t chip_id) const;
 
     std::unique_ptr<FabricContext> fabric_context_;
 };

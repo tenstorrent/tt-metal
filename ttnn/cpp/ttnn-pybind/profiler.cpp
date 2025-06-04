@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "profiler.hpp"
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "profiler.hpp"
 #include "tools/profiler/op_profiler.hpp"
 
-namespace py = pybind11;
+namespace ttnn::profiler {
 
-namespace ttnn {
-namespace profiler {
-namespace detail {
+namespace {
+
 void ProfilerModule(py::module& m_profiler) {
     m_profiler.def(
         "start_tracy_zone",
@@ -71,8 +71,8 @@ void ProfilerModule(py::module& m_profiler) {
     )doc");
 }
 
-}  // namespace detail
+}  // namespace
 
-void py_module(py::module& module) { detail::ProfilerModule(module); }
-}  // namespace profiler
-}  // namespace ttnn
+void py_module(py::module& module) { ProfilerModule(module); }
+
+}  // namespace ttnn::profiler

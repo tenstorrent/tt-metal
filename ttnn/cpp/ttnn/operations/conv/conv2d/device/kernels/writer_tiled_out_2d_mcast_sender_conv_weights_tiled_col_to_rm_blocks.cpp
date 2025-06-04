@@ -13,31 +13,29 @@
 
 void kernel_main() {
     // This writer is for output tensor in tile format
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(0);
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t bias_in_dram = get_compile_time_arg_val(2) == 1;
 
-    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(7);
-    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(9);
-    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(10);
-    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(11);
-    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(12);
-    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(13);
-    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(14);
+    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(6);
+    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(7);
+    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(8);
+    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(9);
+    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(11);
+    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(12);
+    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(13);
 
     // Bias arg. Unused if bias fusion is not enabled.
-    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(15);
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(14);
 
-    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(16);
-    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(17);
-    constexpr uint32_t output_rows_tiles = get_compile_time_arg_val(18);
+    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
+    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(16);
 
     uint32_t i = 0;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i++);
     // Bias arg. Unused if bias fusion is not enabled.
     const uint32_t bias_addr = get_arg_val<uint32_t>(i++);
-    const uint32_t out_start_tile_id = get_arg_val<uint32_t>(i++);
-    const uint32_t out_start_tile_id_h = get_arg_val<uint32_t>(i++);
     const uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i++);
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
 
@@ -55,7 +53,6 @@ void kernel_main() {
     const uint32_t weights_mcast_num_cores = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
     const uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
-    const uint32_t out_aligned_page_size = get_arg_val<uint32_t>(i++);
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -77,9 +74,6 @@ void kernel_main() {
 
 // read in bias if enabled (done only once for all batches)
 #ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t bias_in_dram = get_compile_time_arg_val(3) == 1;
-
     constexpr uint32_t bias_pagesize = get_tile_size(bias_cb_id);
     constexpr DataFormat bias_df = get_dataformat(bias_cb_id);
     const InterleavedAddrGenFast<bias_in_dram> s_bias = {
@@ -235,8 +229,6 @@ void kernel_main() {
         // Increment weight start tile id for next block in width dim
         weight_start_tile_id += weight_next_block_stride_w;
     }  // out_num_blocks_w
-
-    cb_wait_front(cb_id_out0, output_rows_tiles);
 
     noc_async_write_barrier();
 }
