@@ -205,6 +205,17 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # Galaxy Quick Tests (4U only for now)
+  tg-quick-test:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tg-quick.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology-4u: true # 4U tests are moved to APC. Eventually we want to move all of Galaxy Quick to APC once 6Us are stable
+      topology-6u: false
   build-docs:
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml
