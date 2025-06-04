@@ -110,8 +110,6 @@ tt_metal::HalProgrammableCoreType get_core_type(chip_id_t chip_id, const CoreCoo
             active_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != active_eth_cores.end();
         is_inactive_eth_core =
             inactive_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != inactive_eth_cores.end();
-        // we should not be operating on any reserved cores here.
-        TT_ASSERT(is_active_eth_core or is_inactive_eth_core);
     }
 
     return is_active_eth_core     ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
