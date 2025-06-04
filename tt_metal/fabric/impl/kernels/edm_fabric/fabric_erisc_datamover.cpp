@@ -1131,8 +1131,16 @@ void run_fabric_edm_main_loop(
     //       math ops on single individual words (or half words)
     auto outbound_to_receiver_channel_pointers =
         ChannelPointersTuple<OutboundReceiverChannelPointers, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make();
+    // Workaround the perf regression in RingAsLinear test.
+    auto outbound_to_receiver_channel_pointer_ch0 =
+        outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>();
+    auto outbound_to_receiver_channel_pointer_ch1 =
+        outbound_to_receiver_channel_pointers.template get<NUM_RECEIVER_CHANNELS - 1>();
 
     auto receiver_channel_pointers = ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY>::make();
+    // Workaround the perf regression in RingAsLinear test.
+    auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<0>();
+    auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<NUM_RECEIVER_CHANNELS - 1>();
 
     std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established =
         initialize_array<NUM_SENDER_CHANNELS, bool, false>();
@@ -1163,7 +1171,7 @@ void run_fabric_edm_main_loop(
                     sender_ch_live_check_skip[0]>(
                     local_sender_channels.template get<0>(),
                     local_sender_channel_worker_interfaces.template get<0>(),
-                    outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>(),
+                    outbound_to_receiver_channel_pointer_ch0,
                     remote_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                     sender_channel_counters_ptrs[0],
                     sender_channel_packet_recorders[0],
@@ -1184,7 +1192,7 @@ void run_fabric_edm_main_loop(
                         local_receiver_channels.template get<0>(),
                         downstream_edm_noc_interfaces,
                         receiver_channel_counters_ptrs[0],
-                        receiver_channel_pointers.template get<0>(),
+                        receiver_channel_pointers_ch0,
                         receiver_channel_packet_recorders[0],
                         receiver_channel_0_trid_tracker,
                         0,
@@ -1204,7 +1212,7 @@ void run_fabric_edm_main_loop(
                         local_receiver_channels.template get<1>(),
                         downstream_edm_noc_interfaces,
                         receiver_channel_counters_ptrs[1],
-                        receiver_channel_pointers.template get<NUM_RECEIVER_CHANNELS - 1>(),
+                        receiver_channel_pointers_ch1,
                         receiver_channel_packet_recorders[1],
                         receiver_channel_1_trid_tracker,
                         1,
@@ -1222,7 +1230,7 @@ void run_fabric_edm_main_loop(
                     sender_ch_live_check_skip[1]>(
                     local_sender_channels.template get<1>(),
                     local_sender_channel_worker_interfaces.template get<1>(),
-                    outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>(),
+                    outbound_to_receiver_channel_pointer_ch0,
                     remote_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                     sender_channel_counters_ptrs[1],
                     sender_channel_packet_recorders[1],
@@ -1241,7 +1249,7 @@ void run_fabric_edm_main_loop(
                         sender_ch_live_check_skip[2]>(
                         local_sender_channels.template get<2>(),
                         local_sender_channel_worker_interfaces.template get<2>(),
-                        outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>(),
+                        outbound_to_receiver_channel_pointer_ch0,
                         remote_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                         sender_channel_counters_ptrs[2],
                         sender_channel_packet_recorders[2],
@@ -1259,7 +1267,7 @@ void run_fabric_edm_main_loop(
                         sender_ch_live_check_skip[3]>(
                         local_sender_channels.template get<3>(),
                         local_sender_channel_worker_interfaces.template get<3>(),
-                        outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>(),
+                        outbound_to_receiver_channel_pointer_ch0,
                         remote_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                         sender_channel_counters_ptrs[3],
                         sender_channel_packet_recorders[3],
@@ -1279,7 +1287,7 @@ void run_fabric_edm_main_loop(
                         sender_ch_live_check_skip[NUM_SENDER_CHANNELS - 1]>(
                         local_sender_channels.template get<NUM_SENDER_CHANNELS - 1>(),
                         local_sender_channel_worker_interfaces.template get<NUM_SENDER_CHANNELS - 1>(),
-                        outbound_to_receiver_channel_pointers.template get<NUM_RECEIVER_CHANNELS - 1>(),
+                        outbound_to_receiver_channel_pointer_ch1,
                         remote_receiver_channels.template get<VC1_RECEIVER_CHANNEL>(),
                         sender_channel_counters_ptrs[NUM_SENDER_CHANNELS - 1],
                         sender_channel_packet_recorders[NUM_SENDER_CHANNELS - 1],
