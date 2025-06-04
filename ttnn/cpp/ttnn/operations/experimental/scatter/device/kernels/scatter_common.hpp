@@ -11,11 +11,6 @@
 constexpr uint32_t ONE_TILE = 1;
 constexpr uint32_t FIRST_TILE = 0;
 
-constexpr uint32_t TILE_FACES_PER_AXIS = 2;
-constexpr uint32_t TILE_FACE_HEIGHT = tt::constants::TILE_HEIGHT / TILE_FACES_PER_AXIS;
-constexpr uint32_t TILE_FACE_WIDTH = tt::constants::TILE_WIDTH / TILE_FACES_PER_AXIS;
-constexpr uint32_t TILE_FACE_HW = TILE_FACE_WIDTH * TILE_FACE_HEIGHT;
-
 template <bool is_dram>
 using IAGF = InterleavedAddrGenFast<is_dram>;
 
@@ -58,13 +53,18 @@ template <DataFormat df>
 using std_type_t = typename df_to_std<df>::std_type;
 
 FORCE_INLINE uint32_t calc_offset_inside_tile(
-    const uint32_t& face_x, const uint32_t& face_y, const uint32_t& scalar_x, const uint32_t& scalar_y) {
+    const uint32_t& face_x,
+    const uint32_t& face_y,
+    const uint32_t& scalar_x,
+    const uint32_t& scalar_y,
+    const uint32_t& face_hw,
+    const uint32_t& face_width) {
     // pick the face
     const uint32_t face_multiplier = ((face_y << 1) | (face_x));
-    uint32_t offset = TILE_FACE_HW * face_multiplier;
+    uint32_t offset = face_hw * face_multiplier;
 
     // pick the value inside face
-    offset += scalar_y * TILE_FACE_WIDTH + scalar_x;
+    offset += scalar_y * face_width + scalar_x;
 
     return offset;
 }
@@ -75,17 +75,24 @@ FORCE_INLINE volatile T& tile_guts(
     const uint32_t& face_x,
     const uint32_t& face_y,
     const uint32_t& scalar_x,
-    const uint32_t& scalar_y) {
-    return l1_ptr[calc_offset_inside_tile(face_x, face_y, scalar_x, scalar_y)];
+    const uint32_t& scalar_y,
+    const uint32_t& face_hw,
+    const uint32_t& face_width) {
+    return l1_ptr[calc_offset_inside_tile(face_x, face_y, scalar_x, scalar_y, face_hw, face_width)];
+}
+
+FORCE_INLINE uint32_t get_width_scalar_index(
+    const uint32_t& tile_id,
+    const uint32_t& face_x,
+    const uint32_t& scalar_x,
+    const uint32_t& tile_width,
+    const uint32_t& face_width) {
+    return tile_id * tile_width + face_x * face_width + scalar_x;
 }
 
 FORCE_INLINE uint32_t
-get_width_scalar_index(const uint32_t& tile_id, const uint32_t& face_x, const uint32_t& scalar_x) {
-    return tile_id * tt::constants::TILE_WIDTH + face_x * (tt::constants::TILE_WIDTH >> 1) + scalar_x;
-}
-
-FORCE_INLINE uint32_t get_height_scalar_index_inside_tile(const uint32_t& face_y, const uint32_t& scalar_y) {
-    return face_y * (tt::constants::TILE_HEIGHT >> 1) + scalar_y;
+get_height_scalar_index_inside_tile(const uint32_t& face_y, const uint32_t& scalar_y, const uint32_t& face_height) {
+    return face_y * face_height + scalar_y;
 }
 
 template <bool is_dram>
@@ -125,7 +132,7 @@ struct ScatterCTAs {
     const uint32_t face_width;
 };
 
-constexpr ScatterCTAs get_ctas() {
+FORCE_INLINE constexpr ScatterCTAs get_ctas() {
     return {get_compile_time_arg_val(0) == 1, get_compile_time_arg_val(1) == 1, get_compile_time_arg_val(2) == 1,
             get_compile_time_arg_val(3) == 1, get_compile_time_arg_val(4),      get_compile_time_arg_val(5),
             get_compile_time_arg_val(6),      get_compile_time_arg_val(7),      get_compile_time_arg_val(8),

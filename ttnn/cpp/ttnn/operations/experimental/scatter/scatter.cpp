@@ -8,7 +8,6 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -52,8 +51,6 @@ Tensor post_scatter_transform_tensor(
         output_tensor.get_logical_shape(),
         original_lshape);
 
-    // return ttnn::fill_implicit_tile_padding(output_tensor, 100);
-
     return output_tensor;
 }
 
@@ -61,14 +58,14 @@ Tensor post_scatter_transform_tensor(
 }  // namespace
 
 Tensor ScatterOperation::invoke(
+    const QueueId& queue_id,
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<scatter::ScatterReductionType>& opt_reduction,
-    std::optional<Tensor>& opt_output,
-    const QueueId& queue_id) {
+    std::optional<Tensor>& opt_output) {
     const ttnn::Shape original_input_tensor_lshape = input_tensor.get_logical_shape();
     const auto input_tensor_rank = input_tensor.get_padded_shape().rank();
 

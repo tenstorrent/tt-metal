@@ -72,14 +72,14 @@ void bind_scatter_operation(py::module& module) {
                std::optional<ttnn::Tensor>& opt_output,
                const QueueId& queue_id = DefaultQueueId) -> Tensor {
                 return self(
+                    queue_id,
                     input_tensor,
                     dim,
                     index_tensor,
                     source_tensor,
                     opt_out_memory_config,
                     opt_reduction,
-                    opt_output,
-                    queue_id);
+                    opt_output);
             },
             py::arg("input").noconvert(),
             py::arg("dim"),

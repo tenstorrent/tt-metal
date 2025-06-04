@@ -32,7 +32,7 @@ def select_torch_dtype(ttnn_dtype):
         ([10, 50, 10, 50, 10], -1, [10, 50, 10, 50, 10], ttnn.bfloat16),
         ([10, 50, 10, 50, 100], -1, [10, 50, 10, 50, 100], ttnn.bfloat16),
         ([700, 10, 30, 10], -1, [700, 10, 30, 10], ttnn.bfloat16),
-        # ([1, 151936], -1, [1, 151936], ttnn.bfloat16),
+        ([700, 10, 30, 100], -1, [700, 10, 30, 10], ttnn.bfloat16),
     ],
 )
 def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, device):

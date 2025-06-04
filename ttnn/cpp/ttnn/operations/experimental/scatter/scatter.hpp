@@ -16,14 +16,14 @@ namespace operations::experimental {
 
 struct ScatterOperation {
     static Tensor invoke(
+        const QueueId& queue_id,
         const Tensor& input_tensor,
         const int32_t& dim,
         const Tensor& index_tensor,
         const Tensor& source_tensor,
         const std::optional<MemoryConfig>& opt_out_memory_config,
         const std::optional<scatter::ScatterReductionType>& opt_reduction,
-        std::optional<Tensor>& opt_output,
-        const QueueId& queue_id = DefaultQueueId);
+        std::optional<Tensor>& opt_output);
 };
 
 }  // namespace operations::experimental
