@@ -68,7 +68,6 @@ target_sources(
             api/tt-metalium/kernel.hpp
             api/tt-metalium/kernel_types.hpp
             api/tt-metalium/lightmetal_binary.hpp
-            api/tt-metalium/logger.hpp
             api/tt-metalium/math.hpp
             api/tt-metalium/memory_reporter.hpp
             api/tt-metalium/mesh_config.hpp

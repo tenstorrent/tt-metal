@@ -279,3 +279,21 @@ if(simd-everywhere_ADDED)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
 endif()
+
+####################################################################################################################
+# spdlog
+####################################################################################################################
+CPMAddPackage(
+    NAME spdlog
+    GITHUB_REPOSITORY gabime/spdlog
+    VERSION 1.15.2
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "SPDLOG_FMT_EXTERNAL_HO ON"
+        "SPDLOG_INSTALL ON"
+)
+
+####################################################################################################################
+# tt-logger
+####################################################################################################################
+CPMAddPackage(NAME tt-logger GITHUB_REPOSITORY tenstorrent/tt-logger VERSION 1.0.5)

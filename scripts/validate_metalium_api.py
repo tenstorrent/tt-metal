@@ -24,7 +24,6 @@ ALLOWED_PREFIXES = {
     "fmt",
     "magic_enum",
     "nlohmann",
-    "pybind11",
 }
 
 STD_HEADERS = {
