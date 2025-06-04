@@ -963,13 +963,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Handling input block/width sharding, and uneven shards
     // Old stuff for input block sharded
 
-    // TODO: (GR) TEMP all instances of this variable
-    uint32_t input_num_blocks_across_width = 1;
-    // TODO: (GR) TEMP all instances of this variable
-
     // Default values are for interleaved input.
     // Cliff core for interleaved input only, is the only core not processing the
     // same number of rows (blocks) as all other cores.
+    uint32_t input_num_blocks_across_width = 1;
     uint32_t num_tiles_per_block = num_tiles_per_row;
     uint32_t num_blocks_per_full_core = num_rows_per_full_core;
     uint32_t num_blocks_per_cliff_core = num_rows_per_cliff_core;
@@ -983,13 +980,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
         full_compute_core_range = input_shard_spec.grid;
         cliff_compute_core_range = CoreRangeSet();
 
+        input_num_blocks_across_width = a.get_padded_shape()[-1] / input_shard_width;
         num_tiles_per_block = input_shard_width / tile_width;
         num_blocks_per_full_core = input_shard_height / tile_height;
         num_blocks_per_cliff_core = 0;
-
-        // TODO: (GR) TEMP all instances of this variable
-        input_num_blocks_across_width = a.get_padded_shape()[-1] / input_shard_width;
-        // TODO: (GR) TEMP all instances of this variable
 
         // Old stuff for input block sharded
         // Handling input block/width sharding, and uneven shards
@@ -1015,7 +1009,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Input CB
     uint32_t input_cb_num_tiles;
     if (input_is_sharded) {
-        // Have compute cores untilize the entire shard at once
+        // Have compute core untilize the entire shard at once
         input_cb_num_tiles = num_tiles_per_block * num_blocks_per_full_core;
     } else {
         if (num_blocks_per_full_core == 1) {
@@ -1036,11 +1030,14 @@ operation::ProgramWithCallbacks untilize_multi_core(
         input_is_sharded ? src0_buffer : nullptr);
 
     // Output CB
-    // Process a single input block at a time (while double buffering).
-    // Each input block will map to a different set of output rows.
-    // Note that a single input block does not necessarily represent
-    // an entire tensor row if the input tensor is width or block sharded.
-    uint32_t output_cb_num_tiles = num_tiles_per_block * 2;
+    uint32_t output_cb_num_tiles;
+    if (num_blocks_per_full_core == 1) {
+        // No need to double buffer if the core is only processing a single block
+        output_cb_num_tiles = num_tiles_per_block;
+    } else {
+        // Double buffer if the core is processing 2+ blocks
+        output_cb_num_tiles = num_tiles_per_block * 2;
+    }
     auto [output_cb_index, cb_output] = create_cb(
         tt::CBIndex::c_16,
         program,
@@ -1074,13 +1071,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
             ReaderDataMovementConfig(reader_compile_time_args));
     }
 
-    // TODO: (GR) Move
-    uint32_t num_output_columns = 1;
-    if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        num_output_columns = a.get_padded_shape()[-1] / output.shard_spec().value().shape[1];
-    }
-
     // Writer compute defines
     std::map<string, string> writer_compute_defines;
     if (output_is_sharded) {
@@ -1089,13 +1079,17 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     // Writer compile-time args
     bool output_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    uint32_t output_stick_size = a.get_padded_shape()[-1] * output.element_size() / num_output_columns;
+    uint32_t output_num_blocks_across_width = 1;
+    if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        output_num_blocks_across_width = a.get_padded_shape()[-1] / output.shard_spec().value().shape[1];
+    }
+    uint32_t output_stick_size = a.get_padded_shape()[-1] * output.element_size() / output_num_blocks_across_width;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(output_stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(output_stick_size) - 1) : 0;
     uint32_t output_element_size = output.element_size();
     uint32_t input_num_cols_per_block = num_tiles_per_block * tile_width;
-    uint32_t output_num_cols_per_block = a.get_padded_shape()[-1] / num_output_columns;
-    uint32_t output_num_blocks_across_width = num_output_columns;
+    uint32_t output_num_cols_per_block = a.get_padded_shape()[-1] / output_num_blocks_across_width;
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)output_is_dram,
         (uint32_t)output_cb_index,
@@ -1133,7 +1127,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     }
 
-    // Compute compile-time args
+    // Compute compile-time args and kernel
     // Note: This condition is always true for sharded input
     if (full_compute_core_range.ranges().size() > 0) {
         std::vector<uint32_t> compute_compile_time_args = {
@@ -1148,7 +1142,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
     }
 
-    // Compute Cliff compile_time args
+    // Compute Cliff compile_time args and kernel
     // Note: This condition is always false for sharded input
     if (cliff_compute_core_range.ranges().size() > 0) {
         std::vector<uint32_t> compute_compile_time_args_cliff = {
@@ -1164,11 +1158,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
 
     // Run-time arg assignment
-    bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;
-    uint32_t tile_start_id = 0;
+    // Note: This variable is only applicable to interleaved input
+    uint32_t tile_start_index = 0;
 
     // Run-time args (full cores)
     // Note: For sharded input, these are the only cores used
+    bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;
     std::vector<CoreCoord> full_cores = corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
     for (uint32_t i = 0; i < full_cores.size(); ++i) {
         CoreCoord core = full_cores[i];
@@ -1184,18 +1179,18 @@ operation::ProgramWithCallbacks untilize_multi_core(
             reader_run_time_args = {
                 src0_buffer->address(),
                 num_tiles_to_read,
-                tile_start_id,
+                tile_start_index,
             };
         }
 
         // Writer run-time args
-        uint32_t block_across_height_start_id = (i / input_num_blocks_across_width) * num_blocks_per_full_core;
-        uint32_t block_accross_width_start_id = i % input_num_blocks_across_width;
+        uint32_t height_wise_input_block_start_index = (i / input_num_blocks_across_width) * num_blocks_per_full_core;
+        uint32_t width_wise_input_block_index = i % input_num_blocks_across_width;
         std::vector<uint32_t> writer_run_time_args = {
             dst_buffer->address(),
             num_blocks_per_full_core,
-            block_across_height_start_id,
-            block_accross_width_start_id,
+            height_wise_input_block_start_index,
+            width_wise_input_block_index,
         };
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
@@ -1205,8 +1200,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
 
-        // Correct for interleaved - if not needed for sharding then rename?
-        tile_start_id += num_tiles_per_block * num_blocks_per_full_core;
+        // Update index of first tile to read
+        tile_start_index += num_tiles_per_block * num_blocks_per_full_core;
     }
 
     // Run-time args (cliff core)
@@ -1221,17 +1216,17 @@ operation::ProgramWithCallbacks untilize_multi_core(
         std::vector<uint32_t> reader_run_time_args = {
             src0_buffer->address(),
             num_tiles_to_read,
-            tile_start_id,
+            tile_start_index,
         };
 
         // Writer run-time args
-        uint32_t block_across_height_start_id = full_cores.size() * num_blocks_per_full_core;
-        uint32_t block_accross_width_start_id = 0;
+        uint32_t height_wise_input_block_start_index = full_cores.size() * num_blocks_per_full_core;
+        uint32_t width_wise_input_block_index = 0;
         std::vector<uint32_t> writer_run_time_args = {
             dst_buffer->address(),
             num_blocks_per_cliff_core,
-            block_across_height_start_id,
-            block_accross_width_start_id,
+            height_wise_input_block_start_index,
+            width_wise_input_block_index,
         };
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
@@ -1263,7 +1258,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         bool input_is_sharded = input_tensors.at(0).is_sharded();
         bool output_is_sharded = output_tensors.at(0).is_sharded();
 
-        // Input
+        // Reader
         if (input_is_sharded) {
             // Sharded input
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
@@ -1276,8 +1271,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             }
         }
 
-        // Output
-        // TODO: (GR) Update after figuring out kernel
+        // Writer
         auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
         for (const CoreCoord& core : cores_with_run_time_args) {
             auto& runtime_args = runtime_args_by_core[core.x][core.y];
