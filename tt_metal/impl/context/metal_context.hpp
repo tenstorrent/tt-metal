@@ -54,12 +54,12 @@ public:
         bool minimal = false,
         bool force_reinit = false);
     void reinitialize();
+    void teardown();
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
     ~MetalContext();
-    void teardown();
 
     void clear_l1_state(chip_id_t device_id);
     void clear_dram_state(chip_id_t device_id);
