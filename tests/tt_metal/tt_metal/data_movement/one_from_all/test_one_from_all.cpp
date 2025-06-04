@@ -197,8 +197,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     }
 }
 
-/* ========== Test case for one from all data movement; Test id = 30 (For now) ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneFromAllIdeal) {
+/* ========== Test case for one from all data movement; Test id = 30 ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
     // Parameters
     uint32_t num_of_transactions, page_size_bytes;
     uint32_t transaction_size_pages = 128;
