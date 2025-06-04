@@ -15,6 +15,7 @@ RUN dnf update -y && \
     ca-certificates \
     capstone \
     capstone-devel \
+    ccache \
     clang \
     cmake3 \
     expat-devel \
