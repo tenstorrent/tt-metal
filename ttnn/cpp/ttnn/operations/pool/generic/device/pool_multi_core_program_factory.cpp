@@ -372,7 +372,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
 
-    uint32_t temparory_size = program.get_cb_memory_size();
+    uint32_t temporary_size = program.get_cb_memory_size();
     auto post_allocate_size =
         input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     auto l1_usage = calculate_L1_usage(
@@ -380,9 +380,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto output_cb_size = post_allocate_size - memory_used;
 
     TT_FATAL(
-        temparory_size + output_cb_size == l1_usage,
+        temporary_size + output_cb_size == l1_usage,
         "Calculated CB size {} does not match with the actual CB size {}  ",
-        temparory_size + output_cb_size,
+        temporary_size + output_cb_size,
         l1_usage);
 
     // Capture reader_indices_buffer to cache this with the program

@@ -190,7 +190,6 @@ uint32_t calculate_L1_usage(
     // uint32_t in_nblocks_c = 1;
     if (is_wide_reduction) {
         in_cb_sz = MAX_TILES_PER_REDUCTION * tt::constants::TILE_HW;
-        // in_nblocks_c = std::ceil((float)in_ntiles_c / MAX_TILES_PER_REDUCTION);
     } else {
         in_cb_sz = in_ntiles_c * tt::constants::TILE_HW;
     }
