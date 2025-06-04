@@ -61,8 +61,8 @@
 <li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Programming Examples</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="dram_loopback.html">DRAM Loopback</a></li>
-<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html">Eltwise SFPU</a></li>
 <li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html">Eltwise binary</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html">Eltwise SFPU</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core.html">Matmul (Multi Core)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
@@ -107,43 +107,49 @@
 <ul>
 <li class="toctree-l1">
 <a class="reference internal" href="dram_loopback.html">DRAM Loopback</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#silicon-accelerator-setup">Silicon accelerator setup</a></li>
-<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#program-pre-compilation-setup">Program pre-compilation setup</a></li>
-<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#building-a-data-movement-kernel">Building a data movement kernel</a></li>
-<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#create-buffers-in-dram-and-l1">Create buffers in DRAM and L1</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#device-initialization">Device initialization</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#program-setup">Program setup</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#create-buffers-in-dram-and-l1-sram">Create buffers in DRAM and L1 (SRAM)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#sending-real-data-into-dram">Sending real data into DRAM</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#creating-a-data-movement-kernel">Creating a data movement kernel</a></li>
 <li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#setting-runtime-arguments-for-the-data-movement-kernel">Setting runtime arguments for the data movement kernel</a></li>
 <li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#running-the-program">Running the program</a></li>
-<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#launch-and-verify-output">Launch and verify output</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#download-the-result-and-verify-output">Download the result and verify output</a></li>
 <li class="toctree-l2"><a class="reference internal" href="dram_loopback.html#validation-and-teardown">Validation and teardown</a></li>
 </ul>
 </li>
 <li class="toctree-l1">
+<a class="reference internal" href="eltwise_binary.html">Eltwise binary</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html#program-setup">Program setup</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html#circular-buffers">Circular buffers</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html#data-movement-and-compute-kernels">Data movement and compute kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html#download-the-result-and-verify-output">Download the result and verify output</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html#validation-and-teardown">Validation and teardown</a></li>
+</ul>
+</li>
+<li class="toctree-l1">
 <a class="reference internal" href="eltwise_sfpu.html">Eltwise SFPU</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html#circular-buffers-for-data-movement-to-from-compute-engine">Circular buffers for data movement to/from compute engine</a></li>
-<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html#compile-time-compute-kernel-arguments">Compile-time compute kernel arguments</a></li>
-<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html#compute-kernel-declaration-and-compile-time-defines">Compute kernel declaration and compile-time defines</a></li>
-<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html#extra-runtime-arguments-for-reader-writer">Extra runtime arguments for reader/writer</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html#program-setup">Program setup</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html#the-kernels">The kernels</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html#set-up-runtime-arguments">Set up runtime arguments</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html#program-execution-and-final-check">Program execution and final check</a></li>
 <li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html#conclusion">Conclusion</a></li>
 </ul>
 </li>
 <li class="toctree-l1">
-<a class="reference internal" href="eltwise_binary.html">Eltwise binary</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html#new-buffers">New buffers</a></li>
-<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html#compute-kernel-declaration-and-compile-time-defines">Compute kernel declaration and compile-time defines</a></li>
-<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html#extra-source-tensor">Extra source tensor</a></li>
-<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html#conclusion">Conclusion</a></li>
+<a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#device-initialization-program-setup">Device Initialization &amp; Program Setup</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#data-preparation-and-golden-reference">Data Preparation and Golden Reference</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#dram-buffer-allocation">DRAM Buffer Allocation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#circular-buffer-orchestration-for-pipelined-matmul">Circular Buffer Orchestration for Pipelined MatMul</a></li>
+<li class="toctree-l2">
+<a class="reference internal" href="matmul_single_core.html#matmul-kernel-pipeline-breakdown">Matmul Kernel Pipeline Breakdown</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="matmul_single_core.html#the-reader-kernel">The reader kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="matmul_single_core.html#the-compute-kernel">The compute kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="matmul_single_core.html#the-writer-kernel">The writer kernel</a></li>
 </ul>
 </li>
-<li class="toctree-l1">
-<a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#host-code">Host Code</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#main-blocks-in-matmul-single-core-function">Main blocks in matmul_single_core function</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#create-program-enqueue-initialization-and-core-range-definition">Create Program, Enqueue initialization, and core range definition</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#create-dram-buffers-circular-buffers">Create DRAM buffers &amp; Circular buffers</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#compile-time-kernels-arguments">Compile-time kernels arguments</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#compute-kernel-declaration-and-compile-time-defines">Compute kernel declaration and compile-time defines</a></li>
-<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#runtime-arguments-and-program-launch">Runtime arguments and program launch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#kernel-exexution-and-result-verification">Kernel exexution and result verification</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html#conclusion">Conclusion</a></li>
 </ul>
 </li>
