@@ -720,37 +720,38 @@ tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
     }
 }
 
-// Program cache safe structures - no dynamic allocation inside
-// Add these definitions at the top of the file, before the function
-// Add these definitions at the top of the file, before the function
-constexpr uint32_t MAX_SEGMENTS_PER_CORE = 8;  // Should handle most workload distributions
+// Add this include at the top of your file:
+#include <tt-metalium/distributed.hpp>
 
-struct CoreTensorWorkFlat {
-    uint32_t tensor_id;
-    uint32_t start_page_in_tensor;
-    uint32_t num_pages_from_tensor;
-    uint32_t tensor_src_addr;
-    uint32_t tensor_is_dram;    // bool as uint32_t
-    uint32_t tensor_page_size;  // for RM layout
+// Fixed version of your concat_multi_core function:
+
+struct TensorMetadata {
+    uint32_t src_addr;
+    uint32_t is_dram;          // bool as uint32_t
+    uint32_t page_size;        // for RM layout
+    uint32_t pages_per_block;  // how many pages this tensor contributes per block
+    uint32_t tensor_id;        // for debugging
 };
 
-struct CoreWorkloadFlat {
-    uint32_t num_segments;  // How many segments are actually used
-    uint32_t total_pages;
-    uint32_t output_start_page;
-    CoreTensorWorkFlat segments[MAX_SEGMENTS_PER_CORE];  // Fixed-size array
+struct ConcatMetadata {
+    uint32_t num_tensors;
+    uint32_t num_output_pages_per_block;
+    uint32_t dim;
+    uint32_t rm_layout;        // bool as uint32_t
+    TensorMetadata tensors[];  // Variable length array
 };
 
 tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     const std::vector<Tensor>& input_tensors, const uint32_t dim, const Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::IDevice* device = output.device();
+    // FIXED: Cast to MeshDevice pointer to access mesh methods
+    tt_metal::IDevice* raw_device = output.device();
+    auto mesh_device = dynamic_cast<tt_metal::distributed::MeshDevice*>(raw_device);
+    TT_FATAL(mesh_device != nullptr, "Expected MeshDevice but got different device type");
 
     const tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-
     const bool rm_layout = output.get_layout() == Layout::ROW_MAJOR;
-
     constexpr bool rm_orientation = false;
 
     uint32_t num_output_pages;
@@ -764,7 +765,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         single_page_size = tt_metal::detail::TileSize(cb_data_format);
     }
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = raw_device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -787,8 +788,6 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     std::vector<uint32_t> src_addr(num_input_tensors);
     std::vector<bool> is_dram(num_input_tensors);
     std::vector<uint32_t> num_pages_per_block(num_input_tensors);
-    std::vector<uint32_t> page_id_per_tensor(num_input_tensors);
-    // Only used for RM
     std::vector<uint32_t> page_size_per_tensor(num_input_tensors);
 
     uint32_t num_accum_pages = 1;
@@ -856,7 +855,6 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     };
 
     std::map<string, string> concat_defines;
-
     if (rm_layout && dim == num_dims - 1) {
         concat_defines["WIDTH_CONCAT"] = "1";
     }
@@ -885,170 +883,96 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
     uint32_t g1_num_cores = core_group_1.num_cores();
 
-    // Compute workload distribution (convert original logic to flat structures)
-    std::vector<CoreWorkloadFlat> flat_workloads(cores.size());
+    // FIXED: MeshBuffer creation with proper API
+    size_t metadata_size = (4 + num_input_tensors * 5) * sizeof(uint32_t);
+    tt_metal::distributed::DeviceLocalBufferConfig buff_config{
+        .page_size = metadata_size, .buffer_type = tt_metal::BufferType::L1};
+    tt_metal::distributed::MeshBufferConfig mesh_config =
+        tt_metal::distributed::ReplicatedBufferConfig{.size = metadata_size};
 
-    for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
-        const CoreCoord& core = cores[i];
-        uint32_t num_pages_per_core = 0;
-        if (i < g1_num_cores) {
-            num_pages_per_core = num_tiles_per_core_group_1;
-        } else {
-            num_pages_per_core = num_tiles_per_core_group_2;
-        }
+    // FIXED: Use mesh_device directly (no .get() since it's not a shared_ptr)
+    auto metadata_buffer = tt_metal::distributed::MeshBuffer::create(mesh_config, buff_config, mesh_device);
 
-        // Initialize flat workload for this core
-        auto& flat_workload = flat_workloads[i];
-        flat_workload.total_pages = num_pages_per_core;
-        flat_workload.output_start_page = num_pages_written;
-        flat_workload.num_segments = 0;
+    // POPULATE METADATA BUFFER
+    std::vector<uint32_t> metadata_data;
+    metadata_data.reserve(4 + num_input_tensors * 5);
 
-        if (num_pages_per_core == 0) {
-            num_pages_written += num_pages_per_core;
-            continue;
-        }
+    // Header
+    metadata_data.push_back(num_input_tensors);
+    metadata_data.push_back(num_output_pages_per_block);
+    metadata_data.push_back(dim);
+    metadata_data.push_back(rm_layout ? 1 : 0);
 
-        // Calculate starting position (original logic)
-        uint32_t block_id = num_pages_written / num_output_pages_per_block;
-        uint32_t id_within_block = num_pages_written % num_output_pages_per_block;
-        uint32_t curr_tensor = 0;
-        uint32_t curr_tensor_id = 0;
-
-        // Compute page_id_per_tensor for this core (original logic)
-        for (uint32_t j = 0; j < num_input_tensors; j++) {
-            page_id_per_tensor[j] = block_id * num_pages_per_block[j];
-            if (id_within_block == 0) {
-                continue;
-            } else if (id_within_block >= num_pages_per_block[j]) {
-                page_id_per_tensor[j] += num_pages_per_block[j];
-                id_within_block -= num_pages_per_block[j];
-                curr_tensor = j + 1;
-            } else {
-                page_id_per_tensor[j] += id_within_block;
-                curr_tensor = j;
-                curr_tensor_id = id_within_block;
-                id_within_block = 0;
-            }
-        }
-
-        // Convert to flat workload structure
-        // For simplicity, we'll create one segment per tensor that this core reads from
-        // This is a conservative approach that may create more segments than optimal
-        uint32_t segment_count = 0;
-
-        for (uint32_t j = 0; j < num_input_tensors && segment_count < MAX_SEGMENTS_PER_CORE; j++) {
-            // Check if this core needs to read from tensor j
-            uint32_t pages_from_this_tensor = 0;
-
-            if (j == curr_tensor) {
-                // This is the starting tensor, figure out how many pages
-                pages_from_this_tensor = std::min(num_pages_per_core, num_pages_per_block[j] - curr_tensor_id);
-            } else if (j > curr_tensor) {
-                // This tensor comes after the starting tensor
-                uint32_t pages_consumed = 0;
-                if (curr_tensor < num_input_tensors) {
-                    pages_consumed = num_pages_per_block[curr_tensor] - curr_tensor_id;
-                }
-
-                for (uint32_t k = curr_tensor + 1; k < j; k++) {
-                    pages_consumed += num_pages_per_block[k];
-                }
-
-                if (pages_consumed < num_pages_per_core) {
-                    pages_from_this_tensor = std::min(num_pages_per_core - pages_consumed, num_pages_per_block[j]);
-                }
-            }
-
-            if (pages_from_this_tensor > 0) {
-                flat_workload.segments[segment_count] = {
-                    .tensor_id = j,
-                    .start_page_in_tensor = page_id_per_tensor[j],
-                    .num_pages_from_tensor = pages_from_this_tensor,
-                    .tensor_src_addr = src_addr[j],
-                    .tensor_is_dram = is_dram[j] ? 1u : 0u,
-                    .tensor_page_size = rm_layout ? page_size_per_tensor[j] : single_page_size};
-                segment_count++;
-            }
-        }
-
-        flat_workload.num_segments = segment_count;
-
-        // Zero out unused segments
-        for (uint32_t j = segment_count; j < MAX_SEGMENTS_PER_CORE; ++j) {
-            flat_workload.segments[j] = {};
-        }
-
-        num_pages_written += num_pages_per_core;
+    // Tensor metadata
+    for (uint32_t i = 0; i < num_input_tensors; ++i) {
+        auto buffer = input_tensors[i].buffer();
+        metadata_data.push_back(buffer->address());
+        metadata_data.push_back(buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0);
+        metadata_data.push_back(rm_layout ? buffer->page_size() : single_page_size);
+        metadata_data.push_back(num_pages_per_block[i]);
+        metadata_data.push_back(i);
     }
 
-    // Set arguments for each core using flat workloads
-    for (uint32_t i = 0; i < cores.size(); ++i) {
+    // FIXED: Write metadata using proper MeshDevice API
+    // For 1x1 mesh (single device), use coordinate {0, 0}
+    tt_metal::distributed::MeshCoordinate mesh_coord{0, 0};
+    tt_metal::distributed::WriteShard(mesh_device->mesh_command_queue(0), metadata_buffer, metadata_data, mesh_coord);
+
+    // Get buffer address for kernel args
+    uint32_t metadata_buffer_addr = metadata_buffer->address();
+
+    // SIMPLE PER-CORE ARGUMENT SETTING
+    for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
-        const auto& flat_workload = flat_workloads[i];
+        uint32_t num_pages_per_core = (i < g1_num_cores) ? num_tiles_per_core_group_1 : num_tiles_per_core_group_2;
 
-        if (flat_workload.num_segments == 0) {
-            continue;  // Core has no work
-        }
+        // SIMPLE READER ARGUMENTS: Just page range and metadata buffer address
+        std::vector<uint32_t> reader_kernel_args = {num_pages_per_core, num_pages_written, metadata_buffer_addr};
 
-        // Build reader args using flat data
-        std::vector<uint32_t> reader_kernel_args;
-        reader_kernel_args.push_back(flat_workload.total_pages);
-        reader_kernel_args.push_back(flat_workload.num_segments);
-
-        // Add tensor metadata for segments
-        for (uint32_t j = 0; j < flat_workload.num_segments; ++j) {
-            const auto& segment = flat_workload.segments[j];
-            reader_kernel_args.push_back(segment.tensor_src_addr);
-            reader_kernel_args.push_back(segment.tensor_is_dram);
-            reader_kernel_args.push_back(segment.start_page_in_tensor);
-            reader_kernel_args.push_back(segment.num_pages_from_tensor);
-            if (rm_layout) {
-                reader_kernel_args.push_back(segment.tensor_page_size);
-            }
-        }
-
-        // Writer args
+        // Writer args (unchanged)
         std::vector<uint32_t> writer_kernel_args;
         if (rm_layout) {
             writer_kernel_args = {
-                dst_buffer->address(),
-                output.buffer()->page_size(),
-                flat_workload.total_pages,
-                flat_workload.output_start_page};
+                dst_buffer->address(), output.buffer()->page_size(), num_pages_per_core, num_pages_written};
         } else {
-            writer_kernel_args = {dst_buffer->address(), flat_workload.total_pages, flat_workload.output_start_page};
+            writer_kernel_args = {dst_buffer->address(), num_pages_per_core, num_pages_written};
         }
 
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
+        num_pages_written += num_pages_per_core;
     }
 
-    // Program cache safe callback
+    // FIXED: Capture variables properly and use correct APIs
     auto override_runtime_args_callback =
-        [flat_workloads, cores, rm_layout, unary_reader_kernel_id, unary_writer_kernel_id](
+        [metadata_buffer, cores, unary_reader_kernel_id, unary_writer_kernel_id, num_input_tensors, mesh_device](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
+            // Read current metadata using NEW API
+            std::vector<uint32_t> metadata_data;
+            metadata_data.resize((metadata_buffer->size() + sizeof(uint32_t) - 1) / sizeof(uint32_t));
+            tt_metal::distributed::MeshCoordinate mesh_coord{0, 0};
+            tt_metal::distributed::ReadShard(
+                mesh_device->mesh_command_queue(0), metadata_data, metadata_buffer, mesh_coord);
+
+            // Update tensor addresses
+            for (uint32_t i = 0; i < num_input_tensors; ++i) {
+                uint32_t addr_index = 4 + i * 5;
+                if (addr_index < metadata_data.size()) {
+                    metadata_data[addr_index] = input_tensors[i].buffer()->address();
+                }
+            }
+
+            // Write back using NEW API
+            tt_metal::distributed::WriteShard(
+                mesh_device->mesh_command_queue(0), metadata_buffer, metadata_data, mesh_coord);
+
+            // Update writer args with new output address
             auto dst_buffer = output_tensors.at(0).buffer();
-
-            for (uint32_t i = 0; i < cores.size(); ++i) {
-                const CoreCoord& core = cores[i];
-                const auto& flat_workload = flat_workloads[i];
-
-                if (flat_workload.num_segments == 0) {
-                    continue;
-                }
-
-                auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-
-                for (uint32_t seg_idx = 0; seg_idx < flat_workload.num_segments; ++seg_idx) {
-                    const auto& segment = flat_workload.segments[seg_idx];
-                    uint32_t addr_index = 2 + seg_idx * (rm_layout ? 5 : 4);
-                    reader_runtime_args[addr_index] = input_tensors[segment.tensor_id].buffer()->address();
-                }
-
+            for (const auto& core : cores) {
                 auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 writer_runtime_args[0] = dst_buffer->address();
             }
