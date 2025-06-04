@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,21 +7,6 @@ import ast
 import pytest
 import torchvision.transforms as transforms
 from PIL import Image
-
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--start-from",
-        action="store",
-        default=0,
-        help="Start from prompt number (0-4999)",
-    )
-    parser.addoption(
-        "--num-prompts",
-        action="store",
-        default=5000,
-        help="Number of prompts to process (default: 5000)",
-    )
 
 
 @pytest.fixture
@@ -60,20 +45,3 @@ def hf_cat_image_sample_input():
     path = "models/sample_data/huggingface_cat_image.jpg"
     im = Image.open(path)
     return im
-
-
-@pytest.fixture
-def sdxl_accuracy_parameters(request):
-    start_from = request.config.getoption("--start-from")
-    num_prompts = request.config.getoption("--num-prompts")
-    if start_from is not None:
-        start_from = int(start_from)
-    else:
-        start_from = 0
-
-    if num_prompts is not None:
-        num_prompts = int(num_prompts)
-    else:
-        num_prompts = 5000
-
-    return start_from, num_prompts
