@@ -93,14 +93,41 @@ struct ShardedAccessor {
     PageMapping get_bank_and_offset(uint32_t page_id) const {
         // Check that page_id is within bounds
         ASSERT(page_id < get_dspec().get_tensor_volume());
-        // TODO: Should be possible to directly implement get_bank_and_offset logic with page_id and skip computing the
-        // page_coord
+
+        size_t flattened_shard_id = 0;
+        size_t page_offset_within_shard = 0;
+
+        const size_t num_banks = get_dspec().num_banks;
+
         std::array<uint32_t, rank> page_coord;
-        for (int i = rank - 1; i >= 0; --i) {
-            page_coord[i] = page_id % get_dspec().get_tensor_shape()[i];
-            page_id /= get_dspec().get_tensor_shape()[i];
+        // TODO: figure out why this is quicker for rank <= 3
+        if constexpr (rank <= 3) {
+            for (int i = rank - 1; i >= 0; --i) {
+                page_coord[i] = page_id % get_dspec().get_tensor_shape()[i];
+                page_id /= get_dspec().get_tensor_shape()[i];
+            }
         }
-        return get_bank_and_offset(page_coord);
+        for (int i = rank - 1; i >= 0; --i) {
+            // Extract coordinate for current dimension
+            if constexpr (rank > 3) {
+                page_coord[i] = page_id % get_dspec().get_tensor_shape()[i];
+                page_id /= get_dspec().get_tensor_shape()[i];
+            }
+
+            // Calculate shard coordinate and page offset contribution
+            uint32_t shard_coord = page_coord[i] / get_dspec().get_shard_shape()[i];
+            uint32_t page_offset = page_coord[i] % get_dspec().get_shard_shape()[i];
+
+            flattened_shard_id += shard_coord * get_dspec().get_shard_grid_strides()[i];
+            page_offset_within_shard += page_offset * get_dspec().get_shard_strides()[i];
+        }
+
+        // Calculate final bank values
+        size_t bank_id = flattened_shard_id % num_banks;
+        size_t bank_shard_id = flattened_shard_id / num_banks;
+        size_t bank_page_offset = bank_shard_id * get_dspec().get_shard_volume() + page_offset_within_shard;
+
+        return {bank_id, bank_page_offset};
     }
 
     PageMapping get_bank_and_offset(const std::array<uint32_t, rank> page_coord) const {
