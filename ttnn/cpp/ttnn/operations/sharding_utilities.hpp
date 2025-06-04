@@ -11,6 +11,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt_metal/common/flags.hpp>
 
 namespace tt::tt_metal {
 
@@ -91,11 +92,19 @@ ShardingConfig get_specs_for_sharding_partition(
 
 namespace sharded_accessor_utils {
 
-struct CRTAConfig {
-    bool runtime_tensor_shape = false;
-    bool runtime_shard_shape = false;
-    bool runtime_bank_coords = false;
+enum class ArgConfig : uint8_t {
+    CTA = 0,
+    RuntimeTensorShape = 1 << 0,
+    RuntimeShardShape = 1 << 1,
+    RuntimeBankCoords = 1 << 2,
+    RTA = RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
 };
+
+using ArgsConfig = Flags<ArgConfig>;
+constexpr ArgsConfig operator|(ArgConfig a, ArgConfig b) noexcept { return ArgsConfig(a) | b; }
+constexpr ArgsConfig operator|(ArgConfig a, ArgsConfig b) noexcept { return ArgsConfig(a) | b; }
+constexpr ArgsConfig operator|(ArgsConfig a, ArgConfig b) noexcept { return a | ArgsConfig(b); }
+
 struct ShardedAccessorArgs {
     size_t rank;
     size_t num_banks;
@@ -106,7 +115,7 @@ ShardedAccessorArgs get_sharded_accessor_args(
     const distributed::MeshDevice& mesh_device,
     const BufferDistributionSpec& buffer_distribution_spec,
     const CoreType& bank_type,
-    const CRTAConfig& crta_config = CRTAConfig{});
+    const ArgsConfig& args_config = ArgConfig::CTA);
 
 }  // namespace sharded_accessor_utils
 

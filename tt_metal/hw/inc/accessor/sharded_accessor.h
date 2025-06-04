@@ -11,18 +11,12 @@
 #include "dataflow_api.h"
 #endif
 
-template <
-    size_t BASE,
-    size_t RANK,
-    size_t NUM_BANKS,
-    bool TensorShapeDynamic = false,
-    bool ShardShapeDynamic = false,
-    bool BankCoordsDynamic = false>
-using distribution_spec_t = typename detail::
-    DistributionSpecWrapper<BASE, RANK, NUM_BANKS, TensorShapeDynamic, ShardShapeDynamic, BankCoordsDynamic>::dspec;
+template <size_t BASE, size_t RANK, size_t NUM_BANKS>
+using distribution_spec_t = typename detail::DistributionSpecWrapper<BASE, RANK, NUM_BANKS>::dspec;
 
 template <typename DSpec>
 constexpr auto compile_time_args_skip =
+    1 +  // +1 for crta config
     (DSpec::rank * DSpec::TensorShapeT::is_static) + (DSpec::rank * DSpec::ShardShapeT::is_static) +
     (DSpec::num_banks * DSpec::BankCoordsT::is_static);
 

@@ -755,24 +755,27 @@ ShardedAccessorArgs get_sharded_accessor_args(
     const distributed::MeshDevice& mesh_device,
     const BufferDistributionSpec& buffer_distribution_spec,
     const CoreType& bank_type,
-    const CRTAConfig& crta) {
+    const ArgsConfig& crta) {
     const auto& tensor_shape = buffer_distribution_spec.get_tensor_shape_in_pages();
     const auto& shard_shape = buffer_distribution_spec.get_shard_shape_in_pages();
     const auto& bank_coords = buffer_distribution_spec.get_cores();
 
-    size_t n_compile_time_args = tensor_shape.size() * !crta.runtime_tensor_shape +
-                                 shard_shape.size() * !crta.runtime_shard_shape +
-                                 bank_coords.size() * !crta.runtime_bank_coords;
-    size_t n_runtime_args = tensor_shape.size() * crta.runtime_tensor_shape +
-                            shard_shape.size() * crta.runtime_shard_shape +
-                            bank_coords.size() * crta.runtime_bank_coords;
+    auto tensor_shape_rt = crta.test(ArgConfig::RuntimeTensorShape);
+    auto shard_shape_rt = crta.test(ArgConfig::RuntimeShardShape);
+    auto bank_coords_rt = crta.test(ArgConfig::RuntimeBankCoords);
+
+    size_t n_compile_time_args = tensor_shape.size() * !tensor_shape_rt + shard_shape.size() * !shard_shape_rt +
+                                 bank_coords.size() * !bank_coords_rt + 1;  // +1 for the crta config
+    size_t n_runtime_args = tensor_shape.size() * tensor_shape_rt + shard_shape.size() * shard_shape_rt +
+                            bank_coords.size() * bank_coords_rt;
     std::vector<uint32_t> compile_time_args;
     std::vector<uint32_t> runtime_args;
     compile_time_args.reserve(n_compile_time_args);
     runtime_args.reserve(n_runtime_args);
-    auto& tensor_shape_args = crta.runtime_tensor_shape ? runtime_args : compile_time_args;
-    auto& shard_shape_args = crta.runtime_shard_shape ? runtime_args : compile_time_args;
-    auto& bank_coords_args = crta.runtime_bank_coords ? runtime_args : compile_time_args;
+    compile_time_args.push_back(crta.raw());
+    auto& tensor_shape_args = tensor_shape_rt ? runtime_args : compile_time_args;
+    auto& shard_shape_args = shard_shape_rt ? runtime_args : compile_time_args;
+    auto& bank_coords_args = bank_coords_rt ? runtime_args : compile_time_args;
 
     tensor_shape_args.insert(tensor_shape_args.end(), tensor_shape.cbegin(), tensor_shape.cend());
     shard_shape_args.insert(shard_shape_args.end(), shard_shape.cbegin(), shard_shape.cend());

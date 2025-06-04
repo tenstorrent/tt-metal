@@ -9,6 +9,50 @@
 
 namespace detail {
 
+namespace {
+enum class ArgConfig : uint8_t {
+    CTA = 0,
+    RuntimeTensorShape = 1 << 0,
+    RuntimeShardShape = 1 << 1,
+    RuntimeBankCoords = 1 << 2,
+    RTA = RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
+};
+
+// TODO: This exact class is defined in tt-metal/common/flags.hpp, consider reusing it
+template <typename E>
+struct Flags {
+    static_assert(std::is_enum_v<E>, "Flags<E> requires E to be an enum.");
+
+    using Underlying = std::underlying_type_t<E>;
+
+    constexpr Flags() noexcept : bits_(0) {}
+    constexpr Flags(E single) noexcept : bits_(static_cast<Underlying>(single)) {}
+    constexpr Flags(E a, E b) noexcept : bits_(static_cast<Underlying>(a) | static_cast<Underlying>(b)) {}
+    constexpr explicit Flags(Underlying bits) noexcept : bits_(bits) {}
+
+    // Bitwise OR a single enum
+    constexpr Flags operator|(E rhs) const noexcept { return Flags(bits_ | static_cast<Underlying>(rhs)); }
+    // Bitwise OR another Flags
+    constexpr Flags operator|(Flags rhs) const noexcept { return Flags(bits_ | rhs.bits_); }
+
+    // ... similarly, operator&, operator^, operator~ if you like ...
+    constexpr Flags operator&(E rhs) const noexcept { return Flags(bits_ & static_cast<Underlying>(rhs)); }
+    constexpr bool test(E single) const noexcept {
+        return (bits_ & static_cast<Underlying>(single)) == static_cast<Underlying>(single);
+    }
+
+    constexpr Underlying raw() const noexcept { return bits_; }
+
+private:
+    Underlying bits_;
+};
+
+using ArgsConfig = Flags<ArgConfig>;
+constexpr ArgsConfig operator|(ArgConfig a, ArgConfig b) noexcept { return ArgsConfig(a) | b; }
+constexpr ArgsConfig operator|(ArgConfig a, ArgsConfig b) noexcept { return ArgsConfig(a) | b; }
+constexpr ArgsConfig operator|(ArgsConfig a, ArgConfig b) noexcept { return a | ArgsConfig(b); }
+}  // namespace
+
 template <size_t... Dims>
 struct ShapeWrapper {
     static constexpr size_t rank = sizeof...(Dims);
@@ -318,27 +362,26 @@ struct TypeSelector<false, StaticWrapper, DynamicWrapper, BASE, SIZE> {
     using type = struct_sequence_wrapper_t<StaticWrapper, BASE, SIZE>;
 };
 
-// Redefined DistributionSpecWrapper using TypeSelector
-template <
-    size_t CTA_BASE,
-    size_t RANK,
-    size_t NUM_BANKS,
-    bool TensorShapeDynamic = false,
-    bool ShardShapeDynamic = false,
-    bool BankCoordsDynamic = false>
+template <size_t CTA_BASE, size_t RANK, size_t NUM_BANKS>
 struct DistributionSpecWrapper {
+    constexpr static auto args_config =
+        ArgsConfig(static_cast<ArgsConfig::Underlying>(get_compile_time_arg_val(CTA_BASE)));
+    constexpr static bool TensorShapeDynamic = args_config.test(ArgConfig::RuntimeTensorShape);
+    constexpr static bool ShardShapeDynamic = args_config.test(ArgConfig::RuntimeShardShape);
+    constexpr static bool BankCoordsDynamic = args_config.test(ArgConfig::RuntimeBankCoords);
+
     // Calculate offsets based on which previous shapes are dynamic
-    static constexpr size_t ShardShapeBase = CTA_BASE + (TensorShapeDynamic ? 0 : RANK);
+    constexpr static size_t TensorShapeBase = CTA_BASE + 1;
+    static constexpr size_t ShardShapeBase = TensorShapeBase + (TensorShapeDynamic ? 0 : RANK);
     static constexpr size_t BankCoordsBase = ShardShapeBase + (ShardShapeDynamic ? 0 : RANK);
 
     using TensorShapeType =
-        typename TypeSelector<TensorShapeDynamic, ShapeWrapper, ShapeWrapperDynamic, CTA_BASE, RANK>::type;
+        typename TypeSelector<TensorShapeDynamic, ShapeWrapper, ShapeWrapperDynamic, TensorShapeBase, RANK>::type;
     using ShardShapeType =
         typename TypeSelector<ShardShapeDynamic, ShapeWrapper, ShapeWrapperDynamic, ShardShapeBase, RANK>::type;
     using BankCoordsType =
         typename TypeSelector<BankCoordsDynamic, BankCoordWrapper, BankCoordWrapperDynamic, BankCoordsBase, NUM_BANKS>::
             type;
-
     using dspec = DistributionSpec<TensorShapeType, ShardShapeType, BankCoordsType>;
 };
 

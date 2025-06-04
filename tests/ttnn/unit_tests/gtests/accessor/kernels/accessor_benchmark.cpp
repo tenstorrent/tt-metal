@@ -18,15 +18,15 @@ void kernel_main() {
     // runtime tensor shape, runtime shard shape, and static bank coords
     constexpr uint32_t base_idx_cta_DDS = base_idx_cta + compile_time_args_skip<input_dspec_cta>;
     constexpr uint32_t base_idx_rta_DDS = 0;
-    using input_dspec_crta_DDS = distribution_spec_t<base_idx_cta_DDS, rank, num_banks, true, true, false>;
+    using input_dspec_crta_DDS = distribution_spec_t<base_idx_cta_DDS, rank, num_banks>;
 
     constexpr uint32_t base_idx_cta_SSD = base_idx_cta_DDS + compile_time_args_skip<input_dspec_crta_DDS>;
     constexpr uint32_t base_idx_rta_SSD = base_idx_rta_DDS + runtime_args_skip<input_dspec_crta_DDS>;
-    using input_dspec_crta_SSD = distribution_spec_t<base_idx_cta_SSD, rank, num_banks, false, false, true>;
+    using input_dspec_crta_SSD = distribution_spec_t<base_idx_cta_SSD, rank, num_banks>;
 
     constexpr uint32_t base_idx_cta_DDD = base_idx_cta_SSD + compile_time_args_skip<input_dspec_crta_SSD>;
     constexpr uint32_t base_idx_rta_DDD = base_idx_rta_SSD + runtime_args_skip<input_dspec_crta_SSD>;
-    using input_dspec_crta_DDD = distribution_spec_t<base_idx_cta_DDD, rank, num_banks, true, true, true>;
+    using input_dspec_crta_DDD = distribution_spec_t<base_idx_cta_DDD, rank, num_banks>;
 
     auto sharded_accessor_cta = ShardedAccessor<input_dspec_cta, page_size>(bank_base_address);
     auto sharded_accessor_crta_DDS =
