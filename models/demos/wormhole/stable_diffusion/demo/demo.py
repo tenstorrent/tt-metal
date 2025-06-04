@@ -68,6 +68,55 @@ def calculate_fid_score(imgs_path1, imgs_path2):
     return fid.compute()
 
 
+def run(
+    device,
+    model,
+    config,
+    tt_vae,
+    input_latents,
+    input_encoder_hidden_states,
+    _tlist,
+    time_step,
+    guidance_scale,
+    ttnn_scheduler,
+):
+    ttnn.device.EnableMemoryReports()
+    ttnn_latents = input_latents
+    # Denoising loop
+    for index in tqdm(range(len(time_step))):
+        # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
+        ttnn_latent_model_input = ttnn.concat([ttnn_latents, ttnn_latents], dim=0)
+        _t = _tlist[index]
+        t = time_step[index]
+        # predict the noise residual
+        ttnn_output = model(
+            ttnn_latent_model_input,  # input
+            timestep=_t,
+            encoder_hidden_states=input_encoder_hidden_states,
+            class_labels=None,
+            attention_mask=None,
+            cross_attention_kwargs=None,
+            return_dict=True,
+            config=config,
+        )
+        # perform guidance
+        noise_pred = tt_guide(ttnn_output, guidance_scale)
+
+        ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
+
+    # scale and decode the image latents with vae
+    latents = 1 / 0.18215 * ttnn_latents
+
+    ttnn_output = ttnn.permute(latents, [0, 2, 3, 1])
+    ttnn.device.dump_device_memory_state(device, prefix="")
+    ttnn.device.DisableMemoryReports()
+
+    ttnn_output = ttnn.move(ttnn_output)
+    ttnn_output = tt_vae.decode(ttnn_output)
+    ttnn_output = ttnn.reshape(ttnn_output, [1, 512, 512, ttnn_output.shape[3]])
+    return ttnn.permute(ttnn_output, [0, 3, 1, 2])
+
+
 def preprocess_images(image_paths):
     images = []
     for image_path in image_paths:
@@ -160,6 +209,54 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     inputs = load_inputs(input_path)
     input_prompts = inputs[:num_prompts]
 
+    ttnn_text_embeddings_device = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([2, 96, 768]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    encoder_hidden_states_rand = torch.randn([2, 77, 768])
+    encoder_hidden_states_rand = torch.nn.functional.pad(encoder_hidden_states_rand, (0, 0, 0, 19))
+    encoder_hidden_states_rand = ttnn.from_torch(
+        encoder_hidden_states_rand, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+
+    # COMPILE
+    ttnn_scheduler.set_timesteps(num_inference_steps)
+    ttnn.copy_host_to_device_tensor(encoder_hidden_states_rand, ttnn_text_embeddings_device, cq_id=0)
+    output = ttnn.from_device(
+        run(
+            device,
+            model,
+            config,
+            tt_vae,
+            rand_latents,
+            ttnn_text_embeddings_device,
+            _tlist,
+            time_step,
+            guidance_scale,
+            ttnn_scheduler,
+        )
+    )
+
+    # CAPTURE
+    ttnn_scheduler.set_timesteps(num_inference_steps)
+    ttnn.copy_host_to_device_tensor(encoder_hidden_states_rand, ttnn_text_embeddings_device, cq_id=0)
+    output.deallocate(True)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    output = run(
+        device,
+        model,
+        config,
+        tt_vae,
+        rand_latents,
+        ttnn_text_embeddings_device,
+        _tlist,
+        time_step,
+        guidance_scale,
+        ttnn_scheduler,
+    )
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    # EXEC
     while i < num_prompts:
         ttnn_scheduler.set_timesteps(num_inference_steps)
         input_prompt = [input_prompts[i]]
@@ -190,49 +287,14 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
         ttnn_text_embeddings = torch.nn.functional.pad(text_embeddings, (0, 0, 0, 19))
         ttnn_text_embeddings = ttnn.from_torch(
-            ttnn_text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            ttnn_text_embeddings,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
         )
-
-        iter = 0
-        ttnn_latents = rand_latents
-        # # Denoising loop
-        for index in tqdm(range(len(time_step))):
-            # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
-            ttnn_latent_model_input = ttnn.concat([ttnn_latents, ttnn_latents], dim=0)
-            _t = _tlist[index]
-            t = time_step[index]
-            # predict the noise residual
-            ttnn_output = model(
-                ttnn_latent_model_input,  # input
-                timestep=_t,
-                encoder_hidden_states=ttnn_text_embeddings,
-                class_labels=None,
-                attention_mask=None,
-                cross_attention_kwargs=None,
-                return_dict=True,
-                config=config,
-            )
-            # perform guidance
-            noise_pred = tt_guide(ttnn_output, guidance_scale)
-
-            ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
-
-            iter += 1
-
-        # scale and decode the image latents with vae
-        latents = 1 / 0.18215 * ttnn_latents
-
-        # on blackhole, we use the original vae decoder until #20760 is fixed
-        if not is_blackhole():
-            latents = ttnn.permute(latents, [0, 2, 3, 1])
-            ttnn_output = tt_vae.decode(latents)
-            ttnn_output = ttnn.reshape(ttnn_output, [1, image_size[0], image_size[1], ttnn_output.shape[3]])
-            ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
-            image = ttnn.to_torch(ttnn_output)
-        else:
-            latents = ttnn.to_torch(latents).to(torch.float32)
-            image = vae.decode(latents).sample
-
+        ttnn.copy_host_to_device_tensor(ttnn_text_embeddings, ttnn_text_embeddings_device, cq_id=0)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        image = ttnn.to_torch(output.cpu(blocking=True))
+        ttnn.synchronize_device(device)
         profiler.end(f"inference_prompt_{i}")
 
         # Image post-processing
@@ -242,7 +304,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         pil_images = [Image.fromarray(image) for image in images][0]
         ttnn_output_path = f"{experiment_name}_ttnn.png"
         pil_images.save(ttnn_output_path)
-
+    ttnn.release_trace(device, tid)
     profiler.print()
 
     # we calculate average time per prompt only when there is more than 1 iteration,
@@ -607,7 +669,11 @@ def run_demo_inference_diffusiondb(
         logger.info(f"CLIP Score (TTNN): {clip_score_ttnn}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 11 * 8192}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 11 * 8192, "trace_region_size": 591528960}],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "input_path",
     (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),
