@@ -12,7 +12,6 @@
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
-#include <initializer_list>
 #include <map>
 #include <typeinfo>
 #include <memory>
@@ -137,6 +136,17 @@ constexpr noc_selection_t k_packet_queue_noc = {
     .downstream_noc = tt::tt_metal::NOC::NOC_0,
 };
 
+//
+// Fabric MUX NOC selections
+//
+// Must be NoC0
+//
+constexpr noc_selection_t k_fabric_mux_noc = {
+    .non_dispatch_noc = tt::tt_metal::NOC::NOC_0,
+    .upstream_noc = tt::tt_metal::NOC::NOC_0,
+    .downstream_noc = tt::tt_metal::NOC::NOC_0,
+};
+
 // clang-format off
 static const std::vector<DispatchKernelNode> single_chip_arch_1cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_prefetcher_noc},
@@ -181,25 +191,6 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
     {13, 1, x, 0, PACKET_ROUTER_DEMUX, {11, x, x, x}, {8, x, x, x}, k_packet_queue_noc},
 };
 
-static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
-    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, {NOC::NOC_1, NOC::NOC_1, NOC::NOC_1}},
-
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
-    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
-
-    // Sender path PREFETCH_H -> PREFETCH_D
-    {5, 0, x, 0, FABRIC_ROUTER_VC, {3, x, x, x}, {7, x, x, x}},
-
-    // Return path DISPATCH_D -> DISPATCH_H
-    {6, 0, x, 0, FABRIC_ROUTER_VC, {8, x, x, x}, {4, x, x, x}},
-
-    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, {NOC::NOC_0, NOC::NOC_0, NOC::NOC_0}},
-    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, {NOC::NOC_0, NOC::NOC_1, NOC::NOC_0}},
-    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, {NOC::NOC_1, NOC::NOC_1, NOC::NOC_1}},
-};
-
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, k_prefetcher_noc},
     {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, k_prefetcher_noc},
@@ -224,6 +215,258 @@ static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
     {16, 1, x, 0, MUX_D, {13, 14, x, x}, {15, x, x, x}, k_packet_queue_noc},
     {17, 1, x, 0, PACKET_ROUTER_DEMUX, {15, x, x, x}, {11, 12, x, x}, k_packet_queue_noc},
 
+};
+
+static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_prefetcher_noc},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_dispatcher_noc},
+    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_dispatcher_s_noc},
+
+    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {6, 5, x, x}, k_prefetcher_noc},
+    {4, 0, 1, 0, DISPATCH_H, {7, x, x, x}, {3, 5, x, x}, k_dispatcher_noc},
+
+    // H2D via MUX
+    {5, 0, 1, 0, FABRIC_MUX, /*Full size*/ {3}, /*Header Only*/ {4}, k_fabric_mux_noc},
+
+    {6, 1, x, 0, PREFETCH_D, {3, x, x, x}, {7, 8, 9, x}, k_prefetcher_noc},
+    {7, 1, x, 0, DISPATCH_D, {6, x, x, x}, {8, 4, 9, x}, k_dispatcher_noc},
+    {8, 1, x, 0, DISPATCH_S, {6, x, x, x}, {7, x, x, x}, k_dispatcher_s_noc},
+
+    // D2H via MUX
+    {9, 1, 0, 0, RETURN_FABRIC_MUX, /*Full size*/ {7}, /*Header Only*/ {6}, k_fabric_mux_noc},
+};
+
+static const std::vector<DispatchKernelNode> two_chip_arch_2cq_fabric = {
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, k_prefetcher_noc},
+    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, k_prefetcher_noc},
+    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, k_dispatcher_noc},
+    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {x, x, x, x}, k_dispatcher_noc},
+
+    {4, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {9, 8, x, x}, k_prefetcher_noc},
+    {5, 0, 1, 1, PREFETCH_H, {x, x, x, x}, {10, 8, x, x}, k_prefetcher_noc},
+    {6, 0, 1, 0, DISPATCH_H, {11, x, x, x}, {4, 8, x, x}, k_dispatcher_noc},
+    {7, 0, 1, 1, DISPATCH_H, {12, x, x, x}, {5, 8, x, x}, k_dispatcher_noc},
+
+    // H2D via MUX
+    {8, 0, 1, 0, FABRIC_MUX, /*Full size*/ {4, 5}, /*Header Only*/ {6, 7}, k_fabric_mux_noc},
+
+    {9, 1, x, 0, PREFETCH_D, {4, x, x, x}, {11, 13, x, x}, k_prefetcher_noc},
+    {10, 1, x, 1, PREFETCH_D, {5, x, x, x}, {12, 13, x, x}, k_prefetcher_noc},
+    {11, 1, x, 0, DISPATCH_D, {9, x, x, x}, {6, 13, x, x}, k_dispatcher_noc},
+    {12, 1, x, 1, DISPATCH_D, {10, x, x, x}, {7, 13, x, x}, k_dispatcher_noc},
+
+    // D2H via MUX
+    {13, 1, 0, 0, RETURN_FABRIC_MUX, /*Full size*/ {11, 12}, /*Header Only*/ {9, 10}, k_fabric_mux_noc},
+};
+
+static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_1cq_fabric = {
+    // Servicing remote chips 1-4
+    // { id, device_id, servicing_device_id, cq, fd kernel, upstream ids, downstream ids, noc selection}
+    {0, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {18, 8, x, x}, k_prefetcher_noc},
+    {1, 0, 1, 0, DISPATCH_H, {19, x, x, x}, {0, 8, x, x}, k_dispatcher_noc},
+
+    {2, 0, 2, 0, PREFETCH_H, {x, x, x, x}, {22, 8, x, x}, k_prefetcher_noc},
+    {3, 0, 2, 0, DISPATCH_H, {23, x, x, x}, {2, 8, x, x}, k_dispatcher_noc},
+
+    {4, 0, 3, 0, PREFETCH_H, {x, x, x, x}, {26, 8, x, x}, k_prefetcher_noc},
+    {5, 0, 3, 0, DISPATCH_H, {27, x, x, x}, {4, 8, x, x}, k_dispatcher_noc},
+
+    {6, 0, 4, 0, PREFETCH_H, {x, x, x, x}, {30, 8, x, x}, k_prefetcher_noc},
+    {7, 0, 4, 0, DISPATCH_H, {31, x, x, x}, {6, 8, x, x}, k_dispatcher_noc},
+
+    {8, 0, x, 0, FABRIC_MUX, /*full size*/ {0, 2, 4, 6}, /*header only*/ {1, 3, 5, 7}, k_fabric_mux_noc, 0},
+
+    // Servicing remote chips 5-8
+    {9, 0, 5, 0, PREFETCH_H, {x, x, x, x}, {34, 17, x, x}, k_prefetcher_noc},
+    {10, 0, 5, 0, DISPATCH_H, {35, x, x, x}, {9, 17, x, x}, k_dispatcher_noc},
+
+    {11, 0, 6, 0, PREFETCH_H, {x, x, x, x}, {38, 17, x, x}, k_prefetcher_noc},
+    {12, 0, 6, 0, DISPATCH_H, {39, x, x, x}, {11, 17, x, x}, k_dispatcher_noc},
+
+    {13, 0, 7, 0, PREFETCH_H, {x, x, x, x}, {42, 17, x, x}, k_prefetcher_noc},
+    {14, 0, 7, 0, DISPATCH_H, {43, x, x, x}, {13, 17, x, x}, k_dispatcher_noc},
+
+    {15, 0, 8, 0, PREFETCH_H, {x, x, x, x}, {46, 17, x, x}, k_prefetcher_noc},
+    {16, 0, 8, 0, DISPATCH_H, {47, x, x, x}, {15, 17, x, x}, k_dispatcher_noc},
+
+    {17, 0, x, 0, FABRIC_MUX, /*full size*/ {9, 11, 13, 15}, /*header only*/ {10, 12, 14, 16}, k_fabric_mux_noc, 1},
+
+    // Remote chip 1
+    {18, 1, x, 0, PREFETCH_D, {0, x, x, x}, {19, 20, 21, x}, k_prefetcher_noc},
+    {19, 1, x, 0, DISPATCH_D, {18, x, x, x}, {1, 20, 21, x}, k_dispatcher_noc},
+    {20, 1, x, 0, DISPATCH_S, {18, x, x, x}, {19, x, x, x}, k_dispatcher_s_noc},
+    {21, 1, x, 0, RETURN_FABRIC_MUX, /*full size*/ {19}, /*header only*/ {18}, k_fabric_mux_noc},
+
+    // Remote chip 2
+    {22, 2, x, 0, PREFETCH_D, {2, x, x, x}, {23, 24, 25, x}, k_prefetcher_noc},
+    {23, 2, x, 0, DISPATCH_D, {22, x, x, x}, {3, 24, 25, x}, k_dispatcher_noc},
+    {24, 2, x, 0, DISPATCH_S, {22, x, x, x}, {23, x, x, x}, k_dispatcher_s_noc},
+    {25, 2, x, 0, RETURN_FABRIC_MUX, /*full size*/ {23}, /*header only*/ {22}, k_fabric_mux_noc},
+
+    // Remote chip 3
+    {26, 3, x, 0, PREFETCH_D, {4, x, x, x}, {27, 28, 29, x}, k_prefetcher_noc},
+    {27, 3, x, 0, DISPATCH_D, {26, x, x, x}, {5, 28, 29, x}, k_dispatcher_noc},
+    {28, 3, x, 0, DISPATCH_S, {26, x, x, x}, {27, x, x, x}, k_dispatcher_s_noc},
+    {29, 3, x, 0, RETURN_FABRIC_MUX, /*full size*/ {27}, /*header only*/ {26}, k_fabric_mux_noc},
+
+    // Remote chip 4
+    {30, 4, x, 0, PREFETCH_D, {6, x, x, x}, {31, 32, 33, x}, k_prefetcher_noc},
+    {31, 4, x, 0, DISPATCH_D, {30, x, x, x}, {7, 32, 33, x}, k_dispatcher_noc},
+    {32, 4, x, 0, DISPATCH_S, {30, x, x, x}, {31, x, x, x}, k_dispatcher_s_noc},
+    {33, 4, x, 0, RETURN_FABRIC_MUX, /*full size*/ {31}, /*header only*/ {30}, k_fabric_mux_noc},
+
+    // Remote chip 5
+    {34, 5, x, 0, PREFETCH_D, {9, x, x, x}, {35, 36, 37, x}, k_prefetcher_noc},
+    {35, 5, x, 0, DISPATCH_D, {34, x, x, x}, {10, 36, 37, x}, k_dispatcher_noc},
+    {36, 5, x, 0, DISPATCH_S, {34, x, x, x}, {35, x, x, x}, k_dispatcher_s_noc},
+    {37, 5, x, 0, RETURN_FABRIC_MUX, /*full size*/ {35}, /*header only*/ {34}, k_fabric_mux_noc},
+
+    // Remote chip 6
+    {38, 6, x, 0, PREFETCH_D, {11, x, x, x}, {39, 40, 41, x}, k_prefetcher_noc},
+    {39, 6, x, 0, DISPATCH_D, {38, x, x, x}, {12, 40, 41, x}, k_dispatcher_noc},
+    {40, 6, x, 0, DISPATCH_S, {38, x, x, x}, {39, x, x, x}, k_dispatcher_s_noc},
+    {41, 6, x, 0, RETURN_FABRIC_MUX, /*full size*/ {39}, /*header only*/ {38}, k_fabric_mux_noc},
+
+    // Remote chip 7
+    {42, 7, x, 0, PREFETCH_D, {13, x, x, x}, {43, 44, 45, x}, k_prefetcher_noc},
+    {43, 7, x, 0, DISPATCH_D, {42, x, x, x}, {14, 44, 45, x}, k_dispatcher_noc},
+    {44, 7, x, 0, DISPATCH_S, {42, x, x, x}, {43, x, x, x}, k_dispatcher_s_noc},
+    {45, 7, x, 0, RETURN_FABRIC_MUX, /*full size*/ {43}, /*header only*/ {42}, k_fabric_mux_noc},
+
+    // Remote chip 8
+    {46, 8, x, 0, PREFETCH_D, {15, x, x, x}, {47, 48, 49, x}, k_prefetcher_noc},
+    {47, 8, x, 0, DISPATCH_D, {46, x, x, x}, {16, 48, 49, x}, k_dispatcher_noc},
+    {48, 8, x, 0, DISPATCH_S, {46, x, x, x}, {47, x, x, x}, k_dispatcher_s_noc},
+    {49, 8, x, 0, RETURN_FABRIC_MUX, /*full size*/ {47}, /*header only*/ {46}, k_fabric_mux_noc},
+};
+
+static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq_fabric = {
+    // Servicing remote chips 1-4
+    // { id, device_id, servicing_device_id, cq, fd kernel, upstream ids, downstream ids, noc selection}
+    {0, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {16, 34, x, x}, k_prefetcher_noc},
+    {1, 0, 1, 1, PREFETCH_H, {x, x, x, x}, {16, 35, x, x}, k_prefetcher_noc},
+
+    {2, 0, 1, 0, DISPATCH_H, {36, x, x, x}, {16, 0, x, x}, k_dispatcher_noc},
+    {3, 0, 1, 1, DISPATCH_H, {37, x, x, x}, {16, 1, x, x}, k_dispatcher_noc},
+
+    {4, 0, 2, 0, PREFETCH_H, {x, x, x, x}, {16, 41, x, x}, k_prefetcher_noc},
+    {5, 0, 2, 1, PREFETCH_H, {x, x, x, x}, {16, 42, x, x}, k_prefetcher_noc},
+
+    {6, 0, 2, 0, DISPATCH_H, {43, x, x, x}, {16, 4, x, x}, k_dispatcher_noc},
+    {7, 0, 2, 1, DISPATCH_H, {44, x, x, x}, {16, 5, x, x}, k_dispatcher_noc},
+
+    {8, 0, 3, 0, PREFETCH_H, {x, x, x, x}, {16, 48, x, x}, k_prefetcher_noc},
+    {9, 0, 3, 1, PREFETCH_H, {x, x, x, x}, {16, 49, x, x}, k_prefetcher_noc},
+
+    {10, 0, 3, 0, DISPATCH_H, {50, x, x, x}, {16, 8, x, x}, k_dispatcher_noc},
+    {11, 0, 3, 1, DISPATCH_H, {51, x, x, x}, {16, 9, x, x}, k_dispatcher_noc},
+
+    {12, 0, 4, 0, PREFETCH_H, {x, x, x, x}, {16, 55, x, x}, k_prefetcher_noc},
+    {13, 0, 4, 1, PREFETCH_H, {x, x, x, x}, {16, 56, x, x}, k_prefetcher_noc},
+
+    {14, 0, 4, 0, DISPATCH_H, {57, x, x, x}, {16, 12, x, x}, k_dispatcher_noc},
+    {15, 0, 4, 1, DISPATCH_H, {58, x, x, x}, {16, 13, x, x}, k_dispatcher_noc},
+
+    {16, 0, x, 0, FABRIC_MUX, /*full size*/ {0, 1, 4, 5, 8, 9, 12, 13}, /*header only*/ {2, 3, 6, 7, 10, 11, 14, 15}, k_fabric_mux_noc, 0},
+
+    // Servicing remote chips 5-8
+    {17, 0, 5, 0, PREFETCH_H, {x, x, x, x}, {33, 62, x, x}, k_prefetcher_noc},
+    {18, 0, 5, 1, PREFETCH_H, {x, x, x, x}, {33, 63, x, x}, k_prefetcher_noc},
+
+    {19, 0, 5, 0, DISPATCH_H, {64, x, x, x}, {33, 17, x, x}, k_dispatcher_noc},
+    {20, 0, 5, 1, DISPATCH_H, {65, x, x, x}, {33, 18, x, x}, k_dispatcher_noc},
+
+    {21, 0, 6, 0, PREFETCH_H, {x, x, x, x}, {33, 69, x, x}, k_prefetcher_noc},
+    {22, 0, 6, 1, PREFETCH_H, {x, x, x, x}, {33, 70, x, x}, k_prefetcher_noc},
+
+    {23, 0, 6, 0, DISPATCH_H, {71, x, x, x}, {33, 21, x, x}, k_dispatcher_noc},
+    {24, 0, 6, 1, DISPATCH_H, {72, x, x, x}, {33, 22, x, x}, k_dispatcher_noc},
+
+    {25, 0, 7, 0, PREFETCH_H, {x, x, x, x}, {33, 76, x, x}, k_prefetcher_noc},
+    {26, 0, 7, 1, PREFETCH_H, {x, x, x, x}, {33, 77, x, x}, k_prefetcher_noc},
+
+    {27, 0, 7, 0, DISPATCH_H, {78, x, x, x}, {33, 25, x, x}, k_dispatcher_noc},
+    {28, 0, 7, 1, DISPATCH_H, {79, x, x, x}, {33, 26, x, x}, k_dispatcher_noc},
+
+    {29, 0, 8, 0, PREFETCH_H, {x, x, x, x}, {33, 83, x, x}, k_prefetcher_noc},
+    {30, 0, 8, 1, PREFETCH_H, {x, x, x, x}, {33, 84, x, x}, k_prefetcher_noc},
+
+    {31, 0, 8, 0, DISPATCH_H, {85, x, x, x}, {33, 29, x, x}, k_dispatcher_noc},
+    {32, 0, 8, 1, DISPATCH_H, {86, x, x, x}, {33, 30, x, x}, k_dispatcher_noc},
+
+    {33, 0, x, 0, FABRIC_MUX, /*full size*/ {17, 18, 21, 22, 25, 26, 29, 30}, /*header only*/ {19, 20, 23, 24, 27, 28, 31, 32}, k_fabric_mux_noc, 1},
+
+    // Remote chip 1
+    {34, 1, x, 0, PREFETCH_D, {0, x, x, x}, {40, 36, 38, x}, k_prefetcher_noc},
+    {35, 1, x, 1, PREFETCH_D, {1, x, x, x}, {40, 37, 39, x}, k_prefetcher_noc},
+    {36, 1, x, 0, DISPATCH_D, {34, x, x, x}, {40, 38, 2, x}, k_dispatcher_noc},
+    {37, 1, x, 1, DISPATCH_D, {35, x, x, x}, {40, 39, 3, x}, k_dispatcher_noc},
+    {38, 1, x, 0, DISPATCH_S, {34, x, x, x}, {36, x, x, x}, k_dispatcher_s_noc},
+    {39, 1, x, 1, DISPATCH_S, {35, x, x, x}, {37, x, x, x}, k_dispatcher_s_noc},
+    {40, 1, x, 0, RETURN_FABRIC_MUX, /*full size*/ {36, 37}, /*header only*/ {34, 35}, k_fabric_mux_noc},
+
+    // Remote chip 2
+    {41, 2, x, 0, PREFETCH_D, {4, x, x, x}, {47, 43, 45, x}, k_prefetcher_noc},
+    {42, 2, x, 1, PREFETCH_D, {5, x, x, x}, {47, 44, 46, x}, k_prefetcher_noc},
+    {43, 2, x, 0, DISPATCH_D, {41, x, x, x}, {47, 45, 6, x}, k_dispatcher_noc},
+    {44, 2, x, 1, DISPATCH_D, {42, x, x, x}, {47, 46, 7, x}, k_dispatcher_noc},
+    {45, 2, x, 0, DISPATCH_S, {41, x, x, x}, {43, x, x, x}, k_dispatcher_s_noc},
+    {46, 2, x, 1, DISPATCH_S, {42, x, x, x}, {44, x, x, x}, k_dispatcher_s_noc},
+    {47, 2, x, 0, RETURN_FABRIC_MUX, /*full size*/ {43, 44}, /*header only*/ {41, 42}, k_fabric_mux_noc},
+
+    // Remote chip 3
+    {48, 3, x, 0, PREFETCH_D, {8, x, x, x}, {54, 50, 52, x}, k_prefetcher_noc},
+    {49, 3, x, 1, PREFETCH_D, {9, x, x, x}, {54, 51, 53, x}, k_prefetcher_noc},
+    {50, 3, x, 0, DISPATCH_D, {48, x, x, x}, {54, 52, 10, x}, k_dispatcher_noc},
+    {51, 3, x, 1, DISPATCH_D, {49, x, x, x}, {54, 53, 11, x}, k_dispatcher_noc},
+    {52, 3, x, 0, DISPATCH_S, {48, x, x, x}, {50, x, x, x}, k_dispatcher_s_noc},
+    {53, 3, x, 1, DISPATCH_S, {49, x, x, x}, {51, x, x, x}, k_dispatcher_s_noc},
+    {54, 3, x, 0, RETURN_FABRIC_MUX, /*full size*/ {50, 51}, /*header only*/ {48, 49}, k_fabric_mux_noc},
+
+    // Remote chip 4
+    {55, 4, x, 0, PREFETCH_D, {12, x, x, x}, {61, 57, 59, x}, k_prefetcher_noc},
+    {56, 4, x, 1, PREFETCH_D, {13, x, x, x}, {61, 58, 60, x}, k_prefetcher_noc},
+    {57, 4, x, 0, DISPATCH_D, {55, x, x, x}, {61, 59, 14, x}, k_dispatcher_noc},
+    {58, 4, x, 1, DISPATCH_D, {56, x, x, x}, {61, 60, 15, x}, k_dispatcher_noc},
+    {59, 4, x, 0, DISPATCH_S, {55, x, x, x}, {57, x, x, x}, k_dispatcher_s_noc},
+    {60, 4, x, 1, DISPATCH_S, {56, x, x, x}, {58, x, x, x}, k_dispatcher_s_noc},
+    {61, 4, x, 0, RETURN_FABRIC_MUX, /*full size*/ {57, 58}, /*header only*/ {55, 56}, k_fabric_mux_noc},
+
+    // Remote chip 5
+    {62, 5, x, 0, PREFETCH_D, {17, x, x, x}, {68, 64, 66, x}, k_prefetcher_noc},
+    {63, 5, x, 1, PREFETCH_D, {18, x, x, x}, {68, 65, 67, x}, k_prefetcher_noc},
+    {64, 5, x, 0, DISPATCH_D, {62, x, x, x}, {68, 66, 19, x}, k_dispatcher_noc},
+    {65, 5, x, 1, DISPATCH_D, {63, x, x, x}, {68, 67, 20, x}, k_dispatcher_noc},
+    {66, 5, x, 0, DISPATCH_S, {62, x, x, x}, {64, x, x, x}, k_dispatcher_s_noc},
+    {67, 5, x, 1, DISPATCH_S, {63, x, x, x}, {65, x, x, x}, k_dispatcher_s_noc},
+    {68, 5, x, 0, RETURN_FABRIC_MUX, /*full size*/ {64, 65}, /*header only*/ {62, 63}, k_fabric_mux_noc},
+
+    // Remote chip 6
+    {69, 6, x, 0, PREFETCH_D, {21, x, x, x}, {75, 71, 73, x}, k_prefetcher_noc},
+    {70, 6, x, 1, PREFETCH_D, {22, x, x, x}, {75, 72, 74, x}, k_prefetcher_noc},
+    {71, 6, x, 0, DISPATCH_D, {69, x, x, x}, {75, 73, 23, x}, k_dispatcher_noc},
+    {72, 6, x, 1, DISPATCH_D, {70, x, x, x}, {75, 74, 24, x}, k_dispatcher_noc},
+    {73, 6, x, 0, DISPATCH_S, {69, x, x, x}, {71, x, x, x}, k_dispatcher_s_noc},
+    {74, 6, x, 1, DISPATCH_S, {70, x, x, x}, {72, x, x, x}, k_dispatcher_s_noc},
+    {75, 6, x, 0, RETURN_FABRIC_MUX, /*full size*/ {71, 72}, /*header only*/ {69, 70}, k_fabric_mux_noc},
+
+    // Remote chip 7
+    {76, 7, x, 0, PREFETCH_D, {25, x, x, x}, {82, 78, 80, x}, k_prefetcher_noc},
+    {77, 7, x, 1, PREFETCH_D, {26, x, x, x}, {82, 79, 81, x}, k_prefetcher_noc},
+    {78, 7, x, 0, DISPATCH_D, {76, x, x, x}, {82, 80, 27, x}, k_dispatcher_noc},
+    {79, 7, x, 1, DISPATCH_D, {77, x, x, x}, {82, 81, 28, x}, k_dispatcher_noc},
+    {80, 7, x, 0, DISPATCH_S, {76, x, x, x}, {78, x, x, x}, k_dispatcher_s_noc},
+    {81, 7, x, 1, DISPATCH_S, {77, x, x, x}, {79, x, x, x}, k_dispatcher_s_noc},
+    {82, 7, x, 0, RETURN_FABRIC_MUX, /*full size*/ {78, 79}, /*header only*/ {76, 77}, k_fabric_mux_noc},
+
+    // Remote chip 8
+    {83, 8, x, 0, PREFETCH_D, {29, x, x, x}, {89, 85, 87, x}, k_prefetcher_noc},
+    {84, 8, x, 1, PREFETCH_D, {30, x, x, x}, {89, 86, 88, x}, k_prefetcher_noc},
+    {85, 8, x, 0, DISPATCH_D, {83, x, x, x}, {89, 87, 31, x}, k_dispatcher_noc},
+    {86, 8, x, 1, DISPATCH_D, {84, x, x, x}, {89, 88, 32, x}, k_dispatcher_noc},
+    {87, 8, x, 0, DISPATCH_S, {83, x, x, x}, {85, x, x, x}, k_dispatcher_s_noc},
+    {88, 8, x, 1, DISPATCH_S, {84, x, x, x}, {86, x, x, x}, k_dispatcher_s_noc},
+    {89, 8, x, 0, RETURN_FABRIC_MUX, /*full size*/ {85, 86}, /*header only*/ {83, 84}, k_fabric_mux_noc},
 };
 
 static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_1cq = {
@@ -609,14 +852,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                 mmio_devices.size() == remote_devices.size() or remote_devices.empty(),
                 "N300/T3K expects devices in mmio/remote pairs.");
             std::vector<DispatchKernelNode> nodes_for_one_mmio;
-            // TODO: Put this in a better place
-            if (tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
-                TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
-                // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
-                nodes_for_one_mmio = two_chip_arch_1cq_fabric;
-            } else {
-                nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq : two_chip_arch_2cq;
-            }
+            nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq : two_chip_arch_2cq;
 
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
@@ -992,7 +1228,7 @@ void configure_dispatch_cores(IDevice* device) {
 bool check_dateline(
     const tt_fabric::ControlPlane& control_plane,
     tt_fabric::Topology topology,
-    tt_fabric::mesh_id_t mesh_id,
+    tt_fabric::MeshId mesh_id,
     chip_id_t chip0,
     chip_id_t chip1,
     bool wrap_around_mesh) {
@@ -1148,16 +1384,12 @@ void build_tt_fabric_program(
             auto eth_chans_dir1 = active_fabric_eth_channels.at(dir1);
             auto eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
 
-            auto eth_chans_dir1_it = eth_chans_dir1.begin();
-            auto eth_chans_dir2_it = eth_chans_dir2.begin();
-
             // since tunneling cores are not guaraneteed to be reserved on the same routing plane, iterate through
             // the ordered eth channels in both directions
             uint32_t num_links = std::min(eth_chans_dir1.size(), eth_chans_dir2.size());
-            uint32_t link = 0;
-            while (eth_chans_dir1_it != eth_chans_dir1.end() && eth_chans_dir2_it != eth_chans_dir2.end()) {
-                auto eth_chan_dir1 = *eth_chans_dir1_it;
-                auto eth_chan_dir2 = *eth_chans_dir2_it;
+            for (uint32_t link = 0; link < num_links; link++) {
+                auto eth_chan_dir1 = eth_chans_dir1[link];
+                auto eth_chan_dir2 = eth_chans_dir2[link];
 
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
@@ -1168,14 +1400,10 @@ void build_tt_fabric_program(
                 auto edm_noc_vc = link & edm_builder1.config.MAX_EDM_NOC_VC;
                 edm_builder1.config.edm_noc_vc = edm_noc_vc;
                 edm_builder2.config.edm_noc_vc = edm_noc_vc;
-                link++;
 
                 if (is_galaxy) {
                     get_optimal_noc_for_edm(edm_builder1, edm_builder2, num_links, topology);
                 }
-
-                eth_chans_dir1_it++;
-                eth_chans_dir2_it++;
             }
         }
     };
@@ -1233,17 +1461,19 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     }
 
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    const auto num_risc_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    const auto num_enabled_eth_cores = edm_builders.size();
+    const auto num_enabled_risc_cores =
+        edm_builders.begin()->second.get_configured_risc_count();  // same across all eth cores
     for (auto& [eth_chan, edm_builder] : edm_builders) {
         edm_builder.set_wait_for_host_signal(true);
         const std::vector<uint32_t> rt_args = edm_builder.get_runtime_args();
-        for (uint32_t risc_id = 0; risc_id < num_risc_cores; risc_id++) {
+        for (uint32_t risc_id = 0; risc_id < num_enabled_risc_cores; risc_id++) {
             std::vector<uint32_t> ct_args = edm_builder.get_compile_time_args(risc_id);
 
-            ct_args.push_back(eth_chan == master_router_chan);
+            const auto is_master_risc_core = eth_chan == master_router_chan && (risc_id == 0);
+            ct_args.push_back(is_master_risc_core);
             ct_args.push_back(master_router_chan);
-            ct_args.push_back(edm_builders.size());
+            ct_args.push_back(num_enabled_risc_cores * num_enabled_eth_cores);
             ct_args.push_back(router_channels_mask);
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);

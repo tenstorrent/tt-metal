@@ -343,6 +343,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->receiver_channels_size_bytes[i] =
             skip_current_channel ? 0 : channel_buffer_size_bytes * num_receiver_buffer_slots;
     }
+    // TODO: change remote receiver channels to be calculated seprately
+    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+        this->remote_receiver_channels_num_buffers[i] = this->receiver_channels_num_buffers[i];
+    }
 
     uint32_t buffer_addr = buffer_region_start;
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -506,6 +510,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     channel_buffer_size(config.channel_buffer_size_bytes),
     sender_channels_num_buffers(config.sender_channels_num_buffers),
     receiver_channels_num_buffers(config.receiver_channels_num_buffers),
+    remote_receiver_channels_num_buffers(config.remote_receiver_channels_num_buffers),
 
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
     receiver_channels_downstream_flow_control_semaphore_id(receiver_channels_downstream_flow_control_semaphore_id),
@@ -578,9 +583,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
-
-        sender_channel_num_buffers,
-        receiver_channel_num_buffers,
 
         config.sender_channels_base_address[0],
         config.sender_channels_worker_conn_info_base_address[0],
@@ -658,6 +660,25 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
+
+    // insert the sender channel num buffers
+    const size_t sender_channel_num_buffers_idx = 12;
+    ct_args.insert(
+        ct_args.begin() + sender_channel_num_buffers_idx,
+        this->sender_channels_num_buffers.begin(),
+        this->sender_channels_num_buffers.begin() + num_sender_channels);
+    // insert the receiver channel num buffers
+    const size_t receiver_channel_num_buffers_idx = sender_channel_num_buffers_idx + num_sender_channels;
+    ct_args.insert(
+        ct_args.begin() + receiver_channel_num_buffers_idx,
+        this->receiver_channels_num_buffers.begin(),
+        this->receiver_channels_num_buffers.begin() + num_receiver_channels);
+    // insert the remote receiver channel num buffers
+    const size_t remote_receiver_channel_num_buffers_idx = receiver_channel_num_buffers_idx + num_receiver_channels;
+    ct_args.insert(
+        ct_args.begin() + remote_receiver_channel_num_buffers_idx,
+        this->remote_receiver_channels_num_buffers.begin(),
+        this->remote_receiver_channels_num_buffers.begin() + num_receiver_channels);
 
     for (size_t i = 0; i < num_sender_channels; i++) {
         ct_args.push_back(this->sender_channel_connection_liveness_check_disable_array[i]);
@@ -1036,6 +1057,8 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
 }
 
 eth_chan_directions FabricEriscDatamoverBuilder::get_direction() const { return this->direction; }
+
+size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
 
 size_t FabricEriscDatamoverBuilder::get_noc_x() const { return this->my_noc_x; }
 

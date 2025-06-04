@@ -16,8 +16,8 @@
 
 namespace tt::tt_fabric {
 
-std::unordered_map<mesh_id_t, bool> FabricContext::check_for_wrap_around_mesh() const {
-    std::unordered_map<mesh_id_t, bool> wrap_around_mesh;
+std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
+    std::unordered_map<MeshId, bool> wrap_around_mesh;
 
     auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     auto mesh_ids = control_plane->get_user_physical_mesh_ids();
@@ -95,7 +95,7 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     set_routing_mode(this->topology_, this->fabric_config_);
 }
 
-bool FabricContext::is_wrap_around_mesh(mesh_id_t mesh_id) const {
+bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
     auto it = this->wrap_around_mesh_.find(mesh_id);
     TT_FATAL(it != this->wrap_around_mesh_.end(), "Querying wrap around mesh for an unknown mesh id");
     return it->second;

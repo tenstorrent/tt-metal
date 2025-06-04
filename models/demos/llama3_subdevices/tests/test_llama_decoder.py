@@ -202,7 +202,7 @@ def test_llama_decoder_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mats = rope_setup.get_rm_rot_mats(current_pos)
         tt_pf = prefetcher_setup.get_input_tensors()
         ttnn.dram_prefetcher(
             tt_pf,

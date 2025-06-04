@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tt_stl/strong_type.hpp>
+
 namespace tt::tt_metal {
 enum class FabricConfig : uint32_t {
     DISABLED = 0,
@@ -16,3 +18,9 @@ enum class FabricConfig : uint32_t {
 };
 
 }  // namespace tt::tt_metal
+
+namespace tt::tt_fabric {
+
+using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
+
+}  // namespace tt::tt_fabric
