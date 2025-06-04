@@ -69,20 +69,34 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
     constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(21);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(22);
+    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(25);
+    constexpr uint32_t multibuffering_factor = get_compile_time_arg_val(26);
 
+    constexpr uint32_t window_size_hw = window_h * window_w;
+    constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
+    constexpr uint32_t interm_reduction_chunks =
+        remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
+    // we only need to initialize the in_cb if we will not fill each multibuffering chunk with max_rows worth of data
+    constexpr bool need_to_initialize_in_cb = remaining_elems && interm_reduction_chunks <= multibuffering_factor;
+    constexpr uint32_t multibuffer_size = multibuffering_factor * in_cb_sz;
+
+    if constexpr (need_to_initialize_in_cb && !is_avg_pool) {  // for avg pool fill_with_val runs in loop, no need to
+                                                               // initialize
+        fill_with_val(get_write_ptr(in_cb_id), multibuffer_size, bf16_init_value);
+    }
+
+    cb_reserve_back(in_scalar_cb_id, 1);
     if (reader_id == 0) {
-        cb_reserve_back(in_scalar_cb_id, 1);
-
         constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
-        // fill interm buffer with init_value
+        // initialize buffers
         fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, bf16_init_value);
         fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
-        if (bf16_scalar != bf16_one_u32) {
-            // Pool operation is not maxpool
+        if constexpr (is_avg_pool) {
+            // for avgpool, we use a one's CB to avoid double division by kernel size for large kernel case.
             fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
         }
-        cb_push_back(in_scalar_cb_id, 1);
     }
+    cb_push_back(in_scalar_cb_id, 1);
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
@@ -93,7 +107,6 @@ void kernel_main() {
 
     uint32_t counter = reader_id;
     constexpr uint32_t total_elems_to_reduce = window_h * window_w;
-    constexpr uint32_t remaining_elems = total_elems_to_reduce % max_rows_for_reduction;
     constexpr bool wide_reduction = in_nblocks_c > 1;
     constexpr uint32_t read_bytes =
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
@@ -116,9 +129,16 @@ void kernel_main() {
                         cb_push_back(in_cb_id, 1);
                         cb_reserve_back(in_cb_id, 1);
                         out_l1_write_addr = get_write_ptr(in_cb_id);
-                        // If next is last chunk, fill whole buffer with the init_value.
-                        if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
-                            fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
+                        // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
+                        // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
+                        // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
+                        // cannot contain values greater than the max value, and if we have N=1 chunks we already
+                        // initialized the entire CB with the init value, but for avg pool we need to fill the
+                        // entire CB with the init value since the junk data will contribute to the average.
+                        if constexpr (is_avg_pool) {
+                            if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
+                                fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
+                            }
                         }
                     }
                 }
