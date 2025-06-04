@@ -13,7 +13,7 @@
 # Functional Coverage:
 # --------------------------------------
 #
-# Auto-generated instruction-level FCOV is specified with the following three tags as commented in the example below. 
+# Auto-generated instruction-level FCOV is specified with the following three tags as commented in the example below.
 #
 #
 # SOME_INSTR:
@@ -272,7 +272,7 @@ STREAMWAIT:
           start_bit: 4
           field_type: DEC
           description: >
-            (10-bit field) 
+            (10-bit field)
             If target_sel is 0, the Tensix core will stall the stall_res resources until the selected stream's phase reaches or exceeds (STREAMWAIT_PARAMS_PhaseValHi << 10 | target_value).
             If target_sel is 1, the Tensix core will stall the stall_res resources until the selected stream's number of messages received reaches or exceeds (STREAMWAIT_PARAMS_NumMsgsValHi << 10 | target_value).
         - name: stall_res
@@ -290,21 +290,21 @@ STREAMWAIT:
                     {name: "stall_cfg",             value: "0x80"},
                     {name: "stall_sfpu",            value: "0x100"}]
     description: >
-        Like STALLWAIT, but as if the stall_resource was XMOV + UNPACK 
-        + PACK. Those three resources will be stalled (on this thread) 
-        until a stream hits a certain phase/num_msgs_received. The 
-        stream is selected by the STREAM_ID_SYNC global CFG registers; 
-        one of these registers is selected by the wait_stream_sel field 
-        of this instruction. In other words, the ID of the stream we 
+        Like STALLWAIT, but as if the stall_resource was XMOV + UNPACK
+        + PACK. Those three resources will be stalled (on this thread)
+        until a stream hits a certain phase/num_msgs_received. The
+        stream is selected by the STREAM_ID_SYNC global CFG registers;
+        one of these registers is selected by the wait_stream_sel field
+        of this instruction. In other words, the ID of the stream we
         will wait on is given by STREAM_ID_SYNC[wait_steam_sel].
-        
-        The target_sel field of this instruction says whether to wait 
-        for that stream's phase to reach (or exceed) the target_value 
-        field of this instruction, or whether to wait until its 
-        num_msgs_received register reaches (or exceeds) the 
+
+        The target_sel field of this instruction says whether to wait
+        for that stream's phase to reach (or exceed) the target_value
+        field of this instruction, or whether to wait until its
+        num_msgs_received register reaches (or exceeds) the
         target_value.
-        
-        
+
+
 
 NOP:
     op_binary: 0x2
@@ -476,7 +476,7 @@ ZEROACC:
           description: >
             Clear modes:
             000 - Clear single row of datums. Uses current dest address from the counters plus the where field of this instruction.
-            001 - Clear single face (i.e. 16 contiguous rows of datums) starting at dest row 16*where[7:0]. 
+            001 - Clear single face (i.e. 16 contiguous rows of datums) starting at dest row 16*where[7:0].
             010 - Clear half of dest. where[0] specifies which half (0 for lower, 1 for upper)
             011 - Clear all of dest.
           fcov_point_bins:
@@ -488,12 +488,12 @@ ZEROACC:
                     {name: "clear_all_registers - 32b dest mode",                               value: "0x7"} ]
     description: >
       Zero out accumulator. Single (00) mode clears one register and updates counters
-      using the addressing mode. For other modes, zero-flags are set to emulate 
-      clearing of the dest memory, and dest_index is used to determine which portion 
+      using the addressing mode. For other modes, zero-flags are set to emulate
+      clearing of the dest memory, and dest_index is used to determine which portion
       is to be cleared.
-      
+
       Note: bits 23:22 of this instruction are NOT available for future use; if they
-      are nonzero, this instruction will cause srcA and/or srcB data valid to be 
+      are nonzero, this instruction will cause srcA and/or srcB data valid to be
       cleared.
 
 ZEROSRC:
@@ -863,7 +863,7 @@ MPOOL3S1:
         - name: index_en
           field_type: BIN
           start_bit: 14
-          description: Enable index output for max-pooling      
+          description: Enable index output for max-pooling
           fcov_point_bool:
         - name: pool_addr_mode
           field_type: BIN
@@ -1217,7 +1217,7 @@ MFCONV3S1:
     src_mask: 0x3
     fcov:
     arguments: *CONV_ARGS
-    description: "3x3 primitive for convolution, with stride 1 with each FP Row operating on four filters. Outputs 8x 12-wide rows of data"    
+    description: "3x3 primitive for convolution, with stride 1 with each FP Row operating on four filters. Outputs 8x 12-wide rows of data"
 
 XMOV:
     op_binary: 0x40
@@ -1261,15 +1261,15 @@ PACR:
           start_bit: 2
           description: " 2'b00 : No modifications to the default PACR behavior \n
                          2'b01 : PACR context will be captured from RTL flops as opposed  to PACR[CfgContext].\n
-                                 In addition to this, if this is the last PACR in a tile, the context tracked in the RTL flops will be incremented (4 contexts will be tracked) if PACK_COUNTERS_SEC[0,1,2,3]_auto_ctxt_inc_xys_cnt regs are zero. If PACK_COUNTERS_SEC[0,1,2,3]_auto_ctxt_inc_xys_cnt are non-zero, the tracked context will be incremeted after packing the number of planes programmed in these registers.\n 
-                         2'b10 : Resets RTL context flops, but NOP in all other respects\n 
+                                 In addition to this, if this is the last PACR in a tile, the context tracked in the RTL flops will be incremented (4 contexts will be tracked) if PACK_COUNTERS_SEC[0,1,2,3]_auto_ctxt_inc_xys_cnt regs are zero. If PACK_COUNTERS_SEC[0,1,2,3]_auto_ctxt_inc_xys_cnt are non-zero, the tracked context will be incremeted after packing the number of planes programmed in these registers.\n
+                         2'b10 : Resets RTL context flops, but NOP in all other respects\n
                          2'b11 : Same behavior as of 2'b01 , except that the RTL context flops will not be reset, if those would have been reset for 2'b01 based on current RTL state
                        "
           fcov_point_bins:
             bins: [ {name: "ctxt_ctrl_0",   value: "0"},
-                    {name: "ctxt_ctrl_1",   value: "1"}, 
-                    {name: "ctxt_ctrl_2",   value: "2"}, 
-                    {name: "ctxt_ctrl_3",   value: "3"} 
+                    {name: "ctxt_ctrl_1",   value: "1"},
+                    {name: "ctxt_ctrl_2",   value: "2"},
+                    {name: "ctxt_ctrl_3",   value: "3"}
                   ]
         - name: Concat
           field_type: BIN
@@ -1302,8 +1302,8 @@ PACR:
           description: "2-bit address counter to be used when PACR[OvrdThreadId] is set"
           fcov_point_bins:
             bins: [ {name: "addrcntctxt0",   value: "0"},
-                    {name: "addrcntctxt1",   value: "1"}, 
-                    {name: "addrcntctxt2",   value: "2"} 
+                    {name: "addrcntctxt1",   value: "1"},
+                    {name: "addrcntctxt2",   value: "2"}
                   ]
         - name: AddrMode
           field_type: DEC
@@ -1334,11 +1334,11 @@ PACR:
                   1 ,    11     - Zero Pad the cumulative packed data to the next 16 datum boundary if (PACR[Last] == 1)
           fcov_point_bins:
             bins: [ {name: "no_row_pad_zero",                          value: "0"},
-                    {name: "row_pad_zero_all_pacr",                    value: "1"}, 
-                    {name: "row_pad_zero_all_pacr_16datum_algn",       value: "5"}, 
-                    {name: "row_pad_zero_no_concat_pacr",              value: "2"}, 
-                    {name: "row_pad_zero_no_concat_pacr_16datum_algn", value: "6"}, 
-                    {name: "row_pad_zero_last_pacr",                   value: "3"}, 
+                    {name: "row_pad_zero_all_pacr",                    value: "1"},
+                    {name: "row_pad_zero_all_pacr_16datum_algn",       value: "5"},
+                    {name: "row_pad_zero_no_concat_pacr",              value: "2"},
+                    {name: "row_pad_zero_no_concat_pacr_16datum_algn", value: "6"},
+                    {name: "row_pad_zero_last_pacr",                   value: "3"},
                     {name: "row_pad_zero_last_pacr_16datum_algn",      value: "7"}
                   ]
         - name: CfgContext
@@ -1347,9 +1347,9 @@ PACR:
           description: "2-bit context for Config Regs"
           fcov_point_bins:
             bins: [ {name: "ctxt0",   value: "0"},
-                    {name: "ctxt1",   value: "1"}, 
-                    {name: "ctxt2",   value: "2"}, 
-                    {name: "ctxt3",   value: "3"} 
+                    {name: "ctxt1",   value: "1"},
+                    {name: "ctxt2",   value: "2"},
+                    {name: "ctxt3",   value: "3"}
                   ]
     description: "Pack row from DST registers to L0"
 
@@ -1394,7 +1394,7 @@ PACR_SETREG:
           field_type: BIN
           start_bit: 23
           description: "Set to 1 to trigger register write"
-    description: "Set MMIO register through packer pipeline. Max register value is limited to 10-bit (upper bits must be don't care!). 32-bit address is assembled 
+    description: "Set MMIO register through packer pipeline. Max register value is limited to 10-bit (upper bits must be don't care!). 32-bit address is assembled
                   as desribed under AddrSel field."
 
 UNPACR:
@@ -1429,7 +1429,7 @@ UNPACR:
           start_bit: 4
           description: "Will cause zeros to be written regardless of source data"
           fcov_point_bool:
-        - name: srcb_bcast 
+        - name: srcb_bcast
           field_type: BIN
           start_bit: 5
           description: "Will broadcast starting row into adjacent 8 rows on SrcB"
@@ -1500,7 +1500,7 @@ UNPACR_NOP: # Misc unpack instruction with side effect (skips actual search and 
           start_bit: 2
           end_bit: 3
           description: >
-              for UNP_CLR_SRC 
+              for UNP_CLR_SRC
                 bits[3:2]
                   Valid when UNP_CLR_SRC (0x1) is set in bits[1:0]
                   0 - clear to 0
@@ -1509,10 +1509,10 @@ UNPACR_NOP: # Misc unpack instruction with side effect (skips actual search and 
                   3 - clear using imm from reg UNP[0/1]_NOP_REG_CLR_VAL
                for UNP_POP+stream_id
                  if bit[2] is 1 , it is an enhanced flavor of UNP_POP+stream_id with support for clearing up to 2k messages
-                    [22]    - register address select bit[1] 
+                    [22]    - register address select bit[1]
                     [21:16] - stream id
-                    [15]    - register address select bit[0] 
-                    [14: 4] - message clear count 
+                    [15]    - register address select bit[0]
+                    [14: 4] - message clear count
                     [3]     - message count accumulate
           fcov_point_bins:
             bins: [  {name: "Clear_to_zero",        value: "0x0"},
@@ -1545,7 +1545,7 @@ UNPACR_NOP: # Misc unpack instruction with side effect (skips actual search and 
               bits [7:6]
                 0 - reserved
                 1 - reserved
-                2 - reserved 
+                2 - reserved
                 3 - Repurposed to use this encoding as a flavor of UNPACR_NOP which sets dvalid of Src Regs , but NOP in all other respects
           fcov_point_bins:
             bins: [  {name: "fp16a",  value: "0x0"},
@@ -1558,7 +1558,7 @@ UNPACR_NOP: # Misc unpack instruction with side effect (skips actual search and 
            fcov_point_bool:
            description: >
                bit 8
-                Set Reg Bank Dvalid once clearing is done - valid when UNP_CLR_SRC (0x1) is set 
+                Set Reg Bank Dvalid once clearing is done - valid when UNP_CLR_SRC (0x1) is set
         - name: Msg_Clr_Cnt
           field_type: DEC
           start_bit: 12
@@ -1613,8 +1613,8 @@ SETDMAREG:
           description: >
               In normal mode - immediate payload to set into selected register. In SetSignals mode selector for which 16b chunk of signals to set into selected register.
                  Payload_SigSel[6:3] mode values:
-                   0  - Accumulated tile size (16-bit) and last written tile size (16-bit) 
-                   1  - All zero flag per XY plane [31:0] 
+                   0  - Accumulated tile size (16-bit) and last written tile size (16-bit)
+                   1  - All zero flag per XY plane [31:0]
                    2  - Tile header for Packer
                    3  - RESERVED
                    4  - RESERVED
@@ -3119,7 +3119,7 @@ RMWCIB0:
   src_mask: 0x0
   fcov:
   arguments: &RMWCIB
-      - name: CfgRegAddr 
+      - name: CfgRegAddr
         start_bit: 0
         field_type: HEX
         description: Address of CFG register in active state space
@@ -3150,7 +3150,7 @@ RMWCIB1:
   fcov:
   arguments:  *RMWCIB
   description: "Read-Modify-Write on Byte 1 of the cfg register, only updating the bits set in mask"
-  
+
 RMWCIB2:
   instrn_type: LOCAL_CREGS
   ex_resource: CFG
@@ -3230,7 +3230,7 @@ CFGSHIFTMASK:
         start_bit: 20
         field_type: DEC
         description: >
-            Select operation. 
+            Select operation.
               000: old OR scratch
               001: old AND scratch
               010: old XOR scratch
@@ -3245,97 +3245,97 @@ CFGSHIFTMASK:
         field_type: BIN
         description: >
             The final calculation is op(scratch_shifted & mask, old_val & ~mask),
-            where old_val was the original value in CfgReg before we edited it 
+            where old_val was the original value in CfgReg before we edited it
             with this instruction. However, if you set this bit to 1, the old_val
             will not be masked.
-      
+
   description: >
     This instruction performs a mask and a shift on a 'CFG scratch register'
     (explained below) and saves the result in the CFG register indicated by the
     CfgReg argument.
-        
+
     This instruction takes two cycles to complete. It is not necessary to
     place NOPs in between two CFGSHIFTMASK instructions. Actually, you
     never need to place NOPs between any instructions that target the
     CfgExu, though you should be careful to place NOPs if the instruction
     following CFGSHIFTMASK is not a cfg instruction and it depends on the
     output of the calculation.
-    
+
     Most CFG registers connect somewhere into the Tensix architecture and modify
     behaviour. Three CFG registers are specifically set aside to be
-    'just registers', i.e. doesn't affect any architectural behaviour. These 
-    registers are called the 'CFG scratch registers', and any instructions that 
+    'just registers', i.e. doesn't affect any architectural behaviour. These
+    registers are called the 'CFG scratch registers', and any instructions that
     write to a CFG register can target them like any other.
-    
+
     Every CFGSHIFTMASK uses one of the three scratch registers as an
-    input operand; the scratch_sel field selects which one to use. The 
+    input operand; the scratch_sel field selects which one to use. The
     second operand (and also the output location) are specified with the
     CfgReg field. It is legal to target any* CFG register, including the
-    scratch registers. 
-    
+    scratch registers.
+
     *You can't access thread-private registers using this instruction. Also,
      the selected CFG register will be in the state pointed to by the current
      thread's state ID.
-    
-    The end result of running this instruction is equivalent to the following 
+
+    The end result of running this instruction is equivalent to the following
     pseudocode:
-        
+
       //CfgReg, right_cshift_amt, and mask_width are the arguments to this
       //instruction, as described above.
       //MM Oct 14 2022: Added op and disable_mask_on_old_val fields
       //circ_rshift() is a circular right-shift on 32-bit words
       extern uint32_t volatile *CFG; //Represents CFG register file
-      
+
       uint32_t mask    = (((uint64_t)1 << (mask_width+1)) - 1) & 0xFFFFFFFF;
       uint32_t scratch_ind = (scratch_sel == 0b11) ? thread_id : scratch_sel;
-      uint32_t scratch = CFG[SCRATCH_BASE + scratch_ind]; 
-      
+      uint32_t scratch = CFG[SCRATCH_BASE + scratch_ind];
+
       uint32_t mask_shifted    = circ_rshift(mask,    right_cshift_amt);
       uint32_t scratch_shifted = circ_rshift(scratch, right_cshift_amt);
-      
+
       uint32_t old_val = CFG[CfgReg];
-      
-      uint32_t old_val_masked = 
+
+      uint32_t old_val_masked =
         disable_mask_on_old_val
         ? old_val
         : old_val & ~mask_shifted
       ;
-      
+
       switch(op) {
         case 0:
           CFG[CfgReg] = old_val_masked | (scratch_shifted & mask_shifted);
           break;
-      
+
         case 1:
           CFG[CfgReg] = old_val_masked & (scratch_shifted & mask_shifted);
           break;
-      
+
         case 2:
           CFG[CfgReg] = old_val_masked ^ (scratch_shifted & mask_shifted);
           break;
-      
+
         case 3:
           CFG[CfgReg] = old_val_masked + (scratch_shifted & mask_shifted);
           break;
       }
-    
+
     Example: We read some stream register, and want to put that register's bits
     23:6 into bits 29:12 of CFG register 41. That might look like this:
-    
+
       TTI_STREAMWRCFG(SCRATCH_REG_INDEX, some_stream_reg, some_stream_id);
-      TTI_CFGSHIFTMASK(0, 0, 32 -1, 6,       0b11, SCRATCH_REG_INDEX);  //Need to subtract 1 for mask width 
+      TTI_CFGSHIFTMASK(0, 0, 32 -1, 6,       0b11, SCRATCH_REG_INDEX);  //Need to subtract 1 for mask width
       TTI_CFGSHIFTMASK(0, 0, 18 -1, 32 - 12, 0b11, 41);
-    
+
     This first instruction reads some_stream_reg and saves the result
-    into the scratch register. The first shiftmask uses a mask of all ones 
-    (for simplicity) and a circular right-shift of 6. We save the result 
-    back into the scratch reg; this is equivalent to cfg[scratch] >>= 6. 
-    The second shiftmask is what takes the lower 18 bits of the scratch 
-    register, shifts them left by 12 (note that a circular right-shift of 
-    32 - 12 is the same as a circular left-shift of 12), and overwrites 
+    into the scratch register. The first shiftmask uses a mask of all ones
+    (for simplicity) and a circular right-shift of 6. We save the result
+    back into the scratch reg; this is equivalent to cfg[scratch] >>= 6.
+    The second shiftmask is what takes the lower 18 bits of the scratch
+    register, shifts them left by 12 (note that a circular right-shift of
+    32 - 12 is the same as a circular left-shift of 12), and overwrites
     that portion of cfg reg 41.
-  
-    
+
+
 MOP:
     op_binary: 0x1
     instrn_type: COMPUTE
@@ -3400,14 +3400,14 @@ REPLAY:
         start_bit: 1
         field_type: BIN
         description: >
-          When load_mode == 0, this bit has no effect. 
-          
+          When load_mode == 0, this bit has no effect.
+
           When load_mode == 1, we have:
-            - When this bit is 1, instructions that are loaded into the replay buffer 
+            - When this bit is 1, instructions that are loaded into the replay buffer
               are also executed by the Tensix core (takes as many cycles as it would
               normally take to execute the loaded Tensix instructions)
-              
-            - When this bit is 0, instructions are only loaded into the replay buffer 
+
+            - When this bit is 0, instructions are only loaded into the replay buffer
               (guaranteed to take only one cycle per loaded Tensix instruction)
       - name: len
         start_bit: 4
@@ -3418,13 +3418,13 @@ REPLAY:
         field_type: DEC
         description: "replay_buffer[start_idx +: len] are targeted by this replay command. The hardware will only use the log2(replay_buffer_depth) LSBs of this field."
 
-        
+
 RESOURCEDECL:
     op_binary: 0x5
     instrn_type: COMPUTE
     ex_resource: NONE
     description: >
-        Declare resources ahead-of-time for a given class of Tensix 
+        Declare resources ahead-of-time for a given class of Tensix
         instructions. If not performed, the hardware will use the
         default values shown below.
         Once set, the declared resources are persistent.
@@ -3434,8 +3434,8 @@ RESOURCEDECL:
           - Class  2: 9'b11_11_000_00; //RW to TDMA and GPR
           - Class  3: 9'b00_11_000_00; //RW to GPR.
           - Class  4: 9'b00_00_111_11; //RW to CFG. All CFG zones marked for safety
-          - Class  5: 9'b00_01_000_00; //R from GPR. 
-          - Class  6: 9'b00_10_000_00; //W to GPR. 
+          - Class  5: 9'b00_01_000_00; //R from GPR.
+          - Class  6: 9'b00_10_000_00; //W to GPR.
           - Class  7: 9'b10_00_000_00; //W to TDMA.
           - Class  8: 9'b00_01_111_10; //R from GPR, write to CFG
           - Class  9: 9'b00_10_111_01; //R from CFG, write to GPR
@@ -3450,7 +3450,7 @@ RESOURCEDECL:
         start_bit: 0
         field_type: DEC
         description: >
-            Set the resources used by instruction class N. This is a 
+            Set the resources used by instruction class N. This is a
             bitmap as described by the `resources` field
             - Class  0: ADDDMAREG, ASUBDMAREG, MULDMAREG, BITWOPDMAREG, SHIFTDMAREG, CMPDMAREG, SETDMAREG
             - Class  1: ATINCGET, ATINCGETPTR, ATSWAP, ATCAS
@@ -3468,14 +3468,14 @@ RESOURCEDECL:
             - Class 13: MOP
             - Class 14: REPLAY
             - Class 15: All others
-            Please note: a MOP/REPLAY  template can contain 
-            instructions from arbitrary classes. The Tensix-TRISC sync 
-            mechanism will NOT consult the resources declared for those 
-            particular classes. Instead, all instructions generated by 
-            the MOP/REPLAY decoder will be under the auspices of the 
-            parent MOP/REPLAY instruction, and as such, are treated as 
-            if they use the resources declared for that parent 
-            instruction. It is up to the programmer to set the 
+            Please note: a MOP/REPLAY  template can contain
+            instructions from arbitrary classes. The Tensix-TRISC sync
+            mechanism will NOT consult the resources declared for those
+            particular classes. Instead, all instructions generated by
+            the MOP/REPLAY decoder will be under the auspices of the
+            parent MOP/REPLAY instruction, and as such, are treated as
+            if they use the resources declared for that parent
+            instruction. It is up to the programmer to set the
             MOP/REPLAY resources ahead of time.
       - name: resources
         start_bit: 4
@@ -3499,73 +3499,73 @@ RESOURCEDECL:
         description: >
           TL;DR
           -----
-          If a Tensix instrn was stalled, then after the RISC memory-mapped access goes through this 
+          If a Tensix instrn was stalled, then after the RISC memory-mapped access goes through this
           'linger time' is copied to a shift register. This shift registers is shifted to the right
-          (i.e. from MSB to LSB) on every cycle. We will keep stalling the Tensix instrn until the 
-          shift register's value reaches zero. It is legal to have a linger_time value of 0. The 
+          (i.e. from MSB to LSB) on every cycle. We will keep stalling the Tensix instrn until the
+          shift register's value reaches zero. It is legal to have a linger_time value of 0. The
           default value is 4'b0001.
-          
-          
+
+
           DETAILS
           -------
           Every instruction class can optionally add extra 'linger time' after the ibuffer is stalled.
-          In other words, suppose there is a RISC memory-mapped register access that is keeping a 
-          Tensix instruction stalled: in some cases, we might not want the instruction to suddenly 
-          issue on the cycle right after the register access goes through (no particular examples come 
-          to mind, but this feature is to try and add options in case the default linger time doesn't 
+          In other words, suppose there is a RISC memory-mapped register access that is keeping a
+          Tensix instruction stalled: in some cases, we might not want the instruction to suddenly
+          issue on the cycle right after the register access goes through (no particular examples come
+          to mind, but this feature is to try and add options in case the default linger time doesn't
           work in all cases!)
-          
+
           This is NOT interpreted as a cycle count! Instead, it is OR'ed into a shift register whenever
           the current Tensix instruction is stalled (it's done this way to simplify the RTL; so sue me).
-          
+
           Example:
-          
+
           t = 0: suppose the head of the RQ is stalled because we're waiting for a register access to go
           through. The ibuffer stall signal is raised because there is a stall condition. Also, the
           linger time for the class of the currently stalled Tensix instruction will be OR'ed into a shift
           register at the next rising edge. Suppose also that the register access is issued on this cycle
           (meaning that the LSQ entry will be popped at the next rising edge).
-          
+
           //(These aren't the actual RTL signal names)
           LSQ_stalls_ibuffer = 1  //<- There is currently an LSQ entry that is stalling the current Tensix instrn
           LSQ_read_enable = 1     //<- On the next clock edge, the register access in the LSQ will be issued
           shift_register = 0b0000 //<- Initial shift register value
           o_ibuffer_stall = 1    //<- This wire is routed to the ibuffer and causes the current Tensix instrn to stall
-          
-          
-          t = 1: The register access is done, so there is no more stall condition. However, the shift register 
+
+
+          t = 1: The register access is done, so there is no more stall condition. However, the shift register
           had a value written into it. As long as this shift register is nonzero,  we will continue to stall
           the current Tensix instrn
-          
+
           LSQ_stalls_ibuffer = 0  //<- There are no LSQ entries causing the current Tensix isntrn (if any) to stall
-          LSQ_read_enable = 0     
+          LSQ_read_enable = 0
           shift_register = 0b0100 //<- Suppose the Tensix instrn stalled in t=0 wanted a linger time of 3 cycles
           o_ibuffer_stall = 1     //<- We will still stall the same Tensix instrn that was stalled in t=0
-          
-          
+
+
           t = 2: The shift register shifts down by one. It is still not zero, so we keep stalling the instrn
-          
-          LSQ_stalls_ibuffer = 0 
-          LSQ_read_enable = 0     
+
+          LSQ_stalls_ibuffer = 0
+          LSQ_read_enable = 0
           shift_register = 0b0010
           o_ibuffer_stall = 1
-          
-          
+
+
           t = 3: The shift register shifts down by one. It is still not zero, so we keep stalling the instrn
-          
-          LSQ_stalls_ibuffer = 0 
-          LSQ_read_enable = 0     
+
+          LSQ_stalls_ibuffer = 0
+          LSQ_read_enable = 0
           shift_register = 0b0001
           o_ibuffer_stall = 1
-          
-          
+
+
           t = 3: The shift register shifts down by one. It is still zero, so we lower the ibuffer stall signal.
           The instrn will be issued on the next clock edge
-          
-          LSQ_stalls_ibuffer = 0 
-          LSQ_read_enable = 0     
+
+          LSQ_stalls_ibuffer = 0
+          LSQ_read_enable = 0
           shift_register = 0b0000
           o_ibuffer_stall = 0
-          
+
           It is legal to have a linger_time value of 0 (this means the instruction is only stalled while there
           is a conflicting access in the LSQ).
