@@ -23,7 +23,11 @@ VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 MAJOR=${VERSION%.*}
 ARCH=`uname -m`
 
-if [[ "$FLAVOR" != "ubuntu" && "$ID_LIKE" != *ubuntu* ]]; then
+is_ubuntu_like() {
+    [[ "$FLAVOR" == "ubuntu" || "$ID_LIKE" == *ubuntu* ]]
+}
+
+if ! is_ubuntu_like; then
     echo "Error: Only Ubuntu and Ubuntu-based distributions are supported"
     exit 1
 fi
@@ -135,8 +139,8 @@ ub_baremetal_packages() {
 
 update_package_list()
 {
-    if [ $FLAVOR == "ubuntu" ]; then
-	case "$mode" in
+    if is_ubuntu_like; then
+        case "$mode" in
             runtime)
                 ub_runtime_packages
                 PKG_LIST=("${UB_RUNTIME_LIST[@]}")
@@ -159,7 +163,7 @@ update_package_list()
 
 validate_packages()
 {
-    if [ $FLAVOR == "ubuntu" ]; then
+    if is_ubuntu_like; then
         dpkg -l "${PKG_LIST[@]}"
     fi
 }
@@ -337,9 +341,9 @@ configure_hugepages() {
 }
 
 install() {
-    if [ $FLAVOR == "ubuntu" ]; then
+    if is_ubuntu_like; then
         echo "Installing packages..."
-	case "$mode" in
+        case "$mode" in
             runtime)
                 prep_ubuntu_runtime
                 install_sfpi
@@ -368,7 +372,7 @@ install() {
 }
 
 cleanup() {
-    if [ $FLAVOR == "ubuntu" ]; then
+    if is_ubuntu_like; then
         rm -rf /var/lib/apt/lists/*
     fi
 }
