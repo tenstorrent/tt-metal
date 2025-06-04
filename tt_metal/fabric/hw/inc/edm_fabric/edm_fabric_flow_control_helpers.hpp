@@ -152,11 +152,17 @@ private:
     BufferPtr ptr = BufferPtr{0};
 };
 
+// Must call reset() before using
 template <uint8_t NUM_BUFFERS>
 struct ChannelCounter {
     static constexpr bool IS_POW2_NUM_BUFFERS = is_power_of_2(NUM_BUFFERS);
-    uint32_t counter = 0;
-    BufferIndex index{0};
+    uint32_t counter;
+    BufferIndex index;
+
+    FORCE_INLINE void reset() {
+        this->counter = 0;
+        this->index = BufferIndex(0);
+    }
 
     FORCE_INLINE BufferIndex get_buffer_index() const { return index; }
 
