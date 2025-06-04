@@ -441,17 +441,13 @@ MeshContainer<chip_id_t> MeshGraph::get_chip_ids(MeshId mesh_id, std::optional<H
 
     // Return submesh for the specific host rank
     MeshCoordinateRange coord_range = get_coord_range(mesh_id, host_rank);
-    MeshShape submesh_shape(
-        coord_range.end_coord()[0] - coord_range.start_coord()[0] + 1,
-        coord_range.end_coord()[1] - coord_range.start_coord()[1] + 1);
+    MeshShape submesh_shape = coord_range.shape();
 
     std::vector<chip_id_t> submesh_chip_ids;
     submesh_chip_ids.reserve(submesh_shape.mesh_size());
 
-    for (int ns = coord_range.start_coord()[0]; ns <= coord_range.end_coord()[0]; ns++) {
-        for (int ew = coord_range.start_coord()[1]; ew <= coord_range.end_coord()[1]; ew++) {
-            submesh_chip_ids.push_back(it->second.at(MeshCoordinate(ns, ew)));
-        }
+    for (const auto& coord : coord_range) {
+        submesh_chip_ids.push_back(it->second.at(coord));
     }
 
     return MeshContainer<chip_id_t>(submesh_shape, submesh_chip_ids);
@@ -485,5 +481,7 @@ std::optional<HostRankId> MeshGraph::get_host_rank_for_chip(MeshId mesh_id, chip
 
     return std::nullopt;
 }
+
+const MeshContainer<HostRankId>& MeshGraph::get_host_ranks(MeshId mesh_id) const { return mesh_host_ranks_[*mesh_id]; }
 
 }  // namespace tt::tt_fabric
