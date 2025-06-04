@@ -497,17 +497,28 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
     (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),),
 )
 @pytest.mark.parametrize(
-    "out_mem_config",
-    (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),),
-)
-@pytest.mark.parametrize(
     "tilized",
     (True,),
 )
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_llama_tg_Embeddings(
-    batch_size, num_embeddings, embedding_dim, num_rows, dtype, in0_mem_config, out_mem_config, tilized, device
+    batch_size, num_embeddings, embedding_dim, num_rows, dtype, in0_mem_config, tilized, device
 ):
+    core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
+    core_range = ttnn.CoreRange(
+        grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
+    )
+    num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+    out_mem_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, 2048 // num_cores_ln),
+        core_grid=ttnn.CoreRangeSet(
+            {
+                core_range,
+            }
+        ),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
     run_embeddings_tests(
         batch_size, num_embeddings, embedding_dim, num_rows, dtype, in0_mem_config, out_mem_config, device, tilized
     )
