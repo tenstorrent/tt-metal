@@ -6,7 +6,9 @@ import math
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from conftest import is_6u
+import os
+
+is_6U_RING = os.environ.get("6U_RING", "0") == "1"
 
 
 class LMHead(LightweightModule):
@@ -189,7 +191,7 @@ class LMHead(LightweightModule):
         outputs = []
         num_links = 3
         if mode == "decode":
-            num_links = 4 if is_6u() else 3
+            num_links = 4 if is_6U_RING else 3
             for weight, pc in zip(self.output_weights_decode, self.program_configs):
                 x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
                 output = ttnn.linear(

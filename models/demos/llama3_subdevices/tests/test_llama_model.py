@@ -5,6 +5,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+import os
 from models.demos.llama3_subdevices.tt.llama_common import (
     sample_host,
     HostEmbedding,
@@ -19,7 +20,8 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-from conftest import is_6u
+
+is_6U_RING = os.environ.get("6U_RING", "0") == "1"
 
 
 @torch.no_grad()
@@ -77,7 +79,7 @@ from conftest import is_6u
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6u() else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6U_RING else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,

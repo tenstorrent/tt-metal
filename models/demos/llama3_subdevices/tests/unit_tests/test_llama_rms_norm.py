@@ -17,7 +17,8 @@ from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_subdevices.tt.distributed_norm import DistributedNorm
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
-from conftest import is_6u
+
+is_6U_RING = os.environ.get("6U_RING", "0") == "1"
 
 
 @torch.no_grad()
@@ -50,7 +51,7 @@ from conftest import is_6u
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6u() else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6U_RING else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
