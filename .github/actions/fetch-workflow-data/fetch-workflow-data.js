@@ -418,15 +418,40 @@ async function run() {
 
     // Save complete dataset to cache
     cacheManager.saveCache(cachePath, groupedRuns);
+    core.info(`[Fetch] Saved complete dataset to cache: ${groupedRuns.size} workflows, ${filteredRuns.length} total runs`);
 
-    // Process requested period runs for upload
-    const filteredRequestedRuns = fetcher.filterRuns(requestedPeriodRuns, workflowConfigs);
+    // For the upload file, we want to use the complete filtered data but only for the requested period
+    const cutoffDate = fetcher.getCutoffDate(days);
+    const filteredRequestedRuns = filteredRuns.filter(run => {
+      const runDate = new Date(run.created_at);
+      return runDate >= cutoffDate;
+    });
+
+    // Group the filtered requested period runs
     const groupedRequestedRuns = fetcher.groupRunsByName(filteredRequestedRuns);
+
+    // Verify we have complete data for the requested period
+    const requestedDateRange = filteredRequestedRuns.reduce((range, run) => {
+      const runDate = new Date(run.created_at);
+      return {
+        earliest: !range.earliest || runDate < range.earliest ? runDate : range.earliest,
+        latest: !range.latest || runDate > range.latest ? runDate : range.latest
+      };
+    }, { earliest: null, latest: null });
+
+    if (requestedDateRange.earliest && requestedDateRange.latest) {
+      const daysCovered = (requestedDateRange.latest - requestedDateRange.earliest) / (1000 * 60 * 60 * 24);
+      core.info(`[Fetch] Requested period coverage: ${daysCovered.toFixed(1)} days (${requestedDateRange.earliest.toISOString()} to ${requestedDateRange.latest.toISOString()})`);
+
+      if (daysCovered < days) {
+        core.warning(`[Fetch] Warning: Requested period coverage (${daysCovered.toFixed(1)} days) is less than requested days (${days} days)`);
+      }
+    }
 
     // Save requested period data to a separate file for upload
     const uploadPath = cachePath.replace('.json', '-upload.json');
     fs.writeFileSync(uploadPath, JSON.stringify(Array.from(groupedRequestedRuns.entries()), null, 2));
-    core.info(`[Fetch] Saved ${groupedRequestedRuns.size} workflows to upload file`);
+    core.info(`[Fetch] Saved filtered dataset to upload file: ${groupedRequestedRuns.size} workflows, ${filteredRequestedRuns.length} total runs`);
 
     // Set outputs
     core.setOutput('total-runs', filteredRequestedRuns.length);
