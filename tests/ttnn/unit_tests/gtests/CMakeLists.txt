@@ -31,7 +31,6 @@ target_sources(
         test_multi_cq_multi_dev.cpp
         test_graph_capture_arguments_morehdot.cpp
         test_graph_capture_arguments_transpose.cpp
-        test_graph_query_op_constraints.cpp
         test_reflect.cpp
         test_to_and_from_json.cpp
         test_broadcast_to.cpp
@@ -55,6 +54,7 @@ target_sources(
         common_test_utils.cpp
         test_async_runtime.cpp # TODO: Fix memory leak (LSan) then shift-left
         test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
+        test_graph_query_op_constraints.cpp
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
 )
