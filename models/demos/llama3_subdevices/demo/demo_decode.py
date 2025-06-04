@@ -200,7 +200,7 @@ def run_llama3_demo(
 
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, -2) if batch_size > 1 else (None, None),
+            dims=(None, None),
             mesh_shape=model_args.cluster_shape,
         )
 
