@@ -17,6 +17,9 @@ namespace ckernel {
 
 /**
  * Please refer to documentation for any_init.
+ *
+ * Template scale parameter is used when fast_and_approx is true and exp_tile is called with scale_en set to true.
+ *
  */
 template <bool fast_and_approx = false, bool approx = false, uint32_t scale = 0x3F800000>
 ALWI void exp_tile_init() {
@@ -32,11 +35,19 @@ ALWI void exp_tile_init() {
  *
  * Return value: None
  *
+ * | Template Parameter      | Description                                                    | Type     | Valid Range      | Default |
+ * |-------------------------|----------------------------------------------------------------|----------|------------------|---------|
+ * | fast_approx             | Enable fast approximation mode for exponential computation     | bool     | true, false      | false   |
+ * | approx                  | If fast_approx is false, enable approximation mode             | bool     | true, false      | false   |
+ * | scale_en                | Enable input scaling by a constant factor in approximate or non-approximate mode | bool     | true, false      | false   |
+ * | skip_positive_check     | Skip large-positive input check                                | bool     | true, false      | false   |
+ * | iterations              | Number of iterations over 32-SFPU lanes to run                 | int      | Positive integer | 8       |
+ *
  * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |
  * |-------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst        | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | int      | Subject to specific hardware/kernel limits          | False    |
- * | scale       | Scale factor to apply if `scale_en` is true. (default: 0x3F80, which is 1.0f in FP16b) | uint16_t | Valid FP16b representation                          | False    |
+ * | vector_mode | Specifies the vector mode for computation (default: VectorMode::RC)        | int      | Subject to specific hardware/kernel limits            | False    |
+ * | scale       | Scale factor to apply in approximate or non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b) | uint16_t | Valid FP16b representation                            | False    |
  */
 // clang-format on
 template <
