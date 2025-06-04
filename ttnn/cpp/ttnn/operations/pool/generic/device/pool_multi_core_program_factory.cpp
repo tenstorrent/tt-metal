@@ -46,7 +46,8 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
     bool first_scalar = true;
     uint32_t last_pool_area = 0;
 
-    if (config.ceil_mode && (config.ceil_w > 0 || config.ceil_h > 0)) {
+    if ((config.ceil_mode && (config.ceil_w > 0 || config.ceil_h > 0)) ||
+        (!config.count_include_pad && (config.pad_h > 0 || config.pad_w > 0))) {
         for (uint32_t i = 0; i < config.out_nhw_per_core; i++) {
             // Compute starting and ending indices of the pooling window
             int h_start = output_stick_x * config.stride_h - config.pad_h;
@@ -58,24 +59,37 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
                 w_start + static_cast<int>(config.kernel_w),
                 static_cast<int>(config.in_w + config.pad_w + config.ceil_w));
 
-            // Initial pool area
-            int pool_area = (h_end - h_start) * (w_end - w_start);
+            int valid_h_start = (h_start > 0) ? h_start : 0;
+            int valid_w_start = (w_start > 0) ? w_start : 0;
+            int valid_h_end = std::min(h_end, static_cast<int>(config.in_h));
+            int valid_w_end = std::min(w_end, static_cast<int>(config.in_w));
 
-            // Calculate ceil induced padding overflow beyond input dimensions
-            int pad_h_over = std::max(h_end - static_cast<int>(config.in_h) - static_cast<int>(config.pad_h), 0);
-            int pad_w_over = std::max(w_end - static_cast<int>(config.in_w) - static_cast<int>(config.pad_w), 0);
+            int effective_h = valid_h_end - valid_h_start;
+            int effective_w = valid_w_end - valid_w_start;
 
-            // Adjust pool area to exclude padded overflow
-            pool_area -= pad_h_over * config.kernel_w;
-            pool_area -= pad_w_over * config.kernel_h;
+            int pool_area = 0;
+            if (config.count_include_pad) {
+                // Initial pool area
+                pool_area = (h_end - h_start) * (w_end - w_start);
 
-            // Re-add intersection if both directions overflowed
-            if (pad_h_over > 0 && pad_w_over > 0) {
-                pool_area += pad_h_over * pad_w_over;
+                // Calculate ceil induced padding overflow beyond input dimensions
+                int pad_h_over = std::max(h_end - static_cast<int>(config.in_h) - static_cast<int>(config.pad_h), 0);
+                int pad_w_over = std::max(w_end - static_cast<int>(config.in_w) - static_cast<int>(config.pad_w), 0);
+
+                // Adjust pool area to exclude padded overflow
+                pool_area -= pad_h_over * config.kernel_w;
+                pool_area -= pad_w_over * config.kernel_h;
+
+                // Re-add intersection if both directions overflowed
+                if (pad_h_over > 0 && pad_w_over > 0) {
+                    pool_area += pad_h_over * pad_w_over;
+                }
+
+                // Avoid division by zero
+                pool_area = pool_area > 1 ? pool_area : 1;
+            } else {
+                pool_area = (effective_h > 0 && effective_w > 0) ? effective_h * effective_w : 0;
             }
-
-            // Avoid division by zero
-            pool_area = pool_area > 1 ? pool_area : 1;
             float value = pool_area > 0 ? 1.f / static_cast<float>(pool_area) : 0.f;
 
             // Add new scalar if padding config changes
@@ -438,7 +452,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t bf16_one_u32 = *reinterpret_cast<const uint32_t*>(&one);
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
-     bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
+    bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
                                (ceil_mode == false && count_include_pad == true) ||
                                (ceil_pad_h == 0 && ceil_pad_w == 0 && pad_h == 0 && pad_w == 0);
 
