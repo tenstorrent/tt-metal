@@ -295,7 +295,7 @@ class CMakeBuild(build_ext):
             "tools/profiler/*",
             "soc_descriptors/*.yaml",
         ]
-        copy_tree_with_patterns(build_dir / LIB_DIR, self.build_lib + f"/ttnn/build/lib", lib_patterns)
+        copy_tree_with_patterns(build_dir / get_lib_dir(), self.build_lib + f"/ttnn/build/lib", lib_patterns)
         copy_tree_with_patterns(build_dir, self.build_lib + "/ttnn/build/lib", ["sfpi-version.json"])
         copy_tree_with_patterns(
             source_dir / "runtime", self.build_lib + "/ttnn/runtime", runtime_patterns, runtime_exclude_files
