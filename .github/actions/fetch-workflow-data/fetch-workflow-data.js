@@ -431,7 +431,15 @@ class CacheManager {
 async function run() {
   try {
     // Get inputs
-    const days = parseInt(core.getInput('days') || DEFAULT_DAYS);
+    const daysInput = core.getInput('days') || DEFAULT_DAYS;
+    const days = parseFloat(daysInput);
+    if (isNaN(days)) {
+      throw new Error(`Invalid days value: ${daysInput}. Must be a number.`);
+    }
+    if (days <= 0) {
+      throw new Error(`Days must be positive, got: ${days}`);
+    }
+
     const cachePath = core.getInput('cache-path', { required: true });
     const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
 
