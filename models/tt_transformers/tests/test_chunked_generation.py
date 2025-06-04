@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer as ReferenceTransformer
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_block_size, num_blocks_in_seq
+from models.tt_transformers.tt.common import PagedAttention, PagedAttentionConfig, get_block_size, num_blocks_in_seq
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
@@ -103,13 +103,10 @@ def test_chunked_prefill_single_user(
         block_size=page_params["page_block_size"],
         max_num_blocks=page_params["page_max_num_blocks"],
     )
-    # Implied shuffling of blocks
-    permutation = torch.randperm(paged_attention_config.max_num_blocks)
-    # Page table which maps virtual blocks to physical
-    reverse_permutation = torch.argsort(permutation)
-    static_page_table = reverse_permutation.reshape(
-        model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
-    )
+
+    paged_attn = PagedAttention(page_params=page_params, model_args=model_args)
+
+    static_page_table, _ = paged_attn.create_page_table()
 
     # Load TTNN model
     tt_model = Transformer(

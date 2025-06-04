@@ -27,6 +27,63 @@ class PagedAttentionConfig:
         self.max_num_blocks = max_num_blocks
 
 
+# Helper class for Paged Attention
+class PagedAttention:
+    def __init__(self, page_params, model_args):
+        assert "page_block_size" in page_params, "Missing page_block_size key in page_params dict"
+        assert "page_max_num_blocks" in page_params, "Missing page_max_num_blocks key in page_params dict"
+        self.page_block_size = page_params["page_block_size"]
+        self.page_max_num_blocks = page_params["page_max_num_blocks"]
+        self.model_args = model_args
+        self.reverse_permutation = None
+        self.page_table_pt = None
+        self.page_table_tt = None
+
+    def create_page_table(
+        self, device=None, mesh_mapper=None, per_device_group=False, data_parallel=None, return_tt=False
+    ):
+        """
+        Create and optionally return a randomized page table tensor for block shuffling.
+
+        Args:
+            device: Target device for TT tensor conversion.
+            mesh_mapper (optional): Mesh mapper for TT tensor layout. (Required if return_tt is True)
+            per_device_group (bool): Whether to use per-device-group batch size.
+            data_parallel (int, optional): Number of data-parallel replicas. Repeats the page table accordingly.
+            return_tt (bool): If True, return the TT page table tensor, else None is returned
+
+        Returns:
+            A tuple of the PyTorch tensor and TT tensor.By default torch tensor is computed, tt tensor is returned as None unless return_tt is True
+
+        Raises:
+            AssertionError: If page_max_num_blocks is not divisible by batch size,
+                            or if mesh_mapper not provided in return_tt
+        """
+        batch_size = self.model_args.batch_size_per_device_group if per_device_group else self.model_args.max_batch_size
+        permutation = torch.randperm(self.page_max_num_blocks)
+        self.reverse_permutation = torch.argsort(permutation)
+
+        if data_parallel:
+            self.reverse_permutation = self.reverse_permutation.repeat(data_parallel)
+            batch_size *= data_parallel
+
+        assert self.page_max_num_blocks % batch_size == 0, "max_num_blocks must be divisible by max_batch_size"
+
+        self.page_table_pt = self.reverse_permutation.reshape(batch_size, self.page_max_num_blocks // batch_size)
+
+        if return_tt:
+            assert device is not None, "TT page table requires mesh device!"
+            assert mesh_mapper is not None, "TT page table requires mesh mapper!"
+            self.page_table_tt = ttnn.from_torch(
+                self.page_table_pt,
+                device=device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+        return self.page_table_pt, self.page_table_tt
+
+
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):
     """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
     {{ system_prompt }}<|eot_id|><|start_header_id|>user<|end_header_id|>
