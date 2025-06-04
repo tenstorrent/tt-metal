@@ -952,19 +952,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
         }
     }
 
-    // Old stuff for input block sharded
-    // Handling input block/width sharding, and uneven shards
-    /*
-    bool src_block_sharded = false;
-    uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
-             num_output_rows_unpadded = 0;
-    CoreCoord end_core;
-    */
-    // Handling input block/width sharding, and uneven shards
-    // Old stuff for input block sharded
-
     // Default values are for interleaved input.
-    // Cliff core for interleaved input only, is the only core not processing the
+    // Cliff core applicable interleaved input only, it is the only core not processing the
     // same number of rows (blocks) as all other cores.
     uint32_t input_num_blocks_across_width = 1;
     uint32_t num_tiles_per_block = num_tiles_per_row;
@@ -984,25 +973,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
         num_tiles_per_block = input_shard_width / tile_width;
         num_blocks_per_full_core = input_shard_height / tile_height;
         num_blocks_per_cliff_core = 0;
-
-        // Old stuff for input block sharded
-        // Handling input block/width sharding, and uneven shards
-        /*
-        src_block_sharded = a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
-
-        block_row_size = input_shard_width * output.element_size();  // in0_block_w * TILE_WIDTH * dtype_nbytes
-        output_row_size = output.get_padded_shape()[-1] * output.element_size();  // output row size bytes
-        last_block_row_size_unpadded =
-            block_row_size -
-            (tt::round_up(output.get_padded_shape()[-1], input_shard_width) - output.get_padded_shape()[-1]) *
-                output.element_size();
-        uint32_t num_output_rows = output.volume() / output.get_padded_shape()[-1];
-        num_output_rows_unpadded =
-            input_shard_height - (tt::round_up(num_output_rows, input_shard_spec.shape[0]) - num_output_rows);
-        end_core = (*input_shard_spec.grid.ranges().begin()).end_coord;
-        */
-        // Handling input block/width sharding, and uneven shards
-        // Old stuff for input block sharded
     }
 
     // Input CB
@@ -1142,7 +1112,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
 
     // Compute Cliff compile_time args and kernel
-    // Note: This condition is always false for sharded input
+    // Note: This condition is always false for sharded input (sharded input will never have a cliff core)
     if (cliff_compute_core_range.ranges().size() > 0) {
         std::vector<uint32_t> compute_compile_time_args_cliff = {
             (uint32_t)num_blocks_per_cliff_core,
