@@ -125,6 +125,24 @@ def concatenate(activation, residual, dim=-1, groups=1, final_block=False):
         return ttnn.concat([x, residual], dim=dim, memory_config=output_memory_config, groups=groups)
 
 
+def select_number_of_cores(width: int, max_cores: int, minimum_shard_size: int = 32) -> tuple[int, int]:
+    for shard_width in range(minimum_shard_size, width + 1, minimum_shard_size):
+        if width % shard_width != 0:  # must divide evenly
+            continue
+        cores = width // shard_width
+        if cores <= max_cores:  # fits within the budget
+            return shard_width, cores
+    raise RuntimeError(f"Unable to find a suitable shard grid for tensor size {width}")
+
+
+def width_shard_conv2d_weight(weight):
+    assert ttnn.is_tensor_storage_on_device(weight), "Expected weight to preprocessed and on device before sharding"
+    _, _, H, W = weight.shape
+    [shard_width, number_of_cores] = select_number_of_cores(W, max_cores=8, minimum_shard_size=32)
+    print("---------------", shard_width, number_of_cores)
+    return weight
+
+
 class UNetConv2D:
     def __init__(
         self,
@@ -155,11 +173,7 @@ class UNetConv2D:
         self.use_1d_systolic_array = conv.use_1d_systolic_array
         self.mesh_mapper = mesh_mapper
 
-        shard_layout = (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            if self.use_1d_systolic_array
-            else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-        )
+        self.enable_sharded_weights = conv.enable_sharded_weights if "enable_sharded_weights" in conv else False
 
         assert (not reshard_if_not_optimal) or (
             reshard_if_not_optimal or override_core_grid
@@ -168,7 +182,7 @@ class UNetConv2D:
         self.conv_config = ttnn.Conv2dConfig(
             dtype=activation_dtype,
             weights_dtype=weights_dtype,
-            shard_layout=shard_layout,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=True,
             enable_act_double_buffer=(
                 conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
@@ -227,6 +241,24 @@ class UNetConv2D:
         }
 
     def __call__(self, x):
+        if not ttnn.is_tensor_storage_on_device(self.weight):
+            self.weight = ttnn.prepare_conv_weights(
+                weight_tensor=self.weight,
+                weights_format="OIHW",
+                input_layout=x.get_layout(),
+                input_memory_config=x.memory_config(),
+                has_bias=True,
+                **self.get_conv2d_kwargs(),
+            )
+            self.bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.bias,
+                input_memory_config=x.memory_config(),
+                input_layout=x.get_layout(),
+                **self.get_conv2d_kwargs(),
+            )
+            if self.enable_sharded_weights:
+                self.weight = width_shard_conv2d_weight(self.weight)
+
         x, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
