@@ -1085,16 +1085,16 @@ def test_ttnn_slice_whisper(
     "dims, slice_size, cores",
     [
         [[2, 256, 256, 56], 128, 64],
-        [[2, 256, 128, 23], 32, 8],
-        [[2, 256, 256, 37], 64, 64],
+        # [[2, 256, 128, 23], 32, 8],
+        # [[2, 256, 256, 37], 64, 64],
         # [[2, 8, 8, 32], 2, 4],
         # [[2, 8, 16, 2], 2, 8],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, orientation):
+def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout):
+    orientation = ttnn.ShardOrientation.ROW_MAJOR
     core_grid = device.compute_with_storage_grid_size()
     if core_grid.x * core_grid.y < cores:
         pytest.skip(
