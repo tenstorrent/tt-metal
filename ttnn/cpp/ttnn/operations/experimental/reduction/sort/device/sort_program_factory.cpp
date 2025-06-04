@@ -400,7 +400,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
             .set_page_size(index_tensor_cb_index, index_tensor_tile_size);
     auto cb_index_tensor = tt::tt_metal::CreateCircularBuffer(program, all_core_set, index_tensor_cb_config);
 
-    constexpr uint32_t input_tensor_transposed_cb_index = tt::CBIndex::c_24;
+    constexpr uint32_t input_tensor_transposed_cb_index = tt::CBIndex::c_2;
     const tt::tt_metal::CircularBufferConfig input_tensor_transposed_cb_config =
         tt::tt_metal::CircularBufferConfig(
             buffer_scale_factor * input_tensor_tile_size,
@@ -409,7 +409,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     auto cb_input_tensor_transposed =
         tt::tt_metal::CreateCircularBuffer(program, all_core_set, input_tensor_transposed_cb_config);
 
-    constexpr uint32_t index_tensor_transposed_cb_index = tt::CBIndex::c_25;
+    constexpr uint32_t index_tensor_transposed_cb_index = tt::CBIndex::c_3;
     const tt::tt_metal::CircularBufferConfig index_tensor_transposed_cb_config =
         tt::tt_metal::CircularBufferConfig(
             buffer_scale_factor * index_tensor_tile_size,
@@ -418,14 +418,14 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     auto cb_index_tensor_transposed =
         tt::tt_metal::CreateCircularBuffer(program, all_core_set, index_tensor_transposed_cb_config);
 
-    constexpr uint32_t input_tensor_output_cb_index = tt::CBIndex::c_16;
+    constexpr uint32_t input_tensor_output_cb_index = tt::CBIndex::c_4;
     const tt::tt_metal::CircularBufferConfig input_tensor_output_cb_config =
         tt::tt_metal::CircularBufferConfig(
             buffer_scale_factor * value_tensor_tile_size, {{input_tensor_output_cb_index, value_tensor_cb_data_format}})
             .set_page_size(input_tensor_output_cb_index, value_tensor_tile_size);
     auto cb_value_tensor = tt::tt_metal::CreateCircularBuffer(program, all_core_set, input_tensor_output_cb_config);
 
-    constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_17;
+    constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_5;
     const tt::tt_metal::CircularBufferConfig index_tensor_output_cb_config =
         tt::tt_metal::CircularBufferConfig(
             buffer_scale_factor * index_tensor_tile_size, {{index_tensor_output_cb_index, index_tensor_cb_data_format}})
