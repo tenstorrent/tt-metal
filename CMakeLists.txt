@@ -92,7 +92,8 @@ endif()
 include(compilers)
 CHECK_COMPILERS()
 
-include(linking)
+# TODO(afuller): Re-enable this after we sort out compatibility with old tools.
+# include(linking)
 
 # We're not currently using C++20 modules, so don't bother scanning for them
 set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
