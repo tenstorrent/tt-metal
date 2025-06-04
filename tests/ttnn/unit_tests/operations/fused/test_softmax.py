@@ -13,6 +13,41 @@ from models.utility_functions import skip_for_wormhole_b0, is_grayskull
 from models.utility_functions import torch_random
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, h, w, dim",
+    [
+        (1, 2048, 128000, -1),
+        (1, 512, 128000, -1),
+        (1, 128, 128000, -1),
+        (1, 32, 128000, -1),
+        (1, 2048, 32000, -1),
+        (1, 512, 32000, -1),
+        (1, 32, 32000, -1),  # base case
+    ],
+)
+def test_large_softmax(device, batch_size, h, w, dim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
+    print(torch_input_tensor)
+    torch_output_tensor = F.softmax(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.softmax(input_tensor, dim=dim)
+    print("hi")
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    print("hi")
+    output_tensor = ttnn.from_device(output_tensor)
+    print("hi")
+    output_tensor = ttnn.to_torch(output_tensor)
+    print("hi before assert")
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+
+
 @pytest.mark.parametrize(
     "input_vector",
     [
@@ -101,6 +136,11 @@ def run_softmax_stable_with_program_cache(
         )
     output_tensor = ttnn.to_torch(output_tensor)
 
+    torch.set_printoptions(profile="full")
+    with open("tensor_output.txt", "w") as f:
+        print(output_tensor, file=f)
+    with open("torch_tensor_output.txt", "w") as f:
+        print(torch_output_tensor, file=f)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
@@ -256,41 +296,6 @@ def test_softmax(device, batch_size, h, w, dim):
         print(torch_output_tensor, file=f)
     for i in range(0, w):
         assert_with_pcc(torch_output_tensor[:, :, i], output_tensor[:, :, i], 0.997)
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, h, w, dim",
-    [
-        (1, 2048, 128000, -1),
-        (1, 512, 128000, -1),
-        (1, 128, 128000, -1),
-        (1, 32, 128000, -1),
-        (1, 2048, 32000, -1),
-        (1, 512, 32000, -1),
-        (1, 32, 32000, -1),  # base case
-    ],
-)
-def test_large_softmax(device, batch_size, h, w, dim):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
-    print(torch_input_tensor)
-    torch_output_tensor = F.softmax(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-
-    input_tensor = ttnn.to_device(input_tensor, device)
-    output_tensor = ttnn.softmax(input_tensor, dim=dim)
-    print("hi")
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    print("hi")
-    output_tensor = ttnn.from_device(output_tensor)
-    print("hi")
-    output_tensor = ttnn.to_torch(output_tensor)
-    print("hi before assert")
-
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
 def test_softmax_with_3D(device):
