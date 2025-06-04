@@ -455,7 +455,7 @@ def run_fabric_edm(
         raise ValueError(f"Invalid test mode: {test_mode}")
 
     logger.warning("removing file profile_log_device.csv")
-    os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
+    subprocess.run(["rm", "-rf", f"{os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv"])
 
     enable_persistent_kernel_cache()
 
@@ -501,22 +501,16 @@ def run_fabric_edm(
                 {num_cluster_cols} \
                 0"
         logger.info(f"Running command: {cmd}")
-        rc = os.system(cmd)
+        result = subprocess.run(cmd, shell=True, capture_output=False)
+        rc = result.returncode
 
     disable_persistent_kernel_cache()
     if rc != 0:
         # Handle exit codes differently for daemon vs direct execution
-        if use_daemon:
-            # Daemon returns exit code directly
-            exit_code = rc
-        else:
-            # os.system() returns encoded exit status
-            exit_code = os.WEXITSTATUS(rc)
-
-        if exit_code == 1:
+        if rc == 1:
             pytest.skip("Skipping test because it only works with T3000")
             return
-        logger.info(f"Error in running the test {exit_code}")
+        logger.info(f"Error in running the test {rc}")
         assert False
 
     zone_name_inner = "MAIN-TEST-BODY"
