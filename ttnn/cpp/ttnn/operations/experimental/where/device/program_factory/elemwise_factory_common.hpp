@@ -58,7 +58,6 @@ inline void set_eltwise_ternary_runtime_args(
                   num_cores_total, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major)
             : corerange_to_cores(all_device_cores, {}, row_major);
 
-    // TODO: Don't use hardcoded size
     std::vector<std::vector<uint32_t>> binary_reader_args{cores.size(), std::vector<uint32_t>(7)};
     std::vector<std::vector<uint32_t>> eltwise_binary_args{cores.size(), std::vector<uint32_t>(2)};
     std::vector<std::vector<uint32_t>> unary_writer_args{cores.size(), std::vector<uint32_t>(3)};
@@ -84,7 +83,6 @@ inline void set_eltwise_ternary_runtime_args(
             block_cnt_per_core = num_tiles_per_core_group_2;
             block_size_per_core = block_size_per_core_group_2;
         } else {
-            // TODO: What is the use case?
             // Zero out non-working cores RT args. Only necessary in override
             // since initialization pushes zero vectors to unused cores.
             if constexpr (!initialize_args) {

@@ -37,7 +37,6 @@ Tensor where_impl(
     }
 
     if constexpr (std::is_same_v<T, Tensor> and std::is_same_v<U, Tensor>) {
-        // TODO: no need to have invoke name anymore
         auto [operation_attributes, tensor_args] = WhereDeviceOperation::invoke(
             predicate, value_true, value_false, output_dtype, output_mem_config, std::move(output_tensor));
         return ttnn::device_operation::detail::invoke<WhereDeviceOperation>(
