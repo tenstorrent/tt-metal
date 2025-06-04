@@ -20,6 +20,8 @@
 #include "shape_base.hpp"
 #include "small_vector.hpp"
 
+/*
+
 namespace tt::tt_metal {
 
 namespace {
@@ -280,3 +282,5 @@ const std::vector<DistributionSpec::TargetData>& DistributionSpec::get_metadata_
 }
 
 }  // namespace tt::tt_metal
+
+*/

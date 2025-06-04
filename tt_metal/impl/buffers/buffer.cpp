@@ -629,39 +629,6 @@ bool Buffer::is_nd_sharded() const {
     return false;
 }
 
-Buffer::BankDataMapping Buffer::get_bank_data_mapping() {
-    TT_FATAL(
-        buffer_distribution_spec_.has_value(),
-        "Buffer must have BufferDistributionSpec to get bank and page mapping in bytes!");
-    if (!bank_mapping_in_bytes_.has_value()) {
-        const auto mapping_mode = this->page_size() == this->aligned_page_size()
-                                      ? DistributionSpec::MappingMode::COALESCED
-                                      : DistributionSpec::MappingMode::NONCOALESCED;
-        const auto& bank_mapping_in_pages = buffer_distribution_spec_.value().get_page_mapping(mapping_mode);
-        std::vector<DistributionSpec::TargetData> bank_mapping_in_bytes;
-        bank_mapping_in_bytes.reserve(bank_mapping_in_pages.size());
-        for (const auto& per_bank_mapping_in_pages : bank_mapping_in_pages) {
-            DistributionSpec::TargetData per_bank_mapping_in_bytes;
-            per_bank_mapping_in_bytes.reserve(per_bank_mapping_in_pages.size());
-            for (const auto& chunk_mapping_in_pages : per_bank_mapping_in_pages) {
-                per_bank_mapping_in_bytes.emplace_back(DistributionSpec::ChunkMapping{
-                    .src = chunk_mapping_in_pages.src * this->page_size(),
-                    .dst = chunk_mapping_in_pages.dst * this->aligned_page_size(),
-                    .size = chunk_mapping_in_pages.size * this->page_size()});
-            }
-            bank_mapping_in_bytes.push_back(std::move(per_bank_mapping_in_bytes));
-        }
-        bank_mapping_in_bytes_ = std::move(bank_mapping_in_bytes);
-    }
-    const auto& banks = buffer_distribution_spec_.value().get_cores();
-    TT_FATAL(
-        banks.size() == bank_mapping_in_bytes_.value().size(),
-        "Number of banks {} must match number of mappings {}!",
-        banks.size(),
-        bank_mapping_in_bytes_.value().size());
-    return BankDataMapping{.banks = banks, .bank_mapping_in_bytes = bank_mapping_in_bytes_.value()};
-}
-
 bool ShardSpec::operator==(const ShardSpec&) const = default;
 bool ShardSpec::operator!=(const ShardSpec&) const = default;
 

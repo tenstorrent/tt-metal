@@ -9,6 +9,7 @@
 
 #include <tt-metalium/shape.hpp>
 
+/*
 namespace tt::tt_metal {
 
 class DistributionSpec {
@@ -86,3 +87,5 @@ private:
 };
 
 }  // namespace tt::tt_metal
+
+*/

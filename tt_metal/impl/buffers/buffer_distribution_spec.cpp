@@ -31,6 +31,59 @@ tt::tt_metal::Shape convert_shape_to_shape_in_pages(const tt::tt_metal::Shape& s
 }  // namespace
 
 BufferDistributionSpec::BufferDistributionSpec(
+    tt::tt_metal::Shape tensor_shape_in_pages,
+    tt::tt_metal::Shape shard_shape_in_pages,
+    CoreRangeSet core_range_set,
+    ShardOrientation shard_orientation) :
+    tensor_shape_in_pages_(std::move(tensor_shape_in_pages)),
+    shard_shape_in_pages_(std::move(shard_shape_in_pages)),
+    shard_orientation_(shard_orientation) {
+    TT_FATAL(
+        tensor_shape_in_pages.rank() == shard_shape_in_pages.rank(),
+        "Tensor shape rank ({}) must be same as shard shape rank ({})!",
+        tensor_shape_in_pages.rank(),
+        shard_shape_in_pages.rank());
+    TT_FATAL(shard_shape_in_pages.volume() == 0, "Shard shape must have non zero volume!");
+    TT_FATAL(
+        tensor_shape_in_pages.volume() != 0 || cores_.size() == 0,
+        "Can't distribute non zero volume tensor over an empty set of cores");
+
+    compute_page_mapping();
+}
+
+size_t BufferDistributionSpec::num_shards() const {
+    if (tensor_shape_in_pages_.volume() == 0) {
+        return 0;
+    }
+    size_t num_shards = 1;
+    for (size_t i = 0; i < tensor_shape_in_pages_.size(); i++) {
+        num_shards *= (tensor_shape_in_pages_[i] + shard_shape_in_pages_[i] - 1) / shard_shape_in_pages_[i];
+    }
+    return num_shards;
+}
+
+size_t BufferDistributionSpec::num_shards_per_core() const {
+    if (cores_.size() == 0) {
+        return 0;
+    }
+    return (num_shards() + cores_.size() - 1) / cores_.size();
+}
+
+size_t BufferDistributionSpec::num_dev_pages_per_core() const {
+    return num_shards_per_core() * shard_shape_in_pages_.volume();
+}
+
+void BufferDistributionSpec::compute_page_mapping() {
+    size_t num_shards_per_core = this->num_shards_per_core();
+    size_t shard_pages = shard_shape_in_pages_.volume();
+    page_mapping_.resize(cores_.size());
+    for (size_t i = 0; i < cores_.size(); i++) {
+        page_mapping_[i].resize(num_shards_per_core * shard_pages);
+    }
+}
+
+/*
+BufferDistributionSpec::BufferDistributionSpec(
     const DistributionSpec& page_distribution_spec, const std::vector<CoreCoord>& cores) :
     page_distribution_spec_(page_distribution_spec), cores_(cores) {};
 
@@ -67,5 +120,6 @@ const std::vector<DistributionSpec::TargetData>& BufferDistributionSpec::get_pag
         cores_.size());
     return page_mapping;
 };
+*/
 
 }  // namespace tt::tt_metal

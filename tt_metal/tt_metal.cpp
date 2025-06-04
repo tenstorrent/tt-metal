@@ -534,37 +534,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 
 void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
-    if (buffer.is_nd_sharded()) {
-        auto device_id = buffer.device()->id();
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
-        if (buffer.is_dram()) {
-            for (size_t i = 0; i < banks.size(); i++) {
-                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-                auto dram_channel = buffer.device()->dram_channel_from_virtual_core(virtual_core);
-                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                    cluster.write_dram_vec(
-                        host_buffer.data() + chunk_mapping_in_bytes.src,
-                        chunk_mapping_in_bytes.size,
-                        device_id,
-                        dram_channel,
-                        buffer.address() + chunk_mapping_in_bytes.dst);
-                }
-            }
-        } else {
-            for (size_t i = 0; i < banks.size(); i++) {
-                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                    cluster.write_core(
-                        host_buffer.data() + chunk_mapping_in_bytes.src,
-                        chunk_mapping_in_bytes.size,
-                        tt_cxy_pair(device_id, virtual_core.x, virtual_core.y),
-                        buffer.address() + chunk_mapping_in_bytes.dst);
-                }
-            }
-        }
-    } else if (
-        buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
+    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
@@ -673,37 +643,7 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
 
 void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
     ZoneScoped;
-    if (buffer.is_nd_sharded()) {
-        auto device_id = buffer.device()->id();
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
-        if (buffer.is_dram()) {
-            for (size_t i = 0; i < banks.size(); i++) {
-                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-                auto dram_channel = buffer.device()->dram_channel_from_virtual_core(virtual_core);
-                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                    cluster.read_dram_vec(
-                        host_buffer + chunk_mapping_in_bytes.src,
-                        chunk_mapping_in_bytes.size,
-                        device_id,
-                        dram_channel,
-                        buffer.address() + chunk_mapping_in_bytes.dst);
-                }
-            }
-        } else {
-            for (size_t i = 0; i < banks.size(); i++) {
-                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                    cluster.read_core(
-                        host_buffer + chunk_mapping_in_bytes.src,
-                        chunk_mapping_in_bytes.size,
-                        tt_cxy_pair(device_id, virtual_core),
-                        buffer.address() + chunk_mapping_in_bytes.dst);
-                }
-            }
-        }
-    } else if (
-        buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
+    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
