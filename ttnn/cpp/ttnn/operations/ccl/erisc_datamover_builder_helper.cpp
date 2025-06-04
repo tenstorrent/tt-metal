@@ -58,7 +58,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     }
 
     const std::size_t edm_buffer_size = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-                                        tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+                                        sizeof(tt::tt_fabric::PacketHeader);
     const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
     TT_ASSERT(device_sequence.size() == program_sequence.size());
 
@@ -314,8 +314,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool build_in_worker_connection_mode,
     Topology topology) :
     device_sequence({local_device}), programs({program}) {
-    const std::size_t edm_buffer_size = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-                                        tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    static constexpr std::size_t edm_buffer_size =
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+        sizeof(tt::tt_fabric::PacketHeader);
     const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
 
     log_trace(tt::LogOp, "device id={}", local_device->id());
@@ -527,8 +528,9 @@ EdmLineFabricOpInterface::generate_local_chip_fabric_termination_infos(tt::tt_me
 
 std::vector<tt::tt_fabric::edm_termination_info_t>
 EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest() const {
-    const std::size_t edm_buffer_size = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-                                        tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    static constexpr std::size_t edm_buffer_size =
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+        sizeof(tt::tt_fabric::PacketHeader);
     static const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
     TT_ASSERT(device_sequence.size() > 0);
     const size_t num_hops = device_sequence.size() - 1;

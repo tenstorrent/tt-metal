@@ -70,11 +70,11 @@ void kernel_main() {
 
     // TODO: move to semaphore
     auto edm_buffer_index_sem_id = get_arg_val<uint32_t>(arg_idx++);
-    ASSERT(edm_buffer_index_sem_id < 8);
     auto edm_buffer_index_id = edm_buffer_index_sem_id;
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(writer_send_sem_addr));
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(worker_teardown_sem_addr));
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(last_message_semaphore_address));
+    auto packet_header_buffer_cb_id = get_arg_val<uint32_t>(arg_idx++);
 
     transmit_config config;
     if (mcast_mode) {
@@ -99,15 +99,19 @@ void kernel_main() {
 
         edm_connection_handshake_id,
         edm_worker_location_info_addr,
-        edm_buffer_size_bytes,
+        edm_buffer_size_bytes + sizeof(PACKET_HEADER_TYPE),
         edm_buffer_index_id,
         writer_send_sem_addr,
         worker_teardown_sem_addr,
         worker_buffer_index_semaphore_addr,
         tt::tt_fabric::WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
         StreamId{std::numeric_limits<uint32_t>::max()});
+    DPRINT << "edm_buffer_size_bytes + sizeof(PACKET_HEADER_TYPE)="
+           << (uint32_t)(edm_buffer_size_bytes + sizeof(PACKET_HEADER_TYPE)) << ENDL();
 
+    DPRINT << "Opening sender connection" << ENDL();
     sender.open();
+    DPRINT << "Sender connection opened" << ENDL();
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
@@ -118,18 +122,30 @@ void kernel_main() {
     constexpr size_t NORMALIZED_NOC_INDEX = 0;
 
     uint32_t buffer_index = 0;
+    DPRINT << "Waiting for cb_id_in0 front" << ENDL();
     cb_wait_front(cb_id_in0, 1);
-    auto a_packet_header_addr = get_read_ptr(cb_id_in0);
+    DPRINT << "cb_id_in0 front available" << ENDL();
+
+    DPRINT << "Waiting for packet_header_buffer_cb_id front" << ENDL();
+    cb_reserve_back(packet_header_buffer_cb_id, 1);
+    DPRINT << "packet_header_buffer_cb_id front available" << ENDL();
+
+    auto packet_header_addr = get_write_ptr(packet_header_buffer_cb_id);
+    auto* packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
     for (uint32_t p = 0; p < total_pages_to_send; p += num_pages_per_send) {
         uint32_t pages_to_send = std::min<uint32_t>(num_pages_per_send, total_pages_to_send - p);
+
+        DPRINT << "Waiting for empty write slot, page " << (uint32_t)p << ENDL();
         sender.wait_for_empty_write_slot();
+        DPRINT << "Got empty write slot, page " << (uint32_t)p << ENDL();
+
+        DPRINT << "Waiting for cb_id_in0 front, pages_to_send=" << (uint32_t)pages_to_send << ENDL();
         cb_wait_front(cb_id_in0, pages_to_send);
+        DPRINT << "cb_id_in0 front available, pages_to_send=" << (uint32_t)pages_to_send << ENDL();
 
         // bit of a hack to extract X/Y
         const auto dest_noc_address = get_noc_addr(p, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
-        const size_t packet_size = page_size + sizeof(PACKET_HEADER_TYPE);
-        auto packet_addr = get_read_ptr(cb_id_in0);
-        auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_addr);
+        auto payload_addr = get_read_ptr(cb_id_in0);
         if constexpr (mcast_mode) {
             packet_header
                 ->to_chip_multicast(
@@ -142,31 +158,47 @@ void kernel_main() {
                     tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         }
 
-        sender.send_payload_blocking_from_address(packet_addr, packet_size);
+        DPRINT << "Sending payload without header, page " << (uint32_t)p << ENDL();
+        sender.send_payload_without_header_non_blocking_from_address(payload_addr, pages_to_send * page_size);
+        DPRINT << "Payload sent, flushing header, page " << (uint32_t)p << ENDL();
+        sender.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+        DPRINT << "Header flushed, waiting for NOC writes, page " << (uint32_t)p << ENDL();
+
         noc_async_writes_flushed();
+        DPRINT << "NOC writes flushed, page " << (uint32_t)p << ENDL();
         cb_pop_front(cb_id_in0, pages_to_send);
     }
 
     if constexpr (!mcast_mode) {
+        DPRINT << "Waiting for empty write slot for last message" << ENDL();
         sender.wait_for_empty_write_slot();
+        DPRINT << "Got empty write slot for last message" << ENDL();
 
-        auto& packet_header = *reinterpret_cast<PACKET_HEADER_TYPE*>(a_packet_header_addr);
         ASSERT(*last_message_semaphore_address == 0);
         uint64_t last_message_semaphore_noc0_addr =
             safe_get_noc_addr(my_x[0], my_y[0], (uint32_t)last_message_semaphore_address, 0);
-        packet_header.to_chip_unicast(2);
-        packet_header.to_noc_unicast_atomic_inc(
+        packet_header->to_chip_unicast(2);
+        packet_header->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1, 32));
 
-        sender.send_payload_blocking_from_address(
-            a_packet_header_addr, packet_header.get_payload_size_including_header());
+        DPRINT << "Sending blocking payload for last message" << ENDL();
+        sender.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+        DPRINT << "Blocking payload sent, waiting for semaphore at address " << (uint32_t)last_message_semaphore_address
+               << ENDL();
+        DPRINT << "\tcurr_val=" << (uint32_t)*last_message_semaphore_address << ENDL();
 
         noc_semaphore_wait(last_message_semaphore_address, 1);
+        DPRINT << "Semaphore received" << ENDL();
     }
 
-    bool closed_fabric_connection = terminate_fabric_endpoints_farthest_to_nearest(sender, a_packet_header_addr, arg_idx);
+    DPRINT << "Terminating fabric endpoints" << ENDL();
+    bool closed_fabric_connection =
+        terminate_fabric_endpoints_farthest_to_nearest(sender, (uint32_t)packet_header, arg_idx);
+    DPRINT << "Fabric endpoints terminated, closed_fabric_connection=" << (uint32_t)closed_fabric_connection << ENDL();
 
     if (!closed_fabric_connection) {
+        DPRINT << "Closing sender connection" << ENDL();
         sender.close();
+        DPRINT << "Sender connection closed" << ENDL();
     }
 }

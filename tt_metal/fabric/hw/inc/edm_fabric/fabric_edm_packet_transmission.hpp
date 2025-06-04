@@ -133,6 +133,8 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
     }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
+            DPRINT << "Send write to " << (uint64_t)header.command_fields.unicast_write.noc_address << " with size "
+                   << (uint32_t)payload_size_bytes << "\n";
             const auto dest_address = header.command_fields.unicast_write.noc_address;
             noc_async_write_one_packet_with_trid<false, false>(
                 payload_start_address,
@@ -162,6 +164,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
             const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
             const auto increment = header.command_fields.unicast_seminc.val;
+            DPRINT << "Send atinc to " << (uint64_t)dest_address << " with val " << (uint32_t)increment << " \n";
             if (header.command_fields.unicast_seminc.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
