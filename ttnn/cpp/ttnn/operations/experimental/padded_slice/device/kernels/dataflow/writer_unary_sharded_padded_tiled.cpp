@@ -22,6 +22,11 @@ void kernel_main() {
     uint32_t tiles_read = 0;
     uint32_t read_addr = get_read_ptr(cb_untilized_id);
 
+#define DEBUG
+#ifdef DEBUG
+    DPRINT << "total_num_tiles: " << total_num_tiles << ", num_tiles_per_read: " << num_tiles_per_read
+           << ", tile_size: " << tile_size << ", read_size: " << read_size << ENDL();
+#endif
     noc_async_read_one_packet_set_state(get_noc_addr(read_addr), read_size);
 
     while (tiles_read < total_num_tiles) {
