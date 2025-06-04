@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from enum import Enum
+
 from .format_arg_mapping import (
     ApproximationMode,
     DestAccumulation,
@@ -19,10 +21,20 @@ from .format_arg_mapping import (
 from .format_config import InputOutputFormat
 
 
-def generate_make_command(test_config):
+class ProfilerBuild(Enum):
+    Yes = "true"
+    No = "false"
+
+
+def generate_make_command(
+    test_config, profiler_build: ProfilerBuild = ProfilerBuild.No
+):
     make_cmd = f"make -j 6 --silent "
     formats = test_config.get("formats")
     testname = test_config.get("testname")
+
+    make_cmd += f"llk_profiler={profiler_build.value} "
+
     dest_acc = test_config.get("dest_acc", DestAccumulation.No)
     unpack_to_dest = str(test_config.get("unpack_to_dest", False)).lower()
 

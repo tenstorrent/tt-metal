@@ -40,7 +40,11 @@ def print_faces(operand1):
 
 def run_shell_command(command: str):
     result = subprocess.run(
-        command, shell=True, text=True, capture_output=False, stdout=subprocess.DEVNULL
+        command,
+        shell=True,
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
     if result.returncode != 0:
         raise RuntimeError(f"Build failed: {command}\n{result.stderr}")

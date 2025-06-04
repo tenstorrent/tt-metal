@@ -13,6 +13,20 @@
 // Necessary for ckernel variables
 #include "ckernel_helper.h"
 #include "params.h"
+#include "profiler.h"
+
+#ifdef LLK_PROFILER
+
+namespace llk_profiler
+{
+
+buffer_ptr_t buffer    = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
+uint32_t write_idx     = 0;
+uint32_t open_zone_cnt = 0;
+
+} // namespace llk_profiler
+
+#endif
 
 int main()
 {
@@ -35,6 +49,11 @@ int main()
     std::fill(ckernel::regfile, ckernel::regfile + 64, 0);
     ckernel::reset_cfg_state_id();
     ckernel::reset_dest_offset_id();
+
+#if defined(LLK_PROFILER)
+    llk_profiler::reset();
+#endif
+
     run_kernel();
     ckernel::tensix_sync();
     *mailbox = ckernel::KERNEL_COMPLETE; // 0x1
