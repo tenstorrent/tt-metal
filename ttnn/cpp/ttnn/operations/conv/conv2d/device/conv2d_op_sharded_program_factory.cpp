@@ -1052,6 +1052,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         }
     }
 
+    bool use_dram_sharded_weights = b.is_sharded();
+    tt::log_info("use dram sharded weights = {}", use_dram_sharded_weights);
+
     bool read_window_in_inner_loop = false;
     uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles / conv_act_c_blocks;
     bool fully_buffer_weights = false;
@@ -1402,7 +1405,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         bias_ntiles_per_core,
 
         num_blocks_act_h_per_core,
-        num_blocks_weight_w_per_core};
+        num_blocks_weight_w_per_core,
+
+        use_dram_sharded_weights};
 
     if (enable_split_reader) {
         std::vector<uint32_t> split_reader_args = {

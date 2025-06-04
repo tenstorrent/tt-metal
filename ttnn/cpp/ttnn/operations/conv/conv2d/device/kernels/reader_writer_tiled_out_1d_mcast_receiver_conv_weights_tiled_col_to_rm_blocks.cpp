@@ -22,18 +22,18 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
 
     // Split reader args
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(17);
+    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(18);
     constexpr uint32_t split_reader = act_block_h_datums != 0;
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(18);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(19);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);
-    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(21);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(22);
-    constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(23);
-    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(24);
-    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(25) == 1;
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(26);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(27);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(19);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(20);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(21);
+    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(22);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(23);
+    constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(24);
+    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(25);
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(26) == 1;
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(27);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(28);
 
     constexpr uint32_t act_block_h_datums_read_last_block =
         act_block_h_datums_last_block > act_block_h_datums

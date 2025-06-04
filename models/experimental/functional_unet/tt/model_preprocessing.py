@@ -90,7 +90,7 @@ def create_unet_model_parameters(
 
     parameters.bnc["conv_blocking_and_parallelization_config_override"] = None
     parameters.bnc["use_activation_double_buffer"] = False
-    parameters.bnc["enable_sharded_weights"] = False
+    parameters.bnc["enable_sharded_weights"] = True
     parameters.bnc_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.bnc_2["use_activation_double_buffer"] = False
     parameters.bnc_2["enable_sharded_weights"] = False

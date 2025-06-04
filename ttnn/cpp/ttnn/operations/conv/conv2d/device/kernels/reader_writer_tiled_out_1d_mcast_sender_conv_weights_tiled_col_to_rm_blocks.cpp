@@ -28,19 +28,23 @@ void kernel_main() {
 
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
 
+    // DRAM sharded weights
+    constexpr bool use_dram_sharded_weights = get_compile_time_arg_val(17) == 1;
+    DPRINT << "use_dram sharded weights? " << (uint32_t)use_dram_sharded_weights << ENDL();
+
     // Split reader args
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(17);
+    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(18);
     constexpr uint32_t split_reader = act_block_h_datums != 0;
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(18);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(19);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);
-    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(21);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(22);
-    constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(23);
-    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(24);
-    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(25) == 1;
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(26);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(27);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(19);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(20);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(21);
+    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(22);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(23);
+    constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(24);
+    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(25);
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(26) == 1;
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(27);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(28);
 
     constexpr uint32_t act_block_h_datums_read_last_block =
         act_block_h_datums_last_block > act_block_h_datums
@@ -183,19 +187,25 @@ void kernel_main() {
                 uint32_t weights_start_address = weight_write_l1_addr;
                 uint32_t weights_block_size_bytes = 0;
 
-                // loop over weight block tiles along h
-                for (uint32_t weight_tile_h_i = 0; weight_tile_h_i < weight_block_height_ntiles; ++weight_tile_h_i) {
-                    uint32_t weight_tile_id = weight_row_start_tile_id;
-                    // loop over weight block tiles along w
-                    for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                        // DPRINT << "weight_tile_id=" << weight_tile_id << ENDL();
-                        noc_async_read_tile(weight_tile_id, s_weight, weight_write_l1_addr);
-                        weight_write_l1_addr += weight_tile_nbytes;
-                        weights_block_size_bytes += weight_tile_nbytes;
-                        weight_tile_id += 1;
-                    }  // for weight_block_w
-                    weight_row_start_tile_id += weight_stride_h;
-                }  // for weight_block_h
+                if constexpr (use_dram_sharded_weights) {
+                    // TODO: THIS
+                } else {
+                    // loop over weight block tiles along h
+                    for (uint32_t weight_tile_h_i = 0; weight_tile_h_i < weight_block_height_ntiles;
+                         ++weight_tile_h_i) {
+                        uint32_t weight_tile_id = weight_row_start_tile_id;
+                        // loop over weight block tiles along w
+                        for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles;
+                             ++weight_tile_w_i) {
+                            // DPRINT << "weight_tile_id=" << weight_tile_id << ENDL();
+                            noc_async_read_tile(weight_tile_id, s_weight, weight_write_l1_addr);
+                            weight_write_l1_addr += weight_tile_nbytes;
+                            weights_block_size_bytes += weight_tile_nbytes;
+                            weight_tile_id += 1;
+                        }  // for weight_block_w
+                        weight_row_start_tile_id += weight_stride_h;
+                    }  // for weight_block_h
+                }
                 noc_async_read_barrier();
 
 #ifndef SKIP_MCAST

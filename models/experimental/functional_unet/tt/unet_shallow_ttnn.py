@@ -125,7 +125,9 @@ def concatenate(activation, residual, dim=-1, groups=1, final_block=False):
         return ttnn.concat([x, residual], dim=dim, memory_config=output_memory_config, groups=groups)
 
 
-def select_number_of_cores(width: int, max_cores: int, minimum_shard_size: int = 32) -> tuple[int, int]:
+def determine_num_cores_for_dram_sharded_weights(
+    width: int, max_cores: int, minimum_shard_size: int = 32
+) -> tuple[int, int]:
     for shard_width in range(minimum_shard_size, width + 1, minimum_shard_size):
         if width % shard_width != 0:  # must divide evenly
             continue
@@ -135,11 +137,29 @@ def select_number_of_cores(width: int, max_cores: int, minimum_shard_size: int =
     raise RuntimeError(f"Unable to find a suitable shard grid for tensor size {width}")
 
 
-def width_shard_conv2d_weight(weight):
+def shard_conv2d_weight(weight):
     assert ttnn.is_tensor_storage_on_device(weight), "Expected weight to preprocessed and on device before sharding"
+
     _, _, H, W = weight.shape
-    [shard_width, number_of_cores] = select_number_of_cores(W, max_cores=8, minimum_shard_size=32)
-    print("---------------", shard_width, number_of_cores)
+    [shard_width, number_of_cores] = determine_num_cores_for_dram_sharded_weights(W, max_cores=8, minimum_shard_size=32)
+    assert (
+        shard_width >= 32 and number_of_cores > 0
+    ), f"Expected at least 1 core with shard width >= 32 for DRAM sharding (was {number_of_cores}, {shard_width})"
+
+    core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(number_of_cores - 1, 0)),
+        }
+    )
+    shard_shape = (H, shard_width)
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    device = weight.device()
+    weight = ttnn.to_device(
+        weight.cpu(), device=device, memory_config=memory_config
+    )  # TODO: Add support for DRAM outputs to ttnn.interleaved_to_sharded
+
     return weight
 
 
@@ -257,7 +277,7 @@ class UNetConv2D:
                 **self.get_conv2d_kwargs(),
             )
             if self.enable_sharded_weights:
-                self.weight = width_shard_conv2d_weight(self.weight)
+                self.weight = shard_conv2d_weight(self.weight)
 
         x, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
