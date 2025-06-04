@@ -75,6 +75,16 @@ struct ShardedAccessor {
     }
 
     FORCE_INLINE
+    std::uint64_t get_noc_addr(const std::array<uint32_t, rank>& coords, uint8_t noc = noc_index) const {
+        const auto [bank_id, bank_offset] = this->get_bank_and_offset(coords);
+        const auto& packed_xy_coords = get_dspec().get_packed_xy_coords();
+        return NOC_XY_ADDR(
+            DYNAMIC_NOC_X(noc, (packed_xy_coords[bank_id] >> 16) & 0xFFFF),
+            DYNAMIC_NOC_Y(noc, packed_xy_coords[bank_id] & 0xFFFF),
+            bank_base_address + bank_offset * page_size);
+    }
+
+    FORCE_INLINE
     void noc_async_read_page(const uint32_t id, const uint32_t dest_addr, uint8_t noc = noc_index) const {
         noc_async_read(get_noc_addr(id, noc), dest_addr, page_size, noc);
     }
