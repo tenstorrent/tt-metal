@@ -110,17 +110,26 @@ class TtAttention(nn.Module):
                 bias=None,
             )
 
-            inner_dim = list(k_heads.shape)[-1]
-            head_dim = inner_dim // self.heads
+            q_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                q_heads,
+                num_heads=self.heads,
+                num_kv_heads=0,
+                transpose_k_heads=False,
+            )
 
-            q_heads = ttnn.reshape(q_heads, [B, -1, self.heads, head_dim])
-            q_heads = ttnn.transpose(q_heads, 1, 2)
+            v_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                v_heads,
+                num_heads=self.heads,
+                num_kv_heads=0,
+                transpose_k_heads=False,
+            )
 
-            k_heads = ttnn.reshape(k_heads, [B, -1, self.heads, head_dim])
-            k_heads = ttnn.transpose(k_heads, 1, 2)
-
-            v_heads = ttnn.reshape(v_heads, [B, -1, self.heads, head_dim])
-            v_heads = ttnn.transpose(v_heads, 1, 2)
+            k_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                k_heads,
+                num_heads=self.heads,
+                num_kv_heads=0,
+                transpose_k_heads=False,
+            )
 
         hidden_states = ttnn.transformer.scaled_dot_product_attention(
             q_heads,
