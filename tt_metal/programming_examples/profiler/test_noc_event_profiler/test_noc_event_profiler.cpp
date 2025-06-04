@@ -81,7 +81,7 @@ int main() {
         // It is necessary to explictly dump profile results at the end of the
         // program to get noc traces for standalone tt_metal programs.  For
         // ttnn, this is called _automatically_
-        detail::DumpDeviceProfileResults(device, program);
+        detail::DumpDeviceProfileResults(device);
 
         pass &= CloseDevice(device);
 

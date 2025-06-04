@@ -243,7 +243,7 @@ void ProfilerSync(ProfilerSyncState state);
  * | program       | The program being profiled.                       | const Program & |                           | True     |
  * */
 // clang-format on
-void DumpDeviceProfileResults(IDevice* device, const Program& program);
+// void DumpDeviceProfileResults(IDevice* device, const Program& program);
 
 /**
  * Read device side profiler data and dump results into device side CSV log

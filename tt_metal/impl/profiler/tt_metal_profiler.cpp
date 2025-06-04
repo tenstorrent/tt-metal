@@ -688,30 +688,30 @@ void InitDeviceProfiler(IDevice* device) {
 #endif
 }
 
-void DumpDeviceProfileResults(IDevice* device, const Program& program) {
-#if defined(TRACY_ENABLE)
-    std::vector<CoreCoord> worker_cores_in_program;
-    std::vector<CoreCoord> eth_cores_in_program;
+// void DumpDeviceProfileResults(IDevice* device, const Program& program) {
+// #if defined(TRACY_ENABLE)
+//     std::vector<CoreCoord> worker_cores_in_program;
+//     std::vector<CoreCoord> eth_cores_in_program;
 
-    std::vector<std::vector<CoreCoord>> logical_cores = program.logical_cores();
-    const auto& hal = MetalContext::instance().hal();
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        if (hal.get_core_type(index) == CoreType::WORKER) {
-            worker_cores_in_program = device->worker_cores_from_logical_cores(logical_cores[index]);
-        }
-        if (hal.get_core_type(index) == CoreType::ETH) {
-            eth_cores_in_program = device->ethernet_cores_from_logical_cores(logical_cores[index]);
-        }
-    }
+//     std::vector<std::vector<CoreCoord>> logical_cores = program.logical_cores();
+//     const auto& hal = MetalContext::instance().hal();
+//     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+//         if (hal.get_core_type(index) == CoreType::WORKER) {
+//             worker_cores_in_program = device->worker_cores_from_logical_cores(logical_cores[index]);
+//         }
+//         if (hal.get_core_type(index) == CoreType::ETH) {
+//             eth_cores_in_program = device->ethernet_cores_from_logical_cores(logical_cores[index]);
+//         }
+//     }
 
-    std::vector<CoreCoord> cores_in_program;
-    cores_in_program.reserve(worker_cores_in_program.size() + eth_cores_in_program.size());
-    std::copy(worker_cores_in_program.begin(), worker_cores_in_program.end(), std::back_inserter(cores_in_program));
-    std::copy(eth_cores_in_program.begin(), eth_cores_in_program.end(), std::back_inserter(cores_in_program));
+//     std::vector<CoreCoord> cores_in_program;
+//     cores_in_program.reserve(worker_cores_in_program.size() + eth_cores_in_program.size());
+//     std::copy(worker_cores_in_program.begin(), worker_cores_in_program.end(), std::back_inserter(cores_in_program));
+//     std::copy(eth_cores_in_program.begin(), eth_cores_in_program.end(), std::back_inserter(cores_in_program));
 
-    detail::DumpDeviceProfileResults(device, cores_in_program);
-#endif
-}
+//     detail::DumpDeviceProfileResults(device, cores_in_program);
+// #endif
+// }
 
 void DumpDeviceProfileResults(
     IDevice* device, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
