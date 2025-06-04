@@ -124,7 +124,7 @@ void kernel_main() {
                     intermediate_packet_id_y++;
                 }
             }
-            noc_async_read_barrier();
+            //            noc_async_read_barrier();
             cb_push_back(cb_intermediate_id, num_pages_to_read);
         }
     }
