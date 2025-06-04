@@ -14,6 +14,7 @@
 #include <set>
 #include <utility>
 
+#include "assert.hpp"
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "device_impl.hpp"
@@ -235,6 +236,16 @@ void DevicePool::initialize(
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::MetalContext::instance().initialize(
         dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()});
+
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+        // Automatically initialize 1D fabric for dispatch
+        FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+        if (fabric_config == FabricConfig::DISABLED) {
+            tt::tt_metal::detail::InitializeFabricConfig(FabricConfig::FABRIC_1D);
+        } else if (fabric_config != FabricConfig::FABRIC_1D) {
+            TT_THROW("Fast Dispatch only supports 1D Fabric. Mixed Fabric config is not supported.");
+        }
+    }
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};

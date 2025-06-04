@@ -1,6 +1,7 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #include "dispatch.hpp"
 
 #include <host_api.hpp>
@@ -39,6 +40,13 @@ void DispatchKernel::GenerateStaticConfigs() {
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
     auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+
+    // May be zero if not using dispatch on fabric
+    static_config_.fabric_header_rb_base =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_HEADER_RB);
+    static_config_.fabric_header_rb_entries = tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES;
+    static_config_.my_fabric_sync_status_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -115,10 +123,14 @@ void DispatchKernel::GenerateStaticConfigs() {
 
         static_config_.split_dispatch_page_preamble_size = 0;
         // TODO: why is this hard-coded to 1 CQ on Galaxy?
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-            static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(1);
+        if (MetalContext::instance().rtoptions().get_fd_fabric()) {
+            static_config_.prefetch_h_max_credits = my_dispatch_constants.prefetch_d_buffer_pages();
         } else {
-            static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
+            if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+                static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(1);
+            } else {
+                static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
+            }
         }
 
         static_config_.packed_write_max_unicast_sub_cmds =
@@ -157,18 +169,17 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.completion_queue_base_addr = 0;
         static_config_.completion_queue_size = 0;
 
-        static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
-            *program_,
-            logical_core_,
-            my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs()),
-            GetCoreType());  // Apparently unused
-
         if (MetalContext::instance().rtoptions().get_fd_fabric()) {
             static_config_.split_dispatch_page_preamble_size = 0;
+            static_config_.prefetch_h_max_credits = my_dispatch_constants.prefetch_d_buffer_pages();
+            static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
+                *program_, logical_core_, my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
         } else {
             static_config_.split_dispatch_page_preamble_size = sizeof(tt::packet_queue::dispatch_packet_header_t);
+            static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
+            static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
+                *program_, logical_core_, my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs()), GetCoreType());
         }
-        static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
 
         static_config_.packed_write_max_unicast_sub_cmds =
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
@@ -195,6 +206,11 @@ void DispatchKernel::GenerateStaticConfigs() {
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     } else {
         TT_FATAL(false, "DispatchKernel must be one of (or both) H and D variants");
+    }
+
+    if ((static_config_.is_h_variant.value() ^ static_config_.is_d_variant.value()) &&
+        tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+        create_edm_connection_sems(edm_connection_attributes_);
     }
 }
 
@@ -236,6 +252,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         dependent_config_.downstream_cb_base = 0;                         // Unused
         dependent_config_.downstream_cb_size = 0;                         // Unused
         dependent_config_.downstream_cb_sem_id = UNUSED_SEM_ID;           // Unused
+        dependent_config_.num_hops = 0;
     } else if (static_config_.is_h_variant.value()) {
         // Upstream, expect DEMUX
         // Or direct connection to DISPATCH_D if using fabric
@@ -400,24 +417,39 @@ void DispatchKernel::CreateKernel() {
         static_config_.dev_completion_q_wr_ptr.value(),
         static_config_.dev_completion_q_rd_ptr.value(),
 
-        dependent_config_.downstream_mesh_id.value_or(0),
-        dependent_config_.downstream_dev_id.value_or(0),
-        dependent_config_.upstream_mesh_id.value_or(0),
-        dependent_config_.upstream_dev_id.value_or(0),
-        dependent_config_.fabric_router_noc_xy.value_or(0),
-        dependent_config_.outbound_eth_chan.value_or(0),
-        static_config_.client_interface_addr.value_or(0),
-
         static_config_.first_stream_used.value(),
 
         virtualize_num_eth_cores,
         num_virtual_active_eth_cores,
         num_physical_active_eth_cores,
 
+        static_config_.fabric_header_rb_base.value(),
+        static_config_.fabric_header_rb_entries.value(),
+        static_config_.my_fabric_sync_status_addr.value(),
+
+        dependent_config_.fabric_mux_client_config.virtual_x.value_or(0),
+        dependent_config_.fabric_mux_client_config.virtual_y.value_or(0),
+        dependent_config_.fabric_mux_client_config.num_buffers_per_channel.value_or(0),
+        dependent_config_.fabric_mux_client_config.channel_buffer_size_bytes.value_or(0),
+        dependent_config_.fabric_mux_client_config.channel_base_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.connection_info_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.connection_handshake_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.flow_control_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.buffer_index_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.status_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.termination_signal_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.worker_credits_stream_id.value_or(0),
+
+        edm_connection_attributes_.worker_flow_control_sem,
+        edm_connection_attributes_.worker_teardown_sem,
+        edm_connection_attributes_.worker_buffer_index_sem,
+
+        dependent_config_.num_hops.value(),
+
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 42);
+
     auto my_virtual_core = get_virtual_core_coord(logical_core_, GetCoreType());
     auto upstream_virtual_core = get_virtual_core_coord(dependent_config_.upstream_logical_core.value(), GetCoreType());
     auto downstream_virtual_core =
@@ -470,23 +502,4 @@ void DispatchKernel::ConfigureCore() {
         detail::WriteToDeviceL1(device_, logical_core_, completion_q0_last_event_ptr, zero, GetCoreType());
         detail::WriteToDeviceL1(device_, logical_core_, completion_q1_last_event_ptr, zero, GetCoreType());
     }
-}
-
-void DispatchKernel::UpdateArgsForFabric(
-    const CoreCoord& fabric_router_virtual,
-    uint32_t outbound_eth_chan,
-    tt::tt_fabric::MeshId upstream_mesh_id,
-    chip_id_t upstream_dev_id,
-    tt::tt_fabric::MeshId downstream_mesh_id,
-    chip_id_t downstream_dev_id) {
-    dependent_config_.fabric_router_noc_xy =
-        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
-    dependent_config_.upstream_mesh_id = *upstream_mesh_id;
-    dependent_config_.upstream_dev_id = upstream_dev_id;
-    dependent_config_.downstream_mesh_id = *downstream_mesh_id;
-    dependent_config_.downstream_dev_id = downstream_dev_id;
-    dependent_config_.outbound_eth_chan = outbound_eth_chan;
-    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
-    static_config_.client_interface_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_INTERFACE);
 }
