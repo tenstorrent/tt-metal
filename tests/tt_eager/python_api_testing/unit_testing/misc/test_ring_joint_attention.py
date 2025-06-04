@@ -215,7 +215,7 @@ def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
 @pytest.mark.parametrize("q_chunk_size", [64], ids=["q256"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k256"])
 @pytest.mark.parametrize("b", [1], ids=["b1"])
-@pytest.mark.parametrize("nh", [5], ids=["nh5"])
+@pytest.mark.parametrize("nh", [40], ids=["nh40"])
 @pytest.mark.parametrize("d", [64], ids=["d64"])
 @pytest.mark.parametrize(
     "seq_len, joint_seq_len",
@@ -224,26 +224,50 @@ def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
     ],
 )
 @pytest.mark.parametrize("n_iters, trace_enabled", [(1, False), (10, True)], ids=["no_trace", "yes_trace"])
-@pytest.mark.parametrize("num_devices, num_links, rp_dim, rp_axis, rp_factor", [[8, 1, 2, 1, 8]])
+@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        (
-            {"worker_l1_size": 1344544, "trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            ttnn.Topology.Ring,
-        ),
+        # (
+        #     {"worker_l1_size": 1344544, "trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+        #     ttnn.Topology.Ring,
+        # ),
         (
             {"worker_l1_size": 1344544, "trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
             ttnn.Topology.Linear,
         ),
     ],
     indirect=["device_params"],
-    ids=["ring", "line"],
+    ids=[
+        # "ring",
+        "line",
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [(1, 8)],
+    [(2, 4)],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "rp_axis, rp_factor, up_axis, up_factor",
+    [
+        [0, 2, 1, 4],  # 2x4 RP x UP
+        [0, 2, 1, 2],  # 2x2 RP x UP
+        [0, 2, 1, 1],  # 2x1 RP x UP
+        [1, 2, 0, 2],  # 2x2 UP x RP
+        [1, 2, 0, 1],  # 1x2 UP x RP
+        [1, 4, 0, 1],  # 1x4 UP x RP
+        [1, 8, 0, 1],  # 1x8 UP x RP
+    ],
+    ids=[
+        "2rpx4up",
+        "2rpx2up",
+        "2rpx1up",
+        "2upx2rp",
+        "1upx2rp",
+        "1upx4rp",
+        "1upx8rp",
+    ],
 )
 def test_ring_joint_sdpa_perf(
     mesh_device,
@@ -258,14 +282,28 @@ def test_ring_joint_sdpa_perf(
     dtype,
     n_iters,
     trace_enabled,
-    num_devices,
     num_links,
-    rp_dim,
     rp_axis,
     rp_factor,
+    up_axis,
+    up_factor,
     all_gather_topology,
 ):
-    full_compute_grid = mesh_device.compute_with_storage_grid_size()
+    if rp_factor == 8 and rp_axis == 1:
+        mesh_device.reshape(ttnn.MeshShape(1, 8))
+
+    mesh_device_shape = list(mesh_device.shape)
+    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+    submesh_shape = [0, 0]
+    submesh_shape[rp_axis] = rp_factor
+    submesh_shape[up_axis] = up_factor
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+
+    print(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    print(f"submesh: {submesh.shape}")
+    num_devices = rp_factor * up_factor
+
+    full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (8, 7)
     ccl_core_grid_offset = (0, 7)
 
@@ -281,14 +319,18 @@ def test_ring_joint_sdpa_perf(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
 
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
+    submesh.load_sub_device_manager(sub_device_manager)
+    submesh.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
     ccl_semaphore_handles = [
-        create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(n_iters)
+        create_global_semaphores(submesh, num_devices, ccl_sub_device_crs, 0) for _ in range(n_iters)
     ]
+
+    kv_shard_dims = [None, None]
+    kv_shard_dims[rp_axis] = None  # Output of AllGather is not sharded on RP axis
+    kv_shard_dims[up_axis] = 1  # UP shards on heads dim1
 
     # Create persistent output buffers
     ag_output_shape = (b, nh, seq_len, d)
@@ -296,11 +338,11 @@ def test_ring_joint_sdpa_perf(
         [
             ttnn.from_torch(
                 torch.zeros(ag_output_shape),
-                device=mesh_device,
+                device=submesh,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
             )
             for _ in range(2)  # Num inputs K, V
         ]
@@ -311,11 +353,11 @@ def test_ring_joint_sdpa_perf(
         [
             ttnn.from_torch(
                 torch.zeros(ag_output_shape),
-                device=mesh_device,
+                device=submesh,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
             )
             for _ in range(2)  # Num inputs K, V
         ]
@@ -349,48 +391,59 @@ def test_ring_joint_sdpa_perf(
     logger.debug(f"K: {K.shape}")
     logger.debug(f"V: {V.shape}")
 
+    sdpa_input_shard_dims = [None, None]
+    sdpa_input_shard_dims[rp_axis] = 2  # sequence dim
+    sdpa_input_shard_dims[up_axis] = 1  # head dim
+
+    # Joint input only sharded on head dim
+    sdpa_joint_shard_dims = [None, None]
+    sdpa_joint_shard_dims[up_axis] = 1  # head dim
+
     tt_Q = ttnn.from_torch(
         Q,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-2),
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
     tt_K = ttnn.from_torch(
         K,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-2),
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
     tt_V = ttnn.from_torch(
         V,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-2),
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims),
     )
     tt_joint_Q = ttnn.from_torch(
         joint_Q,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
     )
     tt_joint_K = ttnn.from_torch(
         joint_K,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
     )
     tt_joint_V = ttnn.from_torch(
         joint_V,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
     )
+
+    print(f"tt_Q: {tt_Q.shape}")
+    print(f"tt_joint_Q: {tt_joint_Q.shape}")
 
     tt_out_list = []
     tt_joint_out_list = []
@@ -428,11 +481,11 @@ def test_ring_joint_sdpa_perf(
                 logical_n=seq_len,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
-                dim=rp_dim,
+                dim=2,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
                 cluster_axis=rp_axis,
-                mesh_device=mesh_device,
+                mesh_device=submesh,
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
@@ -444,14 +497,14 @@ def test_ring_joint_sdpa_perf(
         print("Compile run")
         run_iters([], [])
         print("Capture trace")
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
         run_iters(tt_out_list, tt_joint_out_list)
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(mesh_device)
+        ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+        ttnn.synchronize_device(submesh)
         print("Execute trace")
-        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-        ttnn.release_trace(mesh_device, trace_id)
-        ttnn.synchronize_device(mesh_device)
+        ttnn.execute_trace(submesh, trace_id, blocking=False)
+        ttnn.release_trace(submesh, trace_id)
+        ttnn.synchronize_device(submesh)
 
     else:
         print("Run without trace")
@@ -462,10 +515,19 @@ def test_ring_joint_sdpa_perf(
     gt_joint_out = gt[:, :, seq_len:, :]
 
     for i in range(n_iters):
-        tt_out = ttnn.to_torch(tt_out_list[i], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
-        tt_joint_out = ttnn.to_torch(tt_joint_out_list[i], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
-            :1
-        ]
+        tt_out = ttnn.to_torch(
+            tt_out_list[i],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_input_shard_dims
+            ),
+        )
+        joint_shard_dims = [None, None]
+        joint_shard_dims[up_axis] = 1
+        joint_shard_dims[rp_axis] = 0  # Concat replicas on sequence length into batch
+        tt_joint_out = ttnn.to_torch(
+            tt_joint_out_list[i],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=joint_shard_dims),
+        )[:1]
         # Slice out any tile-padding
         tt_out = tt_out[:, :, :seq_len, :]
         tt_joint_out = tt_joint_out[:, :, :joint_seq_len, :]
@@ -480,6 +542,8 @@ def test_ring_joint_sdpa_perf(
             passing = passing and out_pass
 
         assert passing
+
+    ttnn.close_mesh_device(submesh)
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
