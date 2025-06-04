@@ -14,6 +14,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_simmilarity
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -108,14 +109,14 @@ def run_topk(
         device=device,
         memory_config=input_a_memory_config,
     )
-    output_values = ttnn.from_torch(
+    op_output_values = ttnn.from_torch(
         torch_optional_output[0],
         dtype=input_a_dtype,
         layout=input_layout,
         device=device,
         memory_config=output_memory_config,
     )
-    output_indices = ttnn.from_torch(
+    op_output_indices = ttnn.from_torch(
         torch_optional_output[1],
         dtype=ttnn.uint16,
         layout=input_layout,
@@ -124,11 +125,13 @@ def run_topk(
     )
 
     start_time = start_measuring_time()
-    ttnn.topk(input_tensor_a, k=k, dim=dim, largest=largest, sorted=True, out=(output_values, output_indices))
+    ttnn.topk(input_tensor_a, k=k, dim=dim, largest=largest, sorted=True, out=(op_output_values, op_output_indices))
+    output_values = ttnn.to_torch(op_output_values)
+    output_indices = ttnn.to_torch(op_output_indices).to(torch.int64)
     e2e_perf = stop_measuring_time(start_time)
-    output_values, output_indices = ttnn.to_torch(output_values), ttnn.to_torch(output_indices).to(torch.int64)
-
-    return [check_with_pcc(torch_output_values, output_values, 0.999), e2e_perf]
+    expected_pcc = 0.999
+    tensors = [input_tensor_a, op_output_values, op_output_indices]
+    return get_run_return(torch_output_values, output_values, expected_pcc, tensors, e2e_perf)
 
 
 @pytest.mark.parametrize("params", list(permutations(parameters["nightly"])))
