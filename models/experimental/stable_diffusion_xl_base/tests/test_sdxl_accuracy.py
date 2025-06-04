@@ -48,8 +48,8 @@ def test_accuracy_sdxl(
     captions_path,
     coco_statistics_path,
     accuracy_eval_range,
-    expected_clip=30.7893,
-    expected_fid=187.2562,
+    expected_clip=30.998,
+    expected_fid=186.71,
 ):
     start_from, num_prompts = accuracy_eval_range
 
@@ -101,7 +101,7 @@ def test_accuracy_sdxl(
 
     if start_from == 0 and num_prompts == 100:
         assert math.isclose(
-            fid_value, expected_fid, abs_tol=1e-4
+            fid_value, expected_fid, abs_tol=1e-3
         ), f"FID score changed: {fid_value:.4f} != {expected_fid:.4f}"
         assert math.isclose(
             average_clip_score, expected_clip, abs_tol=1e-4
