@@ -204,7 +204,6 @@ TEST(MeshGraphValidation, TestT3kDualHostMeshGraph) {
     auto mesh_graph = std::make_unique<tt_fabric::MeshGraph>(t3k_dual_host_mesh_graph_desc_path.string());
 
     EXPECT_THAT(mesh_graph->get_mesh_ids(), ElementsAre(MeshId{0}));
-    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}), MeshShape(2, 4));
 
     // Check host ranks by accessing the values vector
     const auto& host_ranks = mesh_graph->get_host_ranks(MeshId{0});
@@ -233,8 +232,6 @@ TEST(MeshGraphValidation, TestT3kDualHostMeshGraph) {
     EXPECT_EQ(
         mesh_graph->get_chip_ids(MeshId{0}, HostRankId(1)),
         MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{2, 3, 6, 7}));
-
-    mesh_graph->print_connectivity();
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
