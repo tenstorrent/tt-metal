@@ -11,6 +11,14 @@ target_sources(
         device/binary_ng_program_factory.cpp
         device/binary_ng_utils.cpp
 )
+target_sources(
+    ttnn_op_eltwise_binary_ng
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES device/kernels/compute/eltwise_binary_no_bcast.cpp device/kernels/compute/eltwise_utils_common.hpp
+)
 
 target_include_directories(ttnn_op_eltwise_binary_ng PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
@@ -20,4 +28,12 @@ target_link_libraries(
         TT::NN::Core
 )
 
+install(
+    TARGETS
+        ttnn_op_eltwise_binary_ng
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/eltwise/binary_ng
+        COMPONENT ttnn-runtime
+)
 install(TARGETS ttnn_op_eltwise_binary_ng LIBRARY COMPONENT tar)

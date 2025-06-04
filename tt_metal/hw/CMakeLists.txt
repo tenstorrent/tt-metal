@@ -301,7 +301,9 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_log1p.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_max.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_relu.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_unary_max_min.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_relu.h
                 ckernels/blackhole/metal/llk_api/llk_unpack_untilize_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_math_binary_api.h
                 ckernels/wormhole_b0/metal/llk_api/llk_math_reduce_api.h
