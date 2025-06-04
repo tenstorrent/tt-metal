@@ -262,6 +262,7 @@ Key operations include:
 *   ``matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false)``: Executes the core FPU instruction: multiplies a tile from ``cb_in0`` with a tile from ``cb_in1`` and adds the result to the accumulator.
 *   ``cb_pop_front(cb_in0, 1); cb_pop_front(cb_in1, 1);``: After the tiles are used by ``matmul_tiles``, they are marked as consumed by popping them from the input CBs.
 *   ``pack_tile(0, cb_out); cb_push_back(cb_out, 1);``: Once the ``Kt`` loop completes for an output tile, the accumulated result in the FPU registers is packed and pushed to the output circular buffer ``cb_out``.
+
 The dimensions ``Mt``, ``Kt``, ``Nt`` are passed as compile-time arguments, enabling the compiler to optimize the kernel structure for these specific dimensions.
 
 .. code-block:: cpp
