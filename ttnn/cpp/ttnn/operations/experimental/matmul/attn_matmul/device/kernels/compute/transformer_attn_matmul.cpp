@@ -88,6 +88,8 @@ void MAIN {
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
+                // Workaround, needs to be reverted to the following when fix is found:
+                // mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
             }
         }
     }

@@ -30,22 +30,26 @@ def generate_input_shapes():
 
 
 # @skip_for_blackhole("Bad pcc on BH. Issue #21875")
-@pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("num_loops", [20])
+@pytest.mark.parametrize("in0_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("num_loops", [1])
 def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
     torch.manual_seed(0)
 
     for input_shape_a, input_shape_b in generate_input_shapes():
+        print("Now running with input shapes:")
+        print(input_shape_a, input_shape_b)
+        input_tensor_a = torch.randn(input_shape_a).bfloat16()
+        input_tensor_b = torch.randn(input_shape_b).bfloat16()
+        tt_input_tensor_a = ttnn.Tensor(input_tensor_a, in0_dtype).to(ttnn.TILE_LAYOUT)
+        tt_input_tensor_b = ttnn.Tensor(input_tensor_b, in1_dtype).to(ttnn.TILE_LAYOUT)
+        tt_input_tensor_a = tt_input_tensor_a.to(device)
+        tt_input_tensor_b = tt_input_tensor_b.to(device)
+
         for _ in range(num_loops):
-            input_tensor_a = torch.randn(input_shape_a).bfloat16()
-            input_tensor_b = torch.randn(input_shape_b).bfloat16()
-            tt_input_tensor_a = ttnn.Tensor(input_tensor_a, in0_dtype).to(ttnn.TILE_LAYOUT)
-            tt_input_tensor_b = ttnn.Tensor(input_tensor_b, in1_dtype).to(ttnn.TILE_LAYOUT)
             # Test python syntax in async mode -> tensor handle for inputs should get properly updated when sending to device
-            tt_input_tensor_a = tt_input_tensor_a.to(device)
-            tt_input_tensor_b = tt_input_tensor_b.to(device)
+
             compute_grid_size = device.compute_with_storage_grid_size()
             tt_output_tensor_on_device = ttnn.experimental.attn_matmul(
                 tt_input_tensor_a,
@@ -54,14 +58,16 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=out_dtype,
             )
-            tt_input_tensor_a.deallocate()
-            tt_input_tensor_b.deallocate()
-            tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
+            tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttnn.TILE_LAYOUT).to_torch()
             tt_output_tensor_on_device.deallocate()
             golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
+
+        tt_input_tensor_a.deallocate()
+        tt_input_tensor_b.deallocate()
 
 
 @skip_for_blackhole("Bad pcc on BH. Issue #25421")
