@@ -48,9 +48,6 @@
 | [Mistral 7B](./models/tt_transformers)                        | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        |  104 | 26.4  | 23     | 844.8 | [v0.59.0-rc13](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc13)    |  [739dcaa](https://github.com/tenstorrent/vllm/tree/739dcaa2915fa29d757c25a02c17aadce0c58055) |
 | [Mixtral 8x7B (TP=8)](./models/demos/t3000/mixtral8x7b)       | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 207       | 16.6  | 33              | 531.2  | [v0.58.0-rc22](https://github.com/tenstorrent/tt-metal/tree/v0.58.0-rc22) |                                                                                                   |
 
->[!NOTE]
->For more information regarding vLLM installation, environment creation, model versions, model weights, and more, visit the [Tenstorrent vLLM repository](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md).
-
 > **Last Update:** May 26, 2025
 >
 > **Notes:**
@@ -61,6 +58,7 @@
 > - The t/s/u reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
 > - Performance numbers were collected using the tt-metal model demos (accessible via the model links). If running with a vLLM inference server, performance may be different.
 > - \* Blackhole software optimization is under active development.  Please join us in shaping the future of open source AI! <br> [\[Discord\]](https://discord.gg/tenstorrent) [\[Developer Hub\]](https://tenstorrent.com/developers)
+> - For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM repository](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md).
 
 ## Speech-to-Text
 
