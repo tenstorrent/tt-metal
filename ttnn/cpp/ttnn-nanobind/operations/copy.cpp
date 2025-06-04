@@ -7,15 +7,12 @@
 #include <optional>
 
 #include <fmt/format.h>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "cpp/ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/copy.hpp"
+#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/types.hpp"
-
-namespace nb = nanobind;
 
 namespace ttnn::operations::copy {
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,10 +7,8 @@
 #include <string>
 
 #include <fmt/format.h>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
-
 #include <nlohmann/json.hpp>
 
 #include <tt_stl/reflection.hpp>

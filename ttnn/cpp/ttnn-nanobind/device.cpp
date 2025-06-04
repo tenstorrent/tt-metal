@@ -24,35 +24,27 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
+#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
+#include "tools/profiler/op_profiler.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-
-#include "small_vector_caster.hpp"  // NOLINT - for nanobind SmallVector binding support.
-#include <tt-metalium/persistent_kernel_cache.hpp>
-#include <tt-metalium/memory_reporter.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
+//#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/trace.hpp>
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-//#include <tt-metalium/hal.hpp>
-#include "tools/profiler/op_profiler.hpp"
-
-using namespace tt::tt_metal;
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace nb = nanobind;
+using namespace tt::tt_metal;
 
 namespace {
 void DumpDeviceProfiler(IDevice* device) {
     ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
     tt::tt_metal::detail::DumpDeviceProfileResults(device, ProfilerDumpState::NORMAL, prof_metadata);
 }
-}  // namespace
-
-namespace ttnn::device {
-namespace detail {
 
 void ttnn_device(nb::module_& mod) {
     mod.def(
@@ -85,23 +77,20 @@ void ttnn_device(nb::module_& mod) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    module.def("close_device", [](MeshDevice& device) { ttnn::close_device(device); }, nb::arg("device"));
+    mod.def("close_device", [](ttnn::MeshDevice& device) { ttnn::close_device(device); }, nb::arg("device"));
 
-    module.def(
-        "enable_program_cache", [](MeshDevice& device) { ttnn::enable_program_cache(device); }, nb::arg("device"));
-
-    module.def(
-        "disable_and_clear_program_cache",
-        [](MeshDevice& device) { ttnn::disable_and_clear_program_cache(device); },
-        nb::arg("device"));
-
-    module.def(
-        "deallocate_buffers", [](MeshDevice* device) { ttnn::deallocate_buffers(device); }, nb::arg("device"), R"doc(
+    mod.def(
+        "deallocate_buffers",
+        [](ttnn::MeshDevice* device) { ttnn::deallocate_buffers(device); },
+        nb::arg("device"),
+        R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
 }
 
-}  // namespace detail
+}  // namespace
+
+namespace ttnn::device {
 
 void py_device_module_types(nb::module_& m_device) {
     nb::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
@@ -132,12 +121,6 @@ void py_device_module_types(nb::module_& m_device) {
             "Constructor with specified dispatch core type and axis.",
             nb::arg("type"),
             nb::arg("axis"));
-
-    nb::class_<IDevice>(
-        m_device, "IDevice", "Base class describing a Tenstorrent accelerator device.");
-
-    nb::class_<tt::tt_metal::Device, IDevice>(
-        m_device, "Device", "Class describing a Tenstorrent accelerator device.");
 
     nb::class_<SubDevice>(m_device, "SubDevice", "Class describing a sub-device of a Tenstorrent accelerator device.");
 
@@ -186,167 +169,7 @@ void device_module(nb::module_& m_device) {
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
-    auto pyIDevice =
-        static_cast<nb::class_<IDevice>>(m_device.attr("IDevice"))
-            .def("id", &IDevice::id, "Device's ID")
-            .def("arch", &IDevice::arch, "Device's arch")
-            .def(
-                "compute_with_storage_grid_size",
-                &IDevice::compute_with_storage_grid_size,
-                "Grid size (x, y) denoting region that can be targeted by ops")
-            .def(
-                "dram_grid_size", &IDevice::dram_grid_size, "Grid size (x, y) denoting dram cores that can be targeted")
-            .def(
-                "worker_core_from_logical_core",
-                &IDevice::worker_core_from_logical_core,
-                "Convert a logical core coordinate into a physical worker core coordinate")
-            .def(
-                "enable_program_cache",
-                &IDevice::enable_program_cache,
-                "Enable caching for all programs sent to this device")
-            .def(
-                "disable_and_clear_program_cache",
-                &IDevice::disable_and_clear_program_cache,
-                "Disable and clear program cache for this device")
-            .def(
-                "set_program_cache_misses_allowed",
-                &IDevice::set_program_cache_misses_allowed,
-                "Set whether program cache misses are allowed for this device")
-            .def(
-                "num_program_cache_entries",
-                &IDevice::num_program_cache_entries,
-                "Number of entries in the program cache for this device")
-            .def(
-                "create_sub_device_manager",
-                [](IDevice* device,
-                   const std::vector<SubDevice>& sub_devices,
-                   DeviceAddr local_l1_size) -> SubDeviceManagerId {
-                    std::optional<SubDeviceManagerId> sub_device_manager_id;
-                    device->push_work(
-                        [device, sub_devices, local_l1_size, &sub_device_manager_id] {
-                            sub_device_manager_id = device->create_sub_device_manager(sub_devices, local_l1_size);
-                        },
-                        /*blocking=*/true);
-                    TT_FATAL(sub_device_manager_id.has_value(), "Failed to create sub-device manager");
-                    return *sub_device_manager_id;
-                },
-                nb::arg("sub_devices"),
-                nb::arg("local_l1_size"),
-                R"doc(
-                Creates a sub-device manager for the given device.
-
-                Args:
-                    sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager.
-                    local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
-
-                Returns:
-                    SubDeviceManagerId: The ID of the created sub-device manager.
-            )doc")
-            .def(
-                "create_sub_device_manager_with_fabric",
-                [](IDevice* device, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                    std::optional<std::tuple<SubDeviceManagerId, SubDeviceId>> manager_and_sub_device_ids;
-                    device->push_work(
-                        [device, sub_devices, local_l1_size, &manager_and_sub_device_ids] {
-                            manager_and_sub_device_ids =
-                                device->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-                        },
-                        /*blocking=*/true);
-                    TT_FATAL(manager_and_sub_device_ids.has_value(), "Failed to create sub-device manager with fabric");
-                    return *manager_and_sub_device_ids;
-                },
-                nb::arg("sub_devices"),
-                nb::arg("local_l1_size"),
-                R"doc(
-                Creates a sub-device manager for the given device. This will automatically create a sub-device of ethernet cores for use with fabric.
-                Note that this is a temporary API until migration to actual fabric is complete.
-
-                Args:
-                    sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager. No ethernet cores should be included in this list.
-                    local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
-
-                Returns:
-                    SubDeviceManagerId: The ID of the created sub-device manager.
-                    SubDeviceId: The ID of the sub-device that will be used for fabric.
-            )doc")
-            .def(
-                "load_sub_device_manager",
-                [](IDevice* device, SubDeviceManagerId sub_device_manager_id) {
-                    device->push_work(
-                        [device, sub_device_manager_id] { device->load_sub_device_manager(sub_device_manager_id); });
-                },
-                nb::arg("sub_device_manager_id"),
-                R"doc(
-                Loads the sub-device manager with the given ID.
-
-                Args:
-                    sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to load.
-            )doc")
-            .def(
-                "clear_loaded_sub_device_manager",
-                [](IDevice* device) { device->push_work([device] { device->clear_loaded_sub_device_manager(); }); },
-                R"doc(
-                Clears the loaded sub-device manager for the given device.
-            )doc")
-            .def(
-                "remove_sub_device_manager",
-                [](IDevice* device, SubDeviceManagerId sub_device_manager_id) {
-                    device->push_work(
-                        [device, sub_device_manager_id] { device->remove_sub_device_manager(sub_device_manager_id); });
-                },
-                nb::arg("sub_device_manager_id"),
-                R"doc(
-                Removes the sub-device manager with the given ID.
-
-                Args:
-                    sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to remove.
-            )doc")
-            .def(
-                "set_sub_device_stall_group",
-                [](IDevice* device, const std::vector<SubDeviceId>& sub_device_ids) {
-                    device->push_work([device, sub_device_ids] { device->set_sub_device_stall_group(sub_device_ids); });
-                },
-                nb::arg("sub_device_ids"),
-                R"doc(
-                Set the SubDevice IDs that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing.
-                Stalling here refers to the Fast Dispatch cores waiting for programs to complete execution on the specified SubDevices before proceeding with the specified instruction.
-                The default SubDevice IDs to stall on are set to all SubDevice IDs, and whenever a new SubDevice Manager is loaded.
-
-                Args:
-                    sub_device_ids (List[SubDeviceId]): The IDs of the SubDevices to stall on.
-            )doc")
-            .def(
-                "reset_sub_device_stall_group",
-                [](IDevice* device) { device->push_work([device] { device->reset_sub_device_stall_group(); }); },
-                R"doc(
-                Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing
-                back to all SubDevice IDs.
-            )doc")
-            .def(
-                "sfpu_eps",
-                [](IDevice* device) { return tt::tt_metal::hal::get_eps(); },
-                R"doc(Returns machine epsilon value for current architecture.)doc")
-            .def(
-                "sfpu_nan",
-                [](IDevice* device) { return tt::tt_metal::hal::get_nan(); },
-                R"doc(Returns NaN value for current architecture.)doc")
-            .def(
-                "sfpu_inf",
-                [](IDevice* device) { return tt::tt_metal::hal::get_inf(); },
-                R"doc(Returns Infinity value for current architecture.)doc");
-
-    auto pyDevice = static_cast<nb::class_<tt::tt_metal::Device, IDevice>>(m_device.attr("Device"));
-    pyDevice.def("__init__",
-        [](tt::tt_metal::Device* t, int device_id, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
-            new (t) tt::tt_metal::Device(device_id, 1, l1_small_size, trace_region_size, {}, {}, worker_l1_size);
-        },
-        "Create device.",
-        nb::arg("device_id"),
-        nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
-        nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        nb::kw_only(),
-        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
-
+    // May need a placement new impl?
     m_device.def(
         "CreateDevice",
         [](int device_id,
@@ -678,7 +501,7 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "synchronize_device",
         [](IDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-                Synchronize(device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
+            Synchronize(device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
         },
         synchronize_device_doc.data(),
         nb::arg("device"),
@@ -711,15 +534,6 @@ void device_module(nb::module_& m_device) {
         | device           | Device to dump profiling data of | ttnn.Device           |             | Yes      |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
-    m_device.def("DumpDeviceProfiler", &DumpDeviceProfiler, nb::arg("device"), R"doc(
-        Dump device side profiling data.
-
-        +------------------+----------------------------------+-----------------------+-------------+----------+
-        | Argument         | Description                      | Data type             | Valid range | Required |
-        +==================+==================================+=======================+=============+==========+
-        | device           | Device to dump profiling data of | ttnn.Device           |             | Yes      |
-        +------------------+----------------------------------+-----------------------+-------------+----------+
-    )doc");
 
     m_device.def("get_arch_name", &tt::tt_metal::hal::get_arch_name, "Return the name of the architecture present.");
 
@@ -736,7 +550,7 @@ void device_module(nb::module_& m_device) {
 }
 
 void py_device_module(nb::module_& mod) {
-    detail::ttnn_device(mod);
+    ttnn_device(mod);
     device_module(mod);
 }
 

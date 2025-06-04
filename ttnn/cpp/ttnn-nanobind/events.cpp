@@ -7,7 +7,6 @@
 #include <memory>
 #include <optional>
 #include <ostream>
-#include <string>
 #include <vector>
 
 #include <nanobind/nanobind.h>
@@ -16,13 +15,11 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
-#include <tt-metalium/event.hpp>
-#include "ttnn/events.hpp"
-
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/events.hpp"
+#include <tt-metalium/event.hpp>
 
 using namespace tt::tt_metal;
-namespace nb = nanobind;
 
 namespace ttnn::events {
 
@@ -107,6 +104,17 @@ void py_module(nb::module_& mod) {
                 cq_id (int): The Command Queue on which the barrier is being issued.
                 mesh_event (MeshEvent): The Command Queue will stall until this event is completed.
             )doc");
+
+    mod.def(
+        "event_synchronize",
+        nb::overload_cast<const MeshEvent&>(&event_synchronize),
+        nb::arg("mesh_event"),
+        R"doc(
+            Synchronizes a mesh event, blocking until the event is completed.
+
+            Args:
+                mesh_event (MeshEvent): The mesh event to synchronize.
+        )doc");
 }
 
 }  // namespace ttnn::events

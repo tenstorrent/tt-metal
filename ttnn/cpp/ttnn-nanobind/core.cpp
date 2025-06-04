@@ -11,7 +11,6 @@
 #include <vector>
 
 #include <fmt/format.h>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/string.h>
@@ -23,11 +22,10 @@
 #include "ttnn/core.hpp"
 #include "tt-metalium/lightmetal_binary.hpp"
 #include "tt-metalium/lightmetal_replay.hpp"
-
+#include "tt-metalium/mesh_device.hpp"
 
 namespace ttnn::core {
 
-namespace nb = nanobind;
 
 void py_module_types(nb::module_& mod) {
     nb::class_<ttnn::Config>(mod, "Config");
@@ -61,10 +59,11 @@ void py_module(nb::module_& mod) {
         .def("save_to_file", &LightMetalBinary::save_to_file)
         .def_static("load_from_file", &LightMetalBinary::load_from_file);
 
+    // May need to add an overload_cast for IDevice*
     nb::class_<tt::tt_metal::LightMetalReplay>(mod, "LightMetalReplay")
         .def_static(
             "create",
-            [](LightMetalBinary binary, IDevice* device = nullptr) {
+            [](LightMetalBinary binary, distributed::MeshDevice* device = nullptr) {
                 return std::make_unique<tt::tt_metal::LightMetalReplay>(std::move(binary), device);
             },
             nb::arg("binary"),

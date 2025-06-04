@@ -10,11 +10,9 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "cpp/ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/work_split.hpp>
-
-namespace nb = nanobind;
 
 namespace ttnn::operations::core {
 
@@ -49,18 +47,18 @@ void py_module_types(nb::module_& mod) {
 }
 
 void py_module(nb::module_& mod) {
-
-    mod.def("init_device_compute_kernel_config", &ttnn::init_device_compute_kernel_config,
-            nb::arg("arch"),
-            nb::arg("device_kernel_config") = std::nullopt,
-            nb::kw_only(),
-            nb::arg("math_fidelity") = MathFidelity::LoFi,
-            nb::arg("math_approx_mode") = true,
-            nb::arg("fp32_dest_acc_en") = false,
-            nb::arg("packer_l1_acc") = false,
-            nb::arg("dst_full_sync_en") = false
-        );
-    mod.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, nb::arg("tensor"));
+    mod.def(
+        "init_device_compute_kernel_config",
+        &ttnn::init_device_compute_kernel_config,
+        nb::arg("arch"),
+        nb::arg("device_kernel_config") = std::nullopt,
+        nb::kw_only(),
+        nb::arg("math_fidelity") = MathFidelity::LoFi,
+        nb::arg("math_approx_mode") = true,
+        nb::arg("fp32_dest_acc_en") = false,
+        nb::arg("packer_l1_acc") = false,
+        nb::arg("dst_full_sync_en") = false);
+    mod.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, py::arg("tensor"));
 
     mod.def(
         "to_device",

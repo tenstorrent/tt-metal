@@ -1,13 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "profiler.hpp"
+
 #include <nanobind/nanobind.h>
 
-#include "profiler.hpp"
 #include "tools/profiler/op_profiler.hpp"
-
-namespace nb = nanobind;
 
 namespace ttnn::profiler {
 
@@ -73,4 +72,5 @@ void ProfilerModule(nb::module_& mod) {
 }  // namespace
 
 void py_module(nb::module_& mod) { ProfilerModule(mod); }
+
 }  // namespace ttnn::profiler

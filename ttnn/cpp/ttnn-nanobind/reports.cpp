@@ -7,8 +7,10 @@
 #include <nanobind/nanobind.h>
 
 #include "ttnn/reports.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
-namespace nb = nanobind;
+using tt::tt_metal::distributed::MeshDevice;
 
 namespace ttnn::reports {
 
@@ -27,7 +29,8 @@ void py_module(nb::module_& mod) {
             "max_size_per_bank", [](const ttnn::reports::BufferInfo& self) { return self.max_size_per_bank; })
         .def_prop_ro("buffer_type", [](const ttnn::reports::BufferInfo& self) { return self.buffer_type; });
 
-    mod.def("get_buffers", &get_buffers);
+    mod.def("get_buffers", &get_buffers, nb::arg("devices"));
+    mod.def("get_buffers", [](MeshDevice* device) { return get_buffers({device}); }, nb::arg("device"));
 
     auto py_buffer_page_info = static_cast<nb::class_<ttnn::reports::BufferPageInfo>>(mod.attr("BufferPageInfo"));
     py_buffer_page_info
@@ -43,7 +46,8 @@ void py_module(nb::module_& mod) {
         .def_prop_ro(
             "buffer_type", [](const ttnn::reports::BufferPageInfo& self) { return self.buffer_type; });
 
-    mod.def("get_buffer_pages", &get_buffer_pages);
+    mod.def("get_buffer_pages", &get_buffer_pages, nb::arg("devices"));
+    mod.def("get_buffer_pages", [](MeshDevice* device) { return get_buffer_pages({device}); }, nb::arg("device"));
 
     auto py_device_info = static_cast<nb::class_<ttnn::reports::DeviceInfo>>(mod.attr("DeviceInfo"));
     py_device_info

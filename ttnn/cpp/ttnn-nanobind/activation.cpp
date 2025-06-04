@@ -14,8 +14,6 @@
 
 namespace ttnn::activation {
 
-namespace nb = nanobind;
-
 void py_module_types(nb::module_& mod) {
     using namespace ttnn::operations::unary;
     export_enum<UnaryOpType>(mod, "UnaryOpType");

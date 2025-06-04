@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,12 +17,9 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/common/queue_id.hpp"
-
 #include "small_vector_caster.hpp"  // NOLINT - for nanobind11 SmallVector binding support.
 #include "ttnn/types.hpp"
 #include "types.hpp"
-
-
 
 namespace ttnn {
 namespace decorators {

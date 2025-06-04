@@ -1,38 +1,37 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "operations/__init__.hpp"
+#include "ttnn-nanobind/operations/__init__.hpp"
 
 #include <cstdint>
 
 #include <nanobind/nanobind.h>
 
-#include "activation.hpp"
-#include "cluster.hpp"
-#include "core.hpp"
-#include "device.hpp"
-#include "fabric.hpp"
-#include "profiler.hpp"
-#include "events.hpp"
-#include "global_circular_buffer.hpp"
-#include "global_semaphore.hpp"
-#include "program_descriptors.hpp"
-#include "tensor.hpp"
-#include "reports.hpp"
-#include "ttnn/distributed/distributed_nanobind.hpp"
-#include "ttnn/deprecated/tt_lib/csrc/operations/primary/module_nanobind.hpp"
-#include "ttnn/graph/graph_nanobind.hpp"
-#include "types.hpp"
-
-#include "ttnn-nanobind/types.hpp"
+#include "ttnn-nanobind/activation.hpp"
+#include "ttnn-nanobind/cluster.hpp"
+#include "ttnn-nanobind/core.hpp"
+#include "ttnn-nanobind/device.hpp"
+#include "ttnn-nanobind/events.hpp"
+#include "ttnn-nanobind/fabric.hpp"
+#include "ttnn-nanobind/global_circular_buffer.hpp"
+#include "ttnn-nanobind/global_semaphore.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
 #include "ttnn-nanobind/operations/creation.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
+#include "ttnn-nanobind/profiler.hpp"
+#include "ttnn-nanobind/program_descriptors.hpp"
+#include "ttnn-nanobind/reports.hpp"
+#include "ttnn-nanobind/tensor.hpp"
+#include "ttnn-nanobind/types.hpp"
 
+#include "ttnn/core.hpp"
+#include "ttnn/deprecated/tt_lib/csrc/operations/primary/module.hpp"
+#include "ttnn/distributed/distributed_nanobind.hpp"
+#include "ttnn/graph/graph_nanobind.hpp"
 #include "ttnn/operations/bernoulli/bernoulli_nanobind.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_nanobind.hpp"
+#include "ttnn/operations/ccl/ccl_nanobind.hpp"
 #include "ttnn/operations/conv/conv_nanobind.hpp"
 #include "ttnn/operations/data_movement/data_movement_nanobind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_nanobind.hpp"
@@ -51,6 +50,7 @@
 #include "ttnn/operations/experimental/experimental_nanobind.hpp"
 #include "ttnn/operations/full/full_nanobind.hpp"
 #include "ttnn/operations/full_like/full_like_nanobind.hpp"
+#include "ttnn/operations/generic/generic_op_nanobind.hpp"
 #include "ttnn/operations/index_fill/index_fill_nanobind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_nanobind.hpp"
 #include "ttnn/operations/loss/loss_nanobind.hpp"
@@ -61,13 +61,11 @@
 #include "ttnn/operations/pool/generic/generic_pools_nanobind.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool_nanobind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_nanobind.hpp"
+#include "ttnn/operations/prefetcher/prefetcher_nanobind.hpp"
 #include "ttnn/operations/reduction/reduction_nanobind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_nanobind.hpp"
 #include "ttnn/operations/transformer/transformer_nanobind.hpp"
-#include "ttnn/operations/prefetcher/prefetcher_nanobind.hpp"
 #include "ttnn/operations/uniform/uniform_nanobind.hpp"
-
-namespace nb = nanobind;
 
 namespace ttnn::operations {
 
@@ -185,6 +183,9 @@ void py_module(nb::module_& mod) {
 
     auto m_bernoulli = mod.def_submodule("bernoulli", "bernoulli operations");
     bernoulli::bind_bernoulli_operation(m_bernoulli);
+
+    auto m_generic = mod.def_submodule("generic", "ttnn generic operation interface");
+    generic::bind_generic_operation(m_generic);
 }
 }  // namespace ttnn::operations
 

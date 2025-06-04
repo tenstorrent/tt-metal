@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,10 +6,10 @@
 
 #include <cstdint>
 
-#include <tt-metalium/global_semaphore.hpp>
-#include "cpp/ttnn/global_semaphore.hpp"
-
 #include <nanobind/nanobind.h>
+
+#include "ttnn/global_semaphore.hpp"
+#include <tt-metalium/global_semaphore.hpp>
 
 namespace ttnn::global_semaphore {
 

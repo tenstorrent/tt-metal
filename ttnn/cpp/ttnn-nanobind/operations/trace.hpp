@@ -9,9 +9,6 @@
 namespace ttnn::operations::trace {
 
 namespace nb = nanobind;
-
 void py_module_types(nb::module_& mod);
-
 void py_module(nb::module_& mod);
-
 }  // namespace ttnn::operations::trace 

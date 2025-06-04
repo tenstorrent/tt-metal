@@ -7,8 +7,8 @@
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
 namespace ttnn::global_circular_buffer {
-
 namespace nb = nanobind;
+
 void py_module_types(nb::module_& mod);
 void py_module(nb::module_& mod);
 

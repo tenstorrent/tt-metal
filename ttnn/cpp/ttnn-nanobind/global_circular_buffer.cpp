@@ -12,8 +12,8 @@
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
 
-#include <tt-metalium/global_circular_buffer_impl.hpp>
-#include "cpp/ttnn/global_circular_buffer.hpp"
+#include "ttnn/global_circular_buffer.hpp"
+#include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::global_circular_buffer {
 

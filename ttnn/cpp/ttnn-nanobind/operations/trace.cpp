@@ -12,8 +12,6 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/trace.hpp"
 
-namespace nb = nanobind;
-
 namespace ttnn::operations::trace {
 
 void py_module_types(nb::module_& mod) {
@@ -38,7 +36,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "end_trace_capture",
-        nb::overload_cast<IDevice*, uint32_t, QueueId>(&ttnn::operations::trace::end_trace_capture),
+        nb::overload_cast<IDevice*, MeshTraceId, QueueId>(&ttnn::operations::trace::end_trace_capture),
         nb::arg("device"),
         nb::arg("trace_id"),
         nb::kw_only(),
@@ -46,7 +44,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "execute_trace",
-        nb::overload_cast<IDevice*, uint32_t, QueueId, bool>(&ttnn::operations::trace::execute_trace),
+        nb::overload_cast<IDevice*, MeshTraceId, QueueId, bool>(&ttnn::operations::trace::execute_trace),
         nb::arg("device"),
         nb::arg("trace_id"),
         nb::kw_only(),
@@ -55,11 +53,10 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "release_trace",
-        nb::overload_cast<IDevice*, uint32_t>(&ttnn::operations::trace::release_trace),
+        nb::overload_cast<IDevice*, MeshTraceId>(&ttnn::operations::trace::release_trace),
         nb::arg("device"),
         nb::arg("trace_id"));
 
-    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
     mod.def(
         "begin_trace_capture",
         [](MeshDevice* device, QueueId cq_id) { return ttnn::operations::trace::begin_trace_capture(device, cq_id); },
@@ -67,10 +64,9 @@ void py_module(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("cq_id") = ttnn::DefaultQueueId);
 
-    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
     mod.def(
         "end_trace_capture",
-        [](MeshDevice* device, uint32_t trace_id, QueueId cq_id) {
+        [](MeshDevice* device, MeshTraceId trace_id, QueueId cq_id) {
             return ttnn::operations::trace::end_trace_capture(device, trace_id, cq_id);
         },
         nb::arg("mesh_device"),
@@ -78,10 +74,9 @@ void py_module(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("cq_id") = ttnn::DefaultQueueId);
 
-    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
     mod.def(
         "execute_trace",
-        [](MeshDevice* device, uint32_t trace_id, QueueId cq_id, bool blocking) {
+        [](MeshDevice* device, MeshTraceId trace_id, QueueId cq_id, bool blocking) {
             return ttnn::operations::trace::execute_trace(device, trace_id, cq_id, blocking);
         },
         nb::arg("mesh_device"),
@@ -90,47 +85,10 @@ void py_module(nb::module_& mod) {
         nb::arg("cq_id") = ttnn::DefaultQueueId,
         nb::arg("blocking") = true);
 
-    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
     mod.def(
         "release_trace",
-        [](MeshDevice* device, uint32_t trace_id) { return ttnn::operations::trace::release_trace(device, trace_id); },
-        nb::arg("mesh_device"),
-        nb::arg("trace_id"));
-
-    mod.def(
-        "begin_mesh_trace_capture",
-        [](MeshDevice* device, QueueId cq_id) {
-            return ttnn::operations::trace::begin_mesh_trace_capture(device, cq_id);
-        },
-        nb::arg("mesh_device"),
-        nb::kw_only(),
-        nb::arg("cq_id") = ttnn::DefaultQueueId);
-
-    mod.def(
-        "end_mesh_trace_capture",
-        [](MeshDevice* device, MeshTraceId trace_id, QueueId cq_id) {
-            return ttnn::operations::trace::end_mesh_trace_capture(device, trace_id, cq_id);
-        },
-        nb::arg("mesh_device"),
-        nb::arg("trace_id"),
-        nb::kw_only(),
-        nb::arg("cq_id") = ttnn::DefaultQueueId);
-
-    mod.def(
-        "execute_mesh_trace",
-        [](MeshDevice* device, MeshTraceId trace_id, QueueId cq_id, bool blocking) {
-            return ttnn::operations::trace::execute_mesh_trace(device, trace_id, cq_id, blocking);
-        },
-        nb::arg("mesh_device"),
-        nb::arg("trace_id"),
-        nb::kw_only(),
-        nb::arg("cq_id") = ttnn::DefaultQueueId,
-        nb::arg("blocking") = true);
-
-    mod.def(
-        "release_mesh_trace",
         [](MeshDevice* device, MeshTraceId trace_id) {
-            return ttnn::operations::trace::release_mesh_trace(device, trace_id);
+            return ttnn::operations::trace::release_trace(device, trace_id);
         },
         nb::arg("mesh_device"),
         nb::arg("trace_id"));

@@ -8,8 +8,6 @@
 
 #include <tt-metalium/tt_metal.hpp>
 
-namespace nb = nanobind;
-
 namespace ttnn::fabric {
 
 void bind_fabric_api(nb::module_& mod) {
