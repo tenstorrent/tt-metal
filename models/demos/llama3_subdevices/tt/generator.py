@@ -56,15 +56,17 @@ class Generator:
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
-        self.tokenizer = tokenizer
         self.formatter = formatter
         if isinstance(self.model_args, List):
             self.model_args = self.model_args[0]
         if isinstance(self.model, List):
             self.model = self.model[0]
+        self.tokenizer = self.model_args.tokenizer
         self.trace_id_prefill = defaultdict(lambda: None)
         self.trace_inputs_prefill = defaultdict(lambda: None)
         self.trace_output_prefill = defaultdict(lambda: None)
+        self.empty_slots = list(range(32))
+        self.seq_groups_to_batch_slot = {}
 
     def prefill_forward_text(
         self,
@@ -74,6 +76,8 @@ class Generator:
         prompt_lens=None,
         enable_trace=True,
         sampling_params=SamplingParams(temperature=0.0, top_k=-1, top_p=1.0),
+        seq_groups=None,
+        finished_requests_ids=[],
     ):
         assert sampling_params.temperature == 0, "Currently only supporting greedy decoding (temperature=0) on device"
 
@@ -83,23 +87,29 @@ class Generator:
         batch, batch_seq_len = tokens.shape
         output_logits = torch.zeros(batch, 1, 1)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
-
         if page_table is not None:
             assert isinstance(
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
 
-        for user_id in range(batch):
+        for req in finished_requests_ids:
+            empty_batch_slot = self.seq_groups_to_batch_slot[req]
+            self.empty_slots.append(empty_batch_slot)
+            del self.seq_groups_to_batch_slot[req]
+
+        for id, user_id in enumerate(self.empty_slots[:batch]):
             logger.info(f"Prefilling User {user_id + 1}")
-            seq_len = int(prompt_lens[user_id])
+            seq_len = int(prompt_lens[id])
             last_token_idx = seq_len - 1
 
             prefill_seq_len = get_padded_prefill_len(seq_len)
             prefill_ids = torch.cat(
-                [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
+                [tokens[id : id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
             if page_table is not None:
-                page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, prefill_seq_len)
+                page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, prefill_seq_len, user_id)
+                # remove the first user from the page table
+                page_table = page_table[1:, :]
             prefill_kwargs = {
                 "tokens": prefill_ids,
                 "page_table": page_table_user if page_table is not None else None,
@@ -112,7 +122,15 @@ class Generator:
             else:
                 tt_logits = self.prefill_forward_single_user_text(**prefill_kwargs)
 
-            output_logits[user_id] = tt_logits
+            output_logits[id] = tt_logits
+
+        if seq_groups is not None:
+            # update the batch slot table
+            recently_filled_slots = self.empty_slots[:batch]
+            self.empty_slots = self.empty_slots[batch:]
+
+            for s in seq_groups:
+                self.seq_groups_to_batch_slot[s] = recently_filled_slots.pop(0)
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
@@ -306,13 +324,41 @@ class Generator:
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
         reset_inputs=True,
+        seq_groups=None,
+        finished_requests_ids=None,
     ):
         assert (
             sampling_params is None or sampling_params.temperature == 0
         ), "Currently only supporting greedy decoding (temperature=0) on device"
-        argmax_on_device = torch.all(start_pos[1:] == -1).item() and (
-            sampling_params is not None and sampling_params.temperature == 0
-        )
+        # argmax_on_device = torch.all(start_pos[1:] == -1).item() and (
+        #     sampling_params is not None and sampling_params.temperature == 0
+        # )
+        argmax_on_device = False
+        if seq_groups is not None:
+            for req in finished_requests_ids:
+                empty_batch_slot = self.seq_groups_to_batch_slot[req]
+                self.empty_slots.append(empty_batch_slot)
+                del self.seq_groups_to_batch_slot[req]
+
+            # Calculate perm_table_tensor: perm_table_tensor[new_idx] = current_slot_idx that should move to new_idx
+            perm_table_tensor = torch.as_tensor(
+                [self.seq_groups_to_batch_slot[s] for s in seq_groups] + self.empty_slots,
+                dtype=torch.long,
+                device=start_pos.device,
+            )
+            # Calculate inverse_perm_indices: inverse_perm_indices[current_slot_idx] = new_idx where current_slot_idx should go
+            inverse_perm_indices = torch.empty_like(perm_table_tensor)
+            inverse_perm_indices[perm_table_tensor] = torch.arange(
+                perm_table_tensor.size(0),
+                dtype=torch.long,
+                device=perm_table_tensor.device,
+            )
+
+            # permute the start_pos, tokens, and page_table
+            start_pos = start_pos[inverse_perm_indices]
+            tokens = tokens[inverse_perm_indices, :]
+            page_table = page_table[inverse_perm_indices, :]
+
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
         kv_cache = kv_cache[0]
@@ -327,11 +373,13 @@ class Generator:
             tt_logits = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
         else:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
-
         if read_from_device:
-            return self.read_decode_output(tt_logits, tokens.shape[0], is_tokens=(argmax_on_device))
-        else:
-            return tt_logits
+            tt_logits = self.read_decode_output(tt_logits, tokens.shape[0], is_tokens=(argmax_on_device))
+            if seq_groups is not None:
+                # permute the logits back to the original order from tokens
+                tt_logits = tt_logits[perm_table_tensor, :]
+
+        return tt_logits
 
     def _decode_forward_no_trace_text(
         self,
@@ -505,7 +553,7 @@ class Generator:
 
         return CompletionPrediction(generation=generation)
 
-    def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
+    def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len, user_id):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
 
         block_size = get_block_size(kv_cache)
@@ -516,11 +564,8 @@ class Generator:
             padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
             page_table = torch.cat([page_table, padding], dim=1)
         # Pad page table to 32 users
-        b = page_table.shape[0]
-        padded_b = 32 - b
-        padded_page_table = torch.cat(
-            [page_table, torch.ones(padded_b, page_table.shape[1], dtype=torch.int32) * -1], dim=0
-        )
+        padded_page_table = torch.ones(32, page_table.shape[1], dtype=torch.int32) * -1
+        padded_page_table[user_id, :] = page_table[0, :]
         return padded_page_table
 
     ## Destructor (used to delete ttnn trace if exists)
