@@ -81,6 +81,10 @@ std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoor
 
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord& ethernet_core);
 
+tt_metal::HalProgrammableCoreType get_core_type(chip_id_t chip_id, const CoreCoord& virtual_core);
+
+void send_reset_go_signal(chip_id_t chip, const CoreCoord& virtual_core);
+
 void write_launch_msg_to_core(
     chip_id_t chip, CoreCoord core, launch_msg_t* msg, go_msg_t* go_msg, uint64_t addr, bool send_go = true);
 
