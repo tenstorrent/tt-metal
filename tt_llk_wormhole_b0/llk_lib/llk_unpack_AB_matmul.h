@@ -40,7 +40,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
         TTI_NOP;
 #else
         static_assert(kernel_broadcast_b <= 1, "kernel_broadcast>1 on matmul input 1 is not supported with reuse enabled!");
-        TT_REPLAY(0, replay_buf_prog_len, 0, 1);
+        TTI_REPLAY(0, replay_buf_prog_len, 0, 1);
         if (unpA_partial_face)
         {
             TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
@@ -98,7 +98,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
         TTI_NOP;
 #else
         static_assert(kernel_broadcast_a <= 1, "kernel_broadcast>1 on matmul input 0 is not supported with reuse enabled!");
-        TT_REPLAY(0, replay_buf_prog_len, 0, 1);
+        TTI_REPLAY(0, replay_buf_prog_len, 0, 1);
         if (unpB_partial_face)
         {
             TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);

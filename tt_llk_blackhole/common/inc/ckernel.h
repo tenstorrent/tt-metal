@@ -703,7 +703,7 @@ inline void load_replay_buf(uint start, uint len, bool exec_while_loading, F fn)
 #endif
 
     // Issue instruction to load replay buffer
-    TT_REPLAY(start, len, exec_while_loading, 1);
+    TTI_REPLAY(start, len, exec_while_loading, 1);
 
     // Send in the user's desired instructions
     fn();
