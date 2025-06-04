@@ -85,7 +85,7 @@ def assert_allclose(expected_pytorch_result, actual_pytorch_result, rtol=1e-05, 
 
      Two tensors are considered close if
      ``
-     |actual - expected| \leq atol \cdot rtol . |expected|
+     |actual - expected| \leq atol + rtol \cdot |expected|
      ``
 
     Args:
@@ -115,15 +115,26 @@ def assert_with_ulp(expected_pytorch_result, actual_pytorch_result, ulp_threshol
     """
     Assert that two PyTorch tensors are similar within a given distance expressed in Units of Least Precision (ULP)
 
+    The error is measured using the following formula:
+    ``
+        | expected - actual | / ULP(expected)
+    ``
+
+    Where ULP(expected) returns, for each element, the length of a single Unit of Least Precision (ULP).
+
+
     Args:
         expected_pytorch_result (torch.Tensor): The expected reference tensor
         actual_pytorch_result (torch.Tensor): The actual tensor to compare against the reference
         ulp_threshold (float, optional): Maximum tolerated ULP distance. Defaults to 10.
 
+    Note:
+        The length of a single ULP is measured using the difference between two consecutive floating point numbers.
+
     Returns:
         tuple: A tuple containing:
-            - allclose_passed (bool): True if ulp check passed, False otherwise
-            - allclose_message (str): A message describing comparison result
+            - ulp_passed (bool): True if ulp check passed, False otherwise
+            - ulp_message (str): A message describing comparison result
 
     Raises:
         AssertionError: If the tensor shapes don't match or if tensor difference is greater than ulp_threshold.
