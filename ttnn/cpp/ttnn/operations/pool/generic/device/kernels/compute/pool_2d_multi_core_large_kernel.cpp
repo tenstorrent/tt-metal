@@ -8,7 +8,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tilize.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -48,6 +48,7 @@ inline void reduce_h_fused_interm(
     }
     cb_pop_front(curr_in_cb_id, 1);
     tile_regs_wait();
+    dprint_tensix_dest_reg(0);
     tile_regs_commit();
     pack_untilize_dst<num_output_tiles>(
         interm_cb_id,

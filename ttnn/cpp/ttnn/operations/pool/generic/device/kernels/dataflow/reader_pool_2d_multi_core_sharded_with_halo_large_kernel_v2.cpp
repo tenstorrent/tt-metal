@@ -8,7 +8,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -85,6 +85,7 @@ void kernel_main() {
     }
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
+    const uint32_t out_l1_read_base_addr = get_read_ptr(in_cb_id);
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
@@ -113,6 +114,20 @@ void kernel_main() {
                     processed_rows++;
                     if ((processed_rows % max_rows_for_reduction) == 0) {
                         noc_async_read_barrier();
+
+                        // if (reader_id == 0) {
+                        //     tt::data_movement::common::print_bf16_pages(
+                        //         out_l1_read_base_addr,
+                        //         in_nbytes_c / 2,
+                        //         32);
+                        //     DPRINT << "--" << ENDL();
+                        //     DPRINT << "    processed rows: " << processed_rows << ENDL();
+                        //     DPRINT << "    top_left_local_index: " << top_left_local_index << ENDL();
+                        //     DPRINT << "    c_i: " << c_i << ENDL();
+                        //     DPRINT << "    h: " << h << ENDL();
+                        //     DPRINT << "    w: " << w << ENDL();
+                        // }
+
                         cb_push_back(in_cb_id, 1);
                         cb_reserve_back(in_cb_id, 1);
                         out_l1_write_addr = get_write_ptr(in_cb_id);
@@ -125,6 +140,18 @@ void kernel_main() {
             }
             if (remaining_elems) {
                 noc_async_read_barrier();
+
+                // if (reader_id == 0) {
+                //     tt::data_movement::common::print_bf16_pages(
+                //         out_l1_read_base_addr,
+                //         in_nbytes_c / 2,
+                //         32);
+                //     DPRINT << "--" << ENDL();
+                //     DPRINT << "    processed rows: " << processed_rows << ENDL();
+                //     DPRINT << "    top_left_local_index: " << top_left_local_index << ENDL();
+                //     DPRINT << "    c_i: " << c_i << ENDL();
+                // }
+
                 cb_push_back(in_cb_id, 1);
             }
         }
