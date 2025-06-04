@@ -246,10 +246,11 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, layout, input_dtype",
     [
-        # (2, 1, [2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (2, 1, [3, 120, 2040], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (2, 1, [2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (2, 1, [3, 122, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         (4, 1, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (4, 1, [2, 64, 512], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 1, [1184, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
         (4, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         (8, 1, [10, 16384], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ],
@@ -309,6 +310,34 @@ def test_all_broadcast(
             [192, 64],
             (32, 64),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 1))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+        (
+            2,
+            [2, 3, 64, 1024],
+            (384, 128),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 1)),
+                }
+            ),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            8,
+            [768, 32],
+            (32, 32),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(6, 2)),
+                }
+            ),
             None,
             None,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,

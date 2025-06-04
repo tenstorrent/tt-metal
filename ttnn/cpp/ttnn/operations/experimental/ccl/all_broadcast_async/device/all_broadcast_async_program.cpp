@@ -30,6 +30,7 @@
 #include <optional>
 
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/math.hpp"
 
 bool is_power_of_two_start_32(uint32_t value) { return value >= 32 && (value & (value - 1)) == 0; }
 using namespace tt::constants;
@@ -93,7 +94,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const auto [sender_worker_core_range, sender_worker_cores] =
         choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, mesh_device, sub_device_id);
 
-    uint32_t page_size = input_tensor.get_logical_shape()[-1] * input_tensor.element_size();
+    uint32_t row_size = input_tensor.get_logical_shape()[-1] * input_tensor.element_size();
+    uint32_t page_size = round_up_to_mul32(row_size);
+    printf("input_tensor.get_padded_shape()[-1]: %u\n", input_tensor.get_padded_shape()[-1]);
     printf("page_size: %u\n", page_size);
     printf("input_tensor.get_logical_shape()[-1]: %u\n", input_tensor.get_logical_shape()[-1]);
     printf("input_tensor.element_size(): %u\n", input_tensor.element_size());
@@ -104,14 +107,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     if (input_tensor.get_logical_shape().size() == 4) {
         num_rows *= input_tensor.get_logical_shape()[0];
     }
-    bool src_stick_size_is_power_of_two = is_power_of_two_start_32(page_size);
-    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(page_size) : 0;
+    bool src_stick_size_is_power_of_two = is_power_of_two_start_32(row_size);
+    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(row_size) : 0;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = 4096;  // tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : 4096;
     size_t max_packet_size = packet_size_bytes;
     printf("max_packet_size: %zu\n", max_packet_size);
-    uint32_t num_packets_per_row = std::ceil(static_cast<double>(page_size) / max_packet_size);
+    uint32_t num_packets_per_row = std::ceil(static_cast<double>(row_size) / max_packet_size);
     printf("num_packets_per_row: %u\n", num_packets_per_row);
     printf("packet_size_bytes: %zu\n", packet_size_bytes);
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
@@ -175,8 +178,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             static_cast<uint32_t>(input_tensor_buffer_type),      // buffer0_type
             src0_cb_index,                                        // cb0_id
             num_width_shards > 1 ? buffer_page_size : page_size,  // page_size
-            num_packets_per_row,                                  // num_packets_per_row
-            max_packet_size,                                      // max_packet_size
+            row_size,
+            num_packets_per_row,  // num_packets_per_row
+            max_packet_size,      // max_packet_size
             src_stick_size_is_power_of_two,
             src_log2_stick_size};
     }
@@ -203,6 +207,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             static_cast<uint32_t>(output_tensor_buffer_type),  // buffer0_type
             src0_cb_index,                                     // cb0_id
             num_width_shards > 1 ? buffer_page_size : page_size,
+            row_size,
             max_packet_size,
             num_packets_per_row,   // num_packets_per_row
             num_targets_forward,   // num_targets_forward_direction

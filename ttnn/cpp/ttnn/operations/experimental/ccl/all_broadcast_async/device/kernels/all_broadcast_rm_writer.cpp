@@ -25,13 +25,14 @@ constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
 constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(3));
 constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
 constexpr uint32_t page_size = get_compile_time_arg_val(5);
-constexpr uint32_t max_packet_size = get_compile_time_arg_val(6);
-constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(7);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(8);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(9);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(10);
-constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(11) == 1;
-constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(12);
+constexpr uint32_t row_size = get_compile_time_arg_val(6);
+constexpr uint32_t max_packet_size = get_compile_time_arg_val(7);
+constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(8);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(9);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(10);
+constexpr bool dynamic_alternate = get_compile_time_arg_val(11);
+constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(12) == 1;
+constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(13);
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
@@ -60,13 +61,13 @@ void kernel_main() {
 
 #ifdef SHARDED
     typedef ShardedInfo<
-        get_compile_time_arg_val(13),
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
         get_compile_time_arg_val(17),
         get_compile_time_arg_val(18),
-        get_compile_time_arg_val(19)>
+        get_compile_time_arg_val(19),
+        get_compile_time_arg_val(20)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =
@@ -78,7 +79,7 @@ void kernel_main() {
 #else
     constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
     const auto tensor0_addrgen = get_interleaved_addr_gen<is_dram, src_stick_size_is_pow2>(
-        tensor_address0, page_size, src_log_base_2_of_page_size);
+        tensor_address0, row_size, src_log_base_2_of_page_size);
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
 #endif
