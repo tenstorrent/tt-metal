@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ class LMHead(LightweightModule):
         state_dict,
         state_dict_prefix,
         weight_cache_path,
-        max_columns_per_device=128256 // 4,  # larger values per device lead to OOM or hangs
+        max_columns_per_device,  # too many columns per device lead to L1 OOM
     ):
         super().__init__()
         self.args = args
@@ -63,15 +63,11 @@ class LMHead(LightweightModule):
                     layout=ttnn.TILE_LAYOUT,
                     dtype=dtype,
                     memory_config=memory_config,
-                    # cache_file_name=cache_file_name,
+                    cache_file_name=cache_file_name,
                 )
             )
         else:
             for i, split_size in enumerate(split_sizes):
-                cache_file_name = (
-                    None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_{i}"
-                )
-
                 # Create a list to store the split tensors for each device
                 device_splits = []
                 for device in range(self.num_devices):
@@ -82,8 +78,13 @@ class LMHead(LightweightModule):
                 # Concatenate the splits from all devices
                 combined_split = torch.cat(device_splits, dim=-1)
 
+                cache_file_name = (
+                    None
+                    if args.dummy_weights
+                    else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_{i}_{combined_split.shape[-1]}"
+                )
                 memory_config = args.create_dram_sharded_mem_config(
-                    k=args.dim, n=combined_split.shape[-1] // self.num_devices
+                    k=args.dim, n=math.ceil(combined_split.shape[-1] / self.num_devices)
                 )
                 self.output_weights.append(
                     ttnn.as_tensor(
