@@ -152,6 +152,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     const cutoffDate = this.getCutoffDate(days);
     const startTime = Date.now();
     let apiCallCount = 0;
+    let dateRange = { earliest: null, latest: null };
 
     core.info(`[Fetch] Starting data collection for last ${days} days (cutoff: ${cutoffDate.toISOString()})`);
 
@@ -209,7 +210,6 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     if (needHistoricalData) {
       core.info('[Fetch] Starting full fetch to collect historical data');
       let hasCompleteData = false;
-      let earliestRunDate = null;
 
       for (let page = 1; page <= this.maxPages; page++) {
         try {
@@ -234,10 +234,13 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
               continue;
             }
 
-            // Track earliest run date we've seen
-            if (!earliestRunDate || runDate < earliestRunDate) {
-              earliestRunDate = runDate;
-              core.debug(`[Fetch] New earliest run found: ${earliestRunDate.toISOString()}`);
+            // Update date range
+            if (!dateRange.earliest || runDate < dateRange.earliest) {
+              dateRange.earliest = runDate;
+              core.debug(`[Fetch] New earliest run found: ${dateRange.earliest.toISOString()}`);
+            }
+            if (!dateRange.latest || runDate > dateRange.latest) {
+              dateRange.latest = runDate;
             }
 
             // If we've found a run older than our cutoff date, we have complete data
@@ -279,7 +282,12 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
 
       // If we don't have complete data coverage, log a warning
       if (!hasCompleteData) {
-        core.warning(`[Fetch] Incomplete data coverage: Earliest run (${earliestRunDate.toISOString()}) is newer than cutoff date (${cutoffDate.toISOString()})`);
+        core.warning(`[Fetch] Incomplete data coverage: Earliest run (${dateRange.earliest.toISOString()}) is newer than cutoff date (${cutoffDate.toISOString()})`);
+      }
+
+      // Log the date range of fetched runs
+      if (dateRange.earliest && dateRange.latest) {
+        core.info(`[Fetch] Fetched runs date range: ${dateRange.earliest.toISOString()} to ${dateRange.latest.toISOString()}`);
       }
     }
 
@@ -291,6 +299,19 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
       const runDate = new Date(run.created_at);
       return runDate >= cutoffDate;
     });
+
+    // Calculate and log the date range of requested period runs
+    if (requestedPeriodRuns.length > 0) {
+      const requestedDateRange = requestedPeriodRuns.reduce((range, run) => {
+        const runDate = new Date(run.created_at);
+        return {
+          earliest: !range.earliest || runDate < range.earliest ? runDate : range.earliest,
+          latest: !range.latest || runDate > range.latest ? runDate : range.latest
+        };
+      }, { earliest: null, latest: null });
+
+      core.info(`[Fetch] Requested period runs date range: ${requestedDateRange.earliest.toISOString()} to ${requestedDateRange.latest.toISOString()}`);
+    }
 
     core.info(`[Fetch] Filtered to ${requestedPeriodRuns.length} runs within requested ${days} day period`);
 
