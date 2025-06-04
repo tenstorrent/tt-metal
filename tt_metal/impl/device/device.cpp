@@ -865,8 +865,6 @@ void Device::clear_dram_state() {
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
-    // If the active ethernet core is not reserved a fabric will
-    // be created on it
     if (this->is_mmio_capable() && !tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
         auto command_queue_program_ptr = create_and_compile_cq_program(this);
         this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));

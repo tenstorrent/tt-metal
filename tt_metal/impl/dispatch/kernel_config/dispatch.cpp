@@ -18,6 +18,7 @@
 #include "demux.hpp"
 #include "device.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
@@ -256,6 +257,9 @@ void DispatchKernel::GenerateDependentConfigs() {
     } else if (static_config_.is_h_variant.value()) {
         // Upstream, expect DEMUX
         // Or direct connection to DISPATCH_D if using fabric
+
+        // May be overwritten below
+        dependent_config_.num_hops = 0;
         TT_ASSERT(upstream_kernels_.size() == 1);
         if (auto demux_kernel = dynamic_cast<DemuxKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = demux_kernel->GetLogicalCore();
@@ -269,22 +273,44 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.upstream_dispatch_cb_sem_id =
                 dispatch_d->GetStaticConfig().my_downstream_cb_sem_id.value();
             dependent_config_.upstream_sync_sem = 0;  // Unused
+            dependent_config_.num_hops = tt::tt_metal::get_num_hops(device_id_, dispatch_d->GetDeviceId());
         } else {
             TT_FATAL(false, "Unimplemented path");
         }
 
+        // Downstream
+        // PREFETCH_H || FABRIC_MUX
         // Downstream, no official downstream core but use the field to connect is to the PREFETCH_H that we need to
         // write to when resuming sending of commands post exec_buf stall.
-        TT_ASSERT(downstream_kernels_.size() == 1);
-        auto prefetch_h_kernel = dynamic_cast<PrefetchKernel*>(downstream_kernels_[0]);
-        TT_ASSERT(prefetch_h_kernel && prefetch_h_kernel->GetStaticConfig().is_h_variant.value());
+        bool found_prefetch_h = false;
+        bool found_relay_mux = false;
+        for (FDKernel* ds_kernel : downstream_kernels_) {
+            if (auto prefetch_h_kernel = dynamic_cast<PrefetchKernel*>(ds_kernel)) {
+                TT_ASSERT(prefetch_h_kernel && prefetch_h_kernel->GetStaticConfig().is_h_variant.value());
+                TT_ASSERT(!found_prefetch_h, "DISPATCH_H has multiple downstream PREFETCH_H kernels.");
+                found_prefetch_h = true;
+                dependent_config_.prefetch_h_noc_xy = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
+                    prefetch_h_kernel->GetVirtualCore().x, prefetch_h_kernel->GetVirtualCore().y);
+                dependent_config_.prefetch_h_local_downstream_sem_addr =
+                    prefetch_h_kernel->GetStaticConfig().my_downstream_cb_sem_id;
+            } else if (auto relay_mux = dynamic_cast<tt::tt_metal::RelayMux*>(ds_kernel)) {
+                TT_ASSERT(!found_relay_mux, "DISPATCH_H has multiple downstream RELAY_MUX kernels.");
+                found_relay_mux = true;
+
+                constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
+                    tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL;
+                tt::tt_metal::assemble_fabric_mux_client_config_args(
+                    node_id_, ch_type, relay_mux, dependent_config_.fabric_mux_client_config);
+            } else {
+                TT_FATAL(false, "DISPATCH_H Downstream - Unimplemented path");
+            }
+        }
+
+        TT_ASSERT(found_prefetch_h, "DISPATCH_H expects a PREFETCH_H downstream");
+
         dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.split_prefetch = true;
-        dependent_config_.prefetch_h_noc_xy = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
-            prefetch_h_kernel->GetVirtualCore().x, prefetch_h_kernel->GetVirtualCore().y);
-        dependent_config_.prefetch_h_local_downstream_sem_addr =
-            prefetch_h_kernel->GetStaticConfig().my_downstream_cb_sem_id;
         dependent_config_.downstream_cb_base = 0;    // Unused
         dependent_config_.downstream_cb_size = 0;    // Unused
         dependent_config_.downstream_cb_sem_id = 0;  // Unused
@@ -296,6 +322,8 @@ void DispatchKernel::GenerateDependentConfigs() {
         dependent_config_.upstream_logical_core = prefetch_kernel->GetLogicalCore();
         dependent_config_.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
         dependent_config_.upstream_sync_sem = prefetch_kernel->GetStaticConfig().downstream_sync_sem_id;
+        // May be overwritten below
+        dependent_config_.num_hops = 0;
 
         if (prefetch_kernel->GetStaticConfig().is_h_variant.value() &&
             prefetch_kernel->GetStaticConfig().is_d_variant.value()) {
@@ -320,11 +348,14 @@ void DispatchKernel::GenerateDependentConfigs() {
         bool found_dispatch_s = false;
         bool found_mux = false;
         bool found_dispatch_h = false;
+        bool found_relay_mux = false;  // fabric mux
         for (auto ds_kernel : downstream_kernels_) {
             if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(ds_kernel)) {
+                TT_ASSERT(!found_dispatch_s, "DISPATCH_D has multiple downstream DISPATCH_S kernels.");
                 dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
                 found_dispatch_s = true;
             } else if (auto mux_kernel = dynamic_cast<MuxKernel*>(ds_kernel)) {
+                TT_ASSERT(!found_mux, "DISPATCH_D has multiple downstream MUX_D kernels.");
                 dependent_config_.downstream_logical_core = mux_kernel->GetLogicalCore();
                 // Some configs depend on which port this kernel connects to on the downstream kernel
                 int dispatch_d_idx =
@@ -339,13 +370,22 @@ void DispatchKernel::GenerateDependentConfigs() {
                 dependent_config_.downstream_cb_sem_id = dispatch_d_idx;
                 found_mux = true;
             } else if (auto dispatch_h_kernel = dynamic_cast<DispatchKernel*>(ds_kernel)) {
+                TT_ASSERT(!found_dispatch_h, "DISPATCH_D has multiple downstream DISPATCH_H kernels.");
                 dependent_config_.downstream_logical_core = dispatch_h_kernel->GetLogicalCore();
                 dependent_config_.downstream_cb_size = dispatch_h_kernel->GetDispatchBufferSize();
                 dependent_config_.downstream_cb_base = dispatch_h_kernel->GetStaticConfig().dispatch_cb_base.value();
                 dependent_config_.downstream_cb_sem_id =
                     dispatch_h_kernel->GetStaticConfig().my_dispatch_cb_sem_id.value();
+                dependent_config_.num_hops = tt::tt_metal::get_num_hops(dispatch_h_kernel->GetDeviceId(), device_id_);
                 found_dispatch_h = true;
-            } else {
+            } else if (auto relay_mux = dynamic_cast<tt::tt_metal::RelayMux*>(ds_kernel)) {
+                TT_ASSERT(!found_relay_mux, "DISPATCH_D has multiple downstream RELAY_MUX kernels.");
+                found_relay_mux = true;
+
+                constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+                tt::tt_metal::assemble_fabric_mux_client_config_args(
+                    node_id_, ch_type, relay_mux, dependent_config_.fabric_mux_client_config);
                 TT_FATAL(false, "Unexpected downstream kernel for dispatch_d");
             }
         }

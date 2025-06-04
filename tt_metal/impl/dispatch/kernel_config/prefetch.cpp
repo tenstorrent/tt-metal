@@ -268,7 +268,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
         TT_ASSERT(upstream_kernels_.size() == 0);
         dependent_config_.upstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.upstream_cb_sem_id = 0;  // Used in prefetch_d only
-        // May be updated below
+        // May be overwritten below
         dependent_config_.num_hops = 0;
 
         // Process downstream
@@ -322,7 +322,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
         // Upstream
         // One ROUTER or direct connection to PREFETCH_H if using fabric
         TT_ASSERT(upstream_kernels_.size() == 1);
-        // May be updated below
+        // May be overwritten below
         dependent_config_.num_hops = 0;
         if (auto router_kernel = dynamic_cast<EthRouterKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = router_kernel->GetLogicalCore();
