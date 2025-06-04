@@ -212,41 +212,8 @@ void kernel_main() {
                 // mcast args
                 const uint32_t weights_start_address = get_write_ptr(cb_id_weight);
                 constexpr uint32_t weights_block_size_bytes = weight_tile_nbytes * weight_block_num_tiles;
-                DPRINT << "weights block size bytes " << weights_block_size_bytes << ENDL();
 
-                /*
-                uint64_t dram_read_addr = get_noc_addr_from_bank_id<true>(0, weight_addr_dram_base);
-                noc_async_read(dram_read_addr, weights_l1_base_write_addr, 2 * weights_block_size_bytes);
-                dram_read_addr = get_noc_addr_from_bank_id<true>(0, weight_addr_dram_base);
-                noc_async_read(dram_read_addr, weights_l1_base_write_addr, weights_block_size_bytes);
-                noc_async_read_barrier();
-                */
-
-                /*
-                const uint32_t block_num_tiles = weight_block_height_ntiles * weight_block_width_ntiles;
-
-                uint32_t read_base_addr =
-                    noc_async_read_tile_dram_sharded_set_state<true>(weight_addr_dram_base, weight_tile_nbytes, 0);
-                uint32_t read = 0;
-                uint32_t write = weights_l1_base_write_addr;
-                for (uint32_t w = 0; w < block_num_tiles; w++) {
-                    noc_async_read_tile_dram_sharded_with_state(read_base_addr, read, write);
-                    read += weight_tile_nbytes;
-                    write += weight_tile_nbytes;
-                }
-
-                read = 0;
-                read_base_addr =
-                    noc_async_read_tile_dram_sharded_set_state<true>(weight_addr_dram_base, weight_tile_nbytes, 1);
-                for (uint32_t w = 0; w < block_num_tiles; w++) {
-                    noc_async_read_tile_dram_sharded_with_state(read_base_addr, read, write);
-                    read += weight_tile_nbytes;
-                    write += weight_tile_nbytes;
-                }
-                noc_async_read_barrier();
-                */
-
-                fetch_dram_sharded_weights<8, 8192, weights_block_size_bytes>(
+                fetch_dram_sharded_weights<4, 8192, weights_block_size_bytes>(
                     weight_addr_dram_base, weights_l1_base_write_addr);
                 noc_async_read_barrier();
 
