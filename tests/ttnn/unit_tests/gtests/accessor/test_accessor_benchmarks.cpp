@@ -158,10 +158,6 @@ TEST_P(AccessorBenchmarks, Generic) {
             input_compile_time_args.end(),
             input_sharded_accessor_args_rta_DDD.compile_time_args.cbegin(),
             input_sharded_accessor_args_rta_DDD.compile_time_args.cend());
-        // TODO: Issue with SSD - std::conditional_t in DistributionSpecWrapper evaluates both conditions
-        for (size_t i = 0; i < input_sharded_accessor_args_cta.num_banks; ++i) {
-            input_compile_time_args.push_back(0);
-        }
 
         // Create reader kernel
         KernelHandle reader_kernel_id = CreateKernel(
