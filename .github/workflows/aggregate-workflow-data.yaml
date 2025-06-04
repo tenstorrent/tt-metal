@@ -79,11 +79,18 @@ jobs:
           path: ${{ github.workspace }}/workflow-data.json
           key: metal-workflow-data-${{ github.ref }}-${{ github.run_id }}
 
-      - name: Upload workflow data
+      - name: Upload complete workflow data
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-data-complete
+          path: ${{ github.workspace }}/workflow-data.json
+          retention-days: 1
+
+      - name: Upload filtered workflow data for analysis
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
           name: workflow-data
-          path: ${{ github.workspace }}/workflow-data.json
+          path: ${{ github.workspace }}/workflow-data-upload.json
           retention-days: 1
 
   analyze-data:
@@ -109,7 +116,7 @@ jobs:
         with:
           days: ${{ github.event.inputs.days || 15 }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          cache-path: ${{ github.workspace }}/workflow-data.json
+          cache-path: ${{ github.workspace }}/workflow-data-upload.json
           workflow_configs: ${{ needs.fetch-data.outputs.workflow_configs }}
 
   handle-failures:
