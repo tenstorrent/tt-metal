@@ -81,7 +81,7 @@ def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_e
         )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, -float("inf"))
+    # input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, -float("inf"))
     output_tensor = ttnn.softmax(input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
     output_tensor = ttnn.to_torch(output_tensor)
     torch.set_printoptions(profile="full")
