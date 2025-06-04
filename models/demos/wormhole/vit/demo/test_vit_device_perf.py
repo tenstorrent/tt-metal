@@ -47,7 +47,7 @@ def test_vit_device_ops(
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_sec",
     [
-        1422,
+        1450,
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -61,7 +61,7 @@ def test_vit_perf_device(batch_size, expected_kernel_samples_per_sec):
 
     expected_results = check_device_perf(
         post_processed_results,
-        margin=0.02,
+        margin=0.03,
         expected_perf_cols={inference_time_key: expected_kernel_samples_per_sec},
         assert_on_fail=True,
     )

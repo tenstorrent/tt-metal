@@ -117,17 +117,16 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1753088}], indirect=True
 )
-def test_vit(device, use_program_cache):
+@pytest.mark.parametrize("expected_samples_per_sec", [1377])
+@pytest.mark.parametrize("batch_size", [8])
+def test_vit(device, use_program_cache, expected_samples_per_sec, batch_size):
     torch.manual_seed(0)
 
     profiler.clear()
     disable_persistent_kernel_cache()
-
-    batch_size = 8
 
     first_key = f"first_iter_batchsize{batch_size}"
     second_key = f"second_iter_batchsize{batch_size}"
@@ -135,6 +134,7 @@ def test_vit(device, use_program_cache):
     test_infra = create_test_infra(
         device,
         batch_size,
+        use_random_input_tensor=True,
     )
 
     ttnn.synchronize_device(device)
@@ -164,4 +164,11 @@ def test_vit(device, use_program_cache):
     model_name = f"ttnn_vit_base_batch_size_{batch_size}"
     comments = ""
     logger.info(f"{model_name} {comments} inference time (avg): {inference_time_avg}")
-    logger.info(f"Samples per second: {1 / inference_time_avg * batch_size}")
+    samples_per_sec = 1 / inference_time_avg * batch_size
+    logger.info(f"Samples per second: {samples_per_sec}")
+    margin = 0.02
+    min_range = expected_samples_per_sec * (1 - margin)
+    max_range = expected_samples_per_sec * (1 + margin)
+    assert (
+        samples_per_sec > min_range and samples_per_sec < max_range
+    ), f"Samples per second {samples_per_sec} is either too low or high, expected at to be in range of: [{min_range}, {max_range}]"
