@@ -111,15 +111,17 @@ class TokenAccuracy:
 
 class TokenAccuracy:
     def __init__(self, model_name=None):
+        self.gt_pos = -1
         self.store_predicted_tokens = []
         reference_data_file = f"models/tt_transformers/tests/reference_outputs/{model_name}.refpt"
         logger.info(f"Loading reference data from {reference_data_file}")
         assert os.path.exists(reference_data_file)
         reference_data = torch.load(reference_data_file)
         self.reference_tokens = reference_data["reference_tokens"]
-        self.input_prompt = self.reference_tokens[0, :512]
-        self.gt_tokens = self.reference_tokens[0, 512:]
-        self.top5_tokens = reference_data["top5_tokens"][512 - 1 :, :]
+        split_point = self.reference_tokens.shape[-1] // 2 + 1
+        self.input_prompt = self.reference_tokens[0, :split_point]
+        self.gt_tokens = self.reference_tokens[0, split_point:]
+        self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
 
     def prepare_ref_tokens(self, tokenizer):
         text_data = tokenizer.decode(self.input_prompt)
@@ -127,6 +129,8 @@ class TokenAccuracy:
 
     def collect_predicted_tokens(self, tokens):
         self.store_predicted_tokens.append(tokens)
+        self.gt_pos += 1
+        return self.gt_tokens[self.gt_pos].unsqueeze(-1).unsqueeze(-1)
 
     def compute_accuracy(self):
         count = 0
@@ -580,6 +584,7 @@ def test_demo_text(
     data_parallel,
     reset_seeds,
     request,
+    token_accuracy=True,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -672,9 +677,9 @@ def test_demo_text(
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
-    # test_id='accuracy'
+    test_id = "accuracy"
 
-    if "accuracy" in test_id:
+    if token_accuracy:
         token_acc = TokenAccuracy(model_name="Llama3.2-1B-Instruct")
 
     model_args, model, page_table, tt_kv_cache, tokenizer = prepare_generator_args(
@@ -697,7 +702,7 @@ def test_demo_text(
 
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
-    if "accuracy" in test_id:
+    if token_accuracy:
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
 
     repeat_batch_prompts = []
@@ -805,8 +810,8 @@ def test_demo_text(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            if "accuracy" in test_id:
-                token_acc.collect_predicted_tokens(out_tok.item())
+            if token_accuracy:
+                out_tok = token_acc.collect_predicted_tokens(out_tok.item())
 
             # Run decode forward
             logits = generator.decode_forward_text(
@@ -844,7 +849,6 @@ def test_demo_text(
             )
 
             current_pos += 1
-
             # Save output token to print out later
             for user in range(global_batch_size):
                 user_tok = out_tok[user].item()
@@ -905,8 +909,10 @@ def test_demo_text(
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
-        if "accuracy" in test_id:
+        if token_accuracy:
             acc = token_acc.compute_accuracy()
+            logger.info(f"=== Top1 and Top5 Token Accuracy ===")
+            logger.info(f" Top1 Accuracy: {acc[0]*100:.2f}%, Top5 Accuracy: {acc[1]*100:.2f}%")
 
     profiler.end(f"inference_decode", iteration=batch_idx)
 
