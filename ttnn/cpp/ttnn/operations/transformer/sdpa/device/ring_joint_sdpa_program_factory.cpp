@@ -105,41 +105,41 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     const uint32_t global_logical_NK_chunks = tt::div_up(logical_n, k_chunk_size);
     const uint32_t global_padded_NK_chunks = global_N / k_chunk_size;
 
-    tt::log_info("B: {}", B);
-    tt::log_info("NH: {}", NH);
-    tt::log_info("N: {}", local_N);
-    tt::log_info("L: {}", L);
-    tt::log_info("DH: {}", DH);
+    tt::log_debug("B: {}", B);
+    tt::log_debug("NH: {}", NH);
+    tt::log_debug("N: {}", local_N);
+    tt::log_debug("L: {}", L);
+    tt::log_debug("DH: {}", DH);
 
     // Log padded dimensions
-    tt::log_info("padded_Lq: {}", padded_Lq);
-    tt::log_info("padded_Lk: {}", padded_Lk);
-    tt::log_info("padded_Lqt: {}", padded_Lqt);
-    tt::log_info("padded_Lkt: {}", padded_Lkt);
+    tt::log_debug("padded_Lq: {}", padded_Lq);
+    tt::log_debug("padded_Lk: {}", padded_Lk);
+    tt::log_debug("padded_Lqt: {}", padded_Lqt);
+    tt::log_debug("padded_Lkt: {}", padded_Lkt);
 
     // Log tile dimensions
-    tt::log_info("DHt: {}", DHt);
-    tt::log_info("local_Nt: {}", local_Nt);
-    tt::log_info("global_Nt: {}", global_Nt);
-    tt::log_info("logical_Lt: {}", logical_Lt);
-    tt::log_info("logical_n: {}", logical_n);
-    tt::log_info("global_N: {}", global_N);
+    tt::log_debug("DHt: {}", DHt);
+    tt::log_debug("local_Nt: {}", local_Nt);
+    tt::log_debug("global_Nt: {}", global_Nt);
+    tt::log_debug("logical_Lt: {}", logical_Lt);
+    tt::log_debug("logical_n: {}", logical_n);
+    tt::log_debug("global_N: {}", global_N);
 
     // Log chunking parameters
-    tt::log_info("Sq_chunk_t: {}", Sq_chunk_t);
-    tt::log_info("Sk_chunk_t: {}", Sk_chunk_t);
-    tt::log_info("q_chunk_size: {}", q_chunk_size);
-    tt::log_info("k_chunk_size: {}", k_chunk_size);
-    tt::log_info("q_num_chunks: {}", q_num_chunks);
-    tt::log_info("k_num_chunks: {}", k_num_chunks);
+    tt::log_debug("Sq_chunk_t: {}", Sq_chunk_t);
+    tt::log_debug("Sk_chunk_t: {}", Sk_chunk_t);
+    tt::log_debug("q_chunk_size: {}", q_chunk_size);
+    tt::log_debug("k_chunk_size: {}", k_chunk_size);
+    tt::log_debug("q_num_chunks: {}", q_num_chunks);
+    tt::log_debug("k_num_chunks: {}", k_num_chunks);
 
     // Log concatenated dimensions
-    tt::log_info("cat_Sq: {}", cat_Sq);
-    tt::log_info("cat_Sk: {}", cat_Sk);
-    tt::log_info("cat_Sqt: {}", cat_Sqt);
-    tt::log_info("cat_Skt: {}", cat_Skt);
+    tt::log_debug("cat_Sq: {}", cat_Sq);
+    tt::log_debug("cat_Sk: {}", cat_Sk);
+    tt::log_debug("cat_Sqt: {}", cat_Sqt);
+    tt::log_debug("cat_Skt: {}", cat_Skt);
 
-    tt::log_info("use_joint_mask: {}", use_joint_mask);
+    tt::log_debug("use_joint_mask: {}", use_joint_mask);
 
     // Program program = CreateProgram();
 
@@ -162,9 +162,9 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     TT_FATAL(sdpa_fused_op_signaler.has_value(), "SDPA fused op signaler must be provided");
     sdpa_fused_op_signaler->init_fused_op(program, device, core_grid);
 
-    tt::log_info("num_cores: {}", num_cores);
-    tt::log_info("device->compute_with_storage_grid_size(): {}", device->compute_with_storage_grid_size());
-    tt::log_info("grid_size: {}", grid_size);
+    tt::log_debug("num_cores: {}", num_cores);
+    tt::log_debug("device->compute_with_storage_grid_size(): {}", device->compute_with_storage_grid_size());
+    tt::log_debug("grid_size: {}", grid_size);
 
     TT_FATAL(
         num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y,
@@ -345,8 +345,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     const uint32_t mask_chunk_1 =
         (padded_Lk != L) ? (cat_Skt / Sk_chunk_t) - 1 : (uint32_t)(-1);  // idx of last chunk in second sequence
 
-    tt::log_info("mask_chunk_0: {}", mask_chunk_0);
-    tt::log_info("mask_chunk_1: {}", mask_chunk_1);
+    tt::log_debug("mask_chunk_0: {}", mask_chunk_0);
+    tt::log_debug("mask_chunk_1: {}", mask_chunk_1);
 
     std::vector<uint32_t> writer_compile_time_args = {
         B,
