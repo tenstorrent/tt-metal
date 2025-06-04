@@ -213,7 +213,11 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("pcc", [0.9995])
-def test_llama_tg_BinaryDeviceOperation(use_program_cache, device, batch_size, seq_len, dim, num_heads, dtype, pcc):
+def test_llama_tg_BinaryDeviceOperation(
+    use_program_cache, device, mesh_device, batch_size, seq_len, dim, num_heads, dtype, pcc
+):
+    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=mesh_device.cluster_shape)
+    mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=mesh_device.cluster_shape)
     in_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -233,7 +237,17 @@ def test_llama_tg_BinaryDeviceOperation(use_program_cache, device, batch_size, s
         ),
     )
     run_elt_binary_mul_with_sub_devices(
-        batch_size, num_heads, seq_len, dim, dtype, in_mem_config, out_mem_config, device, None, None, pcc
+        batch_size,
+        num_heads,
+        seq_len,
+        dim,
+        dtype,
+        in_mem_config,
+        out_mem_config,
+        device,
+        mesh_mapper,
+        mesh_composer,
+        pcc,
     )
 
 
