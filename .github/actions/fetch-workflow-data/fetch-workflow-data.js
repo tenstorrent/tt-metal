@@ -11,6 +11,7 @@ const fs = require('fs');
 const MAX_PAGES = 100; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
 const RUNS_PER_PAGE = 100; // GitHub API max per page
 const DEFAULT_DAYS = 15; // Default rolling window in days
+const MAIN_BRANCH = 'main'; // Only collect data from main branch
 
 /**
  * Core business logic, independent of GitHub Actions
@@ -82,7 +83,7 @@ class WorkflowDataFetcher {
     return grouped;
   }
 
-  filterRunsByConfig(runs, workflowConfigs) {
+  filterRuns(runs, workflowConfigs) {
     // Create sets of workflow names and prefixes from configs
     const configWorkflows = new Set();
     const configPrefixes = new Set();
@@ -95,20 +96,28 @@ class WorkflowDataFetcher {
       }
     });
 
-    // Filter runs based on config
     return runs.filter(run => {
+      // Skip runs without names
       if (!run.name) return false;
 
+      // Skip skipped runs
+      if (run.conclusion === 'skipped' || run.status === 'skipped') return false;
+
+      // Skip non-scheduled/push runs
+      if (run.event !== 'schedule' && run.event !== 'push') return false;
+
+      // Skip non-main branch runs
+      if (run.head_branch !== MAIN_BRANCH) return false;
+
+      // Skip incomplete runs
+      if (run.status !== 'completed') return false;
+
       // Check for exact name match
-      if (configWorkflows.has(run.name)) {
-        return true;
-      }
+      if (configWorkflows.has(run.name)) return true;
 
       // Check for prefix match
       for (const prefix of configPrefixes) {
-        if (run.name.startsWith(prefix)) {
-          return true;
-        }
+        if (run.name.startsWith(prefix)) return true;
       }
 
       return false;
@@ -157,7 +166,8 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             repo: this.context.repo.repo,
             per_page: this.runsPerPage,
             page,
-            created: `>=${sinceDate.toISOString()}`
+            created: `>=${sinceDate.toISOString()}`,
+            branch: MAIN_BRANCH
           });
 
           if (!runs.workflow_runs.length) {
@@ -165,17 +175,8 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             break;
           }
 
-          // Filter out skipped runs
-          const validRuns = runs.workflow_runs.filter(run =>
-            run.conclusion !== 'skipped' && run.status !== 'skipped'
-          );
-          const skippedCount = runs.workflow_runs.length - validRuns.length;
-          if (skippedCount > 0) {
-            core.info(`Filtered out ${skippedCount} skipped runs on page ${page}`);
-          }
-
-          allRuns.push(...validRuns);
-          core.info(`Fetched ${validRuns.length} runs on page ${page}`);
+          allRuns.push(...runs.workflow_runs);
+          core.info(`Fetched ${runs.workflow_runs.length} runs on page ${page}`);
 
           if (runs.workflow_runs.length < this.runsPerPage) {
             core.info('Received fewer runs than requested, reached end of data');
@@ -196,7 +197,8 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
           owner: this.context.repo.owner,
           repo: this.context.repo.repo,
           per_page: this.runsPerPage,
-          page
+          page,
+          branch: MAIN_BRANCH
         });
 
         if (!runs.workflow_runs.length) {
@@ -206,10 +208,6 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
 
         for (const run of runs.workflow_runs) {
           const runDate = new Date(run.created_at);
-
-          if (run.conclusion === 'skipped' || run.status === 'skipped') {
-            continue;
-          }
 
           if (!needHistoricalData && runDate <= oldestCachedDate) {
             core.info(`Early exit: found run at ${runDate} <= oldest cached date ${oldestCachedDate}`);
@@ -324,8 +322,8 @@ async function run() {
 
     // Process runs
     const allRuns = fetcher.mergeRuns(previousRuns, newRuns);
-    const filteredRuns = fetcher.filterRunsByConfig(allRuns, workflowConfigs);
-    core.info(`Filtered to ${filteredRuns.length} runs based on workflow configs`);
+    const filteredRuns = fetcher.filterRuns(allRuns, workflowConfigs);
+    core.info(`Filtered to ${filteredRuns.length} runs based on workflow configs, triggers, and branch`);
 
     // Group runs by name
     const groupedRuns = fetcher.groupRunsByName(filteredRuns);
