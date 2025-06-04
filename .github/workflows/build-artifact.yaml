@@ -346,6 +346,7 @@ jobs:
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
+          CIBW_BUILD_FRONTEND: build
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
