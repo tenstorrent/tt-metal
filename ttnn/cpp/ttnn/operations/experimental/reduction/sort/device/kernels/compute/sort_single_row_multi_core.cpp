@@ -13,40 +13,39 @@
 
 namespace NAMESPACE {
 /*
-This sorting algorithm implements a parallel Bitonic Merge Sort for a single row of tiles, leveraging multiple cores for
-efficiency.
+This kernel implements a parallel Bitonic Sort for a single row of tiles, distributing the work across multiple cores
+for efficiency.
 
-### Overview:
-- The row to be sorted consists of `Wt` tiles. Sorting is performed in pairs, requiring `Wt/2` work units per stage.
-- Multiple cores are used to process these pairs in parallel. If the number of available cores is less than `Wt/2`, some
-cores will process multiple pairs.
-- One core acts as a coordinator, managing synchronization between stages and coordinating access to DRAM.
+### High-Level Workflow:
+- The row to be sorted contains `Wt` tiles. Sorting is performed in stages, with each stage processing pairs of tiles.
+- Multiple cores work in parallel, each handling one or more pairs per stage, depending on the number of available
+cores.
+- A coordinator core manages synchronization and ensures correct stage progression.
 
-### Algorithm Steps:
-1. **Stage Iteration**:
-    - The algorithm proceeds in stages, as required by Bitonic sort.
-    - In each stage, the necessary pairs of tiles are identified for sorting.
+### Detailed Steps:
+1. **Initialization**:
+    - For each row, the coordinator core prepares the index tensor and copies input values to the output memory bank.
+    - The output memory bank is used both for final results and as temporary storage between stages.
 
-2. **Work Distribution**:
-    - Each core is assigned one or more pairs to process, depending on the number of available cores.
-    - For each assigned pair, the core:
-        - Reads the appropriate pair of tiles from DRAM.
-        - Performs the sorting operation on the pair.
-        - Writes the sorted tiles back to DRAM.
+2. **Bitonic Sort Stages**:
+    - The sort proceeds in multiple stages, as required by the Bitonic sort algorithm.
+    - In each stage:
+      - Cores are assigned pairs of tiles to process, based on their core ID and the current stage.
+      - If there are fewer cores than pairs, some cores handle multiple pairs.
+      - The coordinator core signals other cores to begin processing.
+      - Each core reads its assigned tile pairs (both values and indices), sorts them according to the required
+direction (ascending or descending), and writes the results back to the output memory bank.
+      - After processing, each core signals completion to the coordinator.
+      - The coordinator waits for all cores to finish before moving to the next stage.
 
-3. **Synchronization**:
-    - After processing all assigned pairs in a stage, each core increments a coordinator semaphore to signal completion.
-    - The coordinator core waits for all cores to finish the current stage.
-    - Once all cores are done, the coordinator updates the semaphore to allow all cores to proceed to the next stage.
+3. **Completion**:
+    - The process repeats for all stages until the row is fully sorted.
+    - The entire procedure is repeated for each row in the `Ht` dimension.
 
-4. **Completion**:
-    - The process repeats for all stages of the Bitonic sort until the row is fully sorted.
-
-### Notes:
-- The algorithm ensures efficient utilization of all cores, with dynamic work assignment if there are fewer cores than
-work units.
-- Synchronization between stages is managed using semaphores, ensuring correct ordering and data consistency.
-- The coordinator core is responsible for orchestrating stage transitions and DRAM access coordination.
+### Additional Notes:
+- The algorithm dynamically assigns work to ensure all cores are utilized efficiently.
+- Synchronization between cores is handled using semaphores to guarantee correct ordering and data consistency.
+- The coordinator core orchestrates stage transitions and manages memory access.
 */
 void MAIN {
     // Compile time args
