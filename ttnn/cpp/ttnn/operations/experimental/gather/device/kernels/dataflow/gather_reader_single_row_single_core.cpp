@@ -128,7 +128,7 @@ void kernel_main() {
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(9);
 
     constexpr uint32_t one_tile = 1;
-    const uint32_t TILE_WIDTH_MASK = tile_width - 1;
+    const uint32_t tile_width_mask = tile_width - 1;
 
     // Index tensor config
     constexpr uint32_t input_index_tensor_tile_size_bytes = get_tile_size(input_index_tensor_cb_index);
@@ -181,7 +181,7 @@ void kernel_main() {
 
                             // Calculate local index
                             const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
-                            const uint32_t index_in_local_tile = global_index & TILE_WIDTH_MASK;
+                            const uint32_t index_in_local_tile = global_index & tile_width_mask;
                             const uint32_t which_row = index_in_local_tile >> __builtin_ctz(face_size);
                             const uint32_t which_col = index_in_local_tile & FACE_SIZE_MASK;
                             /* Equivalent to:

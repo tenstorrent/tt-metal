@@ -453,7 +453,8 @@ void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
     auto output_tensor_buffer = output_tensor.buffer();
 
     const auto input_index_shape = tensor_args.input_index_tensor.get_padded_shape();
-    const uint32_t Wt_index = tensor_args.input_index_tensor.padded_shape()[3] / tt::constants::TILE_WIDTH;
+    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const uint32_t Wt_index = tensor_args.input_index_tensor.padded_shape()[3] / tile_width;
     const uint32_t total_number_of_cores =
         cached_program.shared_variables.storage_grid_size.x * cached_program.shared_variables.storage_grid_size.y;
 

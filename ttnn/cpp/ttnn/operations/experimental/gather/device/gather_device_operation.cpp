@@ -15,11 +15,12 @@ GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_f
     // Calculate Wt to decide which program factory to use
     const auto input_tensor_shape = tensor_args.input_tensor.get_padded_shape();
     const auto input_index_tensor_shape = tensor_args.input_index_tensor.get_padded_shape();
-    const uint32_t Wt_input = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
-    const uint32_t Wt_index = input_index_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const uint32_t Wt_input = input_tensor_shape[3] / tile_width;
+    const uint32_t Wt_index = input_index_tensor_shape[3] / tile_width;
 
     if (Wt_input > WT_THRESHOLD || Wt_index > WT_THRESHOLD) {
-        // Use GatherProgramFactorySRMC for larger Wt
+        // Use GatherProgramFactorySingleRowMultiCore for larger Wt
         return gather::program::GatherProgramFactorySingleRowMultiCore{};
     }
     return gather::program::GatherProgramFactorySingleRowSingleCore{};
