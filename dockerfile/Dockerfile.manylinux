@@ -7,6 +7,9 @@ RUN FILES=(/etc/yum.repos.d/*.repo) && \
 RUN dnf remove -y epel-release || true
 
 # Install system dependencies
+# This should be changed to use install_dependencies.sh so that our 
+# dependency lists come from as few sources as possible, after
+# https://github.com/tenstorrent/tt-metal/issues/23060 is resolved
 RUN dnf update -y && \
     dnf install -y \
     autoconf \
