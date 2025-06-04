@@ -51,9 +51,10 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool build_in_worker_connection_mode,
     Topology topology,
     bool is_galaxy,
+    bool en_dateline_sender_extra_buffer,
+    bool en_dateline_receiver_extra_buffer,
     bool en_dateline_upstream_sender_extra_buffer,
-    bool en_dateline_upstream_receiver_extra_buffer,
-    bool has_ring_loopback) :
+    bool en_dateline_upstream_receiver_extra_buffer) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
@@ -141,23 +142,17 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 }
             }
             // if ring topology set extra buffer on dateline edms.
-            auto en_dateline_sender_extra_buffer_slots = false;
-            auto en_dateline_receiver_extra_buffer_slots = false;
-            if (topology == Topology::Ring) {
-                en_dateline_sender_extra_buffer_slots = true;
-                en_dateline_receiver_extra_buffer_slots = true;
-            }
             auto src_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
                 .edm_type = src_device_edm_type,
-                .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer_slots,
-                .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer_slots,
+                .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer,
+                .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
                 .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
                 .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
             };
             auto dest_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
                 .edm_type = dest_device_edm_type,
-                .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer_slots,
-                .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer_slots,
+                .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer,
+                .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
                 .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
                 .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
             };
