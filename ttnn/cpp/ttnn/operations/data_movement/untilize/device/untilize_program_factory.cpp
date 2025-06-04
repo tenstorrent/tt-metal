@@ -990,16 +990,15 @@ operation::ProgramWithCallbacks untilize_multi_core(
         /*
         src_block_sharded = a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
 
-        num_rows_block = input_shard_spec.shape[0];
-        block_row_size = input_shard_spec.shape[1] * output.element_size();  // in0_block_w * TILE_WIDTH * dtype_nbytes
+        block_row_size = input_shard_width * output.element_size();  // in0_block_w * TILE_WIDTH * dtype_nbytes
         output_row_size = output.get_padded_shape()[-1] * output.element_size();  // output row size bytes
         last_block_row_size_unpadded =
             block_row_size -
-            (tt::round_up(output.get_padded_shape()[-1], input_shard_spec.shape[1]) - output.get_padded_shape()[-1]) *
+            (tt::round_up(output.get_padded_shape()[-1], input_shard_width) - output.get_padded_shape()[-1]) *
                 output.element_size();
         uint32_t num_output_rows = output.volume() / output.get_padded_shape()[-1];
         num_output_rows_unpadded =
-            num_rows_block - (tt::round_up(num_output_rows, input_shard_spec.shape[0]) - num_output_rows);
+            input_shard_height - (tt::round_up(num_output_rows, input_shard_spec.shape[0]) - num_output_rows);
         end_core = (*input_shard_spec.grid.ranges().begin()).end_coord;
         */
         // Handling input block/width sharding, and uneven shards
