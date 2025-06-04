@@ -7,6 +7,7 @@
 #include <cstdarg>
 #include <type_traits>
 
+#include "ckernel_sfpu_binary.h"
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_sqrt.h"
 #include "ckernel_sfpu_square.h"
@@ -224,6 +225,16 @@ constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::ELWDIV;
 #endif
 #ifdef ELTWISE_BINARY_LESS
 constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::ELWLESS;
+#endif
+
+#ifdef SFPU_ELWADD
+constexpr auto SFPU_BINARY_OPERATION = ckernel::sfpu::BinaryOp::ADD;
+#endif
+#ifdef SFPU_ELWSUB
+constexpr auto SFPU_BINARY_OPERATION = ckernel::sfpu::BinaryOp::SUB;
+#endif
+#ifdef SFPU_ELWMUL
+constexpr auto SFPU_BINARY_OPERATION = ckernel::sfpu::BinaryOp::MUL;
 #endif
 
 #ifdef SFPU_OP_SQRT
