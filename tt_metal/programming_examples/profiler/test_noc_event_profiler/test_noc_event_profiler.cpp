@@ -4,6 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
 using namespace tt::tt_metal;
@@ -80,7 +81,7 @@ int main() {
         // It is necessary to explictly dump profile results at the end of the
         // program to get noc traces for standalone tt_metal programs.  For
         // ttnn, this is called _automatically_
-        DumpDeviceProfileResults(device, program);
+        detail::DumpDeviceProfileResults(device, program);
 
         pass &= CloseDevice(device);
 

@@ -35,7 +35,7 @@ using namespace tt::tt_metal;
 namespace {
 void DumpMeshDeviceProfiler(distributed::MeshDevice* device) {
     ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
-    tt::tt_metal::detail::DumpMeshDeviceProfileResults(device, ProfilerDumpState::NORMAL, prof_metadata);
+    tt::tt_metal::DumpMeshDeviceProfileResults(device, ProfilerDumpState::NORMAL, prof_metadata);
 }
 
 void ttnn_device(py::module& module) {

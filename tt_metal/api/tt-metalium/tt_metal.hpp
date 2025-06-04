@@ -229,23 +229,21 @@ void InitDeviceProfiler(IDevice* device);
  * */
 void ProfilerSync(ProfilerSyncState state);
 
+// clang-format off
 /**
- * Read device side profiler data for all devices in the mesh device and dump results into device side CSV log
+ * Read device side profiler data and dump results into device side CSV log
+ *
+ * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
  *
  * Return value: void
  *
- * | Argument      | Description                                           | Type                     | Valid Range |
- * Required |
- * |---------------|-------------------------------------------------------|--------------------------|------------------|----------|
- * | mesh_device   | The mesh device containing the devices to be profiled | distributed::MeshDevice* | | True     | |
- * state         | Profiler dump various states                          | ProfilerDumpState        |                  |
- * False    | | metadata      | Optional metadata to be added to the profiler results | ProfilerOptionalMetadata | |
- * False    |
+ * | Argument      | Description                                       | Type            | Valid Range               | Required |
+ * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+ * | device        | The device holding the program being profiled.    | IDevice*        |                           | True     |
+ * | program       | The program being profiled.                       | const Program & |                           | True     |
  * */
-void DumpMeshDeviceProfileResults(
-    distributed::MeshDevice* mesh_device,
-    ProfilerDumpState state = ProfilerDumpState::NORMAL,
-    const std::optional<ProfilerOptionalMetadata>& metadata = {});
+// clang-format on
+void DumpDeviceProfileResults(IDevice* device, const Program& program);
 
 /**
  * Read device side profiler data and dump results into device side CSV log
