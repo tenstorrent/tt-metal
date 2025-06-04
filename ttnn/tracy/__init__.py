@@ -13,37 +13,20 @@ import socket
 
 from loguru import logger
 
-try:
-    from ttnn.tt_metal.tools.profiler.process_ops_logs import process_ops
-    from ttnn.tt_metal.tools.profiler.common import (
-        TT_METAL_HOME,
-        PROFILER_BIN_DIR,
-        PROFILER_ARTIFACTS_DIR,
-        PROFILER_SCRIPTS_ROOT,
-        TRACY_MODULE_PATH,
-        TRACY_FILE_NAME,
-        TRACY_OPS_TIMES_FILE_NAME,
-        TRACY_OPS_DATA_FILE_NAME,
-        TRACY_CAPTURE_TOOL,
-        TRACY_CSVEXPROT_TOOL,
-        generate_logs_folder,
-    )
-except ImportError:
-    # Fallback for cases where tt_metal might be available at the top level
-    from tt_metal.tools.profiler.process_ops_logs import process_ops
-    from tt_metal.tools.profiler.common import (
-        TT_METAL_HOME,
-        PROFILER_BIN_DIR,
-        PROFILER_ARTIFACTS_DIR,
-        PROFILER_SCRIPTS_ROOT,
-        TRACY_MODULE_PATH,
-        TRACY_FILE_NAME,
-        TRACY_OPS_TIMES_FILE_NAME,
-        TRACY_OPS_DATA_FILE_NAME,
-        TRACY_CAPTURE_TOOL,
-        TRACY_CSVEXPROT_TOOL,
-        generate_logs_folder,
-    )
+from tt_metal.tools.profiler.process_ops_logs import process_ops
+from tt_metal.tools.profiler.common import (
+    TT_METAL_HOME,
+    PROFILER_BIN_DIR,
+    PROFILER_ARTIFACTS_DIR,
+    PROFILER_SCRIPTS_ROOT,
+    TRACY_MODULE_PATH,
+    TRACY_FILE_NAME,
+    TRACY_OPS_TIMES_FILE_NAME,
+    TRACY_OPS_DATA_FILE_NAME,
+    TRACY_CAPTURE_TOOL,
+    TRACY_CSVEXPROT_TOOL,
+    generate_logs_folder,
+)
 
 import tracy.tracy_state
 
