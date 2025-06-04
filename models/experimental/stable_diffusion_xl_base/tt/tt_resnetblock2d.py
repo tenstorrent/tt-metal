@@ -115,7 +115,8 @@ class TtResnetBlock2D(nn.Module):
                 conv_weights_1,
                 conv_bias_1,
                 self.conv1_config.weights_dtype,
-                fp32_dest_acc_en=self.conv1_config.weights_dtype == ttnn.bfloat8_b,
+                fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
+                and (self.conv1_config.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED),
             )
 
         self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
@@ -129,7 +130,8 @@ class TtResnetBlock2D(nn.Module):
             conv_weights_2,
             conv_bias_2,
             self.conv2_config.weights_dtype,
-            fp32_dest_acc_en=self.conv2_config.weights_dtype == ttnn.bfloat8_b,
+            fp32_dest_acc_en=(self.conv2_config.weights_dtype == ttnn.bfloat8_b)
+            and (self.conv2_config.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         )
 
         if conv_shortcut:
