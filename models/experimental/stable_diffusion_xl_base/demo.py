@@ -354,6 +354,14 @@ def run_demo_inference(
             }
         ]
 
+    scaling_factor = ttnn.from_torch(
+        torch.Tensor([pipeline.vae.config.scaling_factor]),
+        dtype=ttnn.bfloat16,
+        device=ttnn_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
     logger.info("Performing warmup run, to make use of program caching in actual inference...")
     B, C, H, W = latents.shape
 
@@ -386,7 +394,7 @@ def run_demo_inference(
         ttnn_timesteps[0],
         0,
     )
-    if not is_ci_env:
+    if not is_ci_env and not os.path.exists("output"):
         os.mkdir("output")
 
     images = []
@@ -432,13 +440,6 @@ def run_demo_inference(
         tt_scheduler.set_step_index(0)
 
         if vae_on_device:
-            scaling_factor = ttnn.from_torch(
-                torch.Tensor([pipeline.vae.config.scaling_factor]),
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
             latents = ttnn.div(latents, scaling_factor)
 
             # Workaround for #22017
