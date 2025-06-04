@@ -150,7 +150,16 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
   async fetchAllWorkflowRuns(days, sinceDate, oldestCachedDate) {
     const allRuns = [];
     const cutoffDate = this.getCutoffDate(days);
-    core.info(`days ${days}, sinceDate: ${sinceDate}, cutoffDate: ${cutoffDate}, oldestCachedDate: ${oldestCachedDate}`);
+    const startTime = Date.now();
+    let apiCallCount = 0;
+
+    core.info(`Starting fetch: days=${days}, sinceDate=${sinceDate}, cutoffDate=${cutoffDate}, oldestCachedDate=${oldestCachedDate}`);
+
+    // Validate inputs
+    if (!oldestCachedDate || isNaN(oldestCachedDate.getTime())) {
+      core.warning('Invalid oldestCachedDate, will perform full fetch');
+      oldestCachedDate = new Date(0);
+    }
 
     // If our cutoff date is newer than oldest cached date, we only need to fetch new data
     const needHistoricalData = cutoffDate < oldestCachedDate;
@@ -161,6 +170,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
       core.info(`Optimizing fetch: only getting runs after ${sinceDate.toISOString()}`);
       try {
         for (let page = 1; page <= this.maxPages; page++) {
+          apiCallCount++;
           const { data: runs } = await this.github.rest.actions.listWorkflowRunsForRepo({
             owner: this.context.repo.owner,
             repo: this.context.repo.repo,
@@ -182,55 +192,77 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             core.info('Received fewer runs than requested, reached end of data');
             break;
           }
+
+          // Check for rate limits
+          const rateLimit = await this.getRateLimitInfo();
+          if (rateLimit.remaining < 100) {
+            core.warning(`Low rate limit remaining: ${rateLimit.remaining}, stopping fetch`);
+            break;
+          }
         }
-        return allRuns;
       } catch (error) {
         core.warning(`Error during optimized fetch: ${error.message}. Falling back to full fetch.`);
       }
     }
 
-    // Full fetch
-    core.info('Performing full fetch of workflow runs');
-    for (let page = 1; page <= this.maxPages; page++) {
-      try {
-        const { data: runs } = await this.github.rest.actions.listWorkflowRunsForRepo({
-          owner: this.context.repo.owner,
-          repo: this.context.repo.repo,
-          per_page: this.runsPerPage,
-          page,
-          branch: MAIN_BRANCH
-        });
+    // Full fetch - only needed if we don't have enough historical data
+    if (needHistoricalData) {
+      core.info('Performing full fetch of workflow runs to get historical data');
+      for (let page = 1; page <= this.maxPages; page++) {
+        try {
+          apiCallCount++;
+          const { data: runs } = await this.github.rest.actions.listWorkflowRunsForRepo({
+            owner: this.context.repo.owner,
+            repo: this.context.repo.repo,
+            per_page: this.runsPerPage,
+            page,
+            branch: MAIN_BRANCH
+          });
 
-        if (!runs.workflow_runs.length) {
-          core.info('No more runs found, stopping fetch');
-          break;
-        }
-
-        for (const run of runs.workflow_runs) {
-          const runDate = new Date(run.created_at);
-
-          if (!needHistoricalData && runDate <= oldestCachedDate) {
-            core.info(`Early exit: found run at ${runDate} <= oldest cached date ${oldestCachedDate}`);
-            return allRuns;
+          if (!runs.workflow_runs.length) {
+            core.info('No more runs found, stopping fetch');
+            break;
           }
 
-          if (runDate >= cutoffDate) {
-            allRuns.push(run);
-          } else {
-            core.info(`Early exit: found run at ${runDate} <= cutoff date ${cutoffDate}`);
-            return allRuns;
-          }
-        }
+          for (const run of runs.workflow_runs) {
+            const runDate = new Date(run.created_at);
+            if (isNaN(runDate.getTime())) {
+              core.warning(`Invalid run date for run ${run.id}, skipping`);
+              continue;
+            }
 
-        if (runs.workflow_runs.length < this.runsPerPage) {
-          core.info('Received fewer runs than requested, reached end of data');
+            if (runDate >= cutoffDate) {
+              allRuns.push(run);
+            } else {
+              core.info(`Found run older than cutoff date: ${runDate} < ${cutoffDate}, stopping fetch`);
+              return allRuns;
+            }
+          }
+
+          if (runs.workflow_runs.length < this.runsPerPage) {
+            core.info('Received fewer runs than requested, reached end of data');
+            break;
+          }
+
+          // Check for rate limits
+          const rateLimit = await this.getRateLimitInfo();
+          if (rateLimit.remaining < 100) {
+            core.warning(`Low rate limit remaining: ${rateLimit.remaining}, stopping fetch`);
+            break;
+          }
+        } catch (error) {
+          if (error.status === 403 && error.message.includes('rate limit')) {
+            core.warning('Rate limit exceeded, stopping fetch');
+            break;
+          }
+          core.warning(`Error fetching page ${page}: ${error.message}`);
           break;
         }
-      } catch (error) {
-        core.warning(`Error fetching page ${page}: ${error.message}`);
-        break;
       }
     }
+
+    const duration = Date.now() - startTime;
+    core.info(`Fetch completed: ${allRuns.length} runs in ${duration}ms (${apiCallCount} API calls)`);
     return allRuns;
   }
 
