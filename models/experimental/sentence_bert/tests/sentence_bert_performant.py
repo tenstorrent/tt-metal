@@ -92,10 +92,20 @@ def run_sentence_bert_trace_inference(device, device_batch_size, sequence_length
     test_infra.dealloc_output()
 
 
-def run_sentence_bert_trace_2cqs_inference(device, device_batch_size, sequence_length):
-    test_infra = create_test_infra(device, device_batch_size, sequence_length)
+def run_sentence_bert_trace_2cqs_inference(
+    device,
+    device_batch_size,
+    sequence_length,
+    input_ids=None,
+    extended_mask=None,
+    token_type_ids=None,
+    position_ids=None,
+):
+    test_infra = create_test_infra(
+        device, device_batch_size, sequence_length, input_ids, extended_mask, token_type_ids, position_ids
+    )
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
-    tt_image_res = tt_inputs_host.to(device, ttnn.DRAM_MEMORY_CONFIG)
+    tt_image_res = tt_inputs_host.to(device)
     # Initialize the op event so we can write
     op_event = ttnn.record_event(device, 0)
     # First run configures convs JIT
@@ -141,12 +151,10 @@ def run_sentence_bert_trace_2cqs_inference(device, device_batch_size, sequence_l
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
         write_event = ttnn.record_event(device, 1)
         ttnn.wait_for_event(0, write_event)
-        if tt_image_res.is_sharded():
-            input_tensor = ttnn.reshard(tt_image_res, input_mem_config, input_tensor)
+        input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
         op_event = ttnn.record_event(device, 0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
-
     if use_signpost:
         signpost(header="stop")
 

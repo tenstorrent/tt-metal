@@ -42,6 +42,4 @@ def test_run_sentence_bert_trace_2cq_inference(
     sequence_length,
     use_program_cache,
 ):
-    run_sentence_bert_trace_2cqs_inference(
-        device=device, device_batch_size=device_batch_size, sequence_length=sequence_length
-    )
+    run_sentence_bert_trace_2cqs_inference(device, device_batch_size, sequence_length)
