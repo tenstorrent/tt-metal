@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
@@ -136,6 +137,8 @@ class Attention(LightweightModule):
         wk_str = f"{layer_name}.wk"
         wv_str = f"{layer_name}.wv"
         wo_str = f"{layer_name}.wo"
+        q_norm_str = f"{layer_name}.q_norm"
+        k_norm_str = f"{layer_name}.k_norm"
 
         # Initialize bias tensors as None
         self.wqkv_bias_decode = None
@@ -233,6 +236,52 @@ class Attention(LightweightModule):
             ),
             cache_file_name=cache_name("wqkv_sharded_2d"),
         )
+
+        def norm_reshard(x, norm, mode):
+            """Hack until RMSNorm supports height-sharded output config"""
+            if mode == "decode":
+                mem_cfg = x.memory_config()
+                x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=x.dtype)
+            x = norm(x, mode)
+            if mode == "decode":
+                x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
+            return x
+
+        if f"{q_norm_str}.weight" in self.state_dict:
+            fn_q_norm = RMSNorm(
+                device=self.mesh_device,
+                dim=self.head_dim,
+                eps=configuration.norm_eps,
+                state_dict=self.state_dict,
+                state_dict_prefix=None,  # we already prefix q_norm_str
+                weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key=q_norm_str,
+                is_distributed=False,
+                sharded_program_config=None,  # FIXME: add height-sharded support. self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
+                sharded_output_config=None,  # FIXME: add height-sharded support. self.model_config["CREATE_QKV_DECODE_SHARD"]
+            )
+            self.q_norm = lambda x, mode: norm_reshard(x, fn_q_norm, mode)
+        else:
+            self.q_norm = lambda x, mode: x
+
+        if f"{k_norm_str}.weight" in self.state_dict:
+            fn_k_norm = RMSNorm(
+                device=self.mesh_device,
+                dim=self.head_dim,
+                eps=configuration.norm_eps,
+                state_dict=self.state_dict,
+                state_dict_prefix=None,  # we already prefix k_norm_str
+                weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key=k_norm_str,
+                is_distributed=False,
+                sharded_program_config=None,  # FIXME: add height-sharded support. self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
+                sharded_output_config=None,  # FIXME: add height-sharded support. self.model_config["CREATE_QKV_DECODE_SHARD"],
+            )
+            self.k_norm = lambda x, mode: norm_reshard(x, fn_k_norm, mode)
+        else:
+            self.k_norm = lambda x, mode: x
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
@@ -400,6 +449,9 @@ class Attention(LightweightModule):
             num_kv_heads=self.n_local_kv_heads,
             memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"],
         )
+
+        q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode")
+        k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode")
 
         ttnn.deallocate(xqkv_fused)
 
@@ -624,6 +676,9 @@ class Attention(LightweightModule):
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
+        k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
 
         ttnn.deallocate(xqkv_fused)
 

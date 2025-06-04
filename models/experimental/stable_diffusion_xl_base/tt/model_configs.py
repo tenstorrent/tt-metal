@@ -10,6 +10,7 @@ class ModelOptimisations:
         self.conv_configs = {}
         self.prepared_weights = False
         self.conv_w_dtype = conv_w_dtype
+        self.conv_ws_dtype = ttnn.bfloat8_b
 
         # HEIGHT SHARDED
         self.conv_configs["ABH_256_ADB"] = ttnn.Conv2dConfig(
@@ -146,7 +147,7 @@ class ModelOptimisations:
         # WIDTH SHARDED
         self.conv_configs["ABH_256_NO_ADB_WS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
-            weights_dtype=conv_w_dtype,
+            weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=False,
@@ -162,7 +163,7 @@ class ModelOptimisations:
         )
         self.conv_configs["ABH_512_NO_ADB_WS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
-            weights_dtype=conv_w_dtype,
+            weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=False,
