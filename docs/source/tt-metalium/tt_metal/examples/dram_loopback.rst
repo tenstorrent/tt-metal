@@ -18,7 +18,7 @@ Building the example can be done by adding a ``--build-programming-examples`` fl
     ./build/programming_examples/loopback
 
 Device initialization
---------------------
+---------------------
 
 .. code-block:: cpp
 
