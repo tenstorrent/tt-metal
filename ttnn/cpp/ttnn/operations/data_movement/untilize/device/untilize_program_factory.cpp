@@ -1087,8 +1087,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         writer_compute_defines["SHARDED"] = "1";
     }
 
-    // TODO: (GR) Add/write actual kernel
-    // Writer compile-time args and kernel
+    // Writer compile-time args
     bool output_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t output_stick_size = a.get_padded_shape()[-1] * output.element_size() / num_output_columns;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(output_stick_size);
@@ -1105,14 +1104,16 @@ operation::ProgramWithCallbacks untilize_multi_core(
         (uint32_t)log2_stick_size,
         (uint32_t)tile_height,
         (uint32_t)num_tiles_per_block,
+        (uint32_t)output_num_blocks_across_width,
         (uint32_t)output_element_size,
         (uint32_t)input_num_cols_per_block,
         (uint32_t)output_num_cols_per_block,
-        (uint32_t)output_num_blocks_across_width,
     };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
     }
+
+    // Writer kernel
     KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"

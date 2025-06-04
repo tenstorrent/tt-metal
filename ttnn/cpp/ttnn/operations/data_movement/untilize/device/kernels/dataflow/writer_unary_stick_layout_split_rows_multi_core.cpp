@@ -10,8 +10,8 @@ void kernel_main() {
     // run-time args
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_blocks = get_arg_val<uint32_t>(1);
-    const uint32_t block_across_height_start_id = get_arg_val<uint32_t>(2);  // wrt input
-    const uint32_t block_across_width_start_id = get_arg_val<uint32_t>(3);   // wrt input
+    const uint32_t height_wise_input_block_start_index = get_arg_val<uint32_t>(2);
+    const uint32_t width_wise_input_block_index = get_arg_val<uint32_t>(3);
 
     // compile-time args
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
@@ -20,13 +20,14 @@ void kernel_main() {
     constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(3) == 1;
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(4);
     constexpr uint32_t tile_height = get_compile_time_arg_val(5);
-    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(6);  // TODO: run-time to handle uneven shard
-    constexpr uint32_t output_element_size = get_compile_time_arg_val(7);
-
-    constexpr uint32_t input_num_cols_per_block = get_compile_time_arg_val(8);
-    constexpr uint32_t output_num_cols_per_block = get_compile_time_arg_val(9);
-
-    constexpr uint32_t output_num_blocks_across_width = get_compile_time_arg_val(10);
+    constexpr uint32_t num_tiles_per_input_block =
+        get_compile_time_arg_val(6);  // TODO: (GR) move to run-time to handle uneven shard
+    constexpr uint32_t num_output_blocks_across_width = get_compile_time_arg_val(7);
+    constexpr uint32_t output_element_size = get_compile_time_arg_val(8);
+    constexpr uint32_t num_cols_per_input_block =
+        get_compile_time_arg_val(9);  // TODO: (GR) move to run-time to handle uneven shard
+    constexpr uint32_t num_cols_per_output_block =
+        get_compile_time_arg_val(10);  // TODO: (GR) move to run-time to handle uneven shard
 
 #ifdef SHARDED
     using tensor_shard_info = ShardedInfo<
@@ -45,57 +46,62 @@ void kernel_main() {
     const auto s = get_interleaved_addr_gen<dst_is_dram, stick_size_is_power_of_two>(
         dst_addr, stick_size, log_base_2_of_page_size);
 #endif
+    // TODO: (GR) num_cols_per_input_block = num_tiles_per_input_block * tile_width
 
-    auto write_tiles_in_current_block = [&](uint32_t block_across_height_id) {
-        cb_wait_front(cb_id_out0, num_tiles_per_block);
-
+    auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
+        cb_wait_front(cb_id_out0, num_tiles_per_input_block);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-        for (uint32_t j = 0; j < tile_height; ++j) {
-            uint32_t num_complete_rows_already_processed = block_across_height_id * tile_height + j;
 
-            // The input row may need to be broken up into different output columns.
-            // And/or we may be writing to the middle of a page.
-            uint32_t num_cols_processed = 0;
-            while (num_cols_processed < input_num_cols_per_block) {
-                // global column id at the start of the row we're going to read/write
-                uint32_t current_global_col_id =
-                    block_across_width_start_id * input_num_cols_per_block + num_cols_processed;
+        // Process each row-major row in the input block
+        for (uint32_t j = 0; j < tile_height; ++j) {
+            uint32_t num_rows_already_processed = block_height_index * tile_height + j;
+
+            // For width or block sharding, the input tensor may have more/less shards width wise compared
+            // to the output tensor. In the less case different sections of the row-major row in the input block
+            // may map to different output blocks. In both cases, we may be writing to the middle of an output page.
+            uint32_t num_input_cols_processed = 0;
+            while (num_input_cols_processed < num_cols_per_input_block) {
+                // Index of the column that we are going to start writing elements to (relative to the entire tensor)
+                uint32_t write_col_index =
+                    width_wise_input_block_index * num_cols_per_input_block + num_input_cols_processed;
 
                 // page_id to write to
-                uint32_t output_page_id_within_row =
-                    current_global_col_id / output_num_cols_per_block;  // integer division -> round down
+                uint32_t output_page_id_within_row = write_col_index / num_cols_per_output_block;
                 uint32_t output_page_id =
-                    num_complete_rows_already_processed * output_num_blocks_across_width + output_page_id_within_row;
+                    num_rows_already_processed * num_output_blocks_across_width + output_page_id_within_row;
 
-                // offset within page we're writing to
-                uint32_t cols_already_processed_in_output_block = current_global_col_id % output_num_cols_per_block;
+                // Offset within page we're writing to
+                uint32_t num_cols_already_processed_in_output_block = write_col_index % num_cols_per_output_block;
                 uint32_t output_offset_within_page_in_bytes =
-                    cols_already_processed_in_output_block * output_element_size;
+                    num_cols_already_processed_in_output_block * output_element_size;
 
-                // how much to write
-                uint32_t num_cols_to_write =
-                    std::min(input_num_cols_per_block - num_cols_processed, output_num_cols_per_block);
+                // How many elements to write from the input block to the output block.
+                // Min of the number of remaining unprocessed columns in the input block
+                // and the number of remaining unprocessed columns in the output block.
+                uint32_t num_cols_to_write = std::min(
+                    num_cols_per_input_block - num_input_cols_processed,
+                    num_cols_per_output_block - num_cols_already_processed_in_output_block);
                 uint32_t num_bytes_to_write = num_cols_to_write * output_element_size;
 
-                // do the write
+                // Perform the write
                 uint64_t dst_noc_addr = get_noc_addr(output_page_id, s, output_offset_within_page_in_bytes);
                 noc_async_write(l1_read_addr, dst_noc_addr, num_bytes_to_write);
 
-                // update number of columns processed and move the read ptr
-                num_cols_processed += num_cols_to_write;
+                // Update number of columns processed and increment the read ptr
+                num_input_cols_processed += num_cols_to_write;
                 l1_read_addr += num_bytes_to_write;
             }
         }
 
         noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles_per_block);
+        cb_pop_front(cb_id_out0, num_tiles_per_input_block);
     };
 
-    // Each row of tiles (block) processed separately
+    // Each input block processed separately
     for (uint32_t i = 0; i < num_blocks; ++i) {
-        uint32_t block_across_height_id = block_across_height_start_id + i;  // 0-indexed
+        uint32_t height_wise_input_block_index = height_wise_input_block_start_index + i;
 
         // Process the current block
-        write_tiles_in_current_block(block_across_height_id);
+        write_tiles_in_current_block(height_wise_input_block_index);
     }
 }
