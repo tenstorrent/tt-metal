@@ -1,5 +1,8 @@
 name: "[internal] Remove Stale Branches"
 
+permissions:
+  contents: write
+
 on:
   schedule:
     - cron: "0 0,12 * * *"   # Runs at midnight (0:00) and noon (12:00)
@@ -10,7 +13,7 @@ jobs:
     if: github.repository == 'tenstorrent/tt-metal'
     runs-on: ubuntu-latest
     steps:
-      - uses: blozano-tt/remove-stale-branches@379c5b1430ca2951a1365427e7eb6574cfc4c7dd
+      - uses: fpicalausa/remove-stale-branches@68ab5e762e74b8c055007c62e5e85afdf0ec54be
         with:
           dry-run: false
           days-before-branch-stale: 180 # Branches stale for ~6 months
