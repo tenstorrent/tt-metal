@@ -54,13 +54,12 @@ void MAIN {
     uint32_t start_ht = get_arg_val<uint32_t>(4);
     uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
     uint32_t cb_length_t = get_arg_val<uint32_t>(6);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
 
     // reserve one tile for zeros on cb_in2
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
-    // auto cb_scaler = tt::CBIndex::c_2;
+    auto cb_scaler = tt::CBIndex::c_2;
     auto cb_fused_scale = tt::CBIndex::c_3;
     auto cb_fused_attn = tt::CBIndex::c_4;
     auto cb_exps = tt::CBIndex::c_6;
@@ -76,14 +75,16 @@ void MAIN {
     auto cb_prev_max = tt::CBIndex::c_15;
     constexpr auto cb_mask_padded = tt::CBIndex::c_5;
     constexpr auto cb_mask_padded_bcast = tt::CBIndex::c_13;
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
     init_sfpu(cb_mask_padded, cb_mask_padded_bcast);
 
     if (mask_padded_data) {
-        tile_regs_acquire();
         reconfig_data_format_srca(cb_mask_padded);
         pack_reconfig_data_format(cb_mask_padded_bcast);
-        cb_wait_front(cb_mask_padded, 1);
         unary_bcast_init<BroadcastType::ROW>(cb_mask_padded, cb_mask_padded_bcast);
+        tile_regs_acquire();
+        cb_wait_front(cb_mask_padded, 1);
+        UNPACK(tt::compute::common::print_full_tile(cb_mask_padded, 0, true));
         unary_bcast<BroadcastType::ROW>(cb_mask_padded, 0, 0);
         tile_regs_wait();
         tile_regs_commit();
@@ -93,6 +94,7 @@ void MAIN {
         tile_regs_release();
         cb_pop_front(cb_mask_padded, 1);
         cb_wait_front(cb_mask_padded_bcast, 1);
+        UNPACK(tt::compute::common::print_full_tile(cb_mask_padded_bcast, 0, true));
     }
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // comes from the reader

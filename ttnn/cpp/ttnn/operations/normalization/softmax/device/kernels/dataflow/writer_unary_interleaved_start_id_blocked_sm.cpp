@@ -3,15 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-
-#include "debug/dprint.h"
+#include "cpp/ttnn/operations/matmul/device/kernels/dataflow/pad_tile.hpp"
 
 // H-bcast mask
 FORCE_INLINE void generate_bcast_row_mask(
     const uint32_t cb_id, const uint32_t num_datum_padded, const uint16_t mask_val) {
-    DPRINT << "Stuck" << ENDL();
     cb_reserve_back(cb_id, 1);
-    DPRINT << "Stuck 2" << ENDL();
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
 
     if (num_datum_padded > 16) {
@@ -46,16 +43,6 @@ FORCE_INLINE void generate_bcast_row_mask(
 
     cb_push_back(cb_id, 1);
 }
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "======" << ENDL();
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -76,8 +63,12 @@ void kernel_main() {
 
     // Adds -inf padding. Note: the value is the uint16 representation of bfloat16's -inf
     constexpr uint16_t mask_val = 0xFF80;
+    constexpr uint32_t mask_val_32 = ((uint32_t)mask_val << 16) + mask_val;
     if (mask_padded_data) {
-        generate_bcast_row_mask(cb_id_mask, num_datum_padded, mask_val);
+        // generate_bcast_row_mask(cb_id_mask, num_datum_padded, mask_val);
+        uint32_t ptr = (get_write_ptr(cb_id_mask));
+        fill_pad_tile<uint16_t, 32 - num_datum_padded, 0>(ptr, mask_val_32);
+        cb_push_back(cb_id_mask, 1);
     }
 
     const InterleavedAddrGenFast<dst_is_dram> s = {
