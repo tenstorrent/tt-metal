@@ -294,31 +294,10 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     const duration = Date.now() - startTime;
     core.info(`[Fetch] Completed: Collected ${allRuns.length} runs in ${duration}ms (${apiCallCount} API calls)`);
 
-    // Filter runs to only include those within the requested time period
-    const requestedPeriodRuns = allRuns.filter(run => {
-      const runDate = new Date(run.created_at);
-      return runDate >= cutoffDate;
-    });
-
-    // Calculate and log the date range of requested period runs
-    if (requestedPeriodRuns.length > 0) {
-      const requestedDateRange = requestedPeriodRuns.reduce((range, run) => {
-        const runDate = new Date(run.created_at);
-        return {
-          earliest: !range.earliest || runDate < range.earliest ? runDate : range.earliest,
-          latest: !range.latest || runDate > range.latest ? runDate : range.latest
-        };
-      }, { earliest: null, latest: null });
-
-      core.info(`[Fetch] Requested period runs date range: ${requestedDateRange.earliest.toISOString()} to ${requestedDateRange.latest.toISOString()}`);
-    }
-
-    core.info(`[Fetch] Filtered to ${requestedPeriodRuns.length} runs within requested ${days} day period`);
-
-    // Return both the complete dataset (for caching) and the filtered dataset (for upload)
+    // Return the complete dataset for filtering in the main function
     return {
       completeRuns: allRuns,
-      requestedPeriodRuns: requestedPeriodRuns
+      dateRange: dateRange
     };
   }
 
@@ -405,13 +384,23 @@ async function run() {
     const { previousRuns, mostRecentCachedDate, earliestCachedDate } = cacheManager.loadPreviousCache(cachePath);
 
     // Fetch new runs
-    const { completeRuns, requestedPeriodRuns } = await fetcher.fetchAllWorkflowRuns(days, mostRecentCachedDate, earliestCachedDate);
-    core.info(`[Fetch] Fetched ${completeRuns.length} complete runs and ${requestedPeriodRuns.length} runs within requested ${days} day period`);
+    const { completeRuns, dateRange } = await fetcher.fetchAllWorkflowRuns(days, mostRecentCachedDate, earliestCachedDate);
+    core.info(`[Fetch] Fetched ${completeRuns.length} complete runs and ${dateRange.earliest.toISOString()} to ${dateRange.latest.toISOString()}`);
 
     // Process runs for caching
     const allRuns = fetcher.mergeRuns(previousRuns, completeRuns);
+
+    // First filter by workflow configs
     const filteredRuns = fetcher.filterRuns(allRuns, workflowConfigs);
     core.info(`[Fetch] Filtered to ${filteredRuns.length} runs based on workflow configs, triggers, and branch`);
+
+    // Then filter by date for the requested period
+    const cutoffDate = fetcher.getCutoffDate(days);
+    const filteredRequestedRuns = filteredRuns.filter(run => {
+      const runDate = new Date(run.created_at);
+      return runDate >= cutoffDate;
+    });
+    core.info(`[Fetch] Filtered to ${filteredRequestedRuns.length} runs within requested ${days} day period`);
 
     // Group runs by name for caching
     const groupedRuns = fetcher.groupRunsByName(filteredRuns);
@@ -420,14 +409,7 @@ async function run() {
     cacheManager.saveCache(cachePath, groupedRuns);
     core.info(`[Fetch] Saved complete dataset to cache: ${groupedRuns.size} workflows, ${filteredRuns.length} total runs`);
 
-    // For the upload file, we want to use the complete filtered data but only for the requested period
-    const cutoffDate = fetcher.getCutoffDate(days);
-    const filteredRequestedRuns = filteredRuns.filter(run => {
-      const runDate = new Date(run.created_at);
-      return runDate >= cutoffDate;
-    });
-
-    // Group the filtered requested period runs
+    // For the upload file, use the filtered requested period runs
     const groupedRequestedRuns = fetcher.groupRunsByName(filteredRequestedRuns);
 
     // Verify we have complete data for the requested period
