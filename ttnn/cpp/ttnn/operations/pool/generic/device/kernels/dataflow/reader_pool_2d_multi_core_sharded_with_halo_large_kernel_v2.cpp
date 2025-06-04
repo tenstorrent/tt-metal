@@ -69,8 +69,8 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
     constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(21);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(22);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(25);
-    constexpr uint32_t multibuffering_factor = get_compile_time_arg_val(26);
+    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(24);
+    constexpr uint32_t multibuffering_factor = get_compile_time_arg_val(25);
 
     constexpr uint32_t window_size_hw = window_h * window_w;
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;

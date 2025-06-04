@@ -306,7 +306,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         max_pool_partials_cb_id,
         in_one_cb_id,
         clear_value_cb_id,
-        is_blackhole,
         (uint32_t)pool_type,
         multi_buffering_factor};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
