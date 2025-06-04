@@ -6,10 +6,7 @@ import pytest
 from loguru import logger
 import ttnn
 import os
-from models.demos.llama3_subdevices.tt.llama_common import (
-    HostEmbedding,
-    PagedAttentionConfig,
-)
+from models.demos.llama3_subdevices.tt.llama_common import HostEmbedding, PagedAttentionConfig, PagedAttention
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
@@ -128,25 +125,16 @@ def test_llama_model_inference(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.batch_size_per_device_group,
-            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, None),
+            mesh_shape=model_args.cluster_shape,
         )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, None),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )
+
+        paged_attn = PagedAttention(paged_attention_config, model_args)
+
+        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper, per_device_group=True)
 
     # Load TTNN model
     tt_model = TtTransformer(

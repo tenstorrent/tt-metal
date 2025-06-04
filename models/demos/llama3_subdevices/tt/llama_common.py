@@ -23,6 +23,32 @@ class PagedAttentionConfig:
         self.max_num_blocks = max_num_blocks
 
 
+# Helper class for Page Attention, uses above PagedAttentionConfig
+class PagedAttention:
+    def __init__(self, config, model_args):
+        self.config = config
+        self.model_args = model_args
+        self.reverse_permutation = None
+        self.page_table_tt = None
+
+    def create_page_table(self, device, mesh_mapper=None, per_device_group=False):
+        batch_size = (
+            self.model_args.max_batch_size if not per_device_group else self.model_args.batch_size_per_device_group
+        )
+        permutation = torch.randperm(self.config.max_num_blocks)
+        self.reverse_permutation = torch.argsort(permutation)
+        assert self.config.max_num_blocks % batch_size == 0, "max_num_blocks must be divisible by max_batch_size"
+        page_table = self.reverse_permutation.reshape(batch_size, self.config.max_num_blocks // batch_size)
+        self.page_table_tt = ttnn.from_torch(
+            page_table,
+            device=device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+        )
+        return self.page_table_tt
+
+
 def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None):
     """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
     {{ system_prompt }}<|eot_id|><|start_header_id|>user<|end_header_id|>
