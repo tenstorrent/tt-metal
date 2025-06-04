@@ -33,7 +33,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
     const bool is_32bit = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
 
     if (is_32bit) {
-        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(icb, false)));
+        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb, false)));
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(true, false)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, false, icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
