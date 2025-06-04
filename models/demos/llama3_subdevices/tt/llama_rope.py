@@ -185,7 +185,7 @@ class TtLlamaRotarySetup(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=None if on_host else self.device,
             memory_config=None if on_host else ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(
+            mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.device,
                 dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
                 mesh_shape=list(self.device.shape),
