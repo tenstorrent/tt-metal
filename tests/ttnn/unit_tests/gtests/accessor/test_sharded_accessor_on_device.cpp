@@ -168,11 +168,6 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
         auto c_in0_config = CircularBufferConfig(aligned_page_size * num_tiles, {{cb_in0_idx, data_format}})
                                 .set_page_size(cb_in0_idx, aligned_page_size);
         auto cb_in0_id = CreateCircularBuffer(program, grid, c_in0_config);
-        tt::log_error(
-            "crta_config: CRTAConfig({}, {}, {})",
-            params.crta_config.runtime_tensor_shape,
-            params.crta_config.runtime_shard_shape,
-            params.crta_config.runtime_bank_coords);
         // Set up compile-time args for reader kernel
         const auto& input_buffer_distribution_spec =
             std::get<BufferDistributionSpec>(input_mesh_buffer->device_local_config().shard_parameters.value());
@@ -186,7 +181,6 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             input_sharded_accessor_args.compile_time_args.cend());
         input_compile_time_args.push_back(cb_in0_idx);
         input_compile_time_args.push_back(aligned_page_size);
-        tt::log_error("Number of compile-time args for reader kernel: {}", input_compile_time_args.size());
 
         // Set up compile-time args for writer kernel
         const auto& output_buffer_distribution_spec =
@@ -201,16 +195,12 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             output_sharded_accessor_args.compile_time_args.cend());
         output_compile_time_args.push_back(cb_in0_idx);
         output_compile_time_args.push_back(aligned_page_size);
-        tt::log_error("Number of compile-time args for writer kernel: {}", output_compile_time_args.size());
 
         std::map<std::string, std::string> defines{
             {"TENSOR_SHAPE_RT", fmt::format("{}", params.crta_config.runtime_tensor_shape)},
             {"SHARD_SHAPE_RT", fmt::format("{}", params.crta_config.runtime_shard_shape)},
             {"BANK_COORDS_RT", fmt::format("{}", params.crta_config.runtime_bank_coords)},
         };
-        for (const auto& [key, value] : defines) {
-            tt::log_error("Define: {} = {}", key, value);
-        }
         // Create reader kernel
         KernelHandle reader_kernel_id = CreateKernel(
             program,
@@ -241,7 +231,6 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             input_runtime_args.end(),
             input_sharded_accessor_args.runtime_args.cbegin(),
             input_sharded_accessor_args.runtime_args.cend());
-        tt::log_error("Number of runtime args for reader kernel: {}", input_runtime_args.size());
         SetRuntimeArgs(program, reader_kernel_id, grid, input_runtime_args);
 
         // Set up runtime args for writer kernel
@@ -252,7 +241,6 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             output_runtime_args.end(),
             output_sharded_accessor_args.runtime_args.cbegin(),
             output_sharded_accessor_args.runtime_args.cend());
-        tt::log_error("Number of runtime args for writer kernel: {}", output_runtime_args.size());
         SetRuntimeArgs(program, writer_kernel_id, grid, output_runtime_args);
 
         // Launch program
