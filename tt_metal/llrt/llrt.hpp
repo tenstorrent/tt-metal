@@ -14,6 +14,7 @@
 #include "core_coord.hpp"
 #include <tt_stl/span.hpp>
 // clang-format off
+#include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
 #include <umd/device/tt_xy_pair.h>
@@ -107,13 +108,12 @@ void wait_until_cores_done(
 
 // Send a message to the ethernet firmware mailbox, if supported
 // Possible message types can be queried from the Hal. See tt::tt_metal::FWMailboxMsg
+// Maximum number of args depends on the architecture. Args not provided will be set to zero.
 void send_msg_to_eth_mailbox(
     chip_id_t device_id,
     const CoreCoord& virtual_core,
-    uint32_t msg_type,
-    uint32_t arg0,
-    uint32_t arg1,
-    uint32_t arg2,
+    tt_metal::FWMailboxMsg msg_type,
+    std::vector<uint32_t> args,
     bool wait_for_ack = true,
     int timeout_ms = 30000);
 

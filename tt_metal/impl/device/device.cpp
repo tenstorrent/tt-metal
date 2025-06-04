@@ -479,10 +479,13 @@ void Device::reset_cores() {
         // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
         // app FW Only applicable to WORMHOLE ethernet cores today, but could in theory extend to other cores, remove
         // assert if so
+        if (this->arch() != ARCH::WORMHOLE_B0) {
+            return false;
+        }
         TT_ASSERT(
-            (this->arch() == ARCH::WORMHOLE_B0) and
-                (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id())),
-            "Invalid core type for context switch check");
+            tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id()),
+            "Invalid core {} for context switch check",
+            virtual_core.str());
         auto core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
         std::uint32_t launch_erisc_addr = hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
         auto data =

@@ -305,12 +305,11 @@ void wait_until_cores_done(
 void send_msg_to_eth_mailbox(
     chip_id_t device_id,
     const CoreCoord& virtual_core,
-    uint32_t msg_type,
-    uint32_t arg0,
-    uint32_t arg1,
-    uint32_t arg2,
+    tt_metal::FWMailboxMsg msg_type,
+    std::vector<uint32_t> args,
     bool wait_for_ack,
     int timeout_ms) {
+    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     bool is_eth_core = internal_::is_active_eth_core(device_id, virtual_core);
     TT_ASSERT(
         is_eth_core,
@@ -318,20 +317,15 @@ void send_msg_to_eth_mailbox(
         virtual_core.str());
 
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    uint32_t mailbox_addr =
-        hal.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_FW_MAILBOX_MSG);
+    uint32_t mailbox_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_FW_MAILBOX);
 
     // Mailbox not supported
     if (mailbox_addr == 0) {
         return;
     }
 
-    // Check mailbox is free
-    // It's free if the message is 0 or ETH_MSG_DONE
-    auto status_mask = hal.get_fw_mailbox_val(
-        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::FWMailboxMsg::ETH_MSG_STATUS_MASK);
-    auto call =
-        hal.get_fw_mailbox_val(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::FWMailboxMsg::ETH_MSG_CALL);
+    auto status_mask = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_STATUS_MASK);
+    auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
 
     auto wait_for_mailbox = [&](std::function<bool(uint32_t)> cond) {
         constexpr auto k_sleep_time = std::chrono::milliseconds{500};
@@ -361,32 +355,35 @@ void send_msg_to_eth_mailbox(
     };
     wait_for_mailbox([=](uint32_t mailbox_val) { return (mailbox_val & status_mask) != call; });
 
-    // Write to mailbox. Must write args first.
-    auto write_arg = [&](tt_metal::HalL1MemAddrType arg, uint32_t val) {
-        uint32_t arg_addr = hal.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, arg);
+    // Must write args first.
+    auto write_arg = [&](int index, uint32_t val) {
+        uint32_t arg_addr = hal.get_eth_fw_mailbox_arg_addr(index);
         write_hex_vec_to_core(device_id, virtual_core, {val}, arg_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
     };
-    write_arg(tt_metal::HalL1MemAddrType::ETH_FW_MAILBOX_ARG0, arg0);
-    write_arg(tt_metal::HalL1MemAddrType::ETH_FW_MAILBOX_ARG1, arg1);
-    write_arg(tt_metal::HalL1MemAddrType::ETH_FW_MAILBOX_ARG2, arg2);
 
-    const uint32_t msg = call | msg_type;
+    const auto max_args = hal.get_eth_fw_mailbox_arg_count();
+    TT_ASSERT(args.size() <= max_args, "Too many args provided {} max args {}", args.size(), max_args);
+    // Pad remaining args to zero
+    args.resize(max_args, 0);
+    for (int i = 0; i < max_args; ++i) {
+        write_arg(i, args[i]);
+    }
+
+    const auto msg_val = hal.get_eth_fw_mailbox_val(msg_type);
+    const uint32_t msg = call | msg_val;
     log_debug(
         tt::LogLLRuntime,
-        "Device {}: Eth {} Mailbox {:#x} Command {:#x} {:#x} {:#x} {:#x}",
+        "Device {}: Eth {} Mailbox {:#x} Command {:#x}",
         device_id,
         virtual_core.str(),
         mailbox_addr,
-        msg,
-        arg0,
-        arg1,
-        arg2);
+        msg);
     write_hex_vec_to_core(device_id, virtual_core, {msg}, mailbox_addr);
 
     // Wait for ack
     if (wait_for_ack) {
-        auto done_message =
-            hal.get_fw_mailbox_val(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::FWMailboxMsg::ETH_MSG_DONE);
+        auto done_message = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_DONE);
         wait_for_mailbox([=](uint32_t mailbox_val) { return (mailbox_val & status_mask) == done_message; });
     }
 }
