@@ -484,6 +484,10 @@ class TtModelArgs:
         self.start_core = ttnn.CoreCoord(1, 0)
 
         CKPT_DIR = os.getenv("CKPT_DIR")
+        if not CKPT_DIR:
+            # Fallback to LLAMA_DIR for backward compatibility
+            # TODO: Remove this fallback in the future
+            CKPT_DIR = os.getenv("LLAMA_DIR")
         HF_MODEL = os.getenv("HF_MODEL")
         assert not (CKPT_DIR and HF_MODEL), "Only one of CKPT_DIR or HF_MODEL should be set"
         if CKPT_DIR:
