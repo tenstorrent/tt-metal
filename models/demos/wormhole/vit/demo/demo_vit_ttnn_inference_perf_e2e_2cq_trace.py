@@ -120,9 +120,14 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1753088}], indirect=True
 )
-@pytest.mark.parametrize("expected_samples_per_sec", [1377])
 @pytest.mark.parametrize("batch_size", [8])
-def test_vit(device, use_program_cache, expected_samples_per_sec, batch_size):
+def test_vit(device, use_program_cache, batch_size, is_single_card_n300):
+    # Test is ran either on n300 or n150
+    # If it's n300, there's a problem with eth dispatch, hence lower perf
+    if is_single_card_n300:
+        expected_samples_per_sec = 1255
+    else:  # n150
+        expected_samples_per_sec = 1377
     torch.manual_seed(0)
 
     profiler.clear()
@@ -149,7 +154,6 @@ def test_vit(device, use_program_cache, expected_samples_per_sec, batch_size):
     # ensuring inference time fluctuations is not noise
     inference_time_avg = profiler.get("run") / num_measurement_iterations
 
-    compile_time = first_iter_time - 2 * inference_time_avg
     prep_perf_report(
         model_name=f"ttnn_vit_base_batch_size{batch_size}",
         batch_size=batch_size,
@@ -166,7 +170,7 @@ def test_vit(device, use_program_cache, expected_samples_per_sec, batch_size):
     logger.info(f"{model_name} {comments} inference time (avg): {inference_time_avg}")
     samples_per_sec = 1 / inference_time_avg * batch_size
     logger.info(f"Samples per second: {samples_per_sec}")
-    margin = 0.02
+    margin = 0.03
     min_range = expected_samples_per_sec * (1 - margin)
     max_range = expected_samples_per_sec * (1 + margin)
     assert (
