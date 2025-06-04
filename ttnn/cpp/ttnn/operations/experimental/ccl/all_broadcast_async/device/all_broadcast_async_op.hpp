@@ -110,7 +110,7 @@ std::vector<Tensor> all_broadcast_async(
     const GlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 std::vector<Tensor> all_broadcast_async(

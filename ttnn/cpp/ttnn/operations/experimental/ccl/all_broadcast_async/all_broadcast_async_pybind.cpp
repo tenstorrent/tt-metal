@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,7 +41,7 @@ void bind_all_broadcast_async(pybind11::module& module, const ccl_operation_t& o
             py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Ring,
+            py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("subdevice_id") = std::nullopt},
 
         ttnn::pybind_overload_t{
@@ -86,23 +86,22 @@ void py_bind_all_broadcast_async(pybind11::module& module) {
         ttnn::experimental::all_broadcast_async,
         R"doc(
 
-        Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
+        Performs an all-broadcast operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
-            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
-            mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
-        * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
+            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the operation on.
+            mesh_device (MeshDevice): Device mesh to perform the operation on.
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
 
         Keyword Args:
-            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            num_links (int, optional): Number of links to use for the all-broadcast operation. Defaults to `1`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            std::vector<ttnn.Tensor>: a vector of tensors from all the devices.
 
         )doc");
 }

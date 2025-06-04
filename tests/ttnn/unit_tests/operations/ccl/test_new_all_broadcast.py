@@ -9,14 +9,10 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
-    run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
-)
-
 
 def run_with_trace(
     mesh_device,
-    all_gather_topology,
+    all_broadcast_topology,
     input_tensor_mesh,
     num_links,
     output_mem_config,
@@ -31,7 +27,7 @@ def run_with_trace(
         multi_device_global_semaphore=multi_device_global_semaphore,
         num_links=num_links,
         memory_config=output_mem_config,
-        topology=all_gather_topology,
+        topology=all_broadcast_topology,
         subdevice_id=subdevice_id,
     )
     ttnn.synchronize_device(mesh_device)
@@ -45,7 +41,7 @@ def run_with_trace(
             multi_device_global_semaphore=multi_device_global_semaphore,
             num_links=num_links,
             memory_config=output_mem_config,
-            topology=all_gather_topology,
+            topology=all_broadcast_topology,
             subdevice_id=subdevice_id,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -60,7 +56,7 @@ def run_with_trace(
     return tt_out_tensor
 
 
-def run_all_gather_impl(
+def run_all_broadcast_impl(
     mesh_device,
     num_devices,
     output_shape,
@@ -69,7 +65,7 @@ def run_all_gather_impl(
     layout,
     use_program_cache,
     function_level_defaults,
-    all_gather_topology,
+    all_broadcast_topology,
     num_iters=1,
     trace_mode=False,
     rand_tensor=True,
@@ -106,7 +102,7 @@ def run_all_gather_impl(
     logger.info(f"input_shard_shape: {input_shard_shape}")
     logger.info(f"input_shard_grid: {input_shard_grid}")
 
-    ### For sharded all gather only
+    ### For sharded all broadcast only
     if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):
         pytest.fail(
             "Both input_shard_shape, shard_grid, and tensor_mem_layout must be provided together or all must be None"
@@ -160,6 +156,7 @@ def run_all_gather_impl(
             else:
                 output_tensor = torch.zeros(output_shape)
                 row_id = 1
+                # Fix indices for tensors with ranks 2 or 3
                 for w in range(output_shape[0]):
                     for z in range(output_shape[1]):
                         for y in range(0, output_shape[2], 32):
@@ -170,7 +167,6 @@ def run_all_gather_impl(
 
         output_tensor_goldens_list.append(output_tensors)
         temp_output_tensor = torch.cat(output_tensors, -1)
-        print("TEMP OUTPUT TENSOR: ", temp_output_tensor.shape)
         input_tensors = torch.chunk(temp_output_tensor, num_devices, -1)
         tt_input_tensors = []
         for i, t in enumerate(input_tensors):
@@ -185,7 +181,7 @@ def run_all_gather_impl(
     if trace_mode:
         tt_out_tensor = run_with_trace(
             mesh_device,
-            all_gather_topology,
+            all_broadcast_topology,
             input_tensor_mesh_list[0],
             num_links,
             output_mem_config,
@@ -201,7 +197,7 @@ def run_all_gather_impl(
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
                 memory_config=output_mem_config,
-                topology=all_gather_topology,
+                topology=all_broadcast_topology,
                 subdevice_id=worker_sub_device_id,
             )
             tt_out_tensor_list.append(tt_out_tensors)
@@ -215,23 +211,18 @@ def run_all_gather_impl(
         tt_out_tensors = tt_out_tensor_list[tensor_index]
         output_tensors = output_tensor_goldens_list[tensor_index]
         for k in range(num_devices):
-            print("k = ", k)
             output_tensor = output_tensors[k]
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensors[k])):
                 tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-                print(f"tt_output_tensor shape: {tt_output_tensor.shape}")
                 logger.info(f"Checking for device {t.device().id()}")
                 if input_dtype == ttnn.bfloat16:
                     eq, output = comp_equal(tt_output_tensor, output_tensor)
                 else:
                     eq, output = comp_pcc(tt_output_tensor, output_tensor)
                 if not eq:
-                    print(tt_output_tensor)
-                    print(output_tensor)
                     logger.error(f"output mismatch for tensor {i}")
                     passed = False
                     assert eq, f"{i} FAILED: {output}"
-    print("after comprisons")
     assert (
         mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
@@ -250,9 +241,9 @@ def run_all_gather_impl(
         (2, 1, [3, 122, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         (4, 1, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (4, 1, [2, 64, 512], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
-        (8, 1, [1184, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
         (4, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (8, 1, [10, 16384], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (8, 1, [10, 8320], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ],
 )
 @pytest.mark.parametrize(
@@ -262,7 +253,7 @@ def run_all_gather_impl(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("num_iters", [1])
+@pytest.mark.parametrize("num_iters", [3])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_broadcast(
     t3k_mesh_device,
@@ -277,7 +268,7 @@ def test_all_broadcast(
     use_program_cache,
     function_level_defaults,
 ):
-    run_all_gather_impl(
+    run_all_broadcast_impl(
         t3k_mesh_device,
         num_devices,
         output_shape,
@@ -286,7 +277,7 @@ def test_all_broadcast(
         layout,
         use_program_cache,
         function_level_defaults,
-        all_gather_topology=ttnn.Topology.Linear,
+        all_broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         rand_tensor=True,
         mem_config=mem_config,
@@ -298,8 +289,8 @@ def test_all_broadcast(
     [
         (
             4,
-            [4, 32, 256],
-            (128, 128),
+            [2, 32, 256],
+            (64, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
             None,
             None,
@@ -380,7 +371,7 @@ def test_all_broadcast_sharded(
     output_shard_grid,
     tensor_mem_layout,
 ):
-    run_all_gather_impl(
+    run_all_broadcast_impl(
         t3k_mesh_device,
         num_devices,
         output_shape,
@@ -389,7 +380,7 @@ def test_all_broadcast_sharded(
         layout,
         use_program_cache,
         function_level_defaults,
-        all_gather_topology=ttnn.Topology.Linear,
+        all_broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         rand_tensor=True,
         input_shard_shape=input_shard_shape,

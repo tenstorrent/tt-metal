@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,11 +17,9 @@ void AllBroadcastAsync::validate_with_output_tensors(
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
-    const auto& page_size = input_tensors[0].buffer()->page_size();
-    // TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_broadcast need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_broadcast need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
     TT_FATAL(
         this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
@@ -36,12 +34,11 @@ void AllBroadcastAsync::validate_with_output_tensors(
         input_tensor.memory_config().memory_layout());
 
     if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
-        printf("Output tensors size: %zu\n", output_tensors.size());
         for (uint32_t k = 0; k < output_tensors.size(); k++) {
             const auto& output_tensor = output_tensors[k];
             TT_FATAL(
                 output_tensor.value().storage_type() == StorageType::DEVICE,
-                "Operands to all_gather need to be on device!");
+                "Operands to all_broadcast need to be on device!");
             TT_FATAL(
                 output_tensor.value().get_layout() == layout,
                 "Error, Output tensor layout should be same as input tensor layout but has {}",
@@ -78,7 +75,7 @@ void AllBroadcastAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> AllBroadcastAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
+    auto shape = input_tensor.get_padded_shape();
     std::vector<TensorSpec> output_specs;
     for (uint32_t i = 0; i < this->ring_size; ++i) {
         output_specs.push_back(TensorSpec(
@@ -221,7 +218,8 @@ std::vector<Tensor> all_broadcast_async_impl(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     const auto mesh_view = mesh_device.get_view();
     TT_FATAL(
-        mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+        mesh_view.is_mesh_2d(),
+        "all-broadcast invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     int32_t rank = input_tensor.get_logical_shape().rank();

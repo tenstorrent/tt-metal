@@ -52,7 +52,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
-    const uint32_t dim = 3;
+
     auto mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
     const bool enable_persistent_fabric_mode = true;
@@ -72,18 +72,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     if (!tilized && (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                      input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED)) {
         num_width_shards = input_tensor.get_padded_shape()[-1] / input_tensor.memory_config().shard_spec()->shape[1];
-        printf("num_width_shards: %u\n", num_width_shards);
     }
 
-    printf("tilized: %d\n", tilized);
-    std::map<string, string> kernel_defines;
-    for (uint32_t k = 0; k < ring_size; k++) {
-        auto out_tensor_buffer = output_tensors[k].buffer()->address();
-        printf("out buffer for index : %u is %u\n", k, out_tensor_buffer);
-    }
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
-    // std::vector<Tensor> output_tensors = {output_tensor};
     auto output_tensor = output_tensors[0];
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
@@ -94,12 +86,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const auto [sender_worker_core_range, sender_worker_cores] =
         choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, mesh_device, sub_device_id);
 
+    // Info for RM tensors
     uint32_t row_size = input_tensor.get_logical_shape()[-1] * input_tensor.element_size();
     uint32_t page_size = round_up_to_mul32(row_size);
-    printf("input_tensor.get_padded_shape()[-1]: %u\n", input_tensor.get_padded_shape()[-1]);
-    printf("page_size: %u\n", page_size);
-    printf("input_tensor.get_logical_shape()[-1]: %u\n", input_tensor.get_logical_shape()[-1]);
-    printf("input_tensor.element_size(): %u\n", input_tensor.element_size());
 
     uint32_t num_rows = input_tensor.get_logical_shape().size() > 2
                             ? input_tensor.get_logical_shape()[-2] * input_tensor.get_logical_shape()[-3]
@@ -113,12 +102,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : 4096;
     size_t max_packet_size = packet_size_bytes;
-    printf("max_packet_size: %zu\n", max_packet_size);
     uint32_t num_packets_per_row = std::ceil(static_cast<double>(row_size) / max_packet_size);
-    printf("num_packets_per_row: %u\n", num_packets_per_row);
-    printf("packet_size_bytes: %zu\n", packet_size_bytes);
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
-    printf("l1_scratch_cb_page_size_bytes: %u\n", l1_scratch_cb_page_size_bytes);
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
@@ -129,12 +114,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     uint32_t buffer_page_size = page_size;
     if (!tilized) {
-        printf("changing cb_src0_config\n");
         if (num_width_shards > 1) {
             buffer_page_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
-            printf("buffer_page_size: %u\n", buffer_page_size);
         }
-        cb_src0_config = tt::tt_metal::CircularBufferConfig(buffer_page_size, {{src0_cb_index, df}})
+        cb_src0_config = tt::tt_metal::CircularBufferConfig(3 * buffer_page_size, {{src0_cb_index, df}})
                              .set_page_size(src0_cb_index, buffer_page_size);
     }
     tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
@@ -151,19 +134,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     // Tensor Info
-    const auto input_tensor_layout = input_tensor.buffer()->buffer_layout();
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
-    const auto input_tensor_page_layout = input_tensor.layout();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto output_tensor_layout = output_tensor.buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
-    const auto output_tensor_page_layout = output_tensor.layout();
 
     // KERNEL CREATION
     // Reader
-    printf("num_pages_per_packet: %u\n", num_pages_per_packet);
-    printf("tensor0_page_size: %u\n", op_config.get_page_size());
-    printf("input_tensor_num_pages: %u\n", input_tensor_num_pages);
     std::vector<uint32_t> reader_compile_args = {
         static_cast<uint32_t>(input_tensor_buffer_type),  // buffer0_type
         src0_cb_index,                                    // cb0_id
@@ -212,7 +188,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             src_stick_size_is_power_of_two,
             src_log2_stick_size};
     }
-
+    std::map<string, string> kernel_defines;
     if (sharded) {
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
@@ -251,10 +227,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
         if (!tilized) {
             base_pages_per_worker = num_rows / num_links;
-            printf("base_pages_per_worker in if : %u\n", base_pages_per_worker);
         }
-        printf("num_rows: %u\n", num_rows);
-        printf("base_pages_per_worker: %u\n", base_pages_per_worker);
         uint32_t remainder = input_tensor_num_pages % num_links;
         uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
         uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
@@ -263,12 +236,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             input_tile_id_start * num_width_shards,  // tile_id_start
             input_tile_id_end * num_width_shards,    // tile_id_end
         };
-        printf("input_tile_id_start: %u\n", input_tile_id_start);
-        printf("input_tile_id_end: %u\n", input_tile_id_end);
-        log_trace(tt::LogOp, "Reader Runtime Args:");
-        for (const auto& arg : reader_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
+
         if (sharded) {
             shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
         }
@@ -278,10 +246,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         uint32_t out_ready_sem_wait_value = (dynamic_alternate ? (ring_size + 1) : ring_size) * num_links;
-        uint32_t output_tile_id_start =
-            input_tile_id_start;  // ring_index * input_tensor_num_pages + input_tile_id_start; //HERE
-        uint32_t output_tile_id_end =
-            input_tile_id_end;  // ring_index * input_tensor_num_pages + input_tile_id_end;  //HERE
+        uint32_t output_tile_id_start = input_tile_id_start;
+        uint32_t output_tile_id_end = input_tile_id_end;
         std::vector<uint32_t> writer_rt_args = {
             output_tensors[ring_index].buffer()->address(),  // tensor_address0  //HERE
             semaphore.address(),                             // out_ready_sem_bank_addr (absolute address)
@@ -293,14 +259,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             drain_sync_core.y,                               // out_ready_sem_noc0_y
             out_ready_sem_wait_value,                        // out_ready_sem_wait_value
         };
-        log_trace(tt::LogOp, "Writer Runtime Args:");
-        for (const auto& arg : writer_rt_args) {
-            log_trace(tt::LogOp, "\t{}", arg);
-        }
         if (sharded) {
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
         }
-        printf("writer rt args size after sharded: %zu\n", writer_rt_args.size());
 
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
@@ -311,11 +272,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
-        }
-        printf("writer rt args size after fabric: %zu\n", writer_rt_args.size());
-
-        for (uint32_t k = 0; k < writer_rt_args.size(); k++) {
-            printf("writer rt arg at idx: %u, %u\n", k, writer_rt_args[k]);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
