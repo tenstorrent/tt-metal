@@ -5,6 +5,8 @@ import math
 import ttnn
 import torch
 
+from loguru import logger
+
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, ParameterDict
 
 from ttnn.device import is_wormhole_b0
@@ -125,6 +127,57 @@ def concatenate(activation, residual, dim=-1, groups=1, final_block=False):
         return ttnn.concat([x, residual], dim=dim, memory_config=output_memory_config, groups=groups)
 
 
+def determine_num_cores_for_dram_sharded_weights(
+    height: int, max_cores: int, minimum_shard_size: int = 32
+) -> tuple[int, int]:
+    for shard_size in range(minimum_shard_size, height + 1, minimum_shard_size):
+        if height % shard_size != 0:  # must divide evenly
+            continue
+        cores = height // shard_size
+        if cores <= max_cores:  # fits within the budget
+            return shard_size, cores
+    raise RuntimeError(f"Unable to find a suitable shard grid for tensor size {height}")
+
+
+def group_weight_blocks_per_core(weight, num_blocks, num_cores):
+    _, _, H, W = weight.shape
+
+    assert H % num_blocks == 0, "Weight height must be divisible by number of blocks"
+
+    block_size = H // num_blocks
+
+    assert block_size % num_cores == 0, "Block size must be divisible by number of DRAM banks"
+    assert block_size // num_cores >= 32, "Per bank block size must be at least 32"
+
+    weight = weight.reshape(num_blocks, num_cores, block_size // num_cores, -1)
+    weight = ttnn.permute(weight, (1, 0, 2, 3))
+    weight = weight.reshape(1, 1, H, W)
+    return weight
+
+
+def shard_conv2d_weight(weight, shard_height, number_of_cores, device):
+    _, _, H, W = weight.shape
+
+    assert (
+        shard_height >= 32 and number_of_cores > 0
+    ), f"Expected at least 1 core with shard height >= 32 for DRAM sharding (was {number_of_cores}, {shard_height})"
+
+    core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(number_of_cores - 1, 0)),
+        }
+    )
+    shard_shape = (H // number_of_cores, W)
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    weight = ttnn.to_device(
+        weight.cpu(), device=device, memory_config=memory_config
+    )  # TODO: Add support for DRAM outputs to ttnn.interleaved_to_sharded (#23113)
+
+    return weight
+
+
 class UNetConv2D:
     def __init__(
         self,
@@ -155,11 +208,7 @@ class UNetConv2D:
         self.use_1d_systolic_array = conv.use_1d_systolic_array
         self.mesh_mapper = mesh_mapper
 
-        shard_layout = (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            if self.use_1d_systolic_array
-            else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-        )
+        self.enable_sharded_weights = conv.enable_sharded_weights if "enable_sharded_weights" in conv else True
 
         assert (not reshard_if_not_optimal) or (
             reshard_if_not_optimal or override_core_grid
@@ -168,7 +217,7 @@ class UNetConv2D:
         self.conv_config = ttnn.Conv2dConfig(
             dtype=activation_dtype,
             weights_dtype=weights_dtype,
-            shard_layout=shard_layout,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=True,
             enable_act_double_buffer=(
                 conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
@@ -226,7 +275,38 @@ class UNetConv2D:
             "conv_config": self.conv_config,
         }
 
+    def preprocess_weights(self, input_layout, input_memory_config):
+        self.weight = ttnn.prepare_conv_weights(
+            weight_tensor=self.weight,
+            weights_format="OIHW",
+            input_layout=input_layout,
+            input_memory_config=input_memory_config,
+            has_bias=True,
+            **self.get_conv2d_kwargs(),
+        )
+        self.bias = ttnn.prepare_conv_bias(
+            bias_tensor=self.bias,
+            input_layout=input_layout,
+            input_memory_config=input_memory_config,
+            **self.get_conv2d_kwargs(),
+        )
+        if self.enable_sharded_weights:
+            _, _, H, W = self.weight.shape
+            number_of_blocks = self.kernel_size[0]  # TODO: Get this from conv2d implementation directly
+            [shard_height, number_of_cores] = determine_num_cores_for_dram_sharded_weights(
+                H // number_of_blocks, max_cores=2, minimum_shard_size=32
+            )
+            self.weight = group_weight_blocks_per_core(
+                self.weight, num_blocks=number_of_blocks, num_cores=number_of_cores
+            )
+            self.weight = shard_conv2d_weight(self.weight, shard_height, number_of_cores, self.device)
+            logger.debug(
+                f"Sharded weight (shape={list(self.weight.shape)}, shard_shape={self.weight.memory_config().shard_spec.shape} onto {self.weight.memory_config().shard_spec.num_cores()} cores"
+            )
+
     def __call__(self, x):
+        if not ttnn.is_tensor_storage_on_device(self.weight):
+            self.preprocess_weights(x.get_layout(), x.memory_config())
         x, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
