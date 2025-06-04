@@ -66,11 +66,11 @@ tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @ttmtrajko
 tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/jit_build/ @pgkeller @abhullar-tt @nathan-TT @jbaumanTT
 tt_metal/kernels/ @abhullar-tt # these should go away or get moved to tests
-tt_metal/llrt/ @abhullar-tt @jbaumanTT @pgkeller @asaigal @tt-aho
-tt_metal/programming_examples/ @asaigal @fuller-TT @mo-tenstorrent
+tt_metal/llrt/ @abhullar-tt @jbaumanTT @pgkeller @tt-asaigal @tt-aho
+tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent
 tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema
 tt_metal/test @tenstorrent/metalium-developers-infra
-tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @tt-dma @ihamerTT
+tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @tt-dma @ihamer-tt
 tt_metal/tools/lightmetal_runner @kmabeeTT
 tt_metal/tools/mem_bench @nhuang-tt # should be moved to tests micro benchmark?
 tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT
