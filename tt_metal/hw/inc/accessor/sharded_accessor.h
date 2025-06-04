@@ -23,7 +23,7 @@ using distribution_spec_t = typename detail::
 
 template <typename DSpec>
 constexpr auto compile_time_args_skip =
-    (DSpec::rank * DSpec::TensorShapeT::is_static) + (DSpec::rank * DSpec::TensorShapeT::is_static) +
+    (DSpec::rank * DSpec::TensorShapeT::is_static) + (DSpec::rank * DSpec::ShardShapeT::is_static) +
     (DSpec::num_banks * DSpec::BankCoordsT::is_static);
 
 template <typename DSpec>
