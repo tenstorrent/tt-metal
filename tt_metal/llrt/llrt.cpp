@@ -358,7 +358,7 @@ void send_msg_to_eth_mailbox(
     // Must write args first.
     auto write_arg = [&](int index, uint32_t val) {
         uint32_t arg_addr = hal.get_eth_fw_mailbox_arg_addr(index);
-        write_hex_vec_to_core(device_id, virtual_core, {val}, arg_addr);
+        write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{val}, arg_addr);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
     };
 
@@ -379,7 +379,7 @@ void send_msg_to_eth_mailbox(
         virtual_core.str(),
         mailbox_addr,
         msg);
-    write_hex_vec_to_core(device_id, virtual_core, {msg}, mailbox_addr);
+    write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{msg}, mailbox_addr);
 
     // Wait for ack
     if (wait_for_ack) {
