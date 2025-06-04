@@ -17,6 +17,7 @@
 //
 
 #include "dataflow_api.h"
+#include "dataflow_api_addrgen.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "debug/dprint.h"
@@ -72,8 +73,32 @@ constexpr uint32_t dispatch_s_cb_log_page_size = get_compile_time_arg_val(25);
 
 constexpr uint32_t ringbuffer_size = get_compile_time_arg_val(26);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(27);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(28);
+// fabric mux connection
+constexpr uint32_t fabric_header_rb_base = get_compile_time_arg_val(27);
+constexpr uint32_t fabric_header_rb_entries = get_compile_time_arg_val(28);
+constexpr uint32_t my_fabric_sync_status_addr = get_compile_time_arg_val(29);
+
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(30);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(31);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(32);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(33);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(34);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(35);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(36);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(37);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(38);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(39);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(40);
+constexpr size_t worker_credits_stream_id = get_compile_time_arg_val(41);
+
+constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(42);
+constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(43);
+constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(44);
+
+constexpr uint32_t num_hops = get_compile_time_arg_val(45);
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(46);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(47);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
