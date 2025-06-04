@@ -1460,9 +1460,12 @@ void kernel_main() {
     init_ptr_val<to_sender_packets_completed_streams[0]>(0);
     init_ptr_val<to_sender_packets_completed_streams[1]>(0);
     init_ptr_val<to_sender_packets_completed_streams[2]>(0);
-    init_ptr_val<sender_channel_free_slots_stream_ids[0]>(SENDER_NUM_BUFFERS_ARRAY[0]);
-    init_ptr_val<sender_channel_free_slots_stream_ids[1]>(SENDER_NUM_BUFFERS_ARRAY[1]);
-    init_ptr_val<sender_channel_free_slots_stream_ids[2]>(SENDER_NUM_BUFFERS_ARRAY[2]);
+    init_ptr_val<sender_channel_free_slots_stream_ids[0]>(
+        is_2d_fabric ? SENDER_NUM_BUFFERS_ARRAY[my_direction] : SENDER_NUM_BUFFERS_ARRAY[0]);  // LOCAL
+    init_ptr_val<sender_channel_free_slots_stream_ids[1]>(
+        is_2d_fabric ? SENDER_NUM_BUFFERS_ARRAY[0] : SENDER_NUM_BUFFERS_ARRAY[1]);  // EAST
+    init_ptr_val<sender_channel_free_slots_stream_ids[2]>(
+        is_2d_fabric ? SENDER_NUM_BUFFERS_ARRAY[1] : SENDER_NUM_BUFFERS_ARRAY[2]);  // WEST
     // TODO: change to per channel downstream buffers.
     init_ptr_val<receiver_channel_0_free_slots_from_east_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS);
     init_ptr_val<receiver_channel_0_free_slots_from_west_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS);
@@ -1471,8 +1474,8 @@ void kernel_main() {
     init_ptr_val<receiver_channel_1_free_slots_from_downstream_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS);
 
     if constexpr (is_2d_fabric) {
-        init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[3]);
-        init_ptr_val<sender_channel_free_slots_stream_ids[4]>(SENDER_NUM_BUFFERS_ARRAY[4]);
+        init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[2]);  // NORTH
+        init_ptr_val<sender_channel_free_slots_stream_ids[4]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // SOUTH
         init_ptr_val<vc1_sender_channel_free_slots_stream_id>(SENDER_NUM_BUFFERS_ARRAY[VC1_SENDER_CHANNEL]);
         init_ptr_val<to_sender_packets_acked_streams[3]>(0);
         init_ptr_val<to_sender_packets_acked_streams[4]>(0);
