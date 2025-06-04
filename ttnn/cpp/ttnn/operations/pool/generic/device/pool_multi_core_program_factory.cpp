@@ -130,7 +130,7 @@ static Tensor create_scalar_config_tensor(
     uint32_t n_dim,
     uint32_t num_shards_c,
     uint32_t num_cores) {
-    std::vector<uint32_t> config_vector;
+    std::vector<uint16_t> config_vector;
 
     size_t max_scalars_cnt = 0;
     std::vector<std::vector<ScalarInfo>> scalars_per_core = {};
@@ -148,7 +148,6 @@ static Tensor create_scalar_config_tensor(
         uint32_t output_stick_n = 0;
         uint32_t output_stick_h = 0;
         uint32_t output_stick_w = 0;
-        uint32_t output_stick_c = 0;
         for (uint32_t i = 0; i < num_iterations; ++i) {
             scalars_per_core.emplace_back(get_bf16_avg_pool_config_scalars(config, output_stick_h, output_stick_w));
             max_scalars_cnt = std::max(max_scalars_cnt, scalars_per_core.back().size());
@@ -156,22 +155,16 @@ static Tensor create_scalar_config_tensor(
             // Width sharded layout requires only one iteration, so we can break here
             if (in_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
                 in_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-                // Block sharded layout will valulate one set of scalars for all channels, so we don't need to iterate
-                // over channels
-                if (++output_stick_c == num_shards_c || in_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-                    output_stick_c = 0;
+                nhw_linear += config.out_nhw_per_core;
+                output_stick_w = nhw_linear % config.out_w;
+                output_stick_h = (nhw_linear / config.out_w) % config.out_h;
+                output_stick_n = nhw_linear / (config.out_w * config.out_h);
 
-                    nhw_linear += config.out_nhw_per_core;
-                    output_stick_w = nhw_linear % config.out_w;
-                    output_stick_h = (nhw_linear / config.out_w) % config.out_h;
-                    output_stick_n = nhw_linear / (config.out_w * config.out_h);
-
-                    if (output_stick_n == n_dim) {
-                        nhw_linear -= output_stick_n * config.out_w * config.out_h;
-                        output_stick_n = 0;
-                        output_stick_h = 0;
-                        output_stick_w = 0;
-                    }
+                if (output_stick_n == n_dim) {
+                    nhw_linear -= output_stick_n * config.out_w * config.out_h;
+                    output_stick_n = 0;
+                    output_stick_h = 0;
+                    output_stick_w = 0;
                 }
             }
         }
