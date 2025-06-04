@@ -165,7 +165,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     printf("tensor0_page_size: %u\n", op_config.get_page_size());
     printf("input_tensor_num_pages: %u\n", input_tensor_num_pages);
     std::vector<uint32_t> reader_compile_args = {
-        ring_index,                                       // my_chip_id
         static_cast<uint32_t>(input_tensor_buffer_type),  // buffer0_type
         src0_cb_index,                                    // cb0_id
         num_pages_per_packet,                             // packet_size_in_pages
@@ -174,7 +173,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     if (!tilized) {
         reader_compile_args = {
-            ring_index,                                           // my_chip_id
             static_cast<uint32_t>(input_tensor_buffer_type),      // buffer0_type
             src0_cb_index,                                        // cb0_id
             num_width_shards > 1 ? buffer_page_size : page_size,  // page_size
@@ -186,7 +184,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
 
     std::vector<uint32_t> writer_compile_args = {
-        ring_index,                                        // my_chip_id
         reserved_packet_header_CB_index,                   // reserved_packet_header_cb_id
         num_packet_headers_storable,                       // num_packet_headers_storable
         static_cast<uint32_t>(output_tensor_buffer_type),  // buffer0_type
@@ -201,7 +198,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     if (!tilized) {
         writer_compile_args = {
-            ring_index,                                        // my_chip_id
             reserved_packet_header_CB_index,                   // reserved_packet_header_cb_id
             num_packet_headers_storable,                       // num_packet_headers_storable
             static_cast<uint32_t>(output_tensor_buffer_type),  // buffer0_type

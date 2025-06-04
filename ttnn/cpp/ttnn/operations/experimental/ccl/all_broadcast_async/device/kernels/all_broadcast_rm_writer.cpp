@@ -19,20 +19,19 @@ using tt::tt_metal::BufferType;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
-constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(3));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
-constexpr uint32_t page_size = get_compile_time_arg_val(5);
-constexpr uint32_t row_size = get_compile_time_arg_val(6);
-constexpr uint32_t max_packet_size = get_compile_time_arg_val(7);
-constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(8);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(9);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(10);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(11);
-constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(12) == 1;
-constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(13);
+constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(0);
+constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(1);
+constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(2));
+constexpr uint32_t cb0_id = get_compile_time_arg_val(3);
+constexpr uint32_t page_size = get_compile_time_arg_val(4);
+constexpr uint32_t row_size = get_compile_time_arg_val(5);
+constexpr uint32_t max_packet_size = get_compile_time_arg_val(6);
+constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(7);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(8);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(9);
+constexpr bool dynamic_alternate = get_compile_time_arg_val(10);
+constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(11) == 1;
+constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(12);
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
@@ -61,13 +60,13 @@ void kernel_main() {
 
 #ifdef SHARDED
     typedef ShardedInfo<
+        get_compile_time_arg_val(13),
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
         get_compile_time_arg_val(17),
         get_compile_time_arg_val(18),
-        get_compile_time_arg_val(19),
-        get_compile_time_arg_val(20)>
+        get_compile_time_arg_val(19)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =
@@ -84,36 +83,6 @@ void kernel_main() {
 
 #endif
 
-    DPRINT << "ct args: \n";
-    DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
-    DPRINT << "reserved_packet_header_cb_id: " << (uint32_t)reserved_packet_header_cb_id << "\n";
-    DPRINT << "num_packet_headers_storable: " << (uint32_t)num_packet_headers_storable << "\n";
-    DPRINT << "buffer0_type: " << (uint32_t)buffer0_type << "\n";
-    DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "num_packets_per_row: " << (uint32_t)num_packets_per_row << "\n";
-    DPRINT << "max_packet_size: " << (uint32_t)max_packet_size << "\n";
-    DPRINT << "page_size: " << (uint32_t)page_size << "\n";
-    DPRINT << "num_targets_forward_direction: " << (uint32_t)num_targets_forward_direction << "\n";
-    DPRINT << "num_targets_backward_direction: " << (uint32_t)num_targets_backward_direction << "\n";
-
-    DPRINT << "rt args: \n";
-    DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    DPRINT << "row_id_start: " << (uint32_t)row_id_start << "\n";
-    DPRINT << "row_id_end: " << (uint32_t)row_id_end << "\n";
-    DPRINT << "wait_output_semaphore: " << (uint32_t)wait_output_semaphore << "\n";
-    DPRINT << "reset_global_semaphore: " << (uint32_t)reset_global_semaphore << "\n";
-    DPRINT << "out_ready_sem_bank_addr: " << (uint32_t)out_ready_sem_bank_addr << "\n";
-    DPRINT << "out_ready_sem_noc0_x: " << (uint32_t)out_ready_sem_noc0_x << "\n";
-    DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y << "\n";
-    DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value << "\n";
-
-    DPRINT << "arg_for_fab: " << (uint32_t)arg_for_fab << "\n";
-    DPRINT << "fabric_connection arg 0" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 1" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 2" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 3" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 4" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-
     // packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
@@ -124,9 +93,6 @@ void kernel_main() {
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
-    DPRINT << "packet_header_buffer_addr_forward: " << (uint32_t)packet_header_buffer_addr_forward << "\n";
-    DPRINT << "packet_header_buffer_addr_backward: " << (uint32_t)packet_header_buffer_addr_backward << "\n";
-    DPRINT << "packet_header_buffer_seminc: " << (uint32_t)packet_header_buffer_seminc << "\n";
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -138,46 +104,24 @@ void kernel_main() {
     pkt_hdr_backward->to_chip_multicast(
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
 
-    // interleaved addrgen
-    // constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    // auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
-    //    .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
-
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open();
     }
-    DPRINT << "fabric connection opened" << "\n";
 
     // 1. mcast via fabric to remote tensor addresses
-    DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << "\n";
-    DPRINT << "num_targets_backward_direction: " << num_targets_backward_direction << "\n";
-    DPRINT << "my_chip_id: " << my_chip_id << "\n";
-
     uint32_t row_id = row_id_start;
     while (row_id < row_id_end) {
         size_t l1_read_addr = get_read_ptr(cb0_id);
-        DPRINT << "row_id: " << row_id << "\n";
         cb_wait_front(cb0_id, 1);
 
         uint32_t offset = 0;
 
         for (uint32_t j = 0; j < num_packets_per_row; j++) {
-            DPRINT << "j: " << (uint32_t)j << "\n";
             uint64_t noc0_dest_noc_addr = get_noc_addr(row_id, tensor0_addrgen, offset, 0);
-            DPRINT << "noc0_dest_noc_addr: " << (uint64_t)noc0_dest_noc_addr << "\n";
-            // if (j >= 0) {
-            //     volatile tt_l1_ptr uint16_t* dst_noc2 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_read_addr);
-            //         for (uint16_t value = 0; value < 32; value++) {
-            //             DPRINT << "value at " << (uint16_t)value << " is: " << BF16((uint16_t)dst_noc2[value]) <<
-            //             ENDL();
-            //         }
-            // }
+
             uint32_t packet_size = std::min(max_packet_size, page_size);
             packet_size = std::min(packet_size, page_size - max_packet_size * j);
-            DPRINT << "packet_size: " << (uint32_t)packet_size << "\n";
 
-            DPRINT << "l1_read_addr: " << (uint32_t)l1_read_addr << " for j " << (uint32_t)j << "\n";
-            // This issues a flush barrier
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr, pkt_hdr_forward, pkt_hdr_backward, fabric_connection, l1_read_addr, packet_size);
             if constexpr (dynamic_alternate) {
@@ -221,18 +165,15 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-    DPRINT << "inc done\n";
 
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
         while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
-        DPRINT << "waitval done\n";
     }
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
-        DPRINT << "reset done\n";
     }
 
     if (fabric_connection.is_logically_connected()) {
@@ -240,6 +181,4 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
-
-    DPRINT << "DONE \n";
 }
