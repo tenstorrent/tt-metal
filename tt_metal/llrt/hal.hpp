@@ -42,6 +42,25 @@ struct HalJitBuildConfig {
     ll_api::memory::Loading memory_load;
 };
 
+// Ethernet Firmware mailbox messagesAdd commentMore actions
+enum class FWMailboxMsg : uint8_t {
+    // Message status mask.
+    // msg & ETH_MSG_STATUS_MASK != ETH_MSG_CALL means the mailbox is free
+    ETH_MSG_STATUS_MASK,
+    // Execute message
+    ETH_MSG_CALL,
+    // Indicates message processed
+    ETH_MSG_DONE,
+    // Run link status check
+    // arg0: copy_addr, arg1: unused, arg2: unused
+    ETH_MSG_LINK_STATUS_CHECK,
+    // Execute function from the core
+    // arg0: L1 addr of function, arg1: unused, arg2: unused
+    ETH_MSG_RELEASE_CORE,
+    // Number of mailbox message types
+    COUNT,
+};
+
 class Hal;
 
 // Core information instanced once per core type
@@ -55,6 +74,7 @@ private:
     std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
+    std::vector<uint32_t> fw_mailbox_msgs_;
     bool supports_cbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
 
@@ -65,6 +85,7 @@ public:
         const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
         const std::vector<DeviceAddr>& mem_map_bases,
         const std::vector<uint32_t>& mem_map_sizes,
+        const std::vector<uint32_t>& fw_mailbox_msgs,
         bool supports_cbs,
         bool supports_receiving_multicast_cmds);
 
@@ -219,6 +240,7 @@ public:
     const std::unordered_set<AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
+    uint32_t get_fw_mailbox_val(HalProgrammableCoreType programmable_core_type, FWMailboxMsg msg) const;
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
@@ -380,6 +402,13 @@ inline const HalJitBuildConfig& Hal::get_jit_build_config(
 }
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig
+
+inline uint32_t Hal::get_fw_mailbox_val(HalProgrammableCoreType programmable_core_type, FWMailboxMsg msg) const {
+    uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    TT_ASSERT(index < this->core_info_.size());
+    TT_ASSERT(msg < FWMailboxMsg::COUNT);
+    return this->core_info_[index].fw_mailbox_msgs_[utils::underlying_type<FWMailboxMsg>(msg)];
+}
 
 }  // namespace tt_metal
 }  // namespace tt

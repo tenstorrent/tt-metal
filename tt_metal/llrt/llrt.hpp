@@ -105,6 +105,18 @@ namespace internal_ {
 void wait_until_cores_done(
     chip_id_t device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms = 0);
 
+// Send a message to the ethernet firmware mailbox, if supported
+// Possible message types can be queried from the Hal. See tt::tt_metal::FWMailboxMsg
+void send_msg_to_eth_mailbox(
+    chip_id_t device_id,
+    const CoreCoord& virtual_core,
+    uint32_t msg_type,
+    uint32_t arg0,
+    uint32_t arg1,
+    uint32_t arg2,
+    bool wait_for_ack = true,
+    int timeout_ms = 30000);
+
 }  // namespace internal_
 
 }  // namespace llrt

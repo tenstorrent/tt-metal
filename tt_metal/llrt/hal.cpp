@@ -56,6 +56,7 @@ HalCoreInfoType::HalCoreInfoType(
     const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
     const std::vector<DeviceAddr>& mem_map_bases,
     const std::vector<uint32_t>& mem_map_sizes,
+    const std::vector<uint32_t>& fw_mailbox_msgs,
     bool supports_cbs,
     bool supports_receiving_multicast_cmds) :
     programmable_core_type_(programmable_core_type),
@@ -63,6 +64,7 @@ HalCoreInfoType::HalCoreInfoType(
     processor_classes_(processor_classes),
     mem_map_bases_(mem_map_bases),
     mem_map_sizes_(mem_map_sizes),
+    fw_mailbox_msgs_{fw_mailbox_msgs},
     supports_cbs_(supports_cbs),
     supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds) {}
 

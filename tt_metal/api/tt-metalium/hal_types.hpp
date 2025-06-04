@@ -42,6 +42,10 @@ enum class HalL1MemAddrType : uint8_t {
     RETRAIN_COUNT,
     RETRAIN_FORCE,
     FABRIC_ROUTER_CONFIG,
+    ETH_FW_MAILBOX_MSG,
+    ETH_FW_MAILBOX_ARG0,
+    ETH_FW_MAILBOX_ARG1,
+    ETH_FW_MAILBOX_ARG2,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
