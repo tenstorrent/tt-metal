@@ -29,6 +29,7 @@ RUN dnf update -y && \
     libevent-devel \
     libibverbs-devel \
     libmpc-devel \
+    libzstd-devel \
     make \
     mpfr-devel \
     ninja-build \
