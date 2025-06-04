@@ -5,13 +5,14 @@ training_config:
   model_save_interval: 500
   batch_size: 4
   num_epochs: 1
-  max_steps: 5000
+  max_steps: 4
   learning_rate: 0.0003
   weight_decay: 0.1
   use_moreh_adamw: true
   use_kahan_summation: false
-  gradient_accumulation_steps: 8
+  gradient_accumulation_steps: 2
   tokenizer_type: bpe
+  tokenizer_path: "data/gpt2-tokenizer.json"
 
   transformer_config:
     runner_type: memory_efficient

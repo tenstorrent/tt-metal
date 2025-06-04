@@ -898,6 +898,8 @@ int main(int argc, char **argv) {
 
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
+            ttml::autograd::ctx().get_profiler().dump_results(device, "dataloader_step_done");
+
             auto start_timer = std::chrono::high_resolution_clock::now();
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer->zero_grad();
@@ -950,6 +952,8 @@ int main(int argc, char **argv) {
                         save_training_state(config.model_path, model, scheduler, "transformer", "adamw");
                     }
                 }
+
+                ttml::autograd::ctx().get_profiler().dump_results(device, fmt::format("iteration_{}", global_step));
 
                 if (global_step >= config.max_steps) {
                     break;
