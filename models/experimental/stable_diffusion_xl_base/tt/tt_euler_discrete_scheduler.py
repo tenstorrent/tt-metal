@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -76,6 +76,9 @@ class TtEulerDiscreteScheduler(nn.Module):
         self.device = device
 
         # self.update_device_tensor("sigmas")
+
+    def set_step_index(self, step_index: int):
+        self.step_index = step_index
 
     def update_device_tensor(self, tensor_name):
         array = getattr(self, tensor_name)
