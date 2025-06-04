@@ -26,13 +26,10 @@ class WorkflowDataFetcher {
   /**
    * Date utility functions
    */
-  getEarliestDateInRuns(runs) {
-    if (!runs.length) return new Date(); // Safe default: current date
-    const times = runs
-      .map(run => new Date(run.created_at).getTime())
-      .filter(t => !isNaN(t) && t > 0);
-    if (!times.length) return new Date();
-    return new Date(Math.min(...times));
+  getCutoffDate(days) {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    return d;
   }
 
   getMostRecentDateInRuns(runs) {
@@ -44,22 +41,7 @@ class WorkflowDataFetcher {
     return new Date(Math.max(...times));
   }
 
-  getCutoffDate(days) {
-    const d = new Date();
-    d.setDate(d.getDate() - days);
-    return d;
-  }
-
-  getLatestCachedDate(runs) {
-    if (!runs.length) return new Date(0); // Safe default: epoch
-    const times = runs
-      .map(run => new Date(run.created_at).getTime())
-      .filter(t => !isNaN(t) && t > 0);
-    if (!times.length) return new Date(0);
-    return new Date(Math.max(...times));
-  }
-
-  getOldestCachedDate(runs) {
+  getEarliestDateInRuns(runs) {
     if (!runs.length) return new Date(); // Safe default: current date
     const times = runs
       .map(run => new Date(run.created_at).getTime())
@@ -237,7 +219,9 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             // Update date range
             if (!dateRange.earliest || runDate < dateRange.earliest) {
               dateRange.earliest = runDate;
-              core.debug(`[Fetch] New earliest run found: ${dateRange.earliest.toISOString()}`);
+              if (dateRange.earliest) {
+                core.debug(`[Fetch] New earliest run found: ${dateRange.earliest.toISOString()}`);
+              }
             }
             if (!dateRange.latest || runDate > dateRange.latest) {
               dateRange.latest = runDate;
@@ -281,7 +265,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
       }
 
       // If we don't have complete data coverage, log a warning
-      if (!hasCompleteData) {
+      if (!hasCompleteData && dateRange.earliest && dateRange.latest) {
         core.warning(`[Fetch] Incomplete data coverage: Earliest run (${dateRange.earliest.toISOString()}) is newer than cutoff date (${cutoffDate.toISOString()})`);
       }
 
@@ -307,6 +291,70 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
       remaining: rateLimit.data.resources.core.remaining,
       limit: rateLimit.data.resources.core.limit
     };
+  }
+
+  /**
+   * Combines cached and newly fetched data, then filters for the requested time period
+   */
+  async combineAndFilterData(previousRuns, newRuns, days, workflowConfigs) {
+    // Combine all runs
+    const allRuns = this.mergeRuns(previousRuns, newRuns);
+    core.info(`[Fetch] Combined ${previousRuns.length} cached runs with ${newRuns.length} new runs into ${allRuns.length} total runs`);
+
+    // Filter by workflow configs
+    const filteredRuns = this.filterRuns(allRuns, workflowConfigs);
+    core.info(`[Fetch] Filtered to ${filteredRuns.length} runs based on workflow configs, triggers, and branch`);
+
+    // Get cutoff date for requested period
+    const cutoffDate = this.getCutoffDate(days);
+
+    // Filter for requested time period
+    const requestedPeriodRuns = filteredRuns.filter(run => {
+      const runDate = new Date(run.created_at);
+      return runDate >= cutoffDate;
+    });
+    core.info(`[Fetch] Filtered to ${requestedPeriodRuns.length} runs within requested ${days} day period`);
+
+    // Calculate date ranges for both datasets
+    const completeDateRange = this.calculateDateRange(filteredRuns);
+    const requestedDateRange = this.calculateDateRange(requestedPeriodRuns);
+
+    // Log date ranges
+    if (completeDateRange.earliest && completeDateRange.latest) {
+      core.info(`[Fetch] Complete dataset date range: ${completeDateRange.earliest.toISOString()} to ${completeDateRange.latest.toISOString()}`);
+    }
+    if (requestedDateRange.earliest && requestedDateRange.latest) {
+      const daysCovered = (requestedDateRange.latest - requestedDateRange.earliest) / (1000 * 60 * 60 * 24);
+      core.info(`[Fetch] Requested period coverage: ${daysCovered.toFixed(1)} days (${requestedDateRange.earliest.toISOString()} to ${requestedDateRange.latest.toISOString()})`);
+
+      if (daysCovered < days) {
+        core.warning(`[Fetch] Warning: Requested period coverage (${daysCovered.toFixed(1)} days) is less than requested days (${days} days)`);
+      }
+    }
+
+    return {
+      completeRuns: filteredRuns,
+      requestedPeriodRuns: requestedPeriodRuns,
+      completeDateRange,
+      requestedDateRange
+    };
+  }
+
+  /**
+   * Calculate date range for a set of runs
+   */
+  calculateDateRange(runs) {
+    return runs.reduce((range, run) => {
+      const runDate = new Date(run.created_at);
+      if (isNaN(runDate.getTime())) {
+        core.warning(`[Fetch] Invalid run date found, skipping`);
+        return range;
+      }
+      return {
+        earliest: !range.earliest || runDate < range.earliest ? runDate : range.earliest,
+        latest: !range.latest || runDate > range.latest ? runDate : range.latest
+      };
+    }, { earliest: null, latest: null });
   }
 }
 
@@ -385,58 +433,43 @@ async function run() {
 
     // Fetch new runs
     const { completeRuns, dateRange } = await fetcher.fetchAllWorkflowRuns(days, mostRecentCachedDate, earliestCachedDate);
-    core.info(`[Fetch] Fetched ${completeRuns.length} complete runs and ${dateRange.earliest.toISOString()} to ${dateRange.latest.toISOString()}`);
+    if (dateRange && dateRange.earliest && dateRange.latest) {
+      core.info(`[Fetch] Fetched ${completeRuns.length} new runs with date range: ${dateRange.earliest.toISOString()} to ${dateRange.latest.toISOString()}`);
+    } else {
+      core.info(`[Fetch] Fetched ${completeRuns.length} new runs (no valid date range available)`);
+    }
 
-    // Process runs for caching
+    // Merge new runs with cached runs
     const allRuns = fetcher.mergeRuns(previousRuns, completeRuns);
+    core.info(`[Fetch] Combined ${previousRuns.length} cached runs with ${completeRuns.length} new runs into ${allRuns.length} total runs`);
 
-    // First filter by workflow configs
+    // Filter by workflow configs
     const filteredRuns = fetcher.filterRuns(allRuns, workflowConfigs);
     core.info(`[Fetch] Filtered to ${filteredRuns.length} runs based on workflow configs, triggers, and branch`);
 
-    // Then filter by date for the requested period
+    // Filter for requested time period
     const cutoffDate = fetcher.getCutoffDate(days);
-    const filteredRequestedRuns = filteredRuns.filter(run => {
+    const requestedPeriodRuns = filteredRuns.filter(run => {
       const runDate = new Date(run.created_at);
-      return runDate >= cutoffDate;
+      return !isNaN(runDate.getTime()) && runDate >= cutoffDate;
     });
-    core.info(`[Fetch] Filtered to ${filteredRequestedRuns.length} runs within requested ${days} day period`);
+    core.info(`[Fetch] Filtered to ${requestedPeriodRuns.length} runs within requested ${days} day period`);
 
     // Group runs by name for caching
     const groupedRuns = fetcher.groupRunsByName(filteredRuns);
+    const groupedRequestedRuns = fetcher.groupRunsByName(requestedPeriodRuns);
 
     // Save complete dataset to cache
     cacheManager.saveCache(cachePath, groupedRuns);
     core.info(`[Fetch] Saved complete dataset to cache: ${groupedRuns.size} workflows, ${filteredRuns.length} total runs`);
 
-    // For the upload file, use the filtered requested period runs
-    const groupedRequestedRuns = fetcher.groupRunsByName(filteredRequestedRuns);
-
-    // Verify we have complete data for the requested period
-    const requestedDateRange = filteredRequestedRuns.reduce((range, run) => {
-      const runDate = new Date(run.created_at);
-      return {
-        earliest: !range.earliest || runDate < range.earliest ? runDate : range.earliest,
-        latest: !range.latest || runDate > range.latest ? runDate : range.latest
-      };
-    }, { earliest: null, latest: null });
-
-    if (requestedDateRange.earliest && requestedDateRange.latest) {
-      const daysCovered = (requestedDateRange.latest - requestedDateRange.earliest) / (1000 * 60 * 60 * 24);
-      core.info(`[Fetch] Requested period coverage: ${daysCovered.toFixed(1)} days (${requestedDateRange.earliest.toISOString()} to ${requestedDateRange.latest.toISOString()})`);
-
-      if (daysCovered < days) {
-        core.warning(`[Fetch] Warning: Requested period coverage (${daysCovered.toFixed(1)} days) is less than requested days (${days} days)`);
-      }
-    }
-
     // Save requested period data to a separate file for upload
     const uploadPath = cachePath.replace('.json', '-upload.json');
     fs.writeFileSync(uploadPath, JSON.stringify(Array.from(groupedRequestedRuns.entries()), null, 2));
-    core.info(`[Fetch] Saved filtered dataset to upload file: ${groupedRequestedRuns.size} workflows, ${filteredRequestedRuns.length} total runs`);
+    core.info(`[Fetch] Saved filtered dataset to upload file: ${groupedRequestedRuns.size} workflows, ${requestedPeriodRuns.length} total runs`);
 
     // Set outputs
-    core.setOutput('total-runs', filteredRequestedRuns.length);
+    core.setOutput('total-runs', requestedPeriodRuns.length);
     core.setOutput('workflow-count', groupedRequestedRuns.size);
     core.setOutput('cache-path', uploadPath);
 
