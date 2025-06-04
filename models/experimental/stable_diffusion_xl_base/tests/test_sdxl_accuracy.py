@@ -31,7 +31,9 @@ COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d11
     "vae_on_device",
     [
         (True),
+        (False),
     ],
+    ids=("device_vae", "host_vae"),
 )
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco2014/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco2014/val2014.npz"])
@@ -44,9 +46,9 @@ def test_accuracy_sdxl(
     vae_on_device,
     captions_path,
     coco_statistics_path,
+    sdxl_accuracy_parameters,
 ):
-    start_from = int(os.getenv("START_FROM", 0))
-    num_prompts = int(os.getenv("NUM_PROMPTS", 5000))
+    start_from, num_prompts = sdxl_accuracy_parameters
 
     assert (
         0 <= start_from < 5000 and start_from + num_prompts <= 5000
