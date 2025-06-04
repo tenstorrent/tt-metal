@@ -264,7 +264,7 @@ void MetalContext::set_default_control_plane_mesh_graph() {
 
 void MetalContext::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
     fabric_config_ = fabric_config;
-    cluster_->initialize_fabric_config(fabric_config);
+    cluster_->configure_ethernet_cores_for_fabric_routers(fabric_config);
 
     // Initialize fabric context in control plane if fabric is enabled
     if (fabric_config != tt_metal::FabricConfig::DISABLED) {
