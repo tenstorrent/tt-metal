@@ -271,11 +271,18 @@ async function generateSummaryBox(grouped, github, context, workflowConfigs) {
  * @returns {Promise<string>} Complete markdown report
  */
 async function buildReport(grouped, github, context, workflowConfigs) {
-  const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
+  const days = parseFloat(core.getInput('days') || DEFAULT_LOOKBACK_DAYS);
   const timestamp = new Date().toISOString();
 
+  // Format the time range display
+  const hours = Math.floor(days * 24);
+  const minutes = Math.floor((days * 24 * 60) % 60);
+  const timeRange = hours > 0
+    ? `${hours} hours${minutes > 0 ? ` and ${minutes} minutes` : ''}`
+    : `${minutes} minutes`;
+
   return [
-    `# Workflow Summary (Last ${days} Days) - Generated at ${timestamp}\n`,
+    `# Workflow Summary (Last ${timeRange}) - Generated at ${timestamp}\n`,
     await generateSummaryBox(grouped, github, context, workflowConfigs),
     '\n## Column Descriptions\n',
     'A unique run represents a single workflow execution, which may have multiple retry attempts. For example, if a workflow fails and is retried twice, this counts as one unique run with three attempts (initial run + two retries).\n',
@@ -310,15 +317,20 @@ async function run() {
   try {
     // Get inputs
     const cachePath = core.getInput('cache-path', { required: true });
-    const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
+    const daysInput = core.getInput('days') || DEFAULT_LOOKBACK_DAYS;
+    const days = parseFloat(daysInput);
+    if (isNaN(days)) {
+      throw new Error(`Invalid days value: ${daysInput}. Must be a number.`);
+    }
+    if (days <= 0) {
+      throw new Error(`Days must be positive, got: ${days}`);
+    }
+
     const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
       throw new Error(`Cache file not found at ${cachePath}`);
-    }
-    if (isNaN(days) || days <= 0) {
-      throw new Error('Days must be a positive number');
     }
     if (!Array.isArray(workflowConfigs)) {
       throw new Error('Workflow configs must be a JSON array');
