@@ -28,7 +28,6 @@ void kernel_main() {
     const uint32_t tile_size = get_tile_size(cb_id_in0);
     const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = tile_size};
 
-#define DEBUG
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", num_dims: " << num_dims << ", start_id: " << start_id
            << ", num_tiles_per_core: " << num_tiles_per_core << ", num_tiles_per_barrier: " << num_tiles_per_barrier
