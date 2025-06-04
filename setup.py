@@ -26,8 +26,6 @@ def get_lib_dir():
         return "lib"
 
 
-LIB_DIR = get_lib_dir()
-
 BUNDLE_SFPI = False
 
 
