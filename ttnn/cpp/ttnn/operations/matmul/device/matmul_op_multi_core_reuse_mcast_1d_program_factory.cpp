@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -277,6 +277,7 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in0(
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
+    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1];
 
     std::vector<uint32_t> in0_sender_compile_time_args;
     if (in0_is_sharded) {
@@ -286,6 +287,8 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in0(
 
             (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
+            (std::uint32_t)in0_last_ktile_w,
+
             // in0/in1 common args
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
@@ -320,9 +323,10 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in0(
             (std::uint32_t)in0_block_w,          // in0_block_w
             (std::uint32_t)in0_block_h,          // in0_block_h
             (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
-            (std::uint32_t)false,                // extract_shard_sub_blocks (not used for interleaved)
-            (std::uint32_t)0,                    // shard_width_in_tiles (not used for interleaved)
-            (std::uint32_t)0,                    // shard_height_in_tiles (not used for interleaved)
+            (std::uint32_t)in0_last_ktile_w,
+            (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
+            (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
+            (std::uint32_t)0,      // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
@@ -898,6 +902,7 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in0(
         ttnn::operations::matmul::mcast_in0};
 }
 
+
 ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in1(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
@@ -975,6 +980,8 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in1(
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+
+    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1];
 
     bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;
@@ -1069,6 +1076,8 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in1(
         (std::uint32_t)in0_block_w,                // in0_block_w
         (std::uint32_t)in0_block_h,                // in0_block_h
         (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
+        (std::uint32_t)in0_last_ktile_w,
+
         (std::uint32_t)extract_shard_sub_blocks,
         (std::uint32_t)in0_shard_width_in_tiles,
         (std::uint32_t)in0_shard_height_in_tiles,
