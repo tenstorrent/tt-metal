@@ -229,22 +229,6 @@ void InitDeviceProfiler(IDevice* device);
  * */
 void ProfilerSync(ProfilerSyncState state);
 
-// clang-format off
-/**
- * Read device side profiler data and dump results into device side CSV log
- *
- * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
- *
- * Return value: void
- *
- * | Argument      | Description                                       | Type            | Valid Range               | Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | IDevice*        |                           | True     |
- * | program       | The program being profiled.                       | const Program & |                           | True     |
- * */
-// clang-format on
-// void DumpDeviceProfileResults(IDevice* device, const Program& program);
-
 /**
  * Read device side profiler data and dump results into device side CSV log
  *
