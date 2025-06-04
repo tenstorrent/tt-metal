@@ -5,8 +5,8 @@ rm -rf *.ddeb
 cd ..
 cd ..
 
-cmake --preset default
-cmake --build default --preset dev --clean-first
+cmake --preset gcc
+cmake --build default --preset dev-gcc --clean-first
 cd .build/default
 ninja package
 cd ..

@@ -2,11 +2,6 @@
 
 EXAMPLES_DIR="/usr/share/tt-metalium/examples"
 
-# Create a build directory and build all examples
-mkdir -p build
-cd build
-cmake -G Ninja ..
-ninja
 
 
 # List of examples to build
@@ -15,7 +10,6 @@ EXAMPLES_TO_BUILD=(
     "hello_world_datamovement_kernel"
     "loopback"
     "matmul_multicore_reuse"
-    
 )
 
 BOOST_SPAN_BROKEN_EXAMPLES=(
@@ -28,6 +22,7 @@ BOOST_SPAN_BROKEN_EXAMPLES=(
     "matmul_single_core"
     "pad"
     "sharding"
+    "contributed/vecadd"
 )
 
 # Loop through specified examples
@@ -40,7 +35,7 @@ for example in "${EXAMPLES_TO_BUILD[@]}"; do
         cd build
         cmake -G Ninja ..
         ninja
-        cd ../..  # Go back to original directory
+        cd "/usr/share/tt-metalium/examples"  # Go back to original directory
     else
         echo "Warning: Example directory not found: $example"
     fi

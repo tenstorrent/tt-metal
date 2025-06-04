@@ -52,6 +52,7 @@ install(
         matmul_single_core
         pad
         sharding
+        contributed
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into /usr/share/doc on a default Docker image.
     #                 Speculation: some dependency for magic doc handling is missing.
@@ -78,6 +79,7 @@ install(
         matmul_single_core
         pad
         sharding
+        contributed
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING
