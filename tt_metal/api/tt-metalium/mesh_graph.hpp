@@ -86,7 +86,7 @@ public:
 
     // Get the host ranks for a given mesh_id
     // Returned MeshContainer has a shape denoting the shape of how the "board" are arranged
-    const MeshContainer<HostRankId>& get_host_ranks(MeshId mesh_id) const { return mesh_host_ranks_[*mesh_id]; }
+    const MeshContainer<HostRankId>& get_host_ranks(MeshId mesh_id) const;
 
     // Get the shape of the mesh, or the shape of the submesh for a given host rank if provided
     MeshShape get_mesh_shape(MeshId mesh_id, std::optional<HostRankId> host_rank = std::nullopt) const;

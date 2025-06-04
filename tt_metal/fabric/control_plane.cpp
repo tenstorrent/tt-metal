@@ -378,30 +378,33 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
         mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "multihost_t3k_mesh_graph_descriptor.yaml") {
         // Pick out the chip with the lowest ethernet coordinate (i.e. NW chip)
-        // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
-        auto cmp = [](const eth_coord_t& lhs, const eth_coord_t& rhs) {
-            if (lhs.cluster_id != rhs.cluster_id) {
-                return lhs.cluster_id < rhs.cluster_id;
-            }
-            if (lhs.x != rhs.x) {
-                return lhs.x < rhs.x;
-            }
-            if (lhs.y != rhs.y) {
-                return lhs.y < rhs.y;
-            }
-            if (lhs.rack != rhs.rack) {
-                return lhs.rack < rhs.rack;
-            }
-            return lhs.shelf < rhs.shelf;
-        };
-        std::set<eth_coord_t, decltype(cmp)> eth_coords;
-        for (const auto& [physical_chip_id, coord] :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates()) {
-            eth_coords.insert(coord);
-        }
+        const auto& chip_eth_coords =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
+        TT_FATAL(!chip_eth_coords.empty(), "No chip ethernet coordinates found in ethernet coordinates map");
 
-        nw_chip_physical_id = tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord(
-            *eth_coords.begin());
+        // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
+        const auto min_coord =
+            *std::min_element(chip_eth_coords.begin(), chip_eth_coords.end(), [](const auto& a, const auto& b) {
+                const auto& [chip_a, eth_coord_a] = a;
+                const auto& [chip_b, eth_coord_b] = b;
+
+                if (eth_coord_a.cluster_id != eth_coord_b.cluster_id) {
+                    return eth_coord_a.cluster_id < eth_coord_b.cluster_id;
+                }
+                if (eth_coord_a.x != eth_coord_b.x) {
+                    return eth_coord_a.x < eth_coord_b.x;
+                }
+                if (eth_coord_a.y != eth_coord_b.y) {
+                    return eth_coord_a.y < eth_coord_b.y;
+                }
+                if (eth_coord_a.rack != eth_coord_b.rack) {
+                    return eth_coord_a.rack < eth_coord_b.rack;
+                }
+                return eth_coord_a.shelf < eth_coord_b.shelf;
+            });
+
+        nw_chip_physical_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord(min_coord.second);
         auto mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0});
 
         const auto& physical_chip_ids =
