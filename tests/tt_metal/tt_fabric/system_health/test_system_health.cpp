@@ -157,7 +157,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
         num_expected_chips = 4;
         num_connections_per_side = 4;
     } else {
-        ASSERT_TRUE(false) << "Mesh check not supported for system type " << magic_enum::enum_name(cluster_type);
+        GTEST_SKIP() << "Mesh check not supported for system type " << magic_enum::enum_name(cluster_type);
     }
 
     EXPECT_EQ(eth_connections.size(), num_expected_chips)
