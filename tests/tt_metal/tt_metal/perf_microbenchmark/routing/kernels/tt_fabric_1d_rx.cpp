@@ -40,7 +40,9 @@ void kernel_main() {
         time_seed = prng_next(time_seed);
         uint32_t expected_val = time_seed + (packet_payload_size_bytes / 16) - 1;
 
-        while (expected_val != *poll_addr);
+        while (expected_val != *poll_addr) {
+            invalidate_l1_cache();
+        }
 
         // check for data correctness
         match = check_packet_data(

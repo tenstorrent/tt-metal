@@ -122,7 +122,7 @@ void kernel_main() {
     uint64_t data_words_sent = 0;
     uint32_t packet_count = 0;
 
-    uint64_t dst_addr = ((uint64_t)noc_offset << 32 | target_address);
+    uint64_t dst_addr = get_noc_addr_helper(noc_offset, target_address);
     if constexpr (mcast_data) {
         fabric_async_write_multicast_add_header(
             client_interface,

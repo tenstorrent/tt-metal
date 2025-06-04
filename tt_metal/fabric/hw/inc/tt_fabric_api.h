@@ -167,6 +167,7 @@ inline void fabric_send_pull_request(
 FORCE_INLINE void fabric_wait_for_pull_request_words_flushed(
     volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface, uint32_t words) {
     while (client_interface->local_pull_request.pull_request.words_read < words) {
+        invalidate_l1_cache();
 #pragma GCC unroll 4
         for (int i = 0; i < 4; i++) {
             asm("nop");
@@ -536,6 +537,7 @@ inline void fabric_client_connect(
     uint64_t curr_client_idx_addr = client_q_addr + offsetof(fabric_push_client_queue_t, curr_client_idx);
     // wait until the client ahead in the queue disconnects
     while (true) {
+        invalidate_l1_cache();
         noc_async_read_one_packet(curr_client_idx_addr, (uint32_t)&(local_req_entry->remote_curr_client_idx.ptr), 4);
         noc_async_read_barrier();
         if (local_req_entry->my_client_idx.ptr == local_req_entry->remote_curr_client_idx.ptr) {
@@ -572,7 +574,9 @@ inline void fabric_client_connect(
 
 inline void fabric_client_disconnect(volatile tt_l1_ptr fabric_push_client_interface_t* client_interface) {
     // wait for slots to drain
-    while (*(uint32_t*)(client_interface->router_space) != FABRIC_ROUTER_OUTBOUND_BUF_SLOTS);
+    while (*(uint32_t*)(client_interface->router_space) != FABRIC_ROUTER_OUTBOUND_BUF_SLOTS) {
+        invalidate_l1_cache();
+    }
 
     uint64_t client_q_addr = get_noc_addr_helper(client_interface->router_addr_h, FABRIC_ROUTER_CLIENT_QUEUE_START);
 
@@ -602,6 +606,7 @@ inline void fabric_async_write_push_data(
     uint64_t push_addr = get_noc_addr_helper(client_interface->router_addr_h, client_interface->router_push_addr);
     uint32_t router_buf_space = *(volatile uint32_t*)client_interface->router_space;
     while (router_buf_space == 0) {
+        invalidate_l1_cache();
         router_buf_space = *(volatile uint32_t*)client_interface->router_space;
     }
 
