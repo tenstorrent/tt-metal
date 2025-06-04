@@ -101,6 +101,9 @@ class MathOperation(Enum):
     ReduceColumn = "REDUCE_COL_OPERATION"
     ReduceRow = "REDUCE_ROW_OPERATION"
     ReduceScalar = "REDUCE_SCALAR_OPERATION"
+    SfpuElwadd = "SFPU_ELWADD"
+    SfpuElwsub = "SFPU_ELWSUB"
+    SfpuElwmul = "SFPU_ELWMUL"
 
 
 class ReduceDimension(Enum):
