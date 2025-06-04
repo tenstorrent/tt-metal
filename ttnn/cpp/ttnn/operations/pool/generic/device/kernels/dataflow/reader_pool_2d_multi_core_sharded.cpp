@@ -16,7 +16,7 @@
 
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
-ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = false) {
+ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = true) {
     // simplest impl:
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
     uint32_t value = val | (val << 16);
@@ -113,7 +113,7 @@ void kernel_main() {
 
     if constexpr (reader_id == 0 && one_scalar_per_core) {
         cb_reserve_back(in_scalar_cb_id_0, 1);
-        fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16, true);
+        fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id_0, 1);
     }
 
@@ -163,7 +163,10 @@ void kernel_main() {
                 scalar_end = config_ptr[3 * scalar_index + 2];
                 scalar_index++;
             }
-            fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value);
+            if (counter < scalar_end && (counter == scalar_start || counter == scalar_start + 1 ||
+                                         counter == scalar_start + 2 || counter == scalar_start + 3)) {
+                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value, false);
+            }
 
             cb_push_back(in_scalar_cb_id, 1);
         }
