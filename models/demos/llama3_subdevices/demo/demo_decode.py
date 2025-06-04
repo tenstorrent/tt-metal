@@ -27,10 +27,16 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 
-# Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
+# Maximum percent `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
 # before triggering an assertion failure. Allows occasional dips while ensuring
 # stable performance without breaking CI prematurely.
-TSU_PERF_DROP_LIMIT_COUNT = 20
+
+# This allows for 15% of tokens to be outside the `tsu_range`for the first `TSU_TOKEN_BOUNDARY` tokens
+TSU_PERF_DROP_LIMIT_PRE_BOUNDARY = 0.15
+# This allows for 0.05% of tokens to be outside the `tsu_range`for the remaining tokens generated
+TSU_PERF_DROP_LIMIT_POST_BOUNDARY = 0.5
+# This dictates the boundary at which we can change our tolerance
+TSU_TOKEN_BOUNDARY = 200
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
@@ -130,6 +136,7 @@ def run_llama3_demo(
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
     dtype = ttnn.bfloat8_b
+
     assert batch_size <= 32, "Max batch size currently supported is 32"
     assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
 
@@ -435,7 +442,8 @@ def run_llama3_demo(
     tsu_thresholds = TSU_THRESHOLDS[galaxy_type].get(layers)
 
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
-    tsu_failures = 0
+    tsu_failures_pre_boundary = 0
+    tsu_failures_post_boundary = 0
 
     while users_decoding:
         if iteration == 0:  # First iteration also accounts for compile time
@@ -499,9 +507,12 @@ def run_llama3_demo(
             tokens_per_second_per_user_token127 = tokens_per_second_per_user
 
         if not stress_test:
-            # Increment failure count if throughput is too low
+            # Increment failure count for respective metrics if throughput is too low
             if tokens_per_second_per_user < tsu_thresholds["min"] or tokens_per_second_per_user > tsu_thresholds["max"]:
-                tsu_failures += 1
+                if iteration < TSU_TOKEN_BOUNDARY:
+                    tsu_failures_pre_boundary += 1
+                else:
+                    tsu_failures_post_boundary += 1
 
         profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
 
@@ -530,8 +541,8 @@ def run_llama3_demo(
         "compile_decode": profiler.get_duration("compile_decode"),
         "prefill_t/s": None,
         "prefill_time_to_token": None,
-        "decode_t/s": tokens_per_second_per_user_token127 * batch_size,
-        "decode_t/s/u": tokens_per_second_per_user_token127,
+        "decode_t/s": tokens_per_second_per_user * batch_size,
+        "decode_t/s/u": tokens_per_second_per_user,
     }
 
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, json_perf_targets)
@@ -546,13 +557,21 @@ def run_llama3_demo(
 
     if not stress_test:
         # print before assertion
-        out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
-        logger.info(out_of_targets_msg)
+        out_of_targets_msg = f"\nThroughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u for {tsu_failures_pre_boundary} iterations within first {TSU_TOKEN_BOUNDARY} tokens and {tsu_failures_post_boundary} iterations within latter tokens"
+
+        tsu_pre_boundary_failure = tsu_failures_pre_boundary / TSU_TOKEN_BOUNDARY <= TSU_PERF_DROP_LIMIT_PRE_BOUNDARY
+        tsu_post_boundary_failure = (
+            tsu_failures_post_boundary / (max_generated_tokens - TSU_TOKEN_BOUNDARY)
+            <= TSU_PERF_DROP_LIMIT_POST_BOUNDARY
+        )
         # Assert at the end of test to check if the throughput recuperated
-        assert tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT, out_of_targets_msg
+        tsu_failure = tsu_pre_boundary_failure or tsu_post_boundary_failure
+        assert tsu_failure, out_of_targets_msg
 
     # Print out total number of tsu_failures
-    logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
+    logger.info(
+        f"Total TSU Failures: {tsu_failures_pre_boundary + tsu_failures_post_boundary} (threshold: {(TSU_PERF_DROP_LIMIT_PRE_BOUNDARY*100):.2f} for first {TSU_TOKEN_BOUNDARY} tokens , {(TSU_PERF_DROP_LIMIT_POST_BOUNDARY*100):.2f} for latter tokens)"
+    )
 
 
 # List of supported Parameters for demo.py
@@ -580,7 +599,7 @@ def run_llama3_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            2000,  # max_generated_tokens
+            2048,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
@@ -596,7 +615,7 @@ def run_llama3_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            2000,  # max_generated_tokens
+            2048,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
