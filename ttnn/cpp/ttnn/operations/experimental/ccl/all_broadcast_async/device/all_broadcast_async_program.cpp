@@ -54,7 +54,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     tt::tt_metal::Program program{};
 
     auto mesh_device = input_tensor.mesh_device();
-    const bool enable_async_output_tensor = false;
     const bool enable_persistent_fabric_mode = true;
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
@@ -243,8 +242,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
-        bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
-        bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
+        bool wait_output_semaphore = (link == 0);
+        bool reset_global_semaphore = (link == 0);
         uint32_t out_ready_sem_wait_value = (dynamic_alternate ? (ring_size + 1) : ring_size) * num_links;
         uint32_t output_tile_id_start = input_tile_id_start;
         uint32_t output_tile_id_end = input_tile_id_end;

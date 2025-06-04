@@ -252,12 +252,14 @@ std::vector<Tensor> all_broadcast_async(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    std::vector<IDevice*> devices;
-    for (const auto& spec : input_tensor.device_storage().specs) {
-        devices.push_back(input_tensor.mesh_device()->get_device(spec.first));
-    }
     return all_broadcast_async_impl(
-        input_tensor, multi_device_global_semaphore, num_links, memory_config, topology, sub_device_id, devices);
+        input_tensor,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        topology,
+        sub_device_id,
+        ttnn::ccl::get_active_physical_devices(input_tensor));
 }
 
 std::vector<Tensor> all_broadcast_async(
