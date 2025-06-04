@@ -6,5 +6,3 @@ target_sources(metal_example_hello_world_datamovement_kernel PRIVATE hello_world
 
 find_package(TT-Metalium REQUIRED)
 target_link_libraries(metal_example_hello_world_datamovement_kernel PUBLIC TT::Metalium)
-
-
