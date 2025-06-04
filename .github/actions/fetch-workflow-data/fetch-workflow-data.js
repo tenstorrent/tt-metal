@@ -153,21 +153,21 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     const startTime = Date.now();
     let apiCallCount = 0;
 
-    core.info(`Starting fetch: days=${days}, sinceDate=${sinceDate}, cutoffDate=${cutoffDate}, oldestCachedDate=${oldestCachedDate}`);
+    core.info(`[Fetch] Starting data collection for last ${days} days (cutoff: ${cutoffDate.toISOString()})`);
 
     // Validate inputs
     if (!oldestCachedDate || isNaN(oldestCachedDate.getTime())) {
-      core.warning('Invalid oldestCachedDate, will perform full fetch');
+      core.warning('[Fetch] Invalid oldestCachedDate, will perform full fetch');
       oldestCachedDate = new Date(0);
     }
 
     // If our cutoff date is newer than oldest cached date, we only need to fetch new data
     const needHistoricalData = cutoffDate < oldestCachedDate;
-    core.info(`Need historical data: ${needHistoricalData} (cutoffDate ${cutoffDate} < oldestCachedDate ${oldestCachedDate})`);
+    core.info(`[Fetch] Cache status: ${needHistoricalData ? 'Need historical data' : 'Using cached data'} (oldest cache: ${oldestCachedDate.toISOString()})`);
 
     // If we don't need historical data and we have a valid sinceDate, we can optimize our fetch
     if (!needHistoricalData && sinceDate && !isNaN(sinceDate.getTime())) {
-      core.info(`Optimizing fetch: only getting runs after ${sinceDate.toISOString()}`);
+      core.info(`[Fetch] Optimized fetch: collecting runs after ${sinceDate.toISOString()}`);
       try {
         for (let page = 1; page <= this.maxPages; page++) {
           apiCallCount++;
@@ -181,33 +181,36 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
           });
 
           if (!runs.workflow_runs.length) {
-            core.info('No more runs found, stopping fetch');
+            core.info('[Fetch] No more runs found in optimized fetch');
             break;
           }
 
           allRuns.push(...runs.workflow_runs);
-          core.info(`Fetched ${runs.workflow_runs.length} runs on page ${page}`);
+          core.info(`[Fetch] Page ${page}: Added ${runs.workflow_runs.length} runs (total: ${allRuns.length})`);
 
           if (runs.workflow_runs.length < this.runsPerPage) {
-            core.info('Received fewer runs than requested, reached end of data');
+            core.info('[Fetch] Reached end of data in optimized fetch');
             break;
           }
 
           // Check for rate limits
           const rateLimit = await this.getRateLimitInfo();
           if (rateLimit.remaining < 100) {
-            core.warning(`Low rate limit remaining: ${rateLimit.remaining}, stopping fetch`);
+            core.warning(`[Fetch] Low rate limit remaining: ${rateLimit.remaining}, stopping optimized fetch`);
             break;
           }
         }
       } catch (error) {
-        core.warning(`Error during optimized fetch: ${error.message}. Falling back to full fetch.`);
+        core.warning(`[Fetch] Error during optimized fetch: ${error.message}. Falling back to full fetch.`);
       }
     }
 
     // Full fetch - only needed if we don't have enough historical data
     if (needHistoricalData) {
-      core.info('Performing full fetch of workflow runs to get historical data');
+      core.info('[Fetch] Starting full fetch to collect historical data');
+      let hasCompleteData = false;
+      let earliestRunDate = null;
+
       for (let page = 1; page <= this.maxPages; page++) {
         try {
           apiCallCount++;
@@ -220,50 +223,82 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
           });
 
           if (!runs.workflow_runs.length) {
-            core.info('No more runs found, stopping fetch');
+            core.info('[Fetch] No more runs found in full fetch');
             break;
           }
 
           for (const run of runs.workflow_runs) {
             const runDate = new Date(run.created_at);
             if (isNaN(runDate.getTime())) {
-              core.warning(`Invalid run date for run ${run.id}, skipping`);
+              core.warning(`[Fetch] Invalid run date for run ${run.id}, skipping`);
               continue;
             }
 
-            if (runDate >= cutoffDate) {
-              allRuns.push(run);
-            } else {
-              core.info(`Found run older than cutoff date: ${runDate} < ${cutoffDate}, stopping fetch`);
-              return allRuns;
+            // Track earliest run date we've seen
+            if (!earliestRunDate || runDate < earliestRunDate) {
+              earliestRunDate = runDate;
+              core.debug(`[Fetch] New earliest run found: ${earliestRunDate.toISOString()}`);
             }
+
+            // If we've found a run older than our cutoff date, we have complete data
+            if (runDate < cutoffDate) {
+              hasCompleteData = true;
+              core.info(`[Fetch] Found run older than cutoff date: ${runDate.toISOString()} < ${cutoffDate.toISOString()}`);
+            }
+
+            // Always add to allRuns for caching, but we'll filter later for the requested period
+            allRuns.push(run);
+          }
+
+          // If we have complete data coverage, we can stop
+          if (hasCompleteData) {
+            core.info('[Fetch] Complete data coverage achieved, stopping full fetch');
+            break;
           }
 
           if (runs.workflow_runs.length < this.runsPerPage) {
-            core.info('Received fewer runs than requested, reached end of data');
+            core.info('[Fetch] Reached end of data in full fetch');
             break;
           }
 
           // Check for rate limits
           const rateLimit = await this.getRateLimitInfo();
           if (rateLimit.remaining < 100) {
-            core.warning(`Low rate limit remaining: ${rateLimit.remaining}, stopping fetch`);
+            core.warning(`[Fetch] Low rate limit remaining: ${rateLimit.remaining}, stopping full fetch`);
             break;
           }
         } catch (error) {
           if (error.status === 403 && error.message.includes('rate limit')) {
-            core.warning('Rate limit exceeded, stopping fetch');
+            core.warning('[Fetch] Rate limit exceeded, stopping full fetch');
             break;
           }
-          core.warning(`Error fetching page ${page}: ${error.message}`);
+          core.warning(`[Fetch] Error fetching page ${page}: ${error.message}`);
           break;
         }
+      }
+
+      // If we don't have complete data coverage, log a warning
+      if (!hasCompleteData) {
+        core.warning(`[Fetch] Incomplete data coverage: Earliest run (${earliestRunDate.toISOString()}) is newer than cutoff date (${cutoffDate.toISOString()})`);
       }
     }
 
     const duration = Date.now() - startTime;
-    core.info(`Fetch completed: ${allRuns.length} runs in ${duration}ms (${apiCallCount} API calls)`);
-    return allRuns;
+    core.info(`[Fetch] Completed: Collected ${allRuns.length} runs in ${duration}ms (${apiCallCount} API calls)`);
+
+    // Filter runs to only include those within the requested time period
+    const requestedPeriodRuns = allRuns.filter(run => {
+      const runDate = new Date(run.created_at);
+      return runDate >= cutoffDate;
+    });
+
+    core.info(`[Fetch] Filtered to ${requestedPeriodRuns.length} runs within requested ${days} day period`);
+
+    // Return both the complete dataset (for caching) and the filtered dataset (for upload)
+    return {
+      completeRuns: allRuns,
+      requestedPeriodRuns: requestedPeriodRuns
+    };
   }
 
   async getRateLimitInfo() {
@@ -349,28 +384,37 @@ async function run() {
     const { previousRuns, mostRecentCachedDate, earliestCachedDate } = cacheManager.loadPreviousCache(cachePath);
 
     // Fetch new runs
-    const newRuns = await fetcher.fetchAllWorkflowRuns(days, mostRecentCachedDate, earliestCachedDate);
-    core.info(`Fetched ${newRuns.length} new runs`);
+    const { completeRuns, requestedPeriodRuns } = await fetcher.fetchAllWorkflowRuns(days, mostRecentCachedDate, earliestCachedDate);
+    core.info(`[Fetch] Fetched ${completeRuns.length} complete runs and ${requestedPeriodRuns.length} runs within requested ${days} day period`);
 
-    // Process runs
-    const allRuns = fetcher.mergeRuns(previousRuns, newRuns);
+    // Process runs for caching
+    const allRuns = fetcher.mergeRuns(previousRuns, completeRuns);
     const filteredRuns = fetcher.filterRuns(allRuns, workflowConfigs);
-    core.info(`Filtered to ${filteredRuns.length} runs based on workflow configs, triggers, and branch`);
+    core.info(`[Fetch] Filtered to ${filteredRuns.length} runs based on workflow configs, triggers, and branch`);
 
-    // Group runs by name
+    // Group runs by name for caching
     const groupedRuns = fetcher.groupRunsByName(filteredRuns);
 
-    // Save cache
+    // Save complete dataset to cache
     cacheManager.saveCache(cachePath, groupedRuns);
 
+    // Process requested period runs for upload
+    const filteredRequestedRuns = fetcher.filterRuns(requestedPeriodRuns, workflowConfigs);
+    const groupedRequestedRuns = fetcher.groupRunsByName(filteredRequestedRuns);
+
+    // Save requested period data to a separate file for upload
+    const uploadPath = cachePath.replace('.json', '-upload.json');
+    fs.writeFileSync(uploadPath, JSON.stringify(Array.from(groupedRequestedRuns.entries()), null, 2));
+    core.info(`[Fetch] Saved ${groupedRequestedRuns.size} workflows to upload file`);
+
     // Set outputs
-    core.setOutput('total-runs', filteredRuns.length);
-    core.setOutput('workflow-count', groupedRuns.size);
-    core.setOutput('cache-path', cachePath);
+    core.setOutput('total-runs', filteredRequestedRuns.length);
+    core.setOutput('workflow-count', groupedRequestedRuns.size);
+    core.setOutput('cache-path', uploadPath);
 
     // Log rate limit info
     const { remaining, limit } = await fetcher.getRateLimitInfo();
-    core.info(`GitHub API rate limit remaining: ${remaining} / ${limit}`);
+    core.info(`[Fetch] GitHub API rate limit remaining: ${remaining} / ${limit}`);
   } catch (error) {
     core.setFailed(error.message);
   }
