@@ -9,10 +9,7 @@ import ttnn
 from models.demos.llama3_subdevices.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
-from models.demos.llama3_subdevices.tt.llama_common import (
-    precompute_freqs,
-    PagedAttentionConfig,
-)
+from models.demos.llama3_subdevices.tt.llama_common import precompute_freqs, PagedAttentionConfig, PageAttention
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 from models.utility_functions import (
     comp_pcc,
@@ -123,25 +120,15 @@ def test_llama_attention_inference(
             max_num_blocks=page_params["page_max_num_blocks"],
         )
 
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.batch_size_per_device_group,
-            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, None),
+            mesh_shape=model_args.cluster_shape,
         )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, None),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )
+
+        paged_attn = PageAttention(paged_attention_config, model_args)
+
+        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper)
 
     prefetcher_setup = TtLlamaPrefetcherSetup(
         mesh_device,
@@ -282,7 +269,7 @@ def test_llama_attention_inference(
                             model_args.head_dim,
                         )[
                             : 1 if batch_size == 1 else model_args.num_device_groups,
-                            reverse_permutation,
+                            paged_attn.reverse_permutation,
                             : model_args.n_kv_heads,
                             :,
                             : model_args.head_dim,

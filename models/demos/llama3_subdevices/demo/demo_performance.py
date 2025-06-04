@@ -12,9 +12,7 @@ import pytest
 
 is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
-from models.demos.llama3_subdevices.tt.llama_common import (
-    PagedAttentionConfig,
-)
+from models.demos.llama3_subdevices.tt.llama_common import PagedAttentionConfig, PagedAttention
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
@@ -111,20 +109,11 @@ def run_llama3_decode_performance(
     page_table_tt = None
 
     if paged_attention:
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
-        )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
-        )
+        paged_attn = PagedAttention(paged_attention_config, model_args)
+
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape)
+
+        page_table = paged_attn.create_page_table(mesh_device, mesh_mapper)
 
     # Load TTNN Llama3.1 model
     logger.info("Loading weights to device...")
