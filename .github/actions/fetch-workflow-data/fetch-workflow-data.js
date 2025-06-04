@@ -27,8 +27,25 @@ class WorkflowDataFetcher {
    * Date utility functions
    */
   getCutoffDate(days) {
+    // Validate days parameter
+    if (typeof days !== 'number' || isNaN(days)) {
+      throw new Error('Days parameter must be a number');
+    }
+    if (days <= 0) {
+      throw new Error('Days parameter must be positive');
+    }
+
     const d = new Date();
-    d.setDate(d.getDate() - days);
+    // Convert days to milliseconds (including fractional days for hours)
+    const hoursInMs = days * 24 * 60 * 60 * 1000;
+    d.setTime(d.getTime() - hoursInMs);
+
+    // Log the time range for debugging
+    const hours = Math.floor(days * 24);
+    const minutes = Math.floor((days * 24 * 60) % 60);
+    core.info(`[Fetch] Time range: ${hours} hours and ${minutes} minutes (${days} days)`);
+    core.info(`[Fetch] Cutoff time: ${d.toISOString()}`);
+
     return d;
   }
 
