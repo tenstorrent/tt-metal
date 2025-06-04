@@ -50,28 +50,28 @@ void call_sfpu_operation(SfpuType operation)
     switch (operation)
     {
         case SfpuType::abs:
-            ckernel::sfpu::_calculate_abs_<APPROX_MODE, 10>(10);
+            ckernel::sfpu::_calculate_abs_<APPROX_MODE, 32>(32);
             break;
         case SfpuType::cosine:
-            ckernel::sfpu::_calculate_cosine_<APPROX_MODE, 10>(10);
+            ckernel::sfpu::_calculate_cosine_<APPROX_MODE, 32>(32);
             break;
         case SfpuType::log:
             ckernel::sfpu::_init_log_<APPROX_MODE>();
-            ckernel::sfpu::_calculate_log_<APPROX_MODE, false, 10>(10, 0);
+            ckernel::sfpu::_calculate_log_<APPROX_MODE, false, 32>(32, 0);
             break;
         case SfpuType::reciprocal:
             ckernel::sfpu::_init_reciprocal_<APPROX_MODE>();
-            ckernel::sfpu::_calculate_reciprocal_<APPROX_MODE, 10, is_fp32_dest_acc_en>(10);
+            ckernel::sfpu::_calculate_reciprocal_<APPROX_MODE, 32, is_fp32_dest_acc_en>(32);
             break;
         case SfpuType::sine:
-            ckernel::sfpu::_calculate_sine_<APPROX_MODE, 10>();
+            ckernel::sfpu::_calculate_sine_<APPROX_MODE, 32>();
             break;
         case SfpuType::sqrt:
             ckernel::sfpu::_init_sqrt_<APPROX_MODE>();
-            ckernel::sfpu::_calculate_sqrt_<APPROX_MODE, 0, 10>(10);
+            ckernel::sfpu::_calculate_sqrt_<APPROX_MODE, 0, 32>(32);
             break;
         case SfpuType::square:
-            ckernel::sfpu::_calculate_square_<APPROX_MODE, 10>(10);
+            ckernel::sfpu::_calculate_square_<APPROX_MODE, 32>(32);
             break;
         case SfpuType::celu:
             ckernel::sfpu::_calculate_activation_<APPROX_MODE, ActivationType::Celu, 10>(10, 1 / 10);

@@ -58,7 +58,7 @@ def generate_golden(operation, operand1, data_format):
     }
     if operation not in ops:
         raise ValueError("Unsupported operation!")
-    return [ops[operation](num) for num in tensor1_float.tolist()][:256]
+    return [ops[operation](num) for num in tensor1_float.tolist()][:1024]
 
 
 # SUPPORTED FORMATS FOR TEST
@@ -122,7 +122,8 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
         pytest.skip(reason="This combination is not fully implemented in testing")
 
     src_A, src_B = generate_stimuli(
-        formats.input_format, formats.input_format, sfpu=True
+        formats.input_format,
+        formats.input_format,
     )
     golden = generate_golden(mathop, src_A, formats.output_format)
     write_stimuli_to_l1(src_A, src_B, formats.input_format, formats.input_format)
@@ -141,12 +142,8 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
     run_elf_files(testname)
 
     wait_for_tensix_operations_finished()
-    res_from_L1 = collect_results(
-        formats, tensor_size=len(src_A)
-    )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
-    res_from_L1 = res_from_L1[
-        :256
-    ]  # this will be removed once we implement to read bytes from L1 according to data format (size of datum) which will be added in next PR
+    res_from_L1 = collect_results(formats, tensor_size=len(src_A))
+    res_from_L1 = res_from_L1[:1024]
     assert len(res_from_L1) == len(golden)
 
     golden_tensor = torch.tensor(
