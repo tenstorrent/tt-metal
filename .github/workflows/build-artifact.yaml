@@ -346,10 +346,10 @@ jobs:
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
-          CIBW_ENVIRONMENT: >
+          CIBW_ENVIRONMENT: |
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
-            CCACHE_REMOTE_STORAGE=${{ env.CCACHE_REMOTE_STORAGE }}
+            CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY=${{ env.ENABLE_TRACY_BUILD }}
           CIBW_BEFORE_BUILD: mkdir -p /tmp/ccache && ccache -z
           CIBW_AFTER_BUILD: ccache -s
