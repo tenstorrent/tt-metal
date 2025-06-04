@@ -67,7 +67,7 @@ tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelick
 tt_metal/jit_build/ @pgkeller @abhullar-tt @nathan-TT @jbaumanTT
 tt_metal/kernels/ @abhullar-tt # these should go away or get moved to tests
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @pgkeller @tt-asaigal @tt-aho
-tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent
+tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent @tenstorrent/metalium-api-owners
 tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema
 tt_metal/test @tenstorrent/metalium-developers-infra
 tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @tt-dma @ihamer-tt
@@ -79,7 +79,7 @@ tt_metal/tools/watcher_dump/ @tt-dma @pgkeller
 
 # metal misc
 tt_metal/sfpi-version.sh @nathan-TT @tenstorrent/metalium-developers-infra
-tt_metal/tt_metal.cpp @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @pgkeller @aliuTT
+tt_metal/tt_metal.cpp @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @pgkeller @aliuTT @ayerofieiev-tt
 tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @tenstorrent/metalium-developers-infra
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
