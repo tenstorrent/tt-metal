@@ -450,22 +450,6 @@ def test_ring_joint_sdpa_perf(
 
     def run_iters(tt_out_list, tt_joint_out_list):
         for i in range(n_iters):
-            # K_gathered = ttnn.experimental.all_gather_async(
-            #     tt_K,
-            #     dim=2,
-            #     multi_device_global_semaphore=[ccl_semaphore_handles[i][0]],
-            #     num_links=1,
-            #     topology=ttnn.Topology.Ring,
-            #     subdevice_id=worker_sub_device_id,
-            # )
-            # V_gathered = ttnn.experimental.all_gather_async(
-            #     tt_V,
-            #     dim=2,
-            #     multi_device_global_semaphore=[ccl_semaphore_handles[i][1]],
-            #     num_links=1,
-            #     topology=ttnn.Topology.Ring,
-            #     subdevice_id=worker_sub_device_id,
-            # )
             tt_out, tt_joint_out, tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_Q,
                 tt_K,
