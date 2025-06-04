@@ -26,11 +26,83 @@ test_suite_bh_single_pcie_small_ml_model_tests() {
     pytest models/demos/blackhole/resnet50/tests/upstream_pipeline
 }
 
+test_suite_wh_6u_metal_unit_tests() {
+    echo "[upstream-tests] running WH 6U upstream metalium unit tests. Note that skips should be treated as failures"
+    ./build/test/tt_metal/tt_fabric/test_system_health
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+}
+
+test_suite_wh_6u_metal_2d_torus_health_check_tests() {
+    echo "[upstream-tests] Checking for 2D Torus topology on WH 6U"
+    ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_2D
+}
+
+test_suite_wh_6u_model_unit_tests() {
+    echo "[upstream-tests] running WH 6U upstream model unit tests"
+    pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
+    pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py
+    pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_llama_perf
+    pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
+    # pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py hang???
+}
+
+test_suite_wh_6u_llama_demo_tests() {
+    echo "[upstream-tests] running WH 6U upstream Llama demo tests with weights"
+
+    if [ -z "${LLAMA_DIR}" ]; then
+        echo "[upstream-tests] Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
+        exit 1
+    fi
+
+    if [ -d "$LLAMA_DIR" ] && [ "$(ls -A $LLAMA_DIR)" ]; then
+        echo "[upstream-tests] Llama weights exist, continuing"
+    else
+        echo "[upstream-tests] Error: Llama weights do not seem to exist in $LLAMA_DIR, exiting" >&2
+        exit 1
+    fi
+
+    # TODO: to remove...
+    pip install -r models/tt_transformers/requirements.txt
+    pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick"
+    pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py
+    pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat"
+    # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
+    # assert 200 <= 20
+    # pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
+    pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "mini-stress-test"
+}
+
+test_suite_wh_6u_llama_long_stress_tests() {
+    echo "[upstream-tests] running WH 6U upstream Llama long stress tests. Note that on 6U systems built as of End of May 2025, this may take up to 4 hours to run."
+    echo "[upstream-tests] Ensure that you have a TG directory populated with .bin files in LLAMA_DIR on the host."
+
+    if [ -z "${LLAMA_DIR}" ]; then
+        echo "[upstream-tests] Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
+        exit 1
+    fi
+
+    if [ -d "$LLAMA_DIR" ] && [ "$(ls -A $LLAMA_DIR)" ]; then
+        echo "[upstream-tests] Llama weights exist, continuing"
+    else
+        echo "[upstream-tests] Error: Llama weights do not seem to exist in $LLAMA_DIR, exiting" >&2
+        exit 1
+    fi
+
+    # TODO: to remove...
+    pip install -r models/tt_transformers/requirements.txt
+    # This will take almost 3 hours. Ensure that the tensors are cached in the LLAMA_DIR.
+    pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test and not mini-stress-test"
+}
+
 # Define test suite mappings for different hardware topologies
 declare -A hw_topology_test_suites
 
 hw_topology_test_suites["blackhole"]="test_suite_bh_single_pcie_python_unit_tests test_suite_bh_single_pcie_metal_unit_tests test_suite_bh_single_pcie_small_ml_model_tests"
 hw_topology_test_suites["blackhole_no_models"]="test_suite_bh_single_pcie_python_unit_tests test_suite_bh_single_pcie_metal_unit_tests"
+hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests test_suite_wh_6u_llama_demo_tests test_suite_wh_6u_metal_unit_tests test_suite_wh_6u_metal_2d_torus_health_check_tests"
 
 # Function to display help
 show_help() {
@@ -102,9 +174,8 @@ if [[ -n "$test_suite" ]]; then
 
     # Check if the test suite is in the list of test suites for this topology
     if ! echo "${hw_topology_test_suites[$hw_topology]}" | grep -q "\b$test_suite\b"; then
-        echo "Error: Test suite '$test_suite' is not part of the '$hw_topology' hw/topology"
+        echo "[upstream-tests] Warning: Test suite '$test_suite' is not part of the '$hw_topology' hw/topology"
         echo "Available test suites for $hw_topology: ${hw_topology_test_suites[$hw_topology]}"
-        exit 1
     fi
 
     $test_suite

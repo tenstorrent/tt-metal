@@ -34,9 +34,50 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only untilize tile major data");
 
-    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
+    TT_FATAL(input_tensor_a.get_padded_shape()[-1] % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
+    TT_FATAL(
+        (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) % TILE_HEIGHT == 0,
+        "Height must be evenly divisible into tiles");
 
-    if (input_tensor_a.memory_config().is_sharded()) {
+    if (this->sub_core_grids.has_value()) {
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Input memory layout must be interleaved when sub_core_grid argument provided");
+        TT_FATAL(
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Output memory layout must be interleaved when sub_core_grid argument provided");
+        TT_FATAL(
+            this->use_multicore == true,
+            "sub_core_grid implementation only supported when use_multicore flag argument is set to true");
+    }
+
+    if (!this->use_multicore) {
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::SINGLE_BANK,
+            "Input memory layout must be interleaved or sharded");
+        TT_FATAL(
+            this->output_mem_config.memory_layout() != TensorMemoryLayout::SINGLE_BANK,
+            "Output memory layout must be interleaved or sharded");
+
+        if (input_tensor_a.is_sharded()) {
+            std::array<uint32_t, 2> input_shard_shape = input_tensor_a.shard_spec().value().shape;
+            TT_FATAL(
+                input_tensor_a.get_padded_shape()[-1] % input_shard_shape[1] == 0,
+                "Uneven input shard shape not supported");
+            TT_FATAL(
+                (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) % input_shard_shape[0] == 0,
+                "Uneven input shard shape not supported");
+        }
+        if (this->output_mem_config.is_sharded()) {
+            std::array<uint32_t, 2> output_shard_shape = this->output_mem_config.shard_spec().value().shape;
+            TT_FATAL(
+                input_tensor_a.get_padded_shape()[-1] % output_shard_shape[1] == 0,
+                "Uneven output shard shape not supported");
+            TT_FATAL(
+                (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) % output_shard_shape[0] == 0,
+                "Uneven output shard shape not supported");
+        }
+    } else if (input_tensor_a.memory_config().is_sharded()) {
         if (this->output_mem_config.is_sharded()) {
             TT_FATAL(
                 this->output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(), "Error");
@@ -66,7 +107,19 @@ std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<T
     const auto& input_tensor = input_tensors.at(0);
     DataType output_dtype =
         input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
-    if (output_mem_config.is_sharded()) {
+
+    if (!this->use_multicore) {
+        return {TensorSpec(
+            input_tensor.get_logical_shape(),
+            TensorLayout::fromPaddedShape(
+                output_dtype,
+                PageConfig(Layout::ROW_MAJOR),
+                this->output_mem_config,
+                input_tensor.get_logical_shape(),
+                input_tensor.get_padded_shape()))};
+    }
+
+    if (this->output_mem_config.is_sharded()) {
         if (input_tensor.memory_config().is_sharded()) {
             auto mem_config = this->output_mem_config.with_shard_spec(input_tensor.memory_config().shard_spec());
             return {TensorSpec(
@@ -105,7 +158,7 @@ std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<T
         TensorLayout::fromPaddedShape(
             output_dtype,
             PageConfig(Layout::ROW_MAJOR),
-            output_mem_config,
+            this->output_mem_config,
             input_tensor.get_logical_shape(),
             input_tensor.get_padded_shape()))};
 }
@@ -119,19 +172,22 @@ operation::ProgramWithCallbacks Untilize::create_program(
         return detail::untilize_single_core(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
-
-    // don't run multicore block if the input tensor is sub_core_grids is provided
     if (this->sub_core_grids.has_value()) {
-        return detail::untilize_multi_core(
-            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->sub_core_grids);
+        // If sub_core_grids parameter is provided, use custom sub_core_grid implementation instead
+        // of the standard multicore implementation or the block multicore implementation
+        return detail::untilize_multi_core_sub_core_grids(
+            input_tensor_a,
+            output_tensor,
+            this->use_pack_untilize,
+            this->fp32_dest_acc_en,
+            this->sub_core_grids.value());
     }
-
-    if (!this->enough_space_height) {
+    if (!this->enough_space_height && !input_tensor_a.is_sharded() && !output_tensor.is_sharded()) {
         return detail::untilize_multi_core_block(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
-    return detail::untilize_multi_core(
-        input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->sub_core_grids);
+
+    return detail::untilize_multi_core(input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
 }
 
 }  // namespace ttnn::operations::data_movement

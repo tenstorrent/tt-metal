@@ -6,6 +6,7 @@
 
 #include "ops/cross_entropy_bw/cross_entropy_bw.hpp"
 #include "ops/cross_entropy_fw/cross_entropy_fw.hpp"
+#include "ops/profiler_no_op/profiler_no_op.hpp"
 #include "ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "ops/softmax/softmax.hpp"
 
@@ -24,5 +25,8 @@ constexpr auto cross_entropy_bw = ttnn::register_operation<
 
 constexpr auto softmax =
     ttnn::register_operation<"ttml::metal::softmax", ttml::metal::ops::softmax::SoftmaxOperation>();
+
+constexpr auto profiler_no_op =
+    ttnn::register_operation<"ttml::metal::profiler_no_op", ttml::metal::ops::profiler_no_op::ProfilerNoopOperation>();
 
 }  // namespace ttml::metal

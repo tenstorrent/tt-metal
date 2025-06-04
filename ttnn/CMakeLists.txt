@@ -23,12 +23,25 @@ add_library(ttnn_core ${LIB_TYPE})
 add_library(TT::NN::Core ALIAS ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
 
-GENERATE_FBS_HEADER(${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_types.fbs)
+set(TENSOR_FLATBUFFER_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_coordinate.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_spec.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
+)
+
+set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
+foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE})
+    list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
+endforeach()
+
 target_sources(
     ttnn_core
     PRIVATE
-        ${FBS_GENERATED_HEADER_FILE}
+        ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
         core/cluster.cpp
         core/config.cpp
@@ -45,9 +58,10 @@ target_sources(
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
         core/old_infra_device_operation.cpp
+        core/reports.cpp
         core/run_operation.cpp
-        core/tensor/flatbuffer/tensor_types_from_flatbuffer.cpp
-        core/tensor/flatbuffer/tensor_types_to_flatbuffer.cpp
+        core/tensor/flatbuffer/tensor_flatbuffer.cpp
+        core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
         core/tensor/host_buffer/functions.cpp
         core/tensor/layout/alignment.cpp
         core/tensor/layout/page_config.cpp
@@ -62,6 +76,7 @@ target_sources(
         core/tensor/tensor_utils.cpp
         core/tensor/types.cpp
         core/tensor/xtensor/partition.cpp
+        core/tensor/nd_sharding_utils.cpp
 )
 target_include_directories(
     ttnn_core
@@ -296,17 +311,24 @@ list(
     APPEND
     TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/__init__.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/activation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/cluster.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/events.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/global_semaphore.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/cluster.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/program_descriptors.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/pytensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/reports.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/operations/copy.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/operations/core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/operations/creation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/operations/trace.cpp
 )
 
 ##################################################
@@ -483,12 +505,10 @@ if(WITH_PYTHON_BINDINGS)
             ${TTNN_SRC_PYBIND}
             ${CCL_TTNN_SRCS_PYBIND}
             ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
-            ${Python3_LIBRARY_DIRS}
     )
     target_include_directories(
         ttnn
         PUBLIC
-            ${Python3_INCLUDE_DIRS}
             ${PROJECT_SOURCE_DIR}/ttnn
             ${CMAKE_CURRENT_SOURCE_DIR}/cpp
     )
@@ -498,7 +518,6 @@ if(WITH_PYTHON_BINDINGS)
         PUBLIC
             TT::NN::CPP
         PRIVATE
-            ${Python3_LIBRARIES}
             pybind11::module
             Boost::algorithm
             TT::Metalium

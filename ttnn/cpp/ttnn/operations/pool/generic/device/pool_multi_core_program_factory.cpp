@@ -7,7 +7,6 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
-#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::pool {
 /**
@@ -77,8 +76,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         (!is_partial_tile && !is_large_kernel) ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
-    const bool is_blackhole = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE;
-
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
         TT_FATAL(input_shape[3] == 16, "Error");
     }
@@ -131,8 +128,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
 
     uint32_t clear_value_cb_id = 32;
-    const bool avg_pool_on_blackhole = is_blackhole && pool_type == Pool2DType::AVG_POOL2D;
-    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT || avg_pool_on_blackhole) {
+    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT) {
         // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
         // is needed only if we use more then 16 sticks per tile for reduction.
         clear_value_cb_id = next_cb_index++;
@@ -309,9 +305,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        clear_value_cb_id,
-        is_blackhole,
-        (uint32_t)pool_type};
+        clear_value_cb_id};
+
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -358,8 +353,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id,
         out_cb_id,
         max_pool_partials_cb_id,
-        in_one_cb_id,
-        is_blackhole};
+        in_one_cb_id};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

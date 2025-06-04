@@ -33,7 +33,7 @@ TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 520, "max": 545}, 10: {"min": 230, "max": 250}, 80: {"min": 48.5, "max": 53}},
+    "4U": {1: {"min": 530, "max": 555}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
     "6U": {1: {"min": 600, "max": 635}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
@@ -278,7 +278,7 @@ def run_llama3_demo(
     logger.info("Current pos tensor done")
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     logger.info("Rot mats done")
 
@@ -356,7 +356,7 @@ def run_llama3_demo(
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+    rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
     tt_decode_input = tt_embd(tt_out_tok)
     tt_out = tt_model(
         tt_decode_input,
@@ -410,7 +410,7 @@ def run_llama3_demo(
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
     ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     profiler.end(f"capture_trace")
@@ -530,9 +530,11 @@ def run_llama3_demo(
     if is_ci_env and tokens_per_second_per_user_token127 is not None:
         benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
 
+        run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg_llama_demo_decode",
+            run_type=run_type,
             ml_model_name="llama70b-tg",
         )
 
