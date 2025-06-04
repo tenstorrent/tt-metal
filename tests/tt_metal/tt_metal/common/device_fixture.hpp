@@ -29,9 +29,6 @@ protected:
         validate_dispatch_mode();
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (arch_ == tt::ARCH::GRAYSKULL && num_devices_ > 2) {
-            num_devices_ = 2; // Limit to 2 devices for GRAYSKULL architecture
-        }
         std::vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices_; id++) {
             ids.push_back(id);
@@ -93,9 +90,6 @@ protected:
         validate_dispatch_mode();
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (arch_ == tt::ARCH::GRAYSKULL && num_devices_ > 2) {
-            num_devices_ = 2;
-        }
         std::vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices_; id++) {
             ids.push_back(id);
