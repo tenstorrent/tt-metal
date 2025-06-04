@@ -35,7 +35,7 @@ TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 540, "max": 565}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
+    "4U": {1: {"min": 615, "max": 640}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
     "6U": {1: {"min": 625, "max": 655}, 10: {"min": 230, "max": 250}, 80: {"min": 53, "max": 58}},
 }
@@ -416,6 +416,7 @@ def run_llama3_demo(
 
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
     tsu_failures = 0
+    all_tokens_per_second_per_user = []
 
     while users_decoding:
         if iteration == 0:  # First iteration also accounts for compile time
@@ -477,7 +478,9 @@ def run_llama3_demo(
                 f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
             )
 
-        if is_ci_env and iteration == 127:
+        all_tokens_per_second_per_user.append(tokens_per_second_per_user)
+
+        if iteration == 127:
             tokens_per_second_per_user_token127 = tokens_per_second_per_user
 
         if not stress_test:
@@ -515,14 +518,32 @@ def run_llama3_demo(
         )
 
     if not stress_test:
+        logger.info(f"Min tsu throughput: {min(all_tokens_per_second_per_user)}")
+        logger.info(f"Max tsu throughput: {max(all_tokens_per_second_per_user)}")
+        logger.info(f"Avg tsu throughput: {sum(all_tokens_per_second_per_user) / len(all_tokens_per_second_per_user)}")
+        logger.info(
+            f"Median tsu throughput: {sorted(all_tokens_per_second_per_user)[len(all_tokens_per_second_per_user) // 2]}"
+        )
+        # 95 percentile tsu throughput
+        logger.info(
+            f"5 percentile tsu throughput: {sorted(all_tokens_per_second_per_user)[int(0.05 * len(all_tokens_per_second_per_user))]}"
+        )
+        logger.info(
+            f"95 percentile tsu throughput: {sorted(all_tokens_per_second_per_user)[int(0.95 * len(all_tokens_per_second_per_user))]}"
+        )
+
+        if tokens_per_second_per_user_token127 is not None:
+            logger.info(f"Tokens per second per user at token 128: {tokens_per_second_per_user_token127}")
+
         # print before assertion
         out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
-        logger.info(out_of_targets_msg)
+        if tsu_failures > TSU_PERF_DROP_LIMIT_COUNT:
+            logger.info(out_of_targets_msg)
         # Assert at the end of test to check if the throughput recuperated
         assert tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT, out_of_targets_msg
 
-    # Print out total number of tsu_failures
-    logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
+        # Print out total number of tsu_failures
+        logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
 
 
 # List of supported Parameters for demo.py
