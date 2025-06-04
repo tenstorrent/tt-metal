@@ -297,6 +297,28 @@ struct DistributionSpec {
     // static constexpr auto packed_xy_coords = BankCoords::packed_xy_coords;
 };
 
+// Helper template for selecting the appropriate type (static or dynamic)
+template <
+    bool IsDynamic,
+    template <size_t...> class StaticWrapper,
+    template <size_t> class DynamicWrapper,
+    size_t BASE,
+    size_t SIZE>
+struct TypeSelector;
+
+// Specialization for dynamic types
+template <template <size_t...> class StaticWrapper, template <size_t> class DynamicWrapper, size_t BASE, size_t SIZE>
+struct TypeSelector<true, StaticWrapper, DynamicWrapper, BASE, SIZE> {
+    using type = DynamicWrapper<SIZE>;
+};
+
+// Specialization for static types
+template <template <size_t...> class StaticWrapper, template <size_t> class DynamicWrapper, size_t BASE, size_t SIZE>
+struct TypeSelector<false, StaticWrapper, DynamicWrapper, BASE, SIZE> {
+    using type = struct_sequence_wrapper_t<StaticWrapper, BASE, SIZE>;
+};
+
+// Redefined DistributionSpecWrapper using TypeSelector
 template <
     size_t CTA_BASE,
     size_t RANK,
@@ -305,22 +327,19 @@ template <
     bool ShardShapeDynamic = false,
     bool BankCoordsDynamic = false>
 struct DistributionSpecWrapper {
-    using dspec = DistributionSpec<
-        std::conditional_t<
-            TensorShapeDynamic,
-            ShapeWrapperDynamic<RANK>,
-            struct_sequence_wrapper_t<ShapeWrapper, CTA_BASE, RANK>>,
-        std::conditional_t<
-            ShardShapeDynamic,
-            ShapeWrapperDynamic<RANK>,
-            struct_sequence_wrapper_t<ShapeWrapper, CTA_BASE + RANK * !TensorShapeDynamic, RANK>>,
-        std::conditional_t<
-            BankCoordsDynamic,
-            BankCoordWrapperDynamic<RANK>,
-            struct_sequence_wrapper_t<
-                BankCoordWrapper,
-                CTA_BASE + RANK * !TensorShapeDynamic + RANK * !ShardShapeDynamic,
-                NUM_BANKS>>>;
+    // Calculate offsets based on which previous shapes are dynamic
+    static constexpr size_t ShardShapeBase = CTA_BASE + (TensorShapeDynamic ? 0 : RANK);
+    static constexpr size_t BankCoordsBase = ShardShapeBase + (ShardShapeDynamic ? 0 : RANK);
+
+    using TensorShapeType =
+        typename TypeSelector<TensorShapeDynamic, ShapeWrapper, ShapeWrapperDynamic, CTA_BASE, RANK>::type;
+    using ShardShapeType =
+        typename TypeSelector<ShardShapeDynamic, ShapeWrapper, ShapeWrapperDynamic, ShardShapeBase, RANK>::type;
+    using BankCoordsType =
+        typename TypeSelector<BankCoordsDynamic, BankCoordWrapper, BankCoordWrapperDynamic, BankCoordsBase, NUM_BANKS>::
+            type;
+
+    using dspec = DistributionSpec<TensorShapeType, ShardShapeType, BankCoordsType>;
 };
 
 template <size_t RTA_BASE, typename DSpec>
