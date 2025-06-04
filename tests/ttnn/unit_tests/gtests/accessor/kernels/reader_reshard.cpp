@@ -15,8 +15,7 @@ void kernel_main() {
     constexpr uint32_t base_idx_cta = 2;
     constexpr uint32_t base_idx_rta = 1;
 
-    using input_dspec =
-        distribution_spec_t<base_idx_cta, rank, num_banks, TENSOR_SHAPE_RT, SHARD_SHAPE_RT, BANK_COORDS_RT>;
+    using input_dspec = distribution_spec_t<base_idx_cta, rank, num_banks>;
     constexpr uint32_t new_base_idx_cta = base_idx_cta + compile_time_args_skip<input_dspec>;
     constexpr uint32_t new_base_idx_rta = base_idx_rta + runtime_args_skip<input_dspec>;
 

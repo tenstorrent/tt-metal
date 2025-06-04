@@ -16,7 +16,8 @@
 #include "ttnn/cpp/ttnn/operations/sharding_utilities.hpp"
 
 namespace sharded_accessor_device_tests {
-using tt::tt_metal::sharded_accessor_utils::CRTAConfig;
+using tt::tt_metal::sharded_accessor_utils::ArgConfig;
+using tt::tt_metal::sharded_accessor_utils::ArgsConfig;
 
 struct InputOutputBufferParams {
     tt::tt_metal::Shape physical_tensor_shape;
@@ -32,7 +33,8 @@ struct InputOutputBufferParams {
     };
     DistributionSpecParams input_shard_spec;
     DistributionSpecParams output_shard_spec;
-    CRTAConfig crta_config = CRTAConfig();
+    // CRTAConfig crta_config = CRTAConfig();
+    ArgsConfig crta_config = ArgsConfig{};
 };
 
 std::array<std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>, 2>
@@ -196,11 +198,6 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
         output_compile_time_args.push_back(cb_in0_idx);
         output_compile_time_args.push_back(aligned_page_size);
 
-        std::map<std::string, std::string> defines{
-            {"TENSOR_SHAPE_RT", fmt::format("{}", params.crta_config.runtime_tensor_shape)},
-            {"SHARD_SHAPE_RT", fmt::format("{}", params.crta_config.runtime_shard_shape)},
-            {"BANK_COORDS_RT", fmt::format("{}", params.crta_config.runtime_bank_coords)},
-        };
         // Create reader kernel
         KernelHandle reader_kernel_id = CreateKernel(
             program,
@@ -210,7 +207,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
                 .compile_args = input_compile_time_args,
-                .defines = defines});
+            });
 
         // Create writer kernel
         KernelHandle writer_kernel_id = CreateKernel(
@@ -221,7 +218,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = NOC::RISCV_1_default,
                 .compile_args = output_compile_time_args,
-                .defines = defines});
+            });
 
         // Set up runtime args for reader kernel
         std::vector<uint32_t> input_runtime_args = {
@@ -413,11 +410,9 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
     std::vector<InputOutputBufferParams> test_params;
     for (const auto& base_param : base_params) {
         // All combinations of runtime/static arguments
-        for (int i = 0; i < 8; ++i) {
+        for (uint8_t i = 0; i < 8; ++i) {
             auto p = base_param;
-            p.crta_config.runtime_tensor_shape = i & 0b001;
-            p.crta_config.runtime_shard_shape = i & 0b010;
-            p.crta_config.runtime_bank_coords = i & 0b100;
+            p.crta_config = ArgsConfig(i);
             test_params.push_back(p);
         }
     }
