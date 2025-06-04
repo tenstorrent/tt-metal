@@ -50,40 +50,63 @@ void kernel_main() {
      *     * You can verify by inserting a dummy marker or removing the volatile since compiler will optimize out the
      * calls
      */
-    constexpr size_t loop_count = 30;
+    constexpr size_t n_zones = 9;
+    constexpr size_t tracy_buffer_size = 125;
+    constexpr size_t loop_count = tracy_buffer_size / n_zones;
     for (size_t i = 0; i < loop_count; ++i) {
-        auto page_id = i % sharded_accessor_cta.get_dspec().get_tensor_volume();
         {
             DeviceZoneScopedN("SHARDED_ACCESSOR_CTA");
             volatile auto _ = sharded_accessor_cta.get_noc_addr(i);
         }
     }
     for (size_t i = 0; i < loop_count; ++i) {
-        auto page_id = i % sharded_accessor_cta.get_dspec().get_tensor_volume();
         {
             DeviceZoneScopedN("SHARDED_ACCESSOR_CRTA_DDS");
             volatile auto _ = sharded_accessor_crta_DDS.get_noc_addr(i);
         }
     }
     for (size_t i = 0; i < loop_count; ++i) {
-        auto page_id = i % sharded_accessor_cta.get_dspec().get_tensor_volume();
         {
             DeviceZoneScopedN("SHARDED_ACCESSOR_CRTA_SSD");
             volatile auto _ = sharded_accessor_crta_SSD.get_noc_addr(i);
         }
     }
     for (size_t i = 0; i < loop_count; ++i) {
-        auto page_id = i % sharded_accessor_cta.get_dspec().get_tensor_volume();
         {
             DeviceZoneScopedN("SHARDED_ACCESSOR_CRTA_DDD");
             volatile auto _ = sharded_accessor_crta_DDD.get_noc_addr(i);
         }
     }
     for (size_t i = 0; i < loop_count; ++i) {
-        auto page_id = i % sharded_accessor_cta.get_dspec().get_tensor_volume();
         {
             DeviceZoneScopedN("INTERLEAVED_ACCESSOR");
             volatile auto _ = interleaved_accessor.get_noc_addr(i);
+        }
+    }
+
+    std::array<uint32_t, rank> coords;
+    for (size_t i = 0; i < loop_count; ++i) {
+        {
+            DeviceZoneScopedN("SHARDED_ACCESSOR_CTA_COORDS");
+            volatile auto _ = sharded_accessor_cta.get_noc_addr(coords);
+        }
+    }
+    for (size_t i = 0; i < loop_count; ++i) {
+        {
+            DeviceZoneScopedN("SHARDED_ACCESSOR_CRTA_DDS_COORDS");
+            volatile auto _ = sharded_accessor_crta_DDS.get_noc_addr(coords);
+        }
+    }
+    for (size_t i = 0; i < loop_count; ++i) {
+        {
+            DeviceZoneScopedN("SHARDED_ACCESSOR_CRTA_SSD_COORDS");
+            volatile auto _ = sharded_accessor_crta_SSD.get_noc_addr(coords);
+        }
+    }
+    for (size_t i = 0; i < loop_count; ++i) {
+        {
+            DeviceZoneScopedN("SHARDED_ACCESSOR_CRTA_DDD_COORDS");
+            volatile auto _ = sharded_accessor_crta_DDD.get_noc_addr(coords);
         }
     }
 }
