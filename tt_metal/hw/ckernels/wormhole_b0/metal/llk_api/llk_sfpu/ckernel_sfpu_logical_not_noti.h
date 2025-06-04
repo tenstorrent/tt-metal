@@ -9,7 +9,6 @@
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
-using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
@@ -18,11 +17,23 @@ template <bool APPROXIMATION_MODE>
 inline void calculate_logical_not_unary() {
 #pragma GCC unroll 0
     for (int d = 0; d < 8; d++) {
-        vFloat v = dst_reg[0];
-        v_if(v == 0) { dst_reg[0] = 1.0f; }
-        v_else { dst_reg[0] = 0.0f; }
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        v_if(v == 0) { sfpi::dst_reg[0] = 1.0f; }
+        v_else { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
-        dst_reg++;
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE>
+inline void calculate_logical_not_unary_int32() {
+#pragma GCC unroll 0
+    for (int d = 0; d < 8; d++) {
+        sfpi::vInt v = sfpi::dst_reg[0];
+        v_if(v == 0) { sfpi::dst_reg[0] = 1; }
+        v_else { sfpi::dst_reg[0] = 0; }
+        v_endif;
+        sfpi::dst_reg++;
     }
 }
 
