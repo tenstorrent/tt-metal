@@ -670,7 +670,7 @@ def test_untilize_multi_core_sharded_to_interleaved(
         ],
     ],
 )
-def test_untilize_multi_core_sharded_to_sharded_different_layout(
+def test_untilize_multi_core_sharded_to_sharded_different_memory_layout(
     device,
     dtype,
     use_pack_untilize,
@@ -830,7 +830,7 @@ def test_untilize_multi_core_sharded_to_sharded_different_layout(
         ],
     ],
 )
-def test_untilize_multi_core_sharded_to_sharded_same_layout_different_shard_shape(
+def test_untilize_multi_core_sharded_to_sharded_same_memory_layout_different_shard_spec(
     device,
     dtype,
     use_pack_untilize,
@@ -978,7 +978,7 @@ def test_untilize_multi_core_sharded_to_sharded_same_layout_different_shard_shap
         ],
     ],
 )
-def test_untilize_multi_core_sharded_to_sharded_shard_specs_identical(
+def test_untilize_multi_core_sharded_to_sharded_identical_memory_layout_and_shard_spec(
     device,
     dtype,
     use_pack_untilize,
