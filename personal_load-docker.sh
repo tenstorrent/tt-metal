@@ -1,0 +1,1 @@
+docker run -it --name evan-package-testing --privileged --device /dev/tenstorrent:/dev/tenstorrent -v /dev/hugepages-1G/:/dev/hugepages-1G/ -v /opt/tenstorrent/sfpi:/opt/tenstorrent/sfpi evan-testing /bin/bash
