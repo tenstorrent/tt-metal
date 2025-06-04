@@ -239,7 +239,6 @@ tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     if (!global_control_plane_) {
         this->initialize_control_plane();
     }
-    TT_FATAL(global_control_plane_, "Global control plane is not initialized. Did you call InitializeFabricConfig?");
     return global_control_plane_->get_local_node_control_plane();
 }
 
@@ -252,6 +251,7 @@ void MetalContext::set_custom_control_plane_mesh_graph(
 
     global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
         mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
+    this->initialize_fabric_config(fabric_config_);
 }
 
 void MetalContext::set_default_control_plane_mesh_graph() {
