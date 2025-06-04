@@ -51,7 +51,7 @@ def test_multimodal_demo_text(
     max_gen_len: Optional[int] = 200,
     model_parallel_size: Optional[int] = None,
 ):
-    ckpt_dir = os.environ["LLAMA_DIR"]
+    ckpt_dir = os.environ["CKPT_DIR"]
     tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
 
     logger.info(f"Creating reference model from checkpoint in '{ckpt_dir}'")

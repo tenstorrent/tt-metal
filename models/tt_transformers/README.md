@@ -42,10 +42,10 @@ You can download Llama models [directly from Meta](https://llama.meta.com/llama-
 
 The downloaded directories include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
 
-If using Meta-provided weights you should set `LLAMA_DIR` to the path of the downloaded directory instead of setting `HF_MODEL`:
+If using Meta-provided weights you should set `CKPT_DIR` to the path of the downloaded directory instead of setting `HF_MODEL`:
 
 ```
-export LLAMA_DIR=<path_to_meta_downloaded_model_directory>
+export CKPT_DIR=<path_to_meta_downloaded_model_directory>
 ```
 
 ##### Repack weights (Llama3.1-70B and Llama3.2-90B from Meta only)
@@ -104,7 +104,7 @@ At the time of writing this covers the majority of popular HuggingFace text-gene
 
 ### 2. Set environment variables
 
-For completeness by now you should have set either `HF_MODEL` or `LLAMA_DIR` as decribed above:
+For completeness by now you should have set either `HF_MODEL` or `CKPT_DIR` as decribed above:
 
 ```
 export HF_MODEL=<hf_model_name or hf_downlaoded_directory>
@@ -113,7 +113,7 @@ export HF_MODEL=<hf_model_name or hf_downlaoded_directory>
 or
 
 ```
-export LLAMA_DIR=<path_to_meta_downloaded_model_directory>
+export CKPT_DIR=<path_to_meta_downloaded_model_directory>
 ```
 
 On N150, N300 and LoudBox / QuietBox you should also set:
@@ -124,7 +124,7 @@ export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 
 Description of these environment variables:
 - `HF_MODEL` is the HuggingFace org/name of the model you want to run or the path to the downloaded Huggingface weights.
-- `LLAMA_DIR` sets the path for Meta-provided Llama3 model weights if you are not using HuggingFace.
+- `CKPT_DIR` sets the path for Meta-provided Llama3 model weights if you are not using HuggingFace.
 - `WH_ARCH_YAML` sets the dispatch over ethernet cores. This is optional for N150 and required for N300 and LoudBox / QuietBox, enabling a full core grid utilization (8x8), allowing for maximum performance of LLama3 models. Do not set this for TG.
 - `TT_CACHE_PATH` is optional. It sets the path for ttnn's weight cache files. See below for more details.
 - `MESH_DEVICE` is optional. It allows you to use fewer devices than are available. See below for more details.
@@ -133,7 +133,7 @@ On the first execution of each model, TTNN will create weight cache files for th
 
 1. `TT_CACHE_PATH` if you have set it.
 2. `HF_MODEL/device_name` if a path to downloaded weights was specified using `HF_MODEL`.
-3. `LLAMA_DIR/device_name` if a path to downloaded Meta-provided weights was specified using `LLAMA_DIR`.
+3. `CKPT_DIR/device_name` if a path to downloaded Meta-provided weights was specified using `CKPT_DIR`.
 4. `model_cache/HF_MODEL/device_name` if a HuggingFace model name was specified using `HF_MODEL`.
 
 The device name used is:

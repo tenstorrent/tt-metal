@@ -61,14 +61,14 @@ run_t3000_llama3_tests() {
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
   # Run test model for llama3 - 1B, 3B, 8B and 11B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
-    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+  for ckpt_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+    CKPT_DIR=$ckpt_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
+    CKPT_DIR=$ckpt_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
+    echo "LOG_METAL: Llama3 tests for $ckpt_dir completed"
   done
 
   # Run chunked prefill test for llama3-1B
-  LLAMA_DIR=$llama1b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/tests/test_chunked_generation.py; fail+=$?
+  CKPT_DIR=$llama1b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/tests/test_chunked_generation.py; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -89,8 +89,8 @@ run_t3000_llama3_70b_tests() {
   # Run test_model (decode and prefill) for llama3 70B
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
-  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
-  LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
+  CKPT_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model.py -k full ; fail+=$?
+  CKPT_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -111,8 +111,8 @@ run_t3000_llama3_90b_tests() {
   # Run test_model (decode and prefill) for llama3 70B
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model.py -k quick ; fail+=$?
-  LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer" ; fail+=$?
+  CKPT_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model.py -k quick ; fail+=$?
+  CKPT_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -145,9 +145,9 @@ run_t3000_llama3_accuracy_tests() {
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
 
   # Run test accuracy llama3 - 1B, 3B, 8B, 11B and 70B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b" "$llama90b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf ; fail+=$?
-    echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
+  for ckpt_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b" "$llama90b"; do
+    CKPT_DIR=$ckpt_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf ; fail+=$?
+    echo "LOG_METAL: Llama3 accuracy tests for $ckpt_dir completed"
   done
 
   # Record the end time
@@ -170,10 +170,10 @@ run_t3000_llama3.2-11b-vision_freq_tests() {
   # Llama3.2-11B
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+  CKPT_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+  CKPT_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+  CKPT_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
+  CKPT_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -197,10 +197,10 @@ run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests() {
   # Use MESH_DEVICE env variable to run on an N300 mesh
   mesh_device=N300
 
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+  MESH_DEVICE=$mesh_device CKPT_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+  MESH_DEVICE=$mesh_device CKPT_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+  MESH_DEVICE=$mesh_device CKPT_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
+  MESH_DEVICE=$mesh_device CKPT_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -221,10 +221,10 @@ run_t3000_llama3.2-90b-vision_freq_tests() {
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.2-90B -- use repacked weights when acceptable for faster testing
   llama90b_repacked=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/repacked
-  LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400; fail+=$?
-  LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-  LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-  LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+  CKPT_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400; fail+=$?
+  CKPT_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+  CKPT_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+  CKPT_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

@@ -34,11 +34,11 @@ def test_ci_dispatch(model_weights):
         if os.getenv("HF_MODEL"):
             del os.environ["HF_MODEL"]
             del os.environ["TT_CACHE_PATH"]
-        os.environ["LLAMA_DIR"] = model_weights
+        os.environ["CKPT_DIR"] = model_weights
     # Mistral uses HF Weights, so we need to setup the correct env vars
     elif "mistral" in model_weights.lower():
-        if os.getenv("LLAMA_DIR"):
-            del os.environ["LLAMA_DIR"]
+        if os.getenv("CKPT_DIR"):
+            del os.environ["CKPT_DIR"]
         os.environ["HF_MODEL"] = model_weights
         os.environ["TT_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
 

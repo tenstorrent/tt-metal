@@ -153,7 +153,7 @@ def test_multimodal_demo_text(
     profiler = BenchmarkProfiler()
     profiler.start("run")
 
-    ckpt_dir = os.environ["LLAMA_DIR"]
+    ckpt_dir = os.environ["CKPT_DIR"]
     tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
 
     mesh_device.enable_program_cache()

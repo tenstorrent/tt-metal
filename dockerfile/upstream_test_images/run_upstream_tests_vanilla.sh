@@ -27,15 +27,15 @@ test_suite_bh_single_pcie_small_ml_model_tests() {
 }
 
 test_suite_bh_single_pcie_llama_demo_tests() {
-    if [ -z "${LLAMA_DIR}" ]; then
-      echo "Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
+    if [ -z "${CKPT_DIR}" ]; then
+      echo "Error: CKPT_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
       exit 1
     fi
 
-    if [ -d "$LLAMA_DIR" ] && [ "$(ls -A $LLAMA_DIR)" ]; then
+    if [ -d "$CKPT_DIR" ] && [ "$(ls -A $CKPT_DIR)" ]; then
       echo "[upstream-tests] Llama weights exist, continuing"
     else
-      echo "[upstream-tests] Error: Llama weights do not seem to exist in $LLAMA_DIR, exiting" >&2
+      echo "[upstream-tests] Error: Llama weights do not seem to exist in $CKPT_DIR, exiting" >&2
       exit 1
     fi
 
@@ -71,15 +71,15 @@ test_suite_wh_6u_model_unit_tests() {
 test_suite_wh_6u_llama_demo_tests() {
     echo "[upstream-tests] running WH 6U upstream Llama demo tests with weights"
 
-    if [ -z "${LLAMA_DIR}" ]; then
-        echo "[upstream-tests] Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
+    if [ -z "${CKPT_DIR}" ]; then
+        echo "[upstream-tests] Error: CKPT_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
         exit 1
     fi
 
-    if [ -d "$LLAMA_DIR" ] && [ "$(ls -A $LLAMA_DIR)" ]; then
+    if [ -d "$CKPT_DIR" ] && [ "$(ls -A $CKPT_DIR)" ]; then
         echo "[upstream-tests] Llama weights exist, continuing"
     else
-        echo "[upstream-tests] Error: Llama weights do not seem to exist in $LLAMA_DIR, exiting" >&2
+        echo "[upstream-tests] Error: Llama weights do not seem to exist in $CKPT_DIR, exiting" >&2
         exit 1
     fi
 
@@ -96,23 +96,23 @@ test_suite_wh_6u_llama_demo_tests() {
 
 test_suite_wh_6u_llama_long_stress_tests() {
     echo "[upstream-tests] running WH 6U upstream Llama long stress tests. Note that on 6U systems built as of End of May 2025, this may take up to 4 hours to run."
-    echo "[upstream-tests] Ensure that you have a TG directory populated with .bin files in LLAMA_DIR on the host."
+    echo "[upstream-tests] Ensure that you have a TG directory populated with .bin files in CKPT_DIR on the host."
 
-    if [ -z "${LLAMA_DIR}" ]; then
-        echo "[upstream-tests] Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
+    if [ -z "${CKPT_DIR}" ]; then
+        echo "[upstream-tests] Error: CKPT_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
         exit 1
     fi
 
-    if [ -d "$LLAMA_DIR" ] && [ "$(ls -A $LLAMA_DIR)" ]; then
+    if [ -d "$CKPT_DIR" ] && [ "$(ls -A $CKPT_DIR)" ]; then
         echo "[upstream-tests] Llama weights exist, continuing"
     else
-        echo "[upstream-tests] Error: Llama weights do not seem to exist in $LLAMA_DIR, exiting" >&2
+        echo "[upstream-tests] Error: Llama weights do not seem to exist in $CKPT_DIR, exiting" >&2
         exit 1
     fi
 
     # TODO: to remove...
     pip install -r models/tt_transformers/requirements.txt
-    # This will take almost 3 hours. Ensure that the tensors are cached in the LLAMA_DIR.
+    # This will take almost 3 hours. Ensure that the tensors are cached in the CKPT_DIR.
     pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test and not mini-stress-test"
 }
 

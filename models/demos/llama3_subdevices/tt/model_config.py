@@ -483,18 +483,18 @@ class TtModelArgs:
         )
         self.start_core = ttnn.CoreCoord(1, 0)
 
-        LLAMA_DIR = os.getenv("LLAMA_DIR")
+        CKPT_DIR = os.getenv("CKPT_DIR")
         HF_MODEL = os.getenv("HF_MODEL")
-        assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
-        if LLAMA_DIR:
+        assert not (CKPT_DIR and HF_MODEL), "Only one of CKPT_DIR or HF_MODEL should be set"
+        if CKPT_DIR:
             if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
-                logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
-            self.CKPT_DIR = LLAMA_DIR
-            self.TOKENIZER_PATH = LLAMA_DIR
+                logger.warning("CKPT_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
+            self.CKPT_DIR = CKPT_DIR
+            self.TOKENIZER_PATH = CKPT_DIR
             self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
             if not self.CACHE_PATH:
-                self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
-            self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
+                self.CACHE_PATH = os.path.join(CKPT_DIR, self.device_name)
+            self.model_name = os.path.basename(CKPT_DIR)  # May be overridden by config
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
@@ -508,13 +508,13 @@ class TtModelArgs:
         else:
             assert (
                 False
-            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
+            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or CKPT_DIR to a Meta-style checkpoint directory"
 
         if not dummy_weights and not HF_MODEL:
             # Assert if all folders and files exist
             assert os.path.exists(
                 self.CKPT_DIR
-            ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
+            ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set CKPT_DIR=... or LLAMA_CKPT_DIR=..."
             os.makedirs(self.CACHE_PATH, exist_ok=True)
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")

@@ -185,8 +185,8 @@ clone_repo() {
 setup_weights() {
     print_step "Setting up weights"
     local LLAMA_REPO=$1
-    local LLAMA_DIR="${LLAMA_REPO}/models/${META_DIR_FILTER}"
-    local LLAMA_WEIGHTS_DIR="${LLAMA_DIR}/${META_MODEL_NAME}"
+    local CKPT_DIR="${LLAMA_REPO}/models/${META_DIR_FILTER}"
+    local LLAMA_WEIGHTS_DIR="${CKPT_DIR}/${META_MODEL_NAME}"
     local WEIGHTS_DIR="${LLAMA3_CKPT_DIR}"
 
     mkdir -p "${WEIGHTS_DIR}" "${LLAMA3_CACHE_PATH}"
@@ -195,7 +195,7 @@ setup_weights() {
         echo "Weights already downloaded in ${LLAMA_WEIGHTS_DIR}"
     else
         print_step "Downloading weights"
-        pushd "${LLAMA_DIR}" >/dev/null
+        pushd "${CKPT_DIR}" >/dev/null
         [[ -x "./download.sh" ]] && ./download.sh || error_exit "Download script not found!"
         popd >/dev/null
     fi

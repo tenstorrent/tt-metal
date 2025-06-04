@@ -67,9 +67,9 @@ run_python_model_tests_wormhole_b0() {
     llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
     # Run all Llama3 tests for 8B, 1B, and 3B weights - dummy weights with tight PCC check
-    for llama_dir in  "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-        LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
-        echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+    for ckpt_dir in  "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+        CKPT_DIR=$ckpt_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+        echo "LOG_METAL: Llama3 tests for $ckpt_dir completed"
     done
 
     # Mistral-7B-v0.3
@@ -94,9 +94,9 @@ run_python_model_tests_blackhole() {
     # Llama3.1-8B
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
     # Run all Llama3 tests for 8B - dummy weights with tight PCC check
-    for llama_dir in "$llama8b"; do
-        LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
-        echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+    for ckpt_dir in "$llama8b"; do
+        CKPT_DIR=$ckpt_dir pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+        echo "LOG_METAL: Llama3 tests for $ckpt_dir completed"
     done
 
     pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py

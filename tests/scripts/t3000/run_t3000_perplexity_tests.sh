@@ -99,13 +99,13 @@ run_t3000_llama3_perplexity_tests_single_card() {
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
   for MESH_DEVICE in N150 N300; do
-    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
+    for CKPT_DIR in "$llama1b" "$llama3b" "$llama8b"; do
+      MESH_DEVICE=$MESH_DEVICE CKPT_DIR=$CKPT_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
     done
   done
 
   # 11B test does not run on N150
-  MESH_DEVICE=N300 LLAMA_DIR="$llama11b" WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
+  MESH_DEVICE=N300 CKPT_DIR="$llama11b" WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -150,13 +150,13 @@ run_t3000_llama3_perplexity_tests_t3000() {
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
 
   for MESH_DEVICE in T3K; do
-    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
+    for CKPT_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+      MESH_DEVICE=$MESH_DEVICE CKPT_DIR=$CKPT_DIR WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
     done
 
     # 70B and 90B tests has the same configuration between `-k "attention-accuracy"` and `-k "attention-performance"` so we only run one of them
-    for LLAMA_DIR in "$llama70b" "$llama90b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k "attention-accuracy" --timeout=3600 ; fail+=$?
+    for CKPT_DIR in "$llama70b" "$llama90b"; do
+      MESH_DEVICE=$MESH_DEVICE CKPT_DIR=$CKPT_DIR WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k "attention-accuracy" --timeout=3600 ; fail+=$?
     done
   done
 

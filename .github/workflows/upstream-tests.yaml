@@ -169,9 +169,9 @@ jobs:
       - name: Run image
         timeout-minutes: 45
         env:
-          SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+          SOURCE_CKPT_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
+          CKPT_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_CKPT_DIR:$CKPT_DIR:ro -e CKPT_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
@@ -196,8 +196,8 @@ jobs:
         timeout-minutes: 30
         env:
           # For different environments, yyz BH VLAN vs. cloud
-          LLAMA_DIR: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-image-tag }}
+          CKPT_DIR: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $CKPT_DIR:$CKPT_DIR:ro -e CKPT_DIR ${{ needs.get-image-tags.outputs.bh-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}

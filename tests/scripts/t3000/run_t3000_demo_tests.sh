@@ -30,7 +30,7 @@ run_t3000_llama3_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
-  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
+  CKPT_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
 
   # Output verification demo for old llama3-70b codebase, to be removed once old codebase is deleted
   env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-trace_mode_off-text_completion-llama3] --timeout=900 ; fail+=$?
@@ -62,9 +62,9 @@ run_t3000_llama3_tests() {
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
-    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+  for ckpt_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+    CKPT_DIR=$ckpt_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+    echo "LOG_METAL: Llama3 tests for $ckpt_dir completed"
   done
 
   # Record the end time
@@ -136,7 +136,7 @@ run_t3000_llama3_vision_tests() {
   t3k=T3K
 
   for mesh_device in "$n300" "$t3k"; do
-    MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
+    MESH_DEVICE=$mesh_device CKPT_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
 
@@ -161,7 +161,7 @@ run_t3000_llama3_90b_vision_tests() {
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
   mesh_device=T3K
 
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 900; fail+=$?
+  MESH_DEVICE=$mesh_device CKPT_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 900; fail+=$?
   echo "LOG_METAL: Llama3.2-90B vision tests for $mesh_device completed"
 
   # Record the end time
@@ -255,9 +255,9 @@ run_t3000_llama3_load_checkpoints_tests() {
   # Llama3.2-90B weights
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
 
-  for llama_dir in "$llama70b" "$llama90b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py --timeout=1800; fail+=$?
-    echo "LOG_METAL: Llama3 load checkpoints tests for $llama_dir completed"
+  for ckpt_dir in "$llama70b" "$llama90b"; do
+    CKPT_DIR=$ckpt_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py --timeout=1800; fail+=$?
+    echo "LOG_METAL: Llama3 load checkpoints tests for $ckpt_dir completed"
   done
 
   # Record the end time

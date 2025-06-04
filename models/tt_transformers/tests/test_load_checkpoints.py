@@ -231,8 +231,8 @@ def write_tensor_states(loaded: dict, tensor_states_path: str) -> None:
 # [INFO] Focus on testing 70B and 90B models because they are the only ones that require shared checkpoints
 def test_load_checkpoints():
     # make ModelArgs object with empty mesh_device for its ability to recognize the model name
-    input_base_path = os.getenv("LLAMA_DIR")
-    assert input_base_path, "LLAMA_DIR must be set to indicate the path to the model checkpoints"
+    input_base_path = os.getenv("CKPT_DIR")
+    assert input_base_path, "CKPT_DIR must be set to indicate the path to the model checkpoints"
     logger.info(f"Checkpoint directory: {input_base_path}")
     # [INFO] we can hardcode this check because we only test 70B and 90B models atm
     is_70b = "Llama" in input_base_path and "70B" in input_base_path

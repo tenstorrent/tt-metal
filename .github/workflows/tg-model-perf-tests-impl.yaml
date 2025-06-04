@@ -44,7 +44,7 @@ jobs:
           {
             name: "Galaxy Llama 70B model perf tests",
             arch: wormhole_b0,
-            cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device",
+            cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG CKPT_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device",
             timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
@@ -53,7 +53,7 @@ jobs:
           {
             name: "Galaxy Llama 70B model dispatch perf tests",
             arch: wormhole_b0,
-            cmd: "TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch",
+            cmd: "TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG CKPT_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch",
             timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
@@ -62,7 +62,7 @@ jobs:
           {
             name: "Galaxy Llama 70B prefill perf tests [128]",
             arch: wormhole_b0,
-            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[128]",
+            cmd: "FAKE_DEVICE=TG CKPT_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[128]",
             timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
@@ -71,7 +71,7 @@ jobs:
           {
             name: "Galaxy Llama 70B prefill perf tests [4096]",
             arch: wormhole_b0,
-            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[4096]",
+            cmd: "FAKE_DEVICE=TG CKPT_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[4096]",
             timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],

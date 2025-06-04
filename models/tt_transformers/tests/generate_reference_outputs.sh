@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Define model directories from environment variables with fallbacks
-LLAMA_DIRS=(
+CKPT_DIRS=(
     "${LLAMA_32_1B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct}"
     "${LLAMA_32_3B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct}"
     "${LLAMA_31_8B_DIR:-/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct}"
@@ -54,7 +54,7 @@ get_model_name() {
 }
 
 # Loop through each LLAMA directory
-for DIR in "${LLAMA_DIRS[@]}"; do
+for DIR in "${CKPT_DIRS[@]}"; do
     if [ ! -d "$DIR" ]; then
         echo "Warning: Directory $DIR does not exist, skipping..."
         continue
@@ -68,8 +68,8 @@ for DIR in "${LLAMA_DIRS[@]}"; do
     echo "Using weights from: ${DIR}"
     echo "Output will be saved to: ${OUTPUT_FILE}"
 
-    # Set LLAMA_DIR environment variable and run the Python script
-    LLAMA_DIR="$DIR" python3 "${SCRIPT_DIR}/generate_reference_outputs.py" \
+    # Set CKPT_DIR environment variable and run the Python script
+    CKPT_DIR="$DIR" python3 "${SCRIPT_DIR}/generate_reference_outputs.py" \
         --total_length "$TOTAL_LENGTH" \
         --output_file "$OUTPUT_FILE"
 done

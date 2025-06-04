@@ -905,7 +905,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         dir_env = "HF_MODEL"
         model_dir = model_dir.split("hf:", 1)[1]
     else:
-        dir_env = "LLAMA_DIR"
+        dir_env = "CKPT_DIR"
     env[dir_env] = model_dir
 
     # Open log file
@@ -1137,7 +1137,7 @@ def get_dir(model):
     if model.startswith("hf:"):
         return model
 
-    llama_dir = {
+    ckpt_dir = {
         "1b": os.environ.get("LLAMA_32_1B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct"),
         "3b": os.environ.get("LLAMA_32_3B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct"),
         "8b": os.environ.get("LLAMA_31_8B_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct"),
@@ -1150,8 +1150,8 @@ def get_dir(model):
         "q3-32b": os.environ.get("QWEN_32B_DIR", "/proj_sw/user_dev/Qwen/Qwen3-32B"),
     }.get(model.lower(), "")
 
-    if not llama_dir or not os.path.exists(llama_dir):
-        print(f"Error: The directory for the {model} model does not exist: {llama_dir}")
+    if not ckpt_dir or not os.path.exists(ckpt_dir):
+        print(f"Error: The directory for the {model} model does not exist: {ckpt_dir}")
         print("You can set the following environment variables to specify the correct directory path:")
         print("  - LLAMA_32_1B_DIR for 1b model")
         print("  - LLAMA_32_3B_DIR for 3b model")
@@ -1163,7 +1163,7 @@ def get_dir(model):
         print("  - QWEN_72B_DIR for 72b Qwen2.5 model")
         sys.exit(1)
 
-    return llama_dir
+    return ckpt_dir
 
 
 def get_command_name(command_input):
