@@ -59,7 +59,14 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
 
 #ifdef SHARDED
-    typedef ShardedInfo<get_compile_time_arg_val(13), get_compile_time_arg_val(14), get_compile_time_arg_val(15), get_compile_time_arg_val(16), get_compile_time_arg_val(17), get_compile_time_arg_val(18), get_compile_time_arg_val(19), >
+    typedef ShardedInfo<
+        get_compile_time_arg_val(13),
+        get_compile_time_arg_val(14),
+        get_compile_time_arg_val(15),
+        get_compile_time_arg_val(16),
+        get_compile_time_arg_val(17),
+        get_compile_time_arg_val(18),
+        get_compile_time_arg_val(19)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =
@@ -172,13 +179,12 @@ void kernel_main() {
             // This issues a flush barrier
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr, pkt_hdr_forward, pkt_hdr_backward, fabric_connection, l1_read_addr, packet_size);
-            noc_async_write_barrier();
-            // if constexpr (dynamic_alternate) {
-            //     std::swap(
-            //         pkt_hdr_forward->routing_fields.value,
-            //         pkt_hdr_backward->routing_fields
-            //             .value);  // alternate the packet header distance for better balancing
-            // }
+            if constexpr (dynamic_alternate) {
+                std::swap(
+                    pkt_hdr_forward->routing_fields.value,
+                    pkt_hdr_backward->routing_fields
+                        .value);  // alternate the packet header distance for better balancing
+            }
             offset += packet_size;  // advance the noc address for the next packet
         }
         row_id++;

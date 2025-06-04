@@ -66,6 +66,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     bool sharded = input_tensor.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
     bool tilized = input_tensor.get_layout() == ttnn::TILE_LAYOUT;
+
+    uint32_t num_width_shards = 1;
+    if (!tilized && (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+                     input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED)) {
+        num_width_shards = input_tensor.get_padded_shape()[-1] / input_tensor.memory_config().shard_spec()->shape[1];
+        printf("num_width_shards: %u\n", num_width_shards);
+    }
+
     printf("tilized: %d\n", tilized);
     std::map<string, string> kernel_defines;
     for (uint32_t k = 0; k < ring_size; k++) {
@@ -100,7 +108,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(page_size) : 0;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = 4096;  // tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     size_t max_packet_size = packet_size_bytes;
     printf("max_packet_size: %zu\n", max_packet_size);
     uint32_t num_packets_per_row = std::ceil(static_cast<double>(page_size) / max_packet_size);
@@ -116,10 +124,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
 
+    uint32_t buffer_page_size = page_size;
     if (!tilized) {
         printf("changing cb_src0_config\n");
-        cb_src0_config = tt::tt_metal::CircularBufferConfig(page_size, {{src0_cb_index, df}})
-                             .set_page_size(src0_cb_index, page_size);
+        if (num_width_shards > 1) {
+            buffer_page_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
+            printf("buffer_page_size: %u\n", buffer_page_size);
+        }
+        cb_src0_config = tt::tt_metal::CircularBufferConfig(buffer_page_size, {{src0_cb_index, df}})
+                             .set_page_size(src0_cb_index, buffer_page_size);
     }
     tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
@@ -158,12 +171,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     if (!tilized) {
         reader_compile_args = {
-            ring_index,                                       // my_chip_id
-            static_cast<uint32_t>(input_tensor_buffer_type),  // buffer0_type
-            src0_cb_index,                                    // cb0_id
-            page_size,                                        // page_size
-            num_packets_per_row,                              // num_packets_per_row
-            max_packet_size,                                  // max_packet_size
+            ring_index,                                           // my_chip_id
+            static_cast<uint32_t>(input_tensor_buffer_type),      // buffer0_type
+            src0_cb_index,                                        // cb0_id
+            num_width_shards > 1 ? buffer_page_size : page_size,  // page_size
+            num_packets_per_row,                                  // num_packets_per_row
+            max_packet_size,                                      // max_packet_size
             src_stick_size_is_power_of_two,
             src_log2_stick_size};
     }
@@ -189,7 +202,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             num_packet_headers_storable,                       // num_packet_headers_storable
             static_cast<uint32_t>(output_tensor_buffer_type),  // buffer0_type
             src0_cb_index,                                     // cb0_id
-            page_size,
+            num_width_shards > 1 ? buffer_page_size : page_size,
             max_packet_size,
             num_packets_per_row,   // num_packets_per_row
             num_targets_forward,   // num_targets_forward_direction
@@ -245,9 +258,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
         uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),  // tensor_address0
-            input_tile_id_start,               // tile_id_start
-            input_tile_id_end,                 // tile_id_end
+            input_tensor.buffer()->address(),        // tensor_address0
+            input_tile_id_start * num_width_shards,  // tile_id_start
+            input_tile_id_end * num_width_shards,    // tile_id_end
         };
         printf("input_tile_id_start: %u\n", input_tile_id_start);
         printf("input_tile_id_end: %u\n", input_tile_id_end);
@@ -271,8 +284,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         std::vector<uint32_t> writer_rt_args = {
             output_tensors[ring_index].buffer()->address(),  // tensor_address0  //HERE
             semaphore.address(),                             // out_ready_sem_bank_addr (absolute address)
-            output_tile_id_start,                            // tile_id_start
-            output_tile_id_end,                              // tile_id_end
+            output_tile_id_start * num_width_shards,         // tile_id_start
+            output_tile_id_end * num_width_shards,           // tile_id_end
             wait_output_semaphore,                           // wait_output_semaphore
             reset_global_semaphore,                          // reset_global_semaphore
             drain_sync_core.x,                               // out_ready_sem_noc0_x
