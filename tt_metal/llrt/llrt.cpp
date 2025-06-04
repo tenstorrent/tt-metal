@@ -96,6 +96,40 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &et
         chip_id, ethernet_core);
 }
 
+tt_metal::HalProgrammableCoreType get_core_type(chip_id_t chip_id, const CoreCoord& virtual_core) {
+    bool is_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, chip_id);
+    bool is_active_eth_core = false;
+    bool is_inactive_eth_core = false;
+
+    // Determine whether an ethernet core is active or idle. Their host handshake interfaces are different.
+    if (is_eth_core) {
+        auto active_eth_cores = tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(chip_id);
+        auto inactive_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(chip_id);
+        is_active_eth_core =
+            active_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != active_eth_cores.end();
+        is_inactive_eth_core =
+            inactive_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != inactive_eth_cores.end();
+        // we should not be operating on any reserved cores here.
+        TT_ASSERT(is_active_eth_core or is_inactive_eth_core);
+    }
+
+    return is_active_eth_core     ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+           : is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH
+                                  : tt_metal::HalProgrammableCoreType::TENSIX;
+}
+
+void send_reset_go_signal(chip_id_t chip, const CoreCoord& virtual_core) {
+    tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip, virtual_core);
+    uint64_t go_signal_adrr =
+        tt_metal::MetalContext::instance().hal().get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+
+    go_msg_t reset_msg;
+    reset_msg.signal = RUN_MSG_RESET_READ_PTR_FROM_HOST;
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        &reset_msg, sizeof(go_msg_t), tt_cxy_pair(chip, virtual_core), go_signal_adrr);
+}
+
 void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
 
     msg->kernel_config.mode = DISPATCH_MODE_HOST;
@@ -131,7 +165,7 @@ bool test_load_write_read_risc_binary(
     uint32_t core_type_idx,
     uint32_t processor_class_idx,
     uint32_t processor_type_idx) {
-    assert(
+    TT_ASSERT(
         tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(core, chip_id) or
         tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id));
 
@@ -179,23 +213,8 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
 namespace internal_ {
 
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
-    bool is_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id);
-    bool is_active_eth_core = false;
-    bool is_inactive_eth_core = false;
+    tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip_id, core);
 
-        // Determine whether an ethernet core is active or idle. Their host handshake interfaces are different.
-    if (is_eth_core) {
-        auto active_eth_cores = tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(chip_id);
-        auto inactive_eth_cores =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(chip_id);
-        is_active_eth_core = active_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != active_eth_cores.end();
-        is_inactive_eth_core = inactive_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != inactive_eth_cores.end();
-        //we should not be operating on any reserved cores here.
-        assert(is_active_eth_core or is_inactive_eth_core);
-    }
-
-    tt_metal::HalProgrammableCoreType dispatch_core_type =  is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH :
-        is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH : tt_metal::HalProgrammableCoreType::TENSIX;
     uint64_t go_msg_addr =
         tt_metal::MetalContext::instance().hal().get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
