@@ -6,45 +6,18 @@
 
 #include <variant>
 #include <tuple>
+#include <hostdevcommon/flags.hpp>
 
 namespace detail {
 
 namespace {
+// TODO: This exact enum is defined on host. Maybe somehow reuse it?
 enum class ArgConfig : uint8_t {
     CTA = 0,
     RuntimeTensorShape = 1 << 0,
     RuntimeShardShape = 1 << 1,
     RuntimeBankCoords = 1 << 2,
     RTA = RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
-};
-
-// TODO: This exact class is defined in tt-metal/common/flags.hpp, consider reusing it
-template <typename E>
-struct Flags {
-    static_assert(std::is_enum_v<E>, "Flags<E> requires E to be an enum.");
-
-    using Underlying = std::underlying_type_t<E>;
-
-    constexpr Flags() noexcept : bits_(0) {}
-    constexpr Flags(E single) noexcept : bits_(static_cast<Underlying>(single)) {}
-    constexpr Flags(E a, E b) noexcept : bits_(static_cast<Underlying>(a) | static_cast<Underlying>(b)) {}
-    constexpr explicit Flags(Underlying bits) noexcept : bits_(bits) {}
-
-    // Bitwise OR a single enum
-    constexpr Flags operator|(E rhs) const noexcept { return Flags(bits_ | static_cast<Underlying>(rhs)); }
-    // Bitwise OR another Flags
-    constexpr Flags operator|(Flags rhs) const noexcept { return Flags(bits_ | rhs.bits_); }
-
-    // ... similarly, operator&, operator^, operator~ if you like ...
-    constexpr Flags operator&(E rhs) const noexcept { return Flags(bits_ & static_cast<Underlying>(rhs)); }
-    constexpr bool test(E single) const noexcept {
-        return (bits_ & static_cast<Underlying>(single)) == static_cast<Underlying>(single);
-    }
-
-    constexpr Underlying raw() const noexcept { return bits_; }
-
-private:
-    Underlying bits_;
 };
 
 using ArgsConfig = Flags<ArgConfig>;

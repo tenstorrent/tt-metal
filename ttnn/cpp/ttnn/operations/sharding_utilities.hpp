@@ -11,7 +11,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt_metal/common/flags.hpp>
+#include <hostdevcommon/flags.hpp>
 
 namespace tt::tt_metal {
 
