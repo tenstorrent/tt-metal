@@ -386,7 +386,9 @@ def run_demo_inference(
         ttnn_timesteps[0],
         0,
     )
-    os.makedirs("output", exist_ok=True)
+    if not is_ci_env:
+        os.mkdir("output")
+
     images = []
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts)):
@@ -460,8 +462,12 @@ def run_demo_inference(
         image = pipeline.image_processor.postprocess(image, output_type="pil")[0]
         images.append(image)
 
-        image.save(f"output/output{iter + start_from}.png")
-        logger.info(f"Image saved to output/output{iter + start_from}.png")
+        if is_ci_env:
+            logger.info(f"Image {iter + 1}/{len(prompts)} generated successfully")
+        else:
+            image.save(f"output/output{iter + start_from}.png")
+            logger.info(f"Image saved to output/output{iter + start_from}.png")
+
         ttnn.deallocate(latents)
         latents = latents_clone.clone()
         latents = ttnn.from_torch(
