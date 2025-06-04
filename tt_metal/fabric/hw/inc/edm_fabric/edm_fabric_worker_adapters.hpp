@@ -15,7 +15,6 @@
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/hw/inc/utils/utils.h"
-#include "tt_metal/hw/inc/wormhole/core_config.h"
 #include "debug/assert.h"
 
 #include <cstdint>
@@ -226,6 +225,7 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
+        invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             return (this->buffer_slot_write_counter.counter - *this->from_remote_buffer_free_slots_ptr) <
                    this->num_buffers_per_channel;
@@ -501,7 +501,7 @@ private:
         } else {
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            noc_inline_dw_write(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
+            noc_inline_dw_write<true>(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
         }
         if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // Write to the atomic increment stream register (write of -1 will subtract 1)
@@ -589,7 +589,7 @@ private:
                 source_address,
                 1,
                 size_bytes,
-                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> 32,
+                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> NOC_ADDR_COORD_SHIFT,
                 this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,
@@ -599,7 +599,7 @@ private:
                 source_address,
                 1,
                 size_bytes,
-                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> 32,
+                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> NOC_ADDR_COORD_SHIFT,
                 this->edm_buffer_addr,
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,
