@@ -31,8 +31,8 @@ daemon_result_pipe_path = "/tmp/tt_metal_fabric_edm_daemon_result"
 daemon_lock = threading.Lock()
 binary_path = os.environ.get("TT_METAL_HOME", "") + "/build/test/ttnn/unit_tests_ttnn_fabric_edm"
 
-# Global daemon mode setting (determined once per test session)
-_daemon_mode_enabled = None
+# Global direct execution mode setting (determined once per test session)
+_direct_mode_enabled = None
 
 
 def start_fabric_edm_daemon():
@@ -147,13 +147,13 @@ def send_test_to_daemon(test_mode, test_params_str):
         return int(result_line)
 
 
-def get_daemon_mode():
-    return _daemon_mode_enabled
+def get_direct_mode():
+    return _direct_mode_enabled
 
 
-def set_daemon_mode(enabled):
-    global _daemon_mode_enabled
-    _daemon_mode_enabled = enabled
+def set_direct_mode(enabled):
+    global _direct_mode_enabled
+    _direct_mode_enabled = enabled
 
 
 def update_machine_type_suffix(machine_type: str):
@@ -459,9 +459,9 @@ def run_fabric_edm(
 
     enable_persistent_kernel_cache()
 
-    use_daemon = get_daemon_mode()
+    use_direct_exec = get_direct_mode()
 
-    if use_daemon:
+    if not use_direct_exec:
         try:
             # Start daemon if not already running
             start_fabric_edm_daemon()
@@ -477,7 +477,6 @@ def run_fabric_edm(
 
         except Exception as e:
             logger.warning(f"Daemon mode failed: {e}, falling back to direct execution")
-            use_daemon = False
     else:
         # Fallback to original direct execution
         cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
@@ -540,20 +539,20 @@ def run_fabric_edm(
 def initialize_daemon_mode(request):
     """Initialize global daemon mode setting once per test session"""
     # Check pytest command line option first, then fall back to environment variable
-    daemon_enabled = hasattr(request.config.option, "use_daemon") and request.config.option.use_daemon
+    direct_exec_mode_enabled = hasattr(request.config.option, "direct_exec") and request.config.option.direct_exec
 
     # Set global daemon mode
-    set_daemon_mode(daemon_enabled)
+    set_direct_mode(direct_exec_mode_enabled)
 
-    if daemon_enabled:
+    if direct_exec_mode_enabled:
+        logger.info("Fabric EDM daemon mode disabled, using direct execution")
+        yield
+    else:
         logger.info("Fabric EDM daemon mode enabled for this test session")
         start_fabric_edm_daemon()
         yield
         logger.info("Stopping fabric EDM daemon after test session")
         stop_fabric_edm_daemon()
-    else:
-        logger.info("Fabric EDM daemon mode disabled, using direct execution")
-        yield
 
 
 @pytest.mark.ubench_quick_tests

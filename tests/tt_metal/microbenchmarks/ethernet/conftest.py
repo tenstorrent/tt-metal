@@ -8,10 +8,10 @@ import pytest
 def pytest_addoption(parser):
     """Add custom command line options to pytest"""
     parser.addoption(
-        "--use_daemon",
+        "--direct_exec",
         action="store_true",
         default=False,
-        help="Use daemon mode for fabric EDM tests instead of direct execution",
+        help="Use direct execution instead of daemon mode for fabric EDM tests",
     )
 
 
