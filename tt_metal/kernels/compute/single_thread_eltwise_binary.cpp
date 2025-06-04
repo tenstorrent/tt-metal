@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_binary_st.h"
 #include "debug/dprint.h"
 
 namespace NAMESPACE {
@@ -22,10 +22,10 @@ void MAIN {
     constexpr auto cb_out0 = tt::CBIndex::c_16;
 
     // Initialize the parts that are common among binary operations
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+    binary_op_init_common_st(cb_in0, cb_in1, cb_out0);
 
     // Initialize the parts that required specifically for this binary operatoins
-    binary_tiles_init<false, EltwiseBinaryType::ELWADD>(cb_in0, cb_in1);
+    binary_tiles_init_st<false, EltwiseBinaryType::ELWADD>(cb_in0, cb_in1);
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 	// Wait for the input circular buffers to be filled with per_core_block_size tiles
@@ -41,7 +41,7 @@ void MAIN {
 	// Perform the elementwise operation on the tiles in the block 
 	// and store them in the destination register
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            add_tiles(cb_in0, cb_in1, i, i, i);
+            add_tiles_st(cb_in0, cb_in1, i, i, i);
         }
 
         tile_regs_commit();
