@@ -19,7 +19,8 @@ void kernel_main() {
     uint32_t receiver_y_coord = get_arg_val<uint32_t>(1);
 
     // Derivative values
-    uint64_t sem_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, sem_id);
+    uint32_t sem_addr = get_semaphore(sem_id);
+    uint64_t sem_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, sem_addr);
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
@@ -43,5 +44,5 @@ void kernel_main() {
         }
         noc_async_write_barrier();
     }
-    noc_semaphore_inc(sem_addr, 1);
+    noc_semaphore_inc(sem_noc_addr, 1);
 }

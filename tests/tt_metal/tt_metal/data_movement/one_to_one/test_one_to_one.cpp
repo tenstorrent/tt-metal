@@ -122,8 +122,6 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 
     // Write Input to Master L1
     tt_metal::detail::WriteToDeviceL1(device, test_config.master_core_coord, l1_base_address, packed_input);
-    // QUESTION: Safety check needed for L1 write?
-    // MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // LAUNCH THE PROGRAM
     detail::LaunchProgram(device, program);
@@ -133,7 +131,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     tt_metal::detail::ReadFromDeviceL1(
         device, test_config.subordinate_core_coord, l1_base_address, total_size_bytes, packed_output);
 
-    // Compare output with golden
+    // Compare output with golden vector
     bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
 
@@ -157,7 +155,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
 
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
     uint32_t max_transactions = 256;
@@ -209,7 +207,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
 
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Adjustable Parameters
     // Ideal: Less transactions, more data per transaction
@@ -217,10 +215,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
     uint32_t pages_per_transaction = max_transmittable_pages / num_of_transactions;
 
     // Cores
-    /*
-        Any two cores that are next to each other on the torus
-         - May be worth considering the performance of this test with different pairs of adjacent cores
-    */
+    // NOTE: May be worth considering the performance of this test with different pairs of adjacent cores
+    //       for a different test case
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {0, 1};
 
