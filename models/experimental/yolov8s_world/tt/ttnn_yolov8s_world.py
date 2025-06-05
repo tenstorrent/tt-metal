@@ -2,16 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import math
-import torch
-from torch import nn
+
+import ttnn
 from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
     ttnn_decode_bboxes,
     concat,
     determine_num_cores_for_upsample,
     get_core_grid_from_num_cores,
     tt_adaptive_to_max_pool2d,
+    ttnn_custom_normalize,
 )
 
 
@@ -560,7 +560,7 @@ class TtImagePoolingAttn:
         self.key = [ttnn.layer_norm, ttnn.linear]
         self.value = [ttnn.layer_norm, ttnn.linear]
         self.proj = ttnn.linear
-        self.scale = nn.Parameter(torch.tensor([0.0]), requires_grad=True) if scale else 1.0
+        self.scale = 0.0 if scale else 1.0  # nn.Parameter(torch.tensor([0.0]), requires_grad=True) if scale else 1.0
         self.projections = [
             TtConv(
                 self.device,
@@ -596,29 +596,21 @@ class TtImagePoolingAttn:
                         channels=x.shape[-1],
                         kernel_size=[
                             tt_adaptive_to_max_pool2d(
-                                torch.randn(
-                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
-                                ),
+                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
                                 (3, 3),
                             )[0],
                             tt_adaptive_to_max_pool2d(
-                                torch.randn(
-                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
-                                ),
+                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
                                 (3, 3),
                             )[0],
                         ],
                         stride=[
                             tt_adaptive_to_max_pool2d(
-                                torch.randn(
-                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
-                                ),
+                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
                                 (3, 3),
                             )[1],
                             tt_adaptive_to_max_pool2d(
-                                torch.randn(
-                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
-                                ),
+                                [x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]],
                                 (3, 3),
                             )[1],
                         ],
@@ -757,18 +749,9 @@ class TtContrastiveHead:
     def __call__(self, x, w):
         """Forward function of contrastive learning."""
         # x = ttnn.permute(x, (0, 3, 1, 2))
-        import torch.nn.functional as F
 
-        x = ttnn.to_torch(x).to(torch.float32)
-        w = ttnn.to_torch(w).to(torch.float32)
-        x = F.normalize(x, dim=-1, p=2)
-        w = F.normalize(w, dim=-1, p=2)
-        x = ttnn.from_torch(
-            x, device=self.device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
-        )
-        w = ttnn.from_torch(
-            w, device=self.device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
-        )
+        x = ttnn_custom_normalize(x, dim=-1, device=x.device())
+        w = ttnn_custom_normalize(w, dim=-1, device=w.device())
 
         ## Replacement for  x = torch.einsum("bchw,bkc->bkhw", x, w)
         batch, height, width, channel = x.shape
