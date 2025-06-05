@@ -309,13 +309,19 @@ def test_isclose(device, h, w, atol, rtol):
     "use_legacy",
     [False, True],
 )
-def test_binary_relational_ttnn(input_shapes, ttnn_function, range1, range2, use_legacy, device):
+@pytest.mark.parametrize(
+    "ttnn_dtype, torch_dtype",
+    [(ttnn.int32, torch.int32), (ttnn.bfloat16, torch.bfloat16), (ttnn.float32, torch.float32)],
+)
+def test_binary_relational_ttnn(
+    input_shapes, ttnn_function, range1, range2, use_legacy, device, ttnn_dtype, torch_dtype
+):
     low1, high1 = range1
     low2, high2 = range2
-    in_data1 = torch.randint(low1, high1, input_shapes, dtype=torch.int32)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    in_data2 = torch.randint(low2, high2, input_shapes, dtype=torch.int32)
-    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    in_data1 = torch.randint(low1, high1, input_shapes, dtype=torch_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    in_data2 = torch.randint(low2, high2, input_shapes, dtype=torch_dtype)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor1, input_tensor2, use_legacy=use_legacy)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data1, in_data2)

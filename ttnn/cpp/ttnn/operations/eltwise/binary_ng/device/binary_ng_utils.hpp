@@ -63,11 +63,17 @@ struct OpConfig {
         REQUANT,
         DEQUANT,
         MAXIMUM,
-        MINIMUM
+        MINIMUM,
+        EQ,
+        NE,
+        LT,
+        LTE,
+        GT,
+        GTE,
     };
 
     template <class EnumT>
-    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>);
+    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, DataType dtype = DataType::BFLOAT16);
 
     std::map<std::string, std::string> as_defines(DataType dtype) const;
 
