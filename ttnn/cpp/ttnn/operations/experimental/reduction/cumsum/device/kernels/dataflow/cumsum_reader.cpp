@@ -50,7 +50,6 @@ void kernel_main() {
 
     fill_cb_with_value(cb_zero, scaler.u);
 
-    DPRINT << "[Cumsum Reader] start_row = " << start_row << ", num rows = " << num_rows << ENDL();
     for (uint32_t i = start_row; i < start_row + num_rows; i++) {
         uint32_t i0 = i / (product_high_dims * HtWt);
         uint32_t i1 = i % (product_high_dims * HtWt);
@@ -61,8 +60,6 @@ void kernel_main() {
             }
 
             uint32_t tileid = get_tile_id(i0, i1, tile_j, tiles_per_row, product_low_dims, product_high_dims, HtWt);
-            DPRINT << "[Cumsum Reader] tile = " << tileid << " (" << i0 << ", " << i1 << "), tile_j = " << tile_j
-                   << ", flip = " << flip << ENDL();
 
             cb_reserve_back(cb_out, 1);
 
@@ -75,5 +72,4 @@ void kernel_main() {
             cb_push_back(cb_out, 1);
         }
     }
-    DPRINT << "[Cumsum Reader] finished" << ENDL();
 }
