@@ -94,6 +94,7 @@ tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT
 tests/tt_metal/tt_metal/sfpi/ @nathan-TT @pgkeller
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @pgkeller
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
+tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
 tests/tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT
 
 # misc tests
