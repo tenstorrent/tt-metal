@@ -114,18 +114,20 @@ def sample_top_p(values: torch.Tensor, p: float):
     return torch.gather(probs_idx, -1, next_token)
 
 
-def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_size):
-    tt_indices_device_offsets = torch.ones([1, 1, 32, 32 * num_devices], dtype=torch.int32)
+def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_size, max_top_k):
+    tt_indices_device_offsets = torch.ones([1, 1, 32, max_top_k * num_devices], dtype=torch.int32)
     per_device_offset = input_tensor.shape[-1] // num_devices
     for device_id in range(num_devices):
-        tt_indices_device_offsets[:, :, :, device_id * 32 : (device_id + 1) * 32] = device_id * per_device_offset
+        tt_indices_device_offsets[:, :, :, device_id * max_top_k : (device_id + 1) * max_top_k] = (
+            device_id * per_device_offset
+        )
 
     # Split up in per device tensors
     per_device_tensors = torch.split(input_tensor, per_device_offset, dim=-1)
     topk_values_list = []
     topk_indices_list = []
     for i in range(num_devices):
-        topk_values, topk_indices = torch.topk(per_device_tensors[i], k=32, dim=-1)
+        topk_values, topk_indices = torch.topk(per_device_tensors[i], k=max_top_k, dim=-1)
         topk_values_list.append(topk_values)
         topk_indices_list.append(topk_indices)
 
@@ -208,12 +210,7 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
 
     else:
         # Random inputs
-        # torch_input = torch.randn(1, 1, 32, model_args.padded_vocab_size)
         torch_input = torch.randn(1, 1, 32, 512)
-        # torch_input = torch.rand(1, 1, 32, 512)
-
-        # torch_input = torch.zeros(1, 1, 32, 512)
-        # torch_input[:, :, :, 1:33] = 1
 
     tt_input = ttnn.from_torch(
         torch_input,
@@ -229,8 +226,6 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
     )
 
     model_args.padded_vocab_size = torch_input.shape[-1]
-
-    # print("torch_input:", torch_input)
 
     # Reference output
     reference_outputs = []
@@ -267,8 +262,6 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
                 tt_outputs = tt_sampling(tt_input)
             logger.info("Done comiling Llama Sampling Trace")
 
-            # ttnn.synchronize_device(mesh_device)
-
             logger.info("Capture Llama Sampling Trace")
 
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -297,13 +290,11 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
             logger.info("Starting sampling...")
             for i in range(num_samples):
                 ttnn.copy_host_to_device_tensor(tt_input_reset, tt_input)
-                # iteration_time_start = time()
 
                 # Execute trace
                 ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                 tt_out_tok_device0 = ttnn.get_device_tensors(tt_outputs)[0]
                 tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)
-                # iteration_time = time() - iteration_time_start
 
                 tt_output_torch = ttnn.to_torch(tt_out_tok_cpu)
                 tt_output_torch = tt_output_torch[0, 0, :, :]

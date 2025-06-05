@@ -23,18 +23,20 @@ class TTSampling(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
         self.max_batch_size = args.max_batch_size
+        self.max_top_k = args.max_top_k
         self.k = [sampling_params["top_k"]] * self.max_batch_size
         self.p = [sampling_params["top_p"]] * self.max_batch_size
         self.seed = sampling_params["seed"]
 
+        assert args.max_top_k >= sampling_params["top_k"]
+
         # Create indices tensor
-        num_local_top_k = 32
         indices_device_offsets = torch.ones(
-            1, 1, self.max_batch_size, num_local_top_k * self.args.cluster_shape[0], dtype=torch.int64
+            1, 1, self.max_batch_size, self.max_top_k * self.args.cluster_shape[0], dtype=torch.int64
         )
         per_device_vocab_size = self.args.padded_vocab_size // self.args.cluster_shape[0]
         for device_id in range(self.args.cluster_shape[0]):
-            indices_device_offsets[:, :, :, device_id * num_local_top_k : (device_id + 1) * num_local_top_k] = (
+            indices_device_offsets[:, :, :, device_id * self.max_top_k : (device_id + 1) * self.max_top_k] = (
                 device_id * per_device_vocab_size
             )
         self.tt_indices_device_offsets = ttnn.from_torch(
@@ -48,7 +50,7 @@ class TTSampling(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, tt_out_tok: ttnn.Tensor = None):
         # Local top k
-        topk_values, topk_indices = ttnn.topk(x, k=32, dim=-1, sub_core_grids=self.args.sub_core_grid_topk)
+        topk_values, topk_indices = ttnn.topk(x, k=self.max_top_k, dim=-1, sub_core_grids=self.args.sub_core_grid_topk)
 
         # Gather values
         # Note: Persistent output buffer used, do not deallocate output!
