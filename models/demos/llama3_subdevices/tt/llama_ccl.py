@@ -565,7 +565,7 @@ class TT_CCL:
             persistent_interim_buffer,
             dim,
             self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-            1,
+            cluster_axis,
             self.mesh_device,
             num_links,
             memory_config_rs=RS_memory_config,
