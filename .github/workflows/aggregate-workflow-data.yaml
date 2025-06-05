@@ -125,51 +125,13 @@ jobs:
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Handle failed workflows
-        id: failures
+      - name: Format Failed Workflows
+        id: format
         run: |
-          echo "The following workflows have failed:"
           FAILED_WORKFLOWS='${{ needs.analyze-data.outputs.failed_workflows }}'
-          echo "$FAILED_WORKFLOWS" | jq -r '.[]'
-
-          # Create a formatted message for Slack
-          echo "message<<EOF" >> $GITHUB_OUTPUT
-          echo "🚨 *Failed Workflows Report*" >> $GITHUB_OUTPUT
-          echo "----------------------------------------" >> $GITHUB_OUTPUT
-          echo "*Repository:* ${{ github.repository }}" >> $GITHUB_OUTPUT
-          echo "*Branch:* ${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          echo "*Time Period:* ${{ github.event.inputs.days || 15 }} days" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "*Failed Workflows:*" >> $GITHUB_OUTPUT
-          echo "$FAILED_WORKFLOWS" | jq -r '.[]' | while read -r workflow; do
-            echo "• $workflow" >> $GITHUB_OUTPUT
-          done
-          echo "" >> $GITHUB_OUTPUT
-          echo "*Full Report:*" >> $GITHUB_OUTPUT
-          echo "${{ needs.analyze-data.outputs.report }}" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Prepare Message Content
-        id: message
-        run: |
-          # Get the failed workflows and report
-          FAILED_WORKFLOWS='${{ needs.analyze-data.outputs.failed_workflows }}'
-          REPORT='${{ needs.analyze-data.outputs.report }}'
-
-          # Create the message content
-          echo "content<<EOF" >> $GITHUB_OUTPUT
-          echo "🚨 *Failed Workflows Report*" >> $GITHUB_OUTPUT
-          echo "*Repository:* ${{ github.repository }}" >> $GITHUB_OUTPUT
-          echo "*Branch:* ${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          echo "*Time Period:* ${{ github.event.inputs.days || 15 }} days" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "*Failed Workflows:*" >> $GITHUB_OUTPUT
-          echo "$FAILED_WORKFLOWS" | jq -r '.[]' | while read -r workflow; do
-            echo "• $workflow" >> $GITHUB_OUTPUT
-          done
-          echo "" >> $GITHUB_OUTPUT
-          echo "*Full Report:*" >> $GITHUB_OUTPUT
-          echo "$REPORT" >> $GITHUB_OUTPUT
+          FORMATTED_WORKFLOWS=$(echo "$FAILED_WORKFLOWS" | jq -r '.[] | "• \(.name)\n  PR: \(.pr)\n  Author: \(.author)\n  Bad SHA: \(.badSha)\n  Good SHA: \(.goodSha)"')
+          echo "formatted_workflows<<EOF" >> $GITHUB_OUTPUT
+          echo "$FORMATTED_WORKFLOWS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Send Slack Notification
@@ -194,4 +156,4 @@ jobs:
                   type: mrkdwn
                   text: |
                     *Failed Workflows:*
-                    ${{ join(fromJson(needs.analyze-data.outputs.failed_workflows), '\n') }}
+                    ${{ steps.format.outputs.formatted_workflows }}
