@@ -785,7 +785,8 @@ void noc_async_write_multicast_one_packet(
         NOC_MULTICAST_WRITE_VC,
         true /* mcast */,
         linked,
-        num_dests true /* multicast_path_reserve */);
+        num_dests,
+        true /* multicast_path_reserve */);
 }
 
 // clang-format off
