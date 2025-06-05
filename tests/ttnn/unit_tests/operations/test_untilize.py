@@ -616,7 +616,7 @@ def test_untilize_multi_core_sharded_to_interleaved(
 @pytest.mark.parametrize(
     "tensor_shape",
     [
-        [2, 2, 512, 2048],
+        [2, 2, 128, 512],
     ],
 )
 @pytest.mark.parametrize(
@@ -643,6 +643,11 @@ def test_untilize_multi_core_sharded_to_interleaved(
     "num_shard_cores, standard_shard_core_grid, block_shard_core_grid",
     [
         [
+            4,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ],
+        [
             16,
             ttnn.CoreRangeSet(
                 {
@@ -651,22 +656,6 @@ def test_untilize_multi_core_sharded_to_interleaved(
                 }
             ),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
-        ],
-        [
-            64,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(7, 0), ttnn.CoreCoord(7, 7)),
-                }
-            ),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         ],
     ],
 )
@@ -743,7 +732,7 @@ def test_untilize_multi_core_sharded_to_sharded_different_memory_layout(
 @pytest.mark.parametrize(
     "tensor_shape",
     [
-        [2, 2, 512, 2048],
+        [2, 2, 128, 512],
     ],
 )
 @pytest.mark.parametrize(
@@ -772,6 +761,11 @@ def test_untilize_multi_core_sharded_to_sharded_different_memory_layout(
     "input_num_shard_cores, input_standard_shard_core_grid, input_block_shard_core_grid",
     [
         [
+            4,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ],
+        [
             16,
             ttnn.CoreRangeSet(
                 {
@@ -780,22 +774,6 @@ def test_untilize_multi_core_sharded_to_sharded_different_memory_layout(
                 }
             ),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
-        ],
-        [
-            64,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(7, 0), ttnn.CoreCoord(7, 7)),
-                }
-            ),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         ],
     ],
 )
@@ -803,6 +781,11 @@ def test_untilize_multi_core_sharded_to_sharded_different_memory_layout(
     "output_num_shard_cores, output_standard_shard_core_grid, output_block_shard_core_grid",
     [
         [
+            4,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ],
+        [
             16,
             ttnn.CoreRangeSet(
                 {
@@ -811,22 +794,6 @@ def test_untilize_multi_core_sharded_to_sharded_different_memory_layout(
                 }
             ),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
-        ],
-        [
-            64,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(7, 0), ttnn.CoreCoord(7, 7)),
-                }
-            ),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         ],
     ],
 )
@@ -929,7 +896,7 @@ def test_untilize_multi_core_sharded_to_sharded_same_memory_layout_different_sha
 @pytest.mark.parametrize(
     "tensor_shape",
     [
-        [2, 2, 512, 2048],
+        [2, 2, 128, 512],
     ],
 )
 @pytest.mark.parametrize(
@@ -951,6 +918,11 @@ def test_untilize_multi_core_sharded_to_sharded_same_memory_layout_different_sha
     "num_shard_cores, standard_shard_core_grid, block_shard_core_grid",
     [
         [
+            4,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ],
+        [
             16,
             ttnn.CoreRangeSet(
                 {
@@ -959,22 +931,6 @@ def test_untilize_multi_core_sharded_to_sharded_same_memory_layout_different_sha
                 }
             ),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
-        ],
-        [
-            64,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 7)),
-                    ttnn.CoreRange(ttnn.CoreCoord(7, 0), ttnn.CoreCoord(7, 7)),
-                }
-            ),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         ],
     ],
 )
