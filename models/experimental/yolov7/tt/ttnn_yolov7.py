@@ -119,11 +119,10 @@ class ttnn_SPPCSPC:
         y2 = ttnn.sharded_to_interleaved(y2, ttnn.L1_MEMORY_CONFIG)
 
         out = concat(3, False, y1, y2)
-
-        out = self.cv7(self.device, out)
-
         ttnn.deallocate(y1)
         ttnn.deallocate(y2)
+
+        out = self.cv7(self.device, out)
 
         return out
 
@@ -245,7 +244,7 @@ class ttnn_yolov7:
         self.ch = [256, 512, 1024]
         self.grid_tensors = grid_tensors
         self.conv1 = Conv([1, 640, 640, 3], (3, 3, 1, 1, 1, 1, 1, 1), parameters["0"], act_block_h=64)
-        self.conv2 = Conv([1, 640, 640, 32], (3, 3, 2, 2, 1, 1, 1, 1), parameters["1"])
+        self.conv2 = Conv([1, 640, 640, 32], (3, 3, 2, 2, 1, 1, 1, 1), parameters["1"], deallocate_activation=True)
         self.conv3 = Conv(
             [1, 320, 320, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
@@ -670,6 +669,7 @@ class ttnn_yolov7:
 
     def __call__(self, input_tensor):
         conv1 = self.conv1(self.device, input_tensor)
+        ttnn.deallocate(input_tensor)
 
         conv2 = self.conv2(self.device, conv1)
         ttnn.deallocate(conv1)
@@ -896,11 +896,11 @@ class ttnn_yolov7:
         conv40 = concat(3, False, conv40, conv38, conv36, conv35)
         ttnn.deallocate(conv37)
         ttnn.deallocate(conv39)
-
-        conv41 = self.conv41(self.device, conv40)
         ttnn.deallocate(conv35)
         ttnn.deallocate(conv36)
         ttnn.deallocate(conv38)
+
+        conv41 = self.conv41(self.device, conv40)
         ttnn.deallocate(conv40)
 
         SPPCSPC = self.SPPCSPC(conv41)
@@ -936,16 +936,15 @@ class ttnn_yolov7:
         conv42 = ttnn.sharded_to_interleaved(conv42, ttnn.L1_MEMORY_CONFIG)
 
         conv43 = concat(3, True, conv43, conv42)
-
+        ttnn.deallocate(conv42)
         ttnn.deallocate(conv31)
 
         conv44 = self.conv44(self.device, conv43)
-        ttnn.deallocate(conv42)
 
         conv45 = self.conv45(self.device, conv43)
+        ttnn.deallocate(conv43)
 
         conv46 = self.conv46(self.device, conv45)
-        ttnn.deallocate(conv43)
 
         conv47 = self.conv47(self.device, conv46)
 
@@ -1068,9 +1067,9 @@ class ttnn_yolov7:
         conv63 = self.conv63(self.device, conv62)
 
         conv64 = self.conv64(self.device, conv62)
+        ttnn.deallocate(conv62)
 
         conv65 = self.conv65(self.device, conv64)
-        ttnn.deallocate(conv62)
 
         conv66 = self.conv66(self.device, conv65)
 

@@ -28,6 +28,7 @@ class TtYOLOv7Conv2D:
         math_approx_mode=False,
         input_channels_alignment=32,
         use_1d_systolic_array=True,
+        deallocate_activation=False,
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
@@ -48,6 +49,7 @@ class TtYOLOv7Conv2D:
         self.shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
+        self.deallocate_activation = deallocate_activation
         self.num_cores_nhw = num_cores_nhw
         self.is_reshape = is_reshape
         self.enable_split_reader = enable_split_reader
@@ -62,6 +64,7 @@ class TtYOLOv7Conv2D:
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             enable_split_reader=self.enable_split_reader,
             enable_act_double_buffer=self.enable_act_double_buffer,
+            deallocate_activation=self.deallocate_activation,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
