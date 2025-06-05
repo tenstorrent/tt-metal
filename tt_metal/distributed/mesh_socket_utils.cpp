@@ -128,13 +128,13 @@ void validate_remote_desc(const SocketPeerDescriptor& local_desc, const SocketPe
         "Mismatch in number of chip IDs during handshake.");
 }
 
-Tag generate_descriptor_exchange_tag() {
+Tag generate_descriptor_exchange_tag(Rank peer_rank) {
     // Generate a unique id to tag the exchange of socket peer
     // descriptors between the sender and receiver.
     // This is used to ensure that the sender and receiver are
     // exchanging the correct descriptors.
-    static uint32_t exchange_tag = 0;
-    return Tag{++exchange_tag};
+    static std::unordered_map<Rank, uint32_t> exchange_tags;
+    return Tag{exchange_tags[peer_rank]++};
 }
 }  // namespace
 
@@ -238,7 +238,6 @@ void write_socket_configs(
 
     if (is_sender) {
         std::vector<sender_socket_md> config_data(config_buffer->size() / sizeof(sender_socket_md), sender_socket_md());
-
         for (const auto& [device_coord, indexed_connections] : grouped_connections) {
             for (const auto& [conn_idx, connection] : indexed_connections) {
                 const auto& [sender_core, recv_core] = connection;
@@ -301,11 +300,14 @@ void write_socket_configs(
 SocketPeerDescriptor generate_local_endpoint_descriptor(const MeshSocket& socket_endpoint) {
     const auto& config = socket_endpoint.get_config();
     bool is_sender = socket_endpoint.get_socket_endpoint_type() == SocketEndpoint::SENDER;
+
+    auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
     SocketPeerDescriptor local_endpoint_desc = {
         .config = config,
         .config_buffer_address = socket_endpoint.get_config_buffer()->address(),
         .data_buffer_address = is_sender ? 0 : socket_endpoint.get_data_buffer()->address(),
-        .exchange_tag = generate_descriptor_exchange_tag()  // Unique tag for this exchange
+
+        .exchange_tag = generate_descriptor_exchange_tag(peer_rank)  // Unique tag for this exchange
     };
     auto device = socket_endpoint.get_config_buffer()->device();
     for (const auto& [sender_core, recv_core] : config.socket_connection_config) {

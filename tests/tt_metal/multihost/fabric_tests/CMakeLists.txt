@@ -9,6 +9,7 @@ target_sources(
         main.cpp
         intermesh_routing.cpp
         intermesh_routing_test_utils.cpp
+        socket_send_recv.cpp
 )
 
 target_include_directories(

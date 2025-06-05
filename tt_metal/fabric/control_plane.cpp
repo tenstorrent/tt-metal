@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <iostream>
 #include <magic_enum/magic_enum.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -923,6 +924,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                 const auto fabric_node_id = FabricNodeId(MeshId{mesh_id}, chip_id);
                 if (*(distributed_context.size()) > 1) {
                     this->assign_intermesh_link_directions_to_remote_host(fabric_node_id);
+                    this->assign_neighbor_meshes_to_exit_node(fabric_node_id);
                 } else {
                     this->assign_intermesh_link_directions_to_local_host(fabric_node_id);
                 }
@@ -1121,11 +1123,66 @@ eth_chan_directions ControlPlane::get_eth_chan_direction(FabricNodeId fabric_nod
     TT_THROW("Cannot Find Ethernet Channel Direction");
 }
 
+std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route_to_exit_node(
+    FabricNodeId src_fabric_node_id, MeshId dst_mesh_id, chan_id_t src_chan_id) const {
+    TT_FATAL(this->system_has_intermesh_links(), "Cannot generate a route to an exit node on a system with no links to a remote host.");
+    int i = 0;
+    std::vector<std::pair<FabricNodeId, chan_id_t>> route;
+    // Generate Route to exit node within the local mesh
+    const auto& exit_nodes_for_dst_mesh = exit_nodes_per_neighbor_mesh_.at(dst_mesh_id);
+    while (std::find(exit_nodes_for_dst_mesh.begin(), exit_nodes_for_dst_mesh.end(), src_fabric_node_id) == exit_nodes_for_dst_mesh.end()) {
+        i++;
+        if (i >= tt::tt_fabric::MAX_MESH_SIZE * tt::tt_fabric::MAX_NUM_MESHES) {
+            return {};
+        }
+        chan_id_t next_chan_id = 0;
+        next_chan_id = this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][*dst_mesh_id];
+        if (next_chan_id == eth_chan_magic_values::INVALID_DIRECTION) {
+            // The complete route b/w src and dst not found, probably some eth cores are reserved along the path
+            return {};
+        }
+        if (src_chan_id != next_chan_id) {
+            // Chan to chan within chip
+            route.push_back({src_fabric_node_id, next_chan_id});
+        }
+        std::tie(src_fabric_node_id, src_chan_id) =
+            this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
+        route.push_back({src_fabric_node_id, src_chan_id});
+    }
+    // Append exit connection.
+    // Check if the exit node has an outgoing connection to the destination mesh, on this channel
+    // If not, return empty route
+    auto next_chan_id = this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][*dst_mesh_id];
+    if (next_chan_id == eth_chan_magic_values::INVALID_DIRECTION) {
+        return {};
+    }
+    // Routing plane can be used for inter-mesh traffic. Return the route to the exit node
+    route.push_back({src_fabric_node_id, this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][*dst_mesh_id]});
+    // TODO: Get routing plane index and return empty if this is > num intermesh routing planes
+    return route;
+}
+
 std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const {
+    // Find any eth chan on the plane id
+    TT_FATAL(this->is_local_mesh(src_fabric_node_id.mesh_id),
+        "Cannot generate the fabric route between {} and {} on host {}, since M {} is not local to the host.",
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        this->local_mesh_binding_.host_rank,
+        src_fabric_node_id.mesh_id);
+
+    if (!this->is_local_mesh(dst_fabric_node_id.mesh_id)) {
+        // Current algorithm to find a fabric route between meshes is to simply find a route to a local exit node
+        // that can route traffic to the requested destination mesh. Once traffic has reached the appropriate exit
+        // node, routers on the destination mesh will route the traffic to the destination chip.
+        // The assumption here is that a routing plane that can route traffic to the exit node and along the intermesh
+        // link is a valid routing plane within the destination mesh (reasonable assumption for current topologies).
+        return this->get_fabric_route_to_exit_node(src_fabric_node_id, dst_fabric_node_id.mesh_id, src_chan_id);
+    }
+
     std::vector<std::pair<FabricNodeId, chan_id_t>> route;
     int i = 0;
-    // Find any eth chan on the plane id
     while (src_fabric_node_id != dst_fabric_node_id) {
         i++;
         auto src_mesh_id = src_fabric_node_id.mesh_id;
@@ -1377,24 +1434,10 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
     const auto& connected_chips_and_eth_cores = cluster.get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
     size_t num_eth_endpoint = 0;
-    for (const auto& [connected_chip_id, eth_cores] : connected_chips_and_eth_cores) {
-        // iterate all physically connected ethernet cores
-        for (const auto& eth_core : eth_cores) {
-            auto eth_channel_id = soc_desc.logical_eth_core_to_chan_map.at(eth_core);
-            bool is_fabric_connected = false;
-            eth_chan_directions router_direction = eth_chan_directions::COUNT;
-            for (const auto& [direction, eth_chans] :
-                 this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
-                // Check if the physically connected channel is part of fabric channel
-                if (std::find(eth_chans.begin(), eth_chans.end(), eth_channel_id) != eth_chans.end()) {
-                    is_fabric_connected = true;
-                    router_direction = this->routing_direction_to_eth_direction(direction);
-                    break;
-                }
-            }
-            if (!is_fabric_connected) {
-                continue;
-            }
+    for (const auto& [direction, eth_chans] :
+         this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
+        for (auto eth_channel_id : eth_chans) {
+            eth_chan_directions router_direction = this->routing_direction_to_eth_direction(direction);
             if (num_eth_endpoint >= tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS) {
                 log_warning(
                     tt::LogFabric,
@@ -1609,7 +1652,7 @@ void ControlPlane::initialize_intermesh_eth_links() {
         for (auto link : extract_intermesh_eth_links(config_data[0], chip_id)) {
             // Find the CoreCoord for this channel
             for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
-                if (channel == link) {
+                if (channel == link and this->is_intermesh_eth_link_trained(chip_id, core_coord)) {
                     intermesh_eth_links.push_back({core_coord, link});
                     break;
                 }
@@ -1685,8 +1728,6 @@ bool ControlPlane::is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) 
 
 // TODO: Support Intramesh links through this API as well
 bool ControlPlane::is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const {
-    TT_FATAL(
-        this->is_intermesh_eth_link(chip_id, eth_core), "Can only call {} on intermesh ethernet links.", __FUNCTION__);
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     // Read the link status from designated L1 address
     tt_cxy_pair virtual_eth_core(
@@ -1994,8 +2035,10 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
                 break;  // No need to check other edges, we found the matching intermesh link
             }
         }
-        router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[intermesh_routing_direction].push_back(
-            eth_chan);
+        if (intermesh_routing_direction != RoutingDirection::NONE) {
+            router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[intermesh_routing_direction].push_back(
+                eth_chan);
+        }
     }
     // Compute the number of intermesh links requsted by the user and ensure that they could be mapped to physical links
     // on the fabric node
@@ -2007,6 +2050,33 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
     TT_FATAL(
         num_directions_assigned == num_links_requested_on_node,
         "Could not bind all edges in the Mesh Graph to an intermesh link.");
+}
+
+void ControlPlane::assign_neighbor_meshes_to_exit_node(const FabricNodeId& fabric_node_id) {
+    // Generate a map tracking the exit nodes connected to each neighbor mesh
+    const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
+    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+    auto board_id = chip_id_to_asic_id_.at(physical_chip_id);
+    auto intermesh_links = this->get_intermesh_eth_links(physical_chip_id);
+
+    for (const auto& [eth_core, eth_chan] : intermesh_links) {
+        auto curr_eth_chan_desc = EthChanDescriptor{.board_id = board_id, .chan_id = eth_chan};
+        const auto& remote_eth_chan_desc = intermesh_link_table_.intermesh_links.at(curr_eth_chan_desc);
+        for (const auto& [connected_mesh_id, edge] :
+            inter_mesh_connectivity[*fabric_node_id.mesh_id][fabric_node_id.chip_id]) {
+            bool exit_node_found = false;
+            for (const auto& [candidate_desc, candidate_peer_desc] : peer_intermesh_link_tables_[connected_mesh_id]) {
+                if (candidate_desc == remote_eth_chan_desc && candidate_peer_desc == curr_eth_chan_desc) {
+                    exit_nodes_per_neighbor_mesh_[connected_mesh_id].push_back(fabric_node_id);
+                    exit_node_found = true;
+                    break;
+                }
+            }
+            if (exit_node_found) {
+                break;  // No need to check other edges for this link. We found the local exit node it corresponds to
+            }
+        }
+    }
 }
 
 const IntermeshLinkTable& ControlPlane::get_local_intermesh_link_table() const { return intermesh_link_table_; }
