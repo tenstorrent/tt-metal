@@ -255,7 +255,6 @@ class TtnnADown:
             kernel_size=(2, 2),
             stride=(1, 1),
             padding=(0, 0),
-            dilation=(1, 1),
         )
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)

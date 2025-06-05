@@ -11,6 +11,7 @@
 #include "blackhole/bh_hal.hpp"
 #include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"
+#include "eth_fw_api.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
@@ -127,18 +128,9 @@ void Hal::initialize_bh() {
     this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
     this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
 
-    this->stack_size_func_ = [](uint32_t type) -> uint32_t {
-        switch (type) {
-            case DebugBrisc: return MEM_BRISC_STACK_SIZE;
-            case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
-            case DebugErisc: return 0;  // Not managed/checked by us.
-            case DebugIErisc: return MEM_IERISC_STACK_SIZE;
-            case DebugSubordinateIErisc: return MEM_BRISC_STACK_SIZE;
-            case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
-            case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
-            case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
-        }
-        return 0xdeadbeef;
+    this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t {
+        return get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) +
+               offsetof(blackhole::EthFwMailbox, arg) + arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]);
     };
 
     this->num_nocs_ = NUM_NOCS;

@@ -147,7 +147,7 @@ public:
 
     void initialize_host_mapping();
 
-    tt::tt_fabric::ControlPlane* get_local_node_control_plane() { return control_plane_.get(); }
+    tt::tt_fabric::ControlPlane& get_local_node_control_plane() { return *control_plane_; }
 
 private:
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;

@@ -14,6 +14,8 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DCond
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+import os
+import gc
 
 
 # Copied from sdxl pipeline
@@ -103,14 +105,13 @@ def run_tt_iteration(
 
 @torch.no_grad()
 def run_demo_inference(
-    ttnn_device,
-    is_ci_env,
-    prompt,
-    num_inference_steps,
-    classifier_free_guidance,
-    vae_on_device,
+    ttnn_device, is_ci_env, prompts, num_inference_steps, classifier_free_guidance, vae_on_device, evaluation_range
 ):
+    start_from, _ = evaluation_range
     torch.manual_seed(0)
+
+    if isinstance(prompts, str):
+        prompts = [prompts]
 
     # In case of classifier free guidance this is set:
     # - guidance_scale = 5.0
@@ -170,27 +171,37 @@ def run_demo_inference(
 
     cpu_device = "cpu"
 
-    # Encode prompt
-    (
-        prompt_embeds,
-        negative_prompt_embeds,
-        pooled_prompt_embeds,
-        negative_pooled_prompt_embeds,
-    ) = pipeline.encode_prompt(
-        prompt=prompt,
-        prompt_2=None,
-        device=cpu_device,
-        num_images_per_prompt=1,
-        do_classifier_free_guidance=classifier_free_guidance,
-        negative_prompt=None,
-        negative_prompt_2=None,
-        prompt_embeds=None,
-        negative_prompt_embeds=None,
-        pooled_prompt_embeds=None,
-        negative_pooled_prompt_embeds=None,
-        lora_scale=None,
-        clip_skip=None,
-    )
+    prompt_embeds = []
+    negative_prompt_embeds = []
+    pooled_prompt_embeds = []
+    negative_pooled_prompt_embeds = []
+
+    # Encode prompts
+    for prompt in prompts:
+        (
+            prompt_embed,
+            negative_prompt_embed,
+            pooled_prompt_embed,
+            negative_pooled_prompt_embed,
+        ) = pipeline.encode_prompt(
+            prompt=prompt,
+            prompt_2=None,
+            device=cpu_device,
+            num_images_per_prompt=1,
+            do_classifier_free_guidance=classifier_free_guidance,
+            negative_prompt=None,
+            negative_prompt_2=None,
+            prompt_embeds=None,
+            negative_prompt_embeds=None,
+            pooled_prompt_embeds=None,
+            negative_pooled_prompt_embeds=None,
+            lora_scale=None,
+            clip_skip=None,
+        )
+        prompt_embeds.append(prompt_embed)
+        negative_prompt_embeds.append(negative_prompt_embed)
+        pooled_prompt_embeds.append(pooled_prompt_embed)
+        negative_pooled_prompt_embeds.append(negative_pooled_prompt_embed)
 
     # Prepare timesteps
     timesteps, num_inference_steps = retrieve_timesteps(pipeline.scheduler, num_inference_steps, cpu_device, None, None)
@@ -217,7 +228,7 @@ def run_demo_inference(
         num_channels_latents,
         height,
         width,
-        prompt_embeds.dtype,
+        prompt_embeds[0].dtype,
         cpu_device,
         None,
         None,
@@ -237,43 +248,49 @@ def run_demo_inference(
         original_size,
         crops_coords_top_left,
         target_size,
-        dtype=prompt_embeds.dtype,
+        dtype=prompt_embeds[0].dtype,
         text_encoder_projection_dim=text_encoder_projection_dim,
     )
     negative_add_time_ids = add_time_ids
 
     if classifier_free_guidance:
         ttnn_prompt_embeds = [
-            ttnn.from_torch(
-                negative_prompt_embeds,
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
-            ttnn.from_torch(
-                prompt_embeds,
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
+            [
+                ttnn.from_torch(
+                    negative_prompt_embed,
+                    dtype=ttnn.bfloat16,
+                    device=ttnn_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                ttnn.from_torch(
+                    prompt_embed,
+                    dtype=ttnn.bfloat16,
+                    device=ttnn_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+            ]
+            for negative_prompt_embed, prompt_embed in zip(negative_prompt_embeds, prompt_embeds)
         ]
         ttnn_add_text_embeds = [
-            ttnn.from_torch(
-                negative_pooled_prompt_embeds,
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
-            ttnn.from_torch(
-                add_text_embeds,
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
+            [
+                ttnn.from_torch(
+                    negative_pooled_prompt_embed,
+                    dtype=ttnn.bfloat16,
+                    device=ttnn_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                ttnn.from_torch(
+                    add_text_embed,
+                    dtype=ttnn.bfloat16,
+                    device=ttnn_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+            ]
+            for negative_pooled_prompt_embed, add_text_embed in zip(negative_pooled_prompt_embeds, add_text_embeds)
         ]
         ttnn_add_time_ids = [
             ttnn.from_torch(
@@ -292,14 +309,17 @@ def run_demo_inference(
             ),
         ]
         ttnn_added_cond_kwargs = [
-            {
-                "text_embeds": ttnn_add_text_embeds[0],
-                "time_ids": ttnn_add_time_ids[0],
-            },
-            {
-                "text_embeds": ttnn_add_text_embeds[1],
-                "time_ids": ttnn_add_time_ids[1],
-            },
+            [
+                {
+                    "text_embeds": ttnn_add_text_embed[0],
+                    "time_ids": ttnn_add_time_ids[0],
+                },
+                {
+                    "text_embeds": ttnn_add_text_embed[1],
+                    "time_ids": ttnn_add_time_ids[1],
+                },
+            ]
+            for ttnn_add_text_embed in ttnn_add_text_embeds
         ]
     else:
         ttnn_prompt_embeds = [
@@ -336,12 +356,22 @@ def run_demo_inference(
             }
         ]
 
+    scaling_factor = ttnn.from_torch(
+        torch.Tensor([pipeline.vae.config.scaling_factor]),
+        dtype=ttnn.bfloat16,
+        device=ttnn_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
     logger.info("Performing warmup run, to make use of program caching in actual inference...")
     B, C, H, W = latents.shape
 
     # All device code will work with channel last tensors
     latents = torch.permute(latents, (0, 2, 3, 1))
     latents = latents.reshape(1, 1, B * H * W, C)
+
+    latents_clone = latents.clone()
 
     latents = ttnn.from_torch(
         latents,
@@ -361,82 +391,102 @@ def run_demo_inference(
         tt_scheduler,
         latent_model_input,
         [B, C, H, W],
-        ttnn_prompt_embeds[0],
-        ttnn_added_cond_kwargs[0],
+        ttnn_prompt_embeds[0][0],
+        ttnn_added_cond_kwargs[0][0],
         ttnn_timesteps[0],
         0,
     )
+    if not is_ci_env and not os.path.exists("output"):
+        os.mkdir("output")
 
+    images = []
     logger.info("Starting ttnn inference...")
-    for i, t in tqdm(enumerate(ttnn_timesteps), total=len(ttnn_timesteps)):
-        unet_outputs = []
-        for unet_slice in range(len(ttnn_prompt_embeds)):
-            latent_model_input = latents
-            noise_pred, noise_shape = run_tt_iteration(
-                ttnn_device,
-                tt_unet,
-                tt_scheduler,
-                latent_model_input,
-                [B, C, H, W],
-                ttnn_prompt_embeds[unet_slice],
-                ttnn_added_cond_kwargs[unet_slice],
-                t,
-                i,
-            )
-            C, H, W = noise_shape
+    for iter in range(len(prompts)):
+        logger.info(f"Running inference for prompt {iter + 1}/{len(prompts)}: {prompts[iter]}")
+        for i, t in tqdm(enumerate(ttnn_timesteps), total=len(ttnn_timesteps)):
+            unet_outputs = []
+            for unet_slice in range(len(ttnn_prompt_embeds[iter])):
+                latent_model_input = latents
+                noise_pred, noise_shape = run_tt_iteration(
+                    ttnn_device,
+                    tt_unet,
+                    tt_scheduler,
+                    latent_model_input,
+                    [B, C, H, W],
+                    ttnn_prompt_embeds[iter][unet_slice],
+                    ttnn_added_cond_kwargs[iter][unet_slice],
+                    t,
+                    i,
+                )
+                C, H, W = noise_shape
 
-            unet_outputs.append(noise_pred)
+                unet_outputs.append(noise_pred)
 
-        # perform guidance
-        if classifier_free_guidance:
-            noise_pred_uncond, noise_pred_text = unet_outputs
-            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+            # perform guidance
+            if classifier_free_guidance:
+                noise_pred_uncond, noise_pred_text = unet_outputs
+                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-            ttnn.deallocate(noise_pred_uncond)
-            ttnn.deallocate(noise_pred_text)
+                ttnn.deallocate(noise_pred_uncond)
+                ttnn.deallocate(noise_pred_text)
+            else:
+                noise_pred = unet_outputs[0]
+
+            latents = tt_scheduler.step(
+                noise_pred, tt_scheduler.timesteps[i], latents, **extra_step_kwargs, return_dict=False
+            )[0]
+
+            ttnn.deallocate(noise_pred)
+            latents = ttnn.move(latents)
+
+        tt_scheduler.set_step_index(0)
+
+        if vae_on_device:
+            latents = ttnn.div(latents, scaling_factor)
+
+            # Workaround for #22017
+            ttnn_device.disable_and_clear_program_cache()
+
+            logger.info("Running TT VAE")
+            image = tt_vae.forward(latents, [B, C, H, W])
+            ttnn_device.enable_program_cache()
         else:
-            noise_pred = unet_outputs[0]
+            latents = ttnn.from_device(latents).to_torch()
+            latents = latents.reshape(B, H, W, C)
+            latents = torch.permute(latents, (0, 3, 1, 2))
 
-        latents = tt_scheduler.step(
-            noise_pred, tt_scheduler.timesteps[i], latents, **extra_step_kwargs, return_dict=False
-        )[0]
+            latents = latents.to(pipeline.vae.dtype)
 
-        ttnn.deallocate(noise_pred)
-        latents = ttnn.move(latents)
+            # VAE upcasting to float32 is happening in the reference SDXL demo if VAE dtype is float16. If it's bfloat16, it will not be upcasted.
+            latents = latents / pipeline.vae.config.scaling_factor
 
-    if vae_on_device:
-        scaling_factor = ttnn.from_torch(
-            torch.Tensor([pipeline.vae.config.scaling_factor]),
+            image = pipeline.vae.decode(latents, return_dict=False)[0]
+
+        image = pipeline.image_processor.postprocess(image, output_type="pil")[0]
+        images.append(image)
+
+        if is_ci_env:
+            logger.info(f"Image {iter + 1}/{len(prompts)} generated successfully")
+        else:
+            image.save(f"output/output{iter + start_from}.png")
+            logger.info(f"Image saved to output/output{iter + start_from}.png")
+
+        if vae_on_device:
+            ttnn.deallocate(latents)
+        else:
+            del latents
+            gc.collect()
+
+        latents = latents_clone.clone()
+        latents = ttnn.from_torch(
+            latents,
             dtype=ttnn.bfloat16,
             device=ttnn_device,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        latents = ttnn.div(latents, scaling_factor)
 
-        # Workaround for #22017
-        ttnn_device.disable_and_clear_program_cache()
-
-        logger.info("Running TT VAE")
-        image = tt_vae.forward(latents, [B, C, H, W])
-    else:
-        latents = ttnn.from_device(latents).to_torch()
-        latents = latents.reshape(B, H, W, C)
-        latents = torch.permute(latents, (0, 3, 1, 2))
-
-        latents = latents.to(pipeline.vae.dtype)
-
-        # VAE upcasting to float32 is happening in the reference SDXL demo if VAE dtype is float16. If it's bfloat16, it will not be upcasted.
-        latents = latents / pipeline.vae.config.scaling_factor
-
-        image = pipeline.vae.decode(latents, return_dict=False)[0]
-    image = pipeline.image_processor.postprocess(image, output_type="pil")[0]
-
-    if is_ci_env:
-        logger.info(f"Image generated successfully")
-    else:
-        image.save("output.png")
-        logger.info(f"Image saved to output.png")
+    return images
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 6 * 16384}], indirect=True)
@@ -472,12 +522,8 @@ def test_demo(
     num_inference_steps,
     classifier_free_guidance,
     vae_on_device,
+    evaluation_range,
 ):
     return run_demo_inference(
-        device,
-        is_ci_env,
-        prompt,
-        num_inference_steps,
-        classifier_free_guidance,
-        vae_on_device=vae_on_device,
+        device, is_ci_env, prompt, num_inference_steps, classifier_free_guidance, vae_on_device, evaluation_range
     )

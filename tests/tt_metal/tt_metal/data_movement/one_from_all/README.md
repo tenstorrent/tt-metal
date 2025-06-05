@@ -27,3 +27,4 @@ Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B fo
 Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
 1. One From All Packet Sizes: Tests different number of transactions and transaction sizes by varying the num_of_transactions and transaction_size_pages parameters. Sweeps values that are multiples of 2 (including 1) in the range [1, 64] for both parameters (skips cases where total data size exceeds L1 capacity). Uses master logical coordinate (0,0) and a grid of 16 subordinate cores: (1,1)-(4,4).
+2. One From All Directed Ideal: Tests optimal data movement setup between master logical coordinate (0,0) and a grid of 16 subordinate cores (1,1)-(4,4). Uses large transaction size and number of transactions to amortize initialization overhead and maximize bandwidth utilization.
