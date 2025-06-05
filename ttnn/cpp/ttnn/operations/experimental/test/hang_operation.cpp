@@ -5,10 +5,10 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "test_hang_operation.hpp"
+#include "hang_operation.hpp"
 #include <tt-metalium/hal.hpp>
 
-namespace ttnn::operations::test {
+namespace ttnn::operations::experimental::test {
 
 ttnn::Tensor ExecuteTestHangOperation::invoke(const ttnn::Tensor& input_tensor) {
 #ifdef TTNN_ENABLE_OPERATION_TIMEOUT
@@ -17,4 +17,4 @@ ttnn::Tensor ExecuteTestHangOperation::invoke(const ttnn::Tensor& input_tensor) 
     return input_tensor;
 #endif
 }
-}  // namespace ttnn::operations::test
+}  // namespace ttnn::operations::experimental::test
