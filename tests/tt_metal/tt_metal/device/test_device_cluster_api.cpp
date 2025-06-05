@@ -61,7 +61,7 @@ TEST_F(N300DeviceFixture, EthValidateEthernetConnectivity) {
     }
 
     // Check conversion to noc coords
-    std::vector<CoreCoord> chip_0_eth_noc_coords_expected = {CoreCoord(25, 17), CoreCoord(18, 17)};
+    std::vector<CoreCoord> chip_0_eth_noc_coords_expected = {CoreCoord(25, 17), CoreCoord(18, 17), CoreCoord(21, 17)};
 
     std::vector<CoreCoord> chip_0_eth_logical_coords;
     std::copy(

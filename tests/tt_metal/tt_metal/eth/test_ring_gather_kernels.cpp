@@ -164,6 +164,10 @@ std::vector<std::tuple<tt_metal::IDevice*, tt_metal::IDevice*, CoreCoord, CoreCo
             const auto& sender_device = device_ring[i];
             const auto& receiver_device = device_ring[i + 1];
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                        sender_device->id(), sender_eth_core)) {
+                    continue;
+                }
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() == device_id) {
                     sender_receivers.push_back({sender_device, receiver_device, sender_eth_core, receiver_eth_core});

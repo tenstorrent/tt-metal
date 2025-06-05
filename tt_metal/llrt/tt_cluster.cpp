@@ -1221,13 +1221,13 @@ bool Cluster::is_ethernet_link_up(chip_id_t chip_id, const CoreCoord& logical_co
 std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const {
     const auto &soc_desc = get_soc_desc(std::get<0>(eth_core));
     ethernet_channel_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
-    TT_ASSERT(
+    TT_FATAL(
         this->is_ethernet_link_up(std::get<0>(eth_core), std::get<1>(eth_core)),
         "Logical eth core {} is not an active eth core on chip {}.",
         std::get<1>(eth_core).str(),
         std::get<0>(eth_core));
     const auto& ethernet_connections_within_cluster = this->get_ethernet_connections();
-    TT_ASSERT(
+    TT_FATAL(
         (ethernet_connections_within_cluster.find(std::get<0>(eth_core)) !=
          ethernet_connections_within_cluster.end()) and
             (ethernet_connections_within_cluster.at(std::get<0>(eth_core)).find(eth_chan) !=
@@ -1247,7 +1247,7 @@ std::tuple<uint64_t, CoreCoord> Cluster::get_connected_ethernet_core_to_remote_m
     std::tuple<chip_id_t, CoreCoord> eth_core) const {
     const auto& soc_desc = get_soc_desc(std::get<0>(eth_core));
     ethernet_channel_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
-    TT_ASSERT(
+    TT_FATAL(
         this->is_ethernet_link_up(std::get<0>(eth_core), std::get<1>(eth_core)),
         "Logical eth core {} is not an active eth core on chip {}.",
         std::get<1>(eth_core).str(),
@@ -1255,7 +1255,7 @@ std::tuple<uint64_t, CoreCoord> Cluster::get_connected_ethernet_core_to_remote_m
     const auto& ethernet_connections_to_remote_cluster = this->get_ethernet_connections_to_remote_mmio_devices();
     const auto& local_chip_id = std::get<0>(eth_core);
     const auto& local_eth_core = std::get<1>(eth_core);
-    TT_ASSERT(
+    TT_FATAL(
         (ethernet_connections_to_remote_cluster.find(local_chip_id) != ethernet_connections_to_remote_cluster.end()) and
             (ethernet_connections_to_remote_cluster.at(local_chip_id).find(eth_chan) !=
              ethernet_connections_to_remote_cluster.at(local_chip_id).end()),
