@@ -16,7 +16,7 @@
 
 ## Overview ##
 
-This repository contains header-only low-level kernels for Tenstorrent AI chips, including Wormhole, and Blackhole.
+This repository contains header-only low-level kernels (LLK) for Tenstorrent AI chips, including Wormhole, and Blackhole.
 
 These kernels serve as foundational compute primitives, acting as building blocks for higher-level software stacks that implement machine learning (ML) operations.
 
@@ -35,6 +35,19 @@ Additionally, the repository includes a test environment designed to validate LL
 ## Software dependencies ##
 
 Test environment requires SFPI compiler for building, which is automatically ingested from <https://github.com/tenstorrent/sfpi>
+
+## Documentation ##
+
+The following documentation is available to help you understand and use low-level kernels:
+
+1. **[Intro](docs/llk/l1/intro.md)**
+   A concise introduction to LLKs, designed for both technical and non-technical audiences. This document outlines the scope of the LLK software stack and its relationship to other Tenstorrent software components.
+
+2. **[Top-level Overview](docs/llk/l1/top_level_overview.md)**
+   Provides a high-level look at the Tensix Core and Tensix Engine architecture, including data organization for efficient LLK usage and operations supported by LLKs. This document is not tied to any specific chip generation (such as Wormhole) and is aimed at engineers and technical readers who want to understand the general architecture and capabilities.
+
+3. **[LLK Programming Model](docs/llk/l1/llk_programming_model.md)**
+   This document dives into architectural details to best explain the usage of the LLK API. It is intended for op writers and advanced users, and connects LLK concepts with our runtime stack, [tt-metal](https://github.com/tenstorrent/tt-metal), providing practical guidance on how to leverage LLKs for efficient kernel development.
 
 ## Contributing ##
 
