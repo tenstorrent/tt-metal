@@ -559,8 +559,14 @@ def comp_pcc(golden, calculated, pcc=0.99):
     return cal_pcc >= pcc, cal_pcc
 
 
-def ulp(x):
+def ulp(x: Union[ttnn.Tensor, torch.Tensor]) -> Union[ttnn.Tensor, torch.Tensor]:
     "Return Unit of Least Precision for each element of a given tensor"
+
+    received_ttnn_input = False
+    if isinstance(x, ttnn.Tensor):
+        x = ttnn.to_torch(x)
+        received_ttnn_input = True
+
     max_value = torch.full(x.size(), torch.finfo(x.dtype).max, dtype=x.dtype)
 
     # Notes:
@@ -573,6 +579,9 @@ def ulp(x):
     abs_x = torch.abs(x)
     next = torch.nextafter(abs_x, max_value)  # 1 ULP ~ Difference between two consecutive floating point numbers
     ulp_value = next - abs_x
+
+    if received_ttnn_input:  # Ensures that type(input) == type(output)
+        ulp_value = ttnn.from_torch(ulp_value)
 
     return ulp_value
 
@@ -588,6 +597,7 @@ def comp_ulp(golden, calculated, ulp_threshold):
     # to have higher precision than calculated tensor.
     # If we passed golden tensor to ulp() as is, we would get ULP of higher precision.
     # e.g. ulp of float32 rather bfloat16 calculation, which would give us a wrong value.
+
     ulp_value = ulp(golden.type(calculated.dtype))
 
     if golden.dtype != calculated.dtype:  # Note: assumes that golden has higher precision than calculated tensor
