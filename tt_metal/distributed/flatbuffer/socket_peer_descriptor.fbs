@@ -29,6 +29,7 @@ table SocketConfig {
     socket_mem_config: SocketMemoryConfig;
     sender_rank: uint32;
     receiver_rank: uint32;
+    socket_id: uint32;
 }
 
 table SocketPeerDescriptor {
