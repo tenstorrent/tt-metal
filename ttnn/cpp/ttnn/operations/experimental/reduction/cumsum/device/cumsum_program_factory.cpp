@@ -33,8 +33,6 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     tensor_return_value_t& output_tensor) {
     using namespace tt;
 
-    std::cout << "Calling Factory::create()" << std::endl;
-
     // Device setup
     Program program;
     IDevice* device = output_tensor.device();
@@ -121,20 +119,15 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     auto grid = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = grid.y;
 
-    auto [num_cores, all_cores, busy_cores, lazy_cores, busy_work_units, lazy_work_units] =
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt_metal::split_work_to_cores(grid, num_rows);
-
-    std::cout << "num cores = " << num_cores << ", num cores y = " << num_cores_y << std::endl;
-
-    // std::cout << "all cores = " << all_cores.num_cores() << ", busy cores = " << busy_cores.num_cores() << " ["
-    //           << busy_work_units << "]"
-    //           << ", lazy cores = " << lazy_cores.num_cores() << " [" << lazy_work_units << "]" << std::endl;
 
     // Device operation does not handle on-the-fly type conversion yet and we ensured that input_dtype == ouptut_dtype
     DataFormat in_df = datatype_to_dataformat_converter(output_dtype);
     DataFormat out_df = in_df;
 
-    uint32_t total_cb_size = 4 * single_tile_size;
+    constexpr uint32_t TILES_PER_CB = 4;
+    uint32_t total_cb_size = TILES_PER_CB * single_tile_size;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -203,8 +196,6 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
             .compile_args = compute_kernel_args,
             .defines = defines_kernel_args});
 
-    std::cout << "num cores = " << num_cores << std::endl;
-
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
@@ -213,15 +204,13 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
         CoreCoord core = {i / grid.y, i % grid.y};
 
         uint32_t rows_per_core = 0;
-        if (busy_cores.contains(core)) {
-            rows_per_core = busy_work_units;
-        } else if (lazy_cores.contains(core)) {
-            rows_per_core = lazy_work_units;
+        if (core_group_1.contains(core)) {
+            rows_per_core = num_rows_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            rows_per_core = num_rows_per_core_group_2;
         } else {
             TT_THROW("Core outside specified core ranges");
         }
-        // std::cout << "core #" << i << "- total rows = " << num_rows << ", rows/core = " << rows_per_core <<
-        // std::endl;
 
         SetRuntimeArgs(
             program,
@@ -285,10 +274,6 @@ void CumSumDeviceOperation::ProgramFactory::override_runtime_arguments(
 
     auto input_buffer_addr = input_tensor.buffer()->address();
     auto output_buffer_addr = tensor_return_value.buffer()->address();
-
-    std::cout << "Calling override_runtime_arguments: num_cores = " << num_cores << ", " << num_cores_y << std::endl;
-
-    // TT_ASSERT(false, "override_runtime_arguments called");
 
     // Note: do not use full grid => we can't override program if we are not running
     // program on the specified core
