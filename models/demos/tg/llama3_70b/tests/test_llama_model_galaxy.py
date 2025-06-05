@@ -18,7 +18,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     BASE_URL,
     UNIT_TEST_GENERATION_LENGTH,
     UNIT_TEST_START_POS,
-    ConcatMesh2DToTensor,
     check_kv_cache,
     check_mesh_device,
     comp_pcc,
@@ -133,7 +132,10 @@ def run_test_LlamaModel_inference(
         del tt_inp_emb, rot_mat, attn_mask
 
         tt_out = ttnn.to_torch(
-            tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 3), cluster_shape=cluster_shape)
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, mesh_shape=tuple(reversed(cluster_shape)), dims=(3, 1)
+            ),
         )
         tt_out = tt_out[:, 0:1, :, : configuration.vocab_size]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
@@ -198,7 +200,10 @@ def run_test_LlamaModel_inference(
         tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[layer_id].attention.layer_past]
         tt_layer_present_all = [
             ttnn.to_torch(
-                lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(0, 1), cluster_shape=cluster_shape)
+                lp,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, mesh_shape=tuple(reversed(cluster_shape)), dims=(1, 0)
+                ),
             )[:batch, ...]
             for lp in tt_layer_present_all
         ]

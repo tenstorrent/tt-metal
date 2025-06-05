@@ -7,6 +7,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
+#include <utility>
 
 #include "dataflow_api.h"
 #if defined(COMPILE_FOR_ERISC)
@@ -122,6 +124,48 @@ private:
     uint8_t channel_id;
 };
 
+
+// A tuple of EthChannelBuffer
+template <size_t... BufferSizes>
+struct EthChannelBufferTuple {
+    std::tuple<tt::tt_fabric::EthChannelBuffer<BufferSizes>...> channel_buffers;
+
+    void init(
+        const size_t channel_base_address[],
+        const size_t buffer_size_bytes,
+        const size_t header_size_bytes,
+        const size_t eth_transaction_ack_word_addr,
+        const size_t channel_base_id) {
+        size_t idx = 0;
+
+        std::apply(
+            [&](auto&... chans) {
+                ((new (&chans) std::remove_reference_t<decltype(chans)>(
+                      channel_base_address[idx],
+                      buffer_size_bytes,
+                      header_size_bytes,
+                      eth_transaction_ack_word_addr,
+                      static_cast<uint8_t>(channel_base_id + idx)),
+                  ++idx),
+                 ...);
+            },
+            channel_buffers);
+    }
+
+    template <size_t I>
+    auto& get() {
+        return std::get<I>(channel_buffers);
+    }
+};
+
+template <auto& ChannelBuffers>
+struct EthChannelBuffers {
+    template <size_t... Is>
+    static auto make(std::index_sequence<Is...>) {
+        return EthChannelBufferTuple<ChannelBuffers[Is]...>{};
+    }
+};
+
 // Note that this class implements a mix of interfaces and will need to be separated to just be different
 // interface types altogether.
 //
@@ -155,6 +199,8 @@ struct EdmChannelWorkerInterface {
         connection_live_semaphore(connection_live_semaphore),
         sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf) {
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
+        local_write_counter.reset();
+        local_read_counter.reset();
     }
 
     // Flow control methods
@@ -231,6 +277,26 @@ struct EdmChannelWorkerInterface {
 
     ChannelCounter<NUM_BUFFERS> local_write_counter;
     ChannelCounter<NUM_BUFFERS> local_read_counter;
+};
+
+// A tuple of EDM channel worker interfaces
+template <size_t... BufferSizes>
+struct EdmChannelWorkerInterfaceTuple {
+    // tuple of EdmChannelWorkerInterface<BufferSizes>...
+    std::tuple<tt::tt_fabric::EdmChannelWorkerInterface<BufferSizes>...> channel_worker_interfaces;
+
+    template <size_t I>
+    auto& get() {
+        return std::get<I>(channel_worker_interfaces);
+    }
+};
+
+template <auto& ChannelBuffers>
+struct EdmChannelWorkerInterfaces {
+    template <size_t... Is>
+    static auto make(std::index_sequence<Is...>) {
+        return EdmChannelWorkerInterfaceTuple<ChannelBuffers[Is]...>{};
+    }
 };
 
 }  // namespace tt::tt_fabric

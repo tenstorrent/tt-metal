@@ -62,7 +62,9 @@ namespace kernel_profiler {
 }
 #endif
 
-extern "C" void notify_brisc_and_halt_to_iram(uint32_t status, uint32_t first_argument);
+#ifdef ARCH_WORMHOLE
+extern "C" uint32_t notify_brisc_and_halt_to_iram(uint32_t status, uint32_t first_argument);
+#endif
 
 inline __attribute__((always_inline)) void notify_brisc_and_wait() {
     while (true) {
@@ -98,7 +100,6 @@ void l1_to_ncrisc_iram_copy_wait() {
 
 int main(int argc, char *argv[]) {
     configure_csr();
-    DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 
     do_crt1((uint32_t tt_l1_ptr *)MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -144,19 +145,19 @@ int main(int argc, char *argv[]) {
 
         WAYPOINT("R");
 
-        void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
+        uint32_t (*kernel_address)(uint32_t) = (uint32_t (*)(uint32_t))
             (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
 #if !defined(ARCH_WORMHOLE)
         while (*ncrisc_run != RUN_SYNC_MSG_GO) {
             invalidate_l1_cache();
         }
-        (*kernel_address)((uint32_t)kernel_address);
+        auto stack_free = (*kernel_address)((uint32_t)kernel_address);
 #else
         // Jumping to IRAM causes bizarre behavior, so signal the brisc to reset the ncrisc to the IRAM address.
         mailboxes->ncrisc_halt.resume_addr = (uint32_t)kernel_init;
-        notify_brisc_and_halt_to_iram(RUN_SYNC_MSG_WAITING_FOR_RESET, (uint32_t)kernel_address);
+        auto stack_free = notify_brisc_and_halt_to_iram(RUN_SYNC_MSG_WAITING_FOR_RESET, (uint32_t)kernel_address);
 #endif
-        RECORD_STACK_USAGE();
+        record_stack_usage(stack_free);
         WAYPOINT("D");
 
         signal_ncrisc_completion();

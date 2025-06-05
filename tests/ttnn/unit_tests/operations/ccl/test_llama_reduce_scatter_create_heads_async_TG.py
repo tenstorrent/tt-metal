@@ -38,23 +38,24 @@ else:
     WRAP_MESH = True
 
 
-def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme="random"):
+def gen_tensor(dim, height, width, num_devices_scatter, num_devices_fracture, num_cores, scheme="random"):
     factor = 1
+    shard_height = height // num_devices_scatter
     torch_fracture_tensors = []
     for _ in range(num_devices_fracture):
         torch_scatter_tensors = []
         for _ in range(num_devices_scatter):
             torch_input_tensors = []
-            for _ in range(num_cores):
-                for _ in range(shard_width // 32):
-                    if scheme == "random":
-                        torch_input_tensors.append(torch.rand(1, 1, shard_height, 32))
-                    elif scheme == "sequential":
-                        torch_input_tensors.append(torch.ones(1, 1, shard_height, 32) * factor)
-                        factor += 1
-                    else:
-                        raise ValueError(f"Invalid scheme: {scheme}")
-            torch_scatter_tensors.append(torch.cat(torch_input_tensors, dim=dim))
+            factor = 1
+            for _ in range(num_devices_scatter):
+                if scheme == "random":
+                    torch_input_tensors.append(torch.rand(1, 1, shard_height, width))
+                elif scheme == "sequential":
+                    torch_input_tensors.append(torch.ones(1, 1, shard_height, width))
+                    factor += 1
+                else:
+                    raise ValueError(f"Invalid scheme: {scheme}")
+            torch_scatter_tensors.append(torch.cat(torch_input_tensors, dim=dim - 1))
 
         torch_fracture_tensors.append(torch.cat(torch_scatter_tensors, dim=1))
     return torch.cat(torch_fracture_tensors, dim=0)
@@ -167,7 +168,13 @@ def run_reduce_scatter_test(
     tt_intermediate_tensors_list = []
     for iter in range(num_iters):
         input = gen_tensor(
-            dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme=scheme
+            dim,
+            shard_height,
+            num_cores * shard_width,
+            num_devices_scatter,
+            num_devices_fracture,
+            num_cores,
+            scheme=scheme,
         )
         reduced_input_tensor = input.sum(dim=1)
         reduced_input_tensor_reshaped = reduced_input_tensor.reshape(8, 32, 10, 128)
@@ -243,7 +250,6 @@ def run_reduce_scatter_test(
     tt_out_tensor_v_list = []
 
     def run_op(n_iters, store_all_results=True):
-        tt_output_list = []
         for i in range(n_iters):
             buffer_index = 0 if trace_mode else i
             tt_out_tensor_q, tt_out_tensor_k, tt_out_tensor_v = ttnn.experimental.llama_rs_create_heads(
@@ -317,7 +323,6 @@ def run_reduce_scatter_test(
         signpost("stop")
 
     mesh_device.reset_sub_device_stall_group()
-    # breakpoint()
     passed = True
     first_failed_tensor_index = None
     failed_indices = []
@@ -384,7 +389,7 @@ def run_reduce_scatter_test(
     "device_params",
     [
         {
-            "trace_region_size": 237568,
+            "trace_region_size": 241664,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
@@ -400,7 +405,7 @@ def run_reduce_scatter_test(
     ],
     indirect=True,
 )
-def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype):
+def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype, use_program_cache):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -447,7 +452,7 @@ def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype):
     ],
     indirect=True,
 )
-def test_rs_create_heads_tg_no_trace(mesh_device, trace_mode, dtype):
+def test_rs_create_heads_tg_no_trace(mesh_device, trace_mode, dtype, use_program_cache):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -459,7 +464,7 @@ def test_rs_create_heads_tg_no_trace(mesh_device, trace_mode, dtype):
     num_devices_scatter = 4
     num_devices_fracture = 8
     num_cores = 20
-    num_iters = 1
+    num_iters = 30
     warmup_iters = 0
     trace_mode = trace_mode
 

@@ -31,7 +31,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     std::vector<DeviceAddr> mem_map_bases;
     constexpr std::uint32_t L1_KERNEL_CONFIG_SIZE = 69 * 1024;
 
-    mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
+    mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_ETH_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = MEM_L1_BARRIER;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_IERISC_MAILBOX_BASE;
@@ -49,7 +49,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SCRATCH;
 
     std::vector<uint32_t> mem_map_sizes;
-    mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
+    mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_ETH_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_IERISC_MAILBOX_SIZE;
@@ -65,6 +65,9 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SIZE;
+
+    // Base FW api not supported on WH
+    std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types(1);
@@ -88,6 +91,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
         processor_classes,
         mem_map_bases,
         mem_map_sizes,
+        fw_mailbox_addr,
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/};
 }

@@ -713,12 +713,12 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
     // Allocate a mesh buffer synchronously.
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
-    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
-    specs.reserve(mesh_device->shape().mesh_size());
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(mesh_device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        specs.push_back(std::make_pair(coord, tensor_spec));
+        coords.push_back(coord);
     }
-    DeviceStorage device_storage(std::move(mesh_buffer), std::move(specs));
+    DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
     return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor{});
 }
 
@@ -764,16 +764,6 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
             },
             [](auto&& s) { TT_THROW("Unreachable"); }},
         device_tensor.get_storage());
-}
-
-std::vector<IDevice*> Tensor::active_physical_devices() const {
-    auto mesh_device = this->mesh_device();
-    std::vector<IDevice*> devices = {};
-    devices.reserve(this->device_storage().specs.size());
-    for (const auto& spec : this->device_storage().specs) {
-        devices.push_back(mesh_device->get_device(spec.first));
-    }
-    return devices;
 }
 
 Tensor set_tensor_id(const Tensor& tensor) {

@@ -51,7 +51,7 @@
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
-#include "jit_build_options.hpp"
+#include "jit_build/jit_build_options.hpp"
 #include "kernel.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -81,6 +81,7 @@
 #include "util.hpp"
 #include "utils.hpp"
 #include "host_api.hpp"
+#include "kernels/kernel_impl.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -127,7 +128,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions &build_options, const std
     try {
         jit_build_genfiles_descriptors(
             BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
-        kernel->generate_binaries(device, build_options);
+        KernelImpl::from(*kernel).generate_binaries(device, build_options);
     } catch (std::runtime_error &ex) {
         TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
     }
@@ -1077,8 +1078,8 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
             } else {
                 sub_kernels = {kernel->processor()};
             }
-            const auto& binaries =
-                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+            const auto& binaries = KernelImpl::from(*kernel).binaries(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             const auto core_type = kernel->get_kernel_programmable_core_type();
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
@@ -1402,7 +1403,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 [kernel, device, this] {
                     JitBuildOptions build_options(
                         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env);
-                    kernel->set_build_options(build_options);
+                    KernelImpl::from(*kernel).set_build_options(build_options);
                     if (this->compiled_.empty()) {
                         this->set_remote_circular_buffer_init(kernel);
                     }
@@ -1418,9 +1419,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
 
-                    kernel->register_kernel_elf_paths_with_watcher(*device);
+                    KernelImpl::from(*kernel).register_kernel_elf_paths_with_watcher(*device);
 
-                    if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
+                    if (enable_persistent_kernel_cache && KernelImpl::from(*kernel).binaries_exist_on_disk(device)) {
                         if (not detail::HashLookup::inst().exists(kernel_hash)) {
                             detail::HashLookup::inst().add(kernel_hash);
                             detail::HashLookup::inst().add_generated_bin(kernel_hash);
@@ -1439,7 +1440,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     for (auto &kernels : kernels_) {
         for (auto &[id, kernel] : kernels) {
-            launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
+            launch_build_step([kernel, device] { KernelImpl::from(*kernel).read_binaries(device); }, events);
         }
     }
     sync_events();

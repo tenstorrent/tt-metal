@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh
 
 
 class TtLlamaEmbedding_galaxy:
@@ -28,7 +27,9 @@ class TtLlamaEmbedding_galaxy:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(3, None), cluster_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(reversed(self.cluster_shape)), dims=(None, 3)
+            ),
             cache_file_name=cache_path / embedding_cache_name,
         )
 

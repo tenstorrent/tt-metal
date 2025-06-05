@@ -48,11 +48,11 @@
         "kernel_duration": 8556.222222222223,
         "op_to_op": 716.4444444444445,
         "first_to_last_start": 2106.0,
-        "non-overlapped-dispatch-time": 5653.2,
+        "non-overlapped-dispatch-time": 6496.9,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "first_to_last_start_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1
+        "dispatch_duration_relative_margin": 0.15
     },
     "Matmul_1": {
         "op_name": "DO_MM",
@@ -98,12 +98,12 @@
         "first_to_last_start_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1
     },
-    "AllReduceCreateQkvHeads_0": {
-        "op_name": "AllReduce_Fuse_Createheads",
-        "kernel_duration": 14541.059027777777,
+    "LlamaReduceScatterCreateHeadsDeviceOperation_0": {
+        "op_name": "LlamaReduceScatterCreateHeads",
+        "kernel_duration": 9801.145,
         "op_to_op": 966.0,
-        "first_to_last_start": 1906.2222222222222,
-        "non-overlapped-dispatch-time": 7932.2,
+        "first_to_last_start": 1843.22,
+        "non-overlapped-dispatch-time": 6101.6,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.4,
         "first_to_last_start_relative_margin": 0.2,
@@ -155,7 +155,7 @@
     },
     "RotaryEmbeddingLlamaFusedQK_0": {
         "op_name": "RotaryEmbeddingLlamaFusedQK",
-        "kernel_duration": 4296,
+        "kernel_duration": 2821,
         "op_to_op": 606.1111111111111,
         "first_to_last_start": 2560.8888888888887,
         "non-overlapped-dispatch-time": 2844.3,
@@ -168,7 +168,7 @@
         "op_name": "PagedUpdateCache",
         "kernel_duration": 5963,
         "op_to_op": 860.2222222222222,
-        "first_to_last_start": 2317.1111111111113,
+        "first_to_last_start": 102,
         "non-overlapped-dispatch-time": 5890.0,
         "kernel_duration_relative_margin": 0.2,
         "op_to_op_duration_relative_margin": 0.2,

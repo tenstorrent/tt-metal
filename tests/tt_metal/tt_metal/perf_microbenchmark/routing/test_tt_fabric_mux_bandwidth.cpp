@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -141,6 +141,7 @@ void create_mux_kernel(
     // std::vector<uint32_t> mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
     auto default_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     size_t mux_status_address = mux_kernel_config->get_status_address();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     std::vector<uint32_t> mux_ct_args = {
         test_params.num_full_size_channels,
         test_params.num_buffers_full_size_channel,
@@ -157,7 +158,8 @@ void create_mux_kernel(
         drainer_kernel_config->get_status_address(),
         drainer_kernel_config->num_buffers_full_size_channel,
         test_params.num_full_size_channel_iters,
-        test_params.num_iters_between_teardown_checks};
+        test_params.num_iters_between_teardown_checks,
+        hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)};
 
     // semaphores needed to build connection with drainer core using the build_from_args API
     auto worker_flow_control_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
@@ -334,11 +336,11 @@ int main(int argc, char** argv) {
     test_params.buffer_size_bytes_header_only_channel = sizeof(tt::tt_fabric::PacketHeader);
 
     // for now, just use one device for running benchmarks
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto mesh_id = control_plane->get_user_physical_mesh_ids()[0];
+    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_id = control_plane.get_user_physical_mesh_ids()[0];
     chip_id_t logical_chip_id = 0;
     auto physical_chip_id =
-        control_plane->get_physical_chip_id_from_fabric_node_id(tt::tt_fabric::FabricNodeId(mesh_id, logical_chip_id));
+        control_plane.get_physical_chip_id_from_fabric_node_id(tt::tt_fabric::FabricNodeId(mesh_id, logical_chip_id));
 
     std::map<chip_id_t, tt::tt_metal::IDevice*> devices = tt::tt_metal::detail::CreateDevices({physical_chip_id});
     tt::tt_metal::IDevice* device = devices.at(physical_chip_id);

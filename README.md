@@ -21,12 +21,19 @@
 
 </div>
 
----
+## Latest Releases
+
+| Release | Release Date |
+|---------|--------------|
+| [0.58.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.58.0) | May 13, 2025 |
+| [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 |
+| [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025 |
 
 ## LLMs
 
 | Model                                                         | Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |---------------------------------------------------------------|-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
+| [Qwen 3 32B (TP=8)](./models/tt_transformers)                       | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 123       | 22.9  | 30              | 732.8  | [main](https://github.com/tenstorrent/tt-metal/) | |
 | [QwQ 32B (TP=8)](./models/tt_transformers)                       | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 133       | 25.2  | 30              | 806.4  | [v0.56.0-rc51](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc51) | [e2e0002](https://github.com/tenstorrent/vllm/tree/e2e0002ac7dcbc5793983c0f967474d4dcab21f8)      |
 | [DeepSeek R1 Distill Llama 3.3 70B (TP=8)](./models/tt_transformers)       | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 159       | 15.2  | 20    | 486.4  | [v0.59.0-rc14](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc14) | [739dcaa](https://github.com/tenstorrent/vllm/tree/739dcaa2915fa29d757c25a02c17aadce0c58055)      |
 | [Llama 3.1 70B (TP=32)](./models/demos/llama3_subdevices)        | 32    | [Galaxy](https://tenstorrent.com/hardware/galaxy) |       | 45.1  | 80              | 1443.2  | [avora/40-tks](https://github.com/tenstorrent/tt-metal/tree/avora/40-tks) | |
@@ -58,6 +65,7 @@
 > - The t/s/u reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
 > - Performance numbers were collected using the tt-metal model demos (accessible via the model links). If running with a vLLM inference server, performance may be different.
 > - \* Blackhole software optimization is under active development.  Please join us in shaping the future of open source AI! <br> [\[Discord\]](https://discord.gg/tenstorrent) [\[Developer Hub\]](https://tenstorrent.com/developers)
+> - For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM repository](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md).
 
 ## Speech-to-Text
 
@@ -74,7 +82,7 @@
 | [ResNet-50 (224x224) (DP=2)](./models/demos/t3000/resnet50)                 | 32    | [n300](https://tenstorrent.com/hardware/wormhole)        | 9,200   | 14,000     |             |
 | [ResNet-50 (224x224) (DP=8)](./models/demos/t3000/resnet50)                 | 128   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 35,800  | 56,000     |             |
 | [ResNet-50 (224x224) (DP=32)](./models/demos/tg/resnet50)                   | 512   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 96,800  | 224,000    |             |
-| [ViT (224x224)](./models/demos/wormhole/vit)                                | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 1100    | 1,600      |             |
+| [ViT (224x224)](./models/demos/wormhole/vit)                                | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 1370    | 1,600      |             |
 | [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.117   | 0.3        |             |
 | [YOLOv4 (320x320)](./models/demos/yolov4)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 120     | 300        |             |
 | [YOLOv4 (640x640)](./models/demos/yolov4)                                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 50      | 100        |             |

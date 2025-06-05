@@ -14,6 +14,8 @@ import requests
 from pathlib import Path
 import hashlib
 
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+
 from models.demos.llama3_subdevices.tt.llama_common import (
     PagedAttentionConfig,
 )
@@ -33,9 +35,9 @@ TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 520, "max": 545}, 10: {"min": 230, "max": 250}, 80: {"min": 48.5, "max": 53}},
+    "4U": {1: {"min": 540, "max": 565}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 600, "max": 635}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+    "6U": {1: {"min": 625, "max": 655}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
 
 
@@ -129,6 +131,7 @@ def run_llama3_demo(
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
     dtype = ttnn.bfloat8_b
+    num_links = 4 if is_RING_6U else 2
     assert batch_size <= 32, "Max batch size currently supported is 32"
     assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
 
@@ -278,7 +281,7 @@ def run_llama3_demo(
     logger.info("Current pos tensor done")
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     logger.info("Rot mats done")
 
@@ -324,7 +327,12 @@ def run_llama3_demo(
 
         # Note: Persistent output buffer used, do not deallocate output!
         tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-            tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
+            tt_out[0],
+            dim=3,
+            num_links=num_links,
+            cluster_axis=0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            buffer_key="SAMPLING",
         )
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
         # Run argmax only for user0
@@ -356,7 +364,7 @@ def run_llama3_demo(
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+    rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
     tt_decode_input = tt_embd(tt_out_tok)
     tt_out = tt_model(
         tt_decode_input,
@@ -368,7 +376,12 @@ def run_llama3_demo(
 
     # Note: Persistent output buffer used, do not deallocate output!
     tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-        tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
+        tt_out[0],
+        dim=3,
+        num_links=num_links,
+        cluster_axis=0,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        buffer_key="SAMPLING",
     )
     tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
     tt_out_rm = ttnn.reshape(tt_out_rm, (1, 1, 1, tt_out_rm.shape[3]), (1, 1, tt_out_rm.shape[2], tt_out_rm.shape[3]))
@@ -410,7 +423,7 @@ def run_llama3_demo(
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
     ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     profiler.end(f"capture_trace")
@@ -687,7 +700,7 @@ def run_llama3_demo(
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
