@@ -8,7 +8,7 @@ To perform a system information dump see the [TT-SMI README.md](https://github.c
 Testing any system configuration is required to ensure that code is behaving as intended and the configuration is set up properly. You can build a custom test or run component tests to check for basic functionality of components in the AI stack.
 
 ### Build a Metal Test
-To build a custom test run the following command: `./build_metal.sh --build-tests`
+To build your own test, run the following command: `./build_metal.sh --build-tests`
 
 ### Component Tests
 The following tests are short in runtime and loop over all chips to test for basic component functionality:
