@@ -283,6 +283,8 @@ endif()
 ####################################################################################################################
 # spdlog
 ####################################################################################################################
+
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME spdlog-dev)
 CPMAddPackage(
     NAME spdlog
     GITHUB_REPOSITORY gabime/spdlog
@@ -292,6 +294,7 @@ CPMAddPackage(
         "SPDLOG_FMT_EXTERNAL_HO ON"
         "SPDLOG_INSTALL ON"
 )
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
 ####################################################################################################################
 # tt-logger
