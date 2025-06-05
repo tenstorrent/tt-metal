@@ -197,4 +197,39 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     }
 }
 
+/* ========== Test case for one from all data movement; Test id = 30 ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
+    // Parameters
+    uint32_t num_of_transactions, page_size_bytes;
+    uint32_t transaction_size_pages = 128;
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes = 64;  // (=flit size): 64 bytes for BH
+        num_of_transactions = 5;
+    } else {
+        page_size_bytes = 32;  // (=flit size): 32 bytes for WH
+        num_of_transactions = 10;
+    }
+
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+    CoreRangeSet subordinate_core_set = {CoreRange(CoreCoord(1, 1), CoreCoord(4, 4))};
+    size_t total_subordinate_cores = subordinate_core_set.num_cores();
+
+    // Test config
+    unit_tests::dm::core_to_core::OneFromAllConfig test_config = {
+        .test_id = 30,
+        .master_core_coord = master_core_coord,
+        .subordinate_core_set = subordinate_core_set,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
 }  // namespace tt::tt_metal

@@ -44,8 +44,8 @@ std::shared_ptr<Buffer> MakeBufferBFP16(IDevice* device, uint32_t n_tiles, bool 
 
 CBHandle MakeCircularBuffer(
     Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t size, uint32_t page_size, tt::DataFormat format) {
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(size, {{cb, format}}).set_page_size(cb, page_size);
-    return CreateCircularBuffer(program, core, cb_src0_config);
+    CircularBufferConfig cb_config = CircularBufferConfig(size, {{cb, format}}).set_page_size(cb, page_size);
+    return CreateCircularBuffer(program, core, cb_config);
 }
 
 // Circular buffers are Tenstorrent's way of communicating between the data movement and the compute kernels.

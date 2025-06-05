@@ -13,6 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -51,13 +52,12 @@ def run_sum(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.sum(input_tensor_a, dim=dim, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(result)
+    op_output_tensor = ttnn.sum(input_tensor_a, dim=dim, memory_config=output_memory_config)
+    output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
-
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    # print(f"input_shape {input_shape} pcc {pcc}")
-    return [pcc, e2e_perf]
+    expected_pcc = 0.999
+    tensors = [input_tensor_a, op_output_tensor]
+    return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
 
 
 def run_prod(
@@ -93,12 +93,11 @@ def run_prod(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.prod(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(result)
+    op_output_tensor = ttnn.prod(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
+    output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
-
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    expected_pcc = 0.999
+    tensors = [input_tensor_a, op_output_tensor]
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
-    # print(f"input_shape {input_shape} pcc {pcc}")
-    return [pcc, e2e_perf]
+    return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)

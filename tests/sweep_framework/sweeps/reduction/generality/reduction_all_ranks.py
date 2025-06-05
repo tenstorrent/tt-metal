@@ -11,7 +11,8 @@ import torch
 import ttnn
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -36,12 +37,13 @@ parameters = {
             "std",
             "var",
         ],
+        "dtype": [torch.bfloat16, torch.float32],
     }
     for rank in range(5)
 }
 
 
-def run_reduction(device, tensor_shape, dim, keepdim, op) -> list:
+def run_reduction(device, tensor_shape, dim, keepdim, op, dtype) -> list:
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -51,7 +53,7 @@ def run_reduction(device, tensor_shape, dim, keepdim, op) -> list:
     """
     rank = len(tensor_shape)
 
-    torch_tensor = torch.randn(*tensor_shape) if rank > 0 else torch.randn(())
+    torch_tensor = torch.randn(*tensor_shape, dtype=dtype) if rank > 0 else torch.randn((), dtype=dtype)
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
     torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
@@ -64,14 +66,17 @@ def run_reduction(device, tensor_shape, dim, keepdim, op) -> list:
         torch_errored = True
 
     ttnn_errored = False
+    start_time = start_measuring_time()
     try:
-        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim) if dim is not None else ttnn_op(ttnn_tensor)
+        op_output_tensor = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim) if dim is not None else ttnn_op(ttnn_tensor)
+        output_tensor = ttnn.to_torch(ttnn.from_device(op_output_tensor))
     except RuntimeError:
         ttnn_errored = True
+    e2e_perf = stop_measuring_time(start_time)
 
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:
-        return [True, f"mismatch in errors raised: torch: {torch_errored}, ttnn: {ttnn_errored}"]
+        return [(True, f"mismatch in errors raised: torch: {torch_errored}, ttnn: {ttnn_errored}"), e2e_perf]
 
     # torch's min/max double as argmin/argmax, so we need to extract the values only
     torch_result = (
@@ -79,13 +84,6 @@ def run_reduction(device, tensor_shape, dim, keepdim, op) -> list:
         if isinstance(torch_result, (torch.return_types.min, torch.return_types.max))
         else torch_result
     )
-
-    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
-
-    pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
-
-    if not pcc_result:
-        return [False, msg]
 
     atol = rtol = 0.1
     # There is a scale factor difference between torch and ttnn for std and var
@@ -95,10 +93,12 @@ def run_reduction(device, tensor_shape, dim, keepdim, op) -> list:
     elif op == "var":
         atol, rtol = sys.maxsize, 0.1 + 2
 
-    return [
-        torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True),
-        f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}",
-    ]
+    allclose = torch.allclose(torch_result, output_tensor, atol=atol, rtol=rtol, equal_nan=True)
+    if not allclose:
+        return [(False, f"mismatch in allclose: torch: {torch_result}, ttnn: {output_tensor}"), e2e_perf]
+    expected_pcc = 0.99
+    tensors = [ttnn_tensor, op_output_tensor]
+    return get_run_return(torch_result, output_tensor, expected_pcc, tensors, e2e_perf)
 
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
@@ -108,14 +108,17 @@ def test_reduction(
     dim,
     keepdim,
     op,
+    dtype,
 ):
-    run_reduction(
+    result, msg = run_reduction(
         device,
         tensor_shape,
         dim,
         keepdim,
         op,
+        dtype,
     )
+    assert result, msg
 
 
 def run(
@@ -123,6 +126,7 @@ def run(
     dim,
     keepdim,
     op,
+    dtype,
     *,
     device,
 ) -> list:
@@ -132,4 +136,5 @@ def run(
         dim,
         keepdim,
         op,
+        dtype,
     )

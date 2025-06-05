@@ -6,8 +6,7 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::normalization::detail {
-void bind_batch_norm_operation(pybind11::module& module);
+namespace py = pybind11;
+void bind_batch_norm_operation(py::module& module);
 }

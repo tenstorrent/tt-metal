@@ -2,6 +2,17 @@ name: "[post-commit] Slow Dispatch unit tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        default: "Release"
 
 jobs:
   build-artifact:
@@ -10,6 +21,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      build-type: ${{ inputs.build-type }}
       build-wheel: true
   sd-unit-tests:
     needs: build-artifact

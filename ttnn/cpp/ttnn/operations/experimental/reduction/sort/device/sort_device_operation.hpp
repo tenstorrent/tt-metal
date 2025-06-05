@@ -19,7 +19,9 @@ struct SortDeviceOperation {
     using tensor_args_t = sort::tensor_args_t;
     using spec_return_value_t = sort::spec_return_value_t;
     using tensor_return_value_t = sort::tensor_return_value_t;
-    using program_factory_t = std::variant<sort::program::SortProgramFactory>;
+    using program_factory_t = std::variant<
+        sort::program::SortProgramFactorySingleRowSingleCore,
+        sort::program::SortProgramFactorySingleRowMultiCore>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

@@ -1165,6 +1165,20 @@ class TtModelArgs:
                 8192 // 4,
                 12288 // 8,  # Use padded N
                 RING_SIZE,
+                untilize_out=True,
+            )
+            RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1)),
+                ]
+            )
+            self.model_config["RS_CREATE_HEADS_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 512),
+                core_grid=RS_CREATE_HEADS_PACKET_WORKER_CRS,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
             # WO
@@ -2231,6 +2245,7 @@ class TtModelArgs:
         N,
         num_cores,
         prefetch=True,
+        untilize_out=False,
     ):
         M *= B  # Fuse batch always enabled
 
@@ -2276,6 +2291,7 @@ class TtModelArgs:
             gather_in0=True,
             hop_cores=hop_core_range_set,
             num_global_cb_receivers=2 if prefetch else 1,
+            untilize_out=untilize_out,
         )
 
         return program_config

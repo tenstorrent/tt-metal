@@ -15,7 +15,7 @@ namespace ttnn::distributed {
 class TensorToMesh {
 public:
     virtual ~TensorToMesh() = default;
-    virtual std::vector<Tensor> map(const Tensor& tensor) const = 0;
+    virtual Tensor operator()(const Tensor& tensor) const = 0;
     virtual tt::tt_metal::DistributedTensorConfig config() const = 0;
 };
 

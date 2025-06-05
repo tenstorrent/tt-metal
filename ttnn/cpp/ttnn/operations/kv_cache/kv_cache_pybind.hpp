@@ -7,7 +7,7 @@
 #include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::kv_cache {
-
-void py_bind_kv_cache(pybind11::module& module);
+namespace py = pybind11;
+void py_bind_kv_cache(py::module& module);
 
 }  // namespace ttnn::operations::kv_cache

@@ -6,6 +6,7 @@ import os
 import glob
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from functools import partial
 from collections import namedtuple
@@ -13,6 +14,16 @@ from collections import namedtuple
 from pathlib import Path
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
+
+
+# Get the platform-specific lib directory name
+def get_lib_dir():
+    if sys.platform == "win32":
+        return "bin"  # Windows DLLs go in bin directory
+    elif sys.platform.startswith("linux"):
+        return "lib64" if os.path.exists("/usr/lib64") else "lib"
+    else:  # macOS and others
+        return "lib"
 
 
 BUNDLE_SFPI = False
@@ -165,7 +176,51 @@ class CMakeBuild(build_ext):
             # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
             build_script_args = ["--build-static-libs", "--release"]
 
-            subprocess.check_call(["./build_metal.sh", *build_script_args], cwd=source_dir, env=build_env)
+            if "CIBUILDWHEEL" in os.environ:
+                cmake_args = [
+                    "cmake",
+                    "-B",
+                    build_dir,
+                    "-G",
+                    "Ninja",
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DCMAKE_INSTALL_PREFIX=build_Release",
+                    "-DBUILD_SHARED_LIBS=OFF",
+                    "-DTT_INSTALL=OFF",
+                    "-DTT_UNITY_BUILDS=ON",
+                    "-DTT_ENABLE_LIGHT_METAL_TRACE=ON",
+                    "-DWITH_PYTHON_BINDINGS=ON",
+                    "-DTT_USE_SYSTEM_SFPI=ON",
+                    "-DENABLE_CCACHE=TRUE",
+                ]
+
+                # Add Tracy flags if enabled
+                if os.environ.get("CIBW_ENABLE_TRACY") == "ON":
+                    cmake_args.extend(
+                        [
+                            "-DENABLE_TRACY=ON",
+                        ]
+                    )
+
+                cmake_args.extend(["-S", source_dir])
+
+                subprocess.check_call(cmake_args)
+                subprocess.check_call(
+                    [
+                        "cmake",
+                        "--build",
+                        build_dir,
+                    ]
+                )
+                subprocess.check_call(
+                    [
+                        "cmake",
+                        "--install",
+                        build_dir,
+                    ]
+                )
+            else:
+                subprocess.check_call(["./build_metal.sh", *build_script_args], cwd=source_dir, env=build_env)
 
         # Some verbose sanity logging to see what files exist in the outputs
         subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
@@ -238,7 +293,7 @@ class CMakeBuild(build_ext):
             "tools/profiler/*",
             "soc_descriptors/*.yaml",
         ]
-        copy_tree_with_patterns(build_dir / "lib", self.build_lib + "/ttnn/build/lib", lib_patterns)
+        copy_tree_with_patterns(build_dir / get_lib_dir(), self.build_lib + f"/ttnn/build/lib", lib_patterns)
         copy_tree_with_patterns(build_dir, self.build_lib + "/ttnn/build/lib", ["sfpi-version.json"])
         copy_tree_with_patterns(
             source_dir / "runtime", self.build_lib + "/ttnn/runtime", runtime_patterns, runtime_exclude_files

@@ -15,6 +15,8 @@ from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOpt
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from tqdm import tqdm
 
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+
 
 @torch.no_grad()
 @pytest.mark.parametrize(
@@ -73,7 +75,7 @@ from tqdm import tqdm
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
@@ -198,7 +200,7 @@ def test_tt_model_acc(
     )
 
     # Get the first input tensors
-    _, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+    _, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     ref_token = input_ids[0, 0].item()  # First token
     ref_token = torch.tensor([[ref_token]], dtype=torch.int32)
@@ -210,7 +212,7 @@ def test_tt_model_acc(
     )
 
     def run_model():
-        rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+        rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
 
         tt_out = tt_model(
             decode_input,
@@ -274,7 +276,7 @@ def test_tt_model_acc(
 
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     ttnn.synchronize_device(mesh_device)

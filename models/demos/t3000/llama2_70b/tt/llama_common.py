@@ -28,56 +28,6 @@ UNIT_TEST_N_LAYER = 1
 UNIT_TEST_LAYER_NUM = 0
 UNIT_TEST_START_POS = 0
 UNIT_TEST_GENERATION_LENGTH = 20
-from ttnn import MeshToTensor, TensorToMesh
-
-
-class ShardTensor2dMesh(TensorToMesh):
-    def __init__(self, mesh_device, dims, cluster_shape):
-        super().__init__(mesh_device)
-        self.dims = dims
-        self.cluster_shape = cluster_shape
-
-    def map(self, tensor: torch.tensor):
-        # Returns list of tensors to map to row-major ordering of chips in cluster
-        tensors_grid_y = None
-        if self.dims[1] == None:
-            tensors_grid_y = [tensor.clone() for _ in range(self.cluster_shape[1])]
-        else:
-            tensors_grid_y = torch.chunk(tensor, self.cluster_shape[1], dim=self.dims[1])
-
-        tensors_grid_all = None
-        if self.dims[0] == None:
-            tensors_grid_all = [t.clone() for t in tensors_grid_y for _ in range(self.cluster_shape[0])]
-        else:
-            tensors_grid_all = [
-                tt for t in tensors_grid_y for tt in torch.chunk(t, self.cluster_shape[0], dim=self.dims[0])
-            ]
-
-        return list(tensors_grid_all)
-
-    def config(self):
-        return {
-            "strategy": "shard",
-            "shard_dim": f"{self.dims[0] if self.dims[0] else self.dims[1]}",
-        }
-
-
-class ConcatMesh2DToTensor(MeshToTensor):
-    def __init__(self, mesh_device, dims, cluster_shape):
-        self.dims = dims
-        self.cluster_shape = cluster_shape
-        self.mesh_device = mesh_device
-
-    def compose(self, tensor: ttnn.Tensor) -> torch.Tensor:
-        tt_shards = [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
-
-        row_concat = []
-        for cluster_row in range(self.cluster_shape[1]):
-            start = cluster_row * self.cluster_shape[0]
-            end = start + self.cluster_shape[0]
-            row_concat.append(torch.cat(tt_shards[start:end], dim=self.dims[0]))
-        all_concat = torch.cat(row_concat, dim=self.dims[1])
-        return all_concat
 
 
 def load_llama_state_dict(ckpt_dir, n_layers, start_layer_idx=0):

@@ -94,7 +94,6 @@ void init_sync_registers() {
 
 int main(int argc, char *argv[]) {
     configure_csr();
-    DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 
     do_crt1((uint32_t tt_l1_ptr *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE_SCRATCH));
@@ -155,10 +154,10 @@ int main(int argc, char *argv[]) {
 
         WAYPOINT("R");
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) + thread_id;
-        void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
+        uint32_t (*kernel_address)(uint32_t) = (uint32_t (*)(uint32_t))
             (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
-        (*kernel_address)((uint32_t)kernel_address);
-        RECORD_STACK_USAGE();
+        auto stack_free = (*kernel_address)((uint32_t)kernel_address);
+        record_stack_usage(stack_free);
         WAYPOINT("D");
 
         // Signal completion

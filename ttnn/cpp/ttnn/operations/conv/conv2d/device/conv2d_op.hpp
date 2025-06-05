@@ -74,7 +74,8 @@ struct Conv2dConfig {
     // Increased perf, but increased L1 usage.
     bool enable_act_double_buffer = false;
 
-    // Used on for height and block sharded convolutions
+    // Doubles the size of the CBs for weights.
+    // Increased perf, but increased L1 usage.
     bool enable_weights_double_buffer = false;
 
     // Only for height sharding.

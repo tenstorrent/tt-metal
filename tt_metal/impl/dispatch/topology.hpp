@@ -31,6 +31,7 @@ struct DispatchKernelNode {
     std::vector<int> upstream_ids;   // Upstream dispatch kernels
     std::vector<int> downstream_ids;  // Downstream dispatch kernels
     noc_selection_t noc_selection;    // NOC selection
+    int tunnel_index{-1};             // Tunnel index
 };
 
 // Create FD kernels for all given device ids. Creates all objects, but need to call create_and_compile_cq_program() use

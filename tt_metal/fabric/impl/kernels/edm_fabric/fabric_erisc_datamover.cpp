@@ -284,7 +284,7 @@ struct OutboundReceiverChannelPointers {
 };
 
 /*
- * Tracks receiver channel pointers (from receiver side)
+ * Tracks receiver channel pointers (from receiver side). Must call reset() before using.
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct ReceiverChannelPointers {
@@ -299,6 +299,13 @@ struct ReceiverChannelPointers {
     }
 
     FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const { return src_chan_ids[buffer_index.get()]; }
+
+    FORCE_INLINE void reset() {
+        wr_sent_counter.reset();
+        wr_flush_counter.reset();
+        ack_counter.reset();
+        completion_counter.reset();
+    }
 };
 
 struct PacketHeaderRecorder {
@@ -1142,6 +1149,9 @@ void run_fabric_edm_main_loop(
     std::array<OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>
         outbound_to_receiver_channel_pointers;
     std::array<ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> receiver_channel_pointers;
+    for (uint32_t i = 0; i < NUM_RECEIVER_CHANNELS; ++i) {
+        receiver_channel_pointers[i].reset();
+    }
     std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established =
         initialize_array<NUM_SENDER_CHANNELS, bool, false>();
 

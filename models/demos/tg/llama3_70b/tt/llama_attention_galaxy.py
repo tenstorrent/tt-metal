@@ -7,7 +7,6 @@ import math
 import torch
 
 import ttnn
-from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
     tt_composite_sharded_all_reduce,
@@ -198,7 +197,9 @@ class TtLlamaAttention_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(reversed(self.cluster_shape)), dims=(3, 2)
+            ),
             cache_file_name=self.cache_path / wqkv_cache_str,
         )
 
@@ -208,7 +209,9 @@ class TtLlamaAttention_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(3, 2), cluster_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(reversed(self.cluster_shape)), dims=(2, 3)
+            ),
             cache_file_name=self.cache_path / wo_cache_str,
         )
 

@@ -15,8 +15,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     MAX_SEQ_LEN,
     UNIT_TEST_LAYER_NUM,
     UNIT_TEST_N_LAYER,
-    ConcatMesh2DToTensor,
-    ShardTensor2dMesh,
     check_mesh_device,
     comp_pcc,
     should_skip_model_load,
@@ -59,8 +57,8 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x, mode):
             layout=ttnn.TILE_LAYOUT,
             device=llama_mlp_model.mesh_device,
             memory_config=act_mem_config,
-            mesh_mapper=ShardTensor2dMesh(
-                llama_mlp_model.mesh_device, dims=(3, None), cluster_shape=llama_mlp_model.cluster_shape
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                llama_mlp_model.mesh_device, mesh_shape=tuple(reversed(llama_mlp_model.cluster_shape)), dims=(None, 3)
             ),
         )
     elif mode == "prefill":
@@ -70,8 +68,8 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x, mode):
             layout=ttnn.TILE_LAYOUT,
             device=llama_mlp_model.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(
-                llama_mlp_model.mesh_device, dims=(3, None), cluster_shape=llama_mlp_model.cluster_shape
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                llama_mlp_model.mesh_device, mesh_shape=tuple(reversed(llama_mlp_model.cluster_shape)), dims=(None, 3)
             ),
         )
 
@@ -141,7 +139,8 @@ def run_test_LlamaMLP_inference(
     tt_out = tt_LlamaMLP_model(tt_mlp_input, mode=mode)
 
     tt_out = ttnn.to_torch(
-        tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)
+        tt_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(reversed(cluster_shape)), dims=(1, 3)),
     )
     tt_out = tt_out[:, 0:1, :, :]
 
