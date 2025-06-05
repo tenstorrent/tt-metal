@@ -1113,14 +1113,23 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
 
             active_ethernet_cores.insert(eth_core);
         }
-        // channel 15 is used by syseng tools and must always be active for WH mmio chips with remote connections
+        // WH has a special case where mmio chips with remote connections must always have certain channels active
         if (this->arch_ == tt::ARCH::WORMHOLE_B0 && this->cluster_desc_->is_chip_mmio_capable(chip_id) &&
             this->get_tunnels_from_mmio_device(chip_id).size() > 0) {
-            constexpr uint32_t syseng_eth_channel = 15;
-            if (logical_active_eth_channels.find(syseng_eth_channel) == logical_active_eth_channels.end()) {
-                tt::umd::CoreCoord eth_core =
-                    soc_desc.get_eth_core_for_channel(syseng_eth_channel, CoordSystem::LOGICAL);
-                active_ethernet_cores.insert(eth_core);
+            // UMD routing FW uses these cores for base routing
+            // channel 15 is used by syseng tools
+            std::unordered_set<int> channels_to_skip = {};
+            if (this->is_galaxy_cluster()) {
+                // TODO: This may need to change, if we need additional eth cores for dispatch on Galaxy
+                channels_to_skip = {0, 1, 2, 3, 15};
+            } else {
+                channels_to_skip = {15};
+            }
+            for (const auto& eth_channel : channels_to_skip) {
+                if (logical_active_eth_channels.find(eth_channel) == logical_active_eth_channels.end()) {
+                    tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                    active_ethernet_cores.insert(eth_core);
+                }
             }
         }
     }
@@ -1193,18 +1202,7 @@ std::vector<CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest
 std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chip_id) const {
     std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
     std::unordered_set<CoreCoord> inactive_ethernet_cores;
-    std::unordered_set<int> channels_to_skip = {};
-    // UMD routing FW uses these cores for base routing
-    // We don't mark these channels as active as this could affect slow dispatch performance of read/writeon Galaxy
-    if (this->is_galaxy_cluster()) {
-        // TODO: This may need to change, if we need additional eth cores for dispatch on Galaxy
-        channels_to_skip = {0, 1, 2, 3};
-    }
     for (const auto& [eth_core, chan] : get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
-        if (this->cluster_desc_->is_chip_mmio_capable(chip_id) and
-            (channels_to_skip.find(chan) != channels_to_skip.end())) {
-            continue;
-        }
         if (active_ethernet_cores.find(eth_core) == active_ethernet_cores.end()) {
             inactive_ethernet_cores.insert(eth_core);
         }
