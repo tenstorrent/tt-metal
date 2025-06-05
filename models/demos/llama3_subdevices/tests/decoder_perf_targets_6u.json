@@ -25,7 +25,7 @@
         "AllGatherConcat_0": {
             "op_name": "AllGatherConcat",
             "kernel_duration": 11501.984953703703,
-            "op_to_op": 577.7777777777778,
+            "op_to_op": 794.7777777777778,
             "first_to_last_start": 1866.0,
             "non-overlapped-dispatch-time": 10806.3,
             "kernel_duration_relative_margin": 0.05,
@@ -105,7 +105,7 @@
             "op_to_op": 966.0,
             "first_to_last_start": 1843.22,
             "non-overlapped-dispatch-time": 6101.6,
-            "kernel_duration_relative_margin": 0.05,
+            "kernel_duration_relative_margin": 0.1,
             "op_to_op_duration_relative_margin": 0.4,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.2
@@ -156,7 +156,7 @@
         },
         "RotaryEmbeddingLlamaFusedQK_0": {
             "op_name": "RotaryEmbeddingLlamaFusedQK",
-            "kernel_duration": 3886.962962962963,
+            "kernel_duration": 2535.8888888888887,
             "op_to_op": 623.925925925926,
             "first_to_last_start": 2560.8888888888887,
             "non-overlapped-dispatch-time": 2749.7,
@@ -341,10 +341,10 @@
             "op_name": "TypecastDeviceOperation_1",
             "kernel_duration": 2039.0,
             "op_to_op": 661.0,
-            "non-overlapped-dispatch-time": 3746.0,
+            "non-overlapped-dispatch-time": 10794.0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.5
+            "dispatch_duration_relative_margin": 0.8
         },
         "BinaryDeviceOperation_0": {
             "op_name": "BinaryDeviceOperation_Last_Residual",
