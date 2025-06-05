@@ -137,7 +137,7 @@ jobs:
         id: prepare-slack
         run: |
           # Create base message
-          cat << EOF > slack-message.json
+          cat > slack-message.json << 'EOF'
           {
             "channel": "${{ secrets.SLACK_METAL_INFRA_PIPELINE_CHANNEL_ID }}",
             "text": "Workflow Status Report",
