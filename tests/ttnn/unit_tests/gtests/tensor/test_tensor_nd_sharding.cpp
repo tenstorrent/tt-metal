@@ -56,7 +56,7 @@ TEST_P(NDShardingTests, LoopbackTest) {
 
     CoreRangeSet cores;
     if (buffer_type == BufferType::L1) {
-        cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{0, 1}));
+        cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
     } else {
         auto dram_grid_size = device_->dram_grid_size();
         cores = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{dram_grid_size.x - 1, dram_grid_size.y - 1}));

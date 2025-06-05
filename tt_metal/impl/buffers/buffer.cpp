@@ -249,7 +249,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
         shard_spec.tensor2d_shape_in_pages);
     shape_in_pages = shard_spec.shape_in_pages();
 
-    buffer_page_mapping.core_host_page_indices_ = std::vector<std::vector<uint32_t>>(num_cores);
+    buffer_page_mapping.core_host_page_indices_ = std::vector<std::vector<std::optional<uint32_t>>>(num_cores);
 
     buffer_page_mapping.dev_page_to_host_page_mapping_ =
         std::vector<std::optional<uint32_t>>(num_dev_pages, std::nullopt);
