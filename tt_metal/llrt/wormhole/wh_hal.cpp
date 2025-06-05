@@ -149,6 +149,8 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
         return 0xdeadbeef;
     };
 
+    this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t { return 0; };
+
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
