@@ -149,23 +149,33 @@ jobs:
           echo "${{ needs.analyze-data.outputs.report }}" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Prepare Message Content
+        id: message
+        run: |
+          FAILED_WORKFLOWS='${{ needs.analyze-data.outputs.failed_workflows }}'
+          REPORT='${{ needs.analyze-data.outputs.report }}'
+
+          # Create the message content
+          MESSAGE="🚨 *Failed Workflows Report*\n"
+          MESSAGE+="*Repository:* ${{ github.repository }}\n"
+          MESSAGE+="*Branch:* ${{ github.ref_name }}\n"
+          MESSAGE+="*Time Period:* ${{ github.event.inputs.days || 15 }} days\n\n"
+          MESSAGE+="*Failed Workflows:*\n"
+          echo "$FAILED_WORKFLOWS" | jq -r '.[]' | while read -r workflow; do
+            MESSAGE+="• $workflow\n"
+          done
+          MESSAGE+="\n*Full Report:*\n$REPORT"
+
+          # Store in output
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          echo "$MESSAGE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Send Slack Notification
-        uses: slackapi/slack-github-action@v1.25.0
+        uses: slackapi/slack-github-action@v2.1.0
         with:
-          channel-id: 'C08SJ7MGESY' # Replace with your Slack channel ID
-          slack-message: ${{ steps.failures.outputs.message }}
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
-            {
-              "text": "Workflow Status Report",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": ${{ steps.failures.outputs.message }}
-                  }
-                }
-              ]
-            }
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+            channel: ${{ secrets. SLACK_METAL_INFRA_PIPELINE_CHANNEL_ID }}
+            text: ${{ toJSON(steps.message.outputs.content) }}
