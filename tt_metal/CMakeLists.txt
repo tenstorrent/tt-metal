@@ -6,6 +6,23 @@ endif()
 
 link_libraries(tt-logger::tt-logger)
 
+# Control compile time logging
+if(NOT DEFINED TT_METAL_ENABLE_LOGGING)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(_default_enable_logging ON)
+    else()
+        set(_default_enable_logging OFF)
+    endif()
+endif()
+option(
+    TT_METAL_ENABLE_LOGGING
+    "Enables inclusion of log_trace and log_debug into the binary."
+    ${_default_enable_logging}
+)
+if(TT_METAL_ENABLE_LOGGING)
+    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
+endif()
+
 add_library(tt_metal)
 add_library(TT::Metalium ALIAS tt_metal)
 add_library(Metalium::Metal ALIAS tt_metal) # For backwards compatibility
@@ -347,6 +364,7 @@ target_link_libraries(
         HAL::wormhole
         HAL::blackhole
         FlatBuffers::FlatBuffers
+        TT::Metalium::Logging
 )
 
 target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
@@ -381,6 +399,7 @@ include_directories(
     api/tt-metalium
 )
 
+add_subdirectory(logging)
 add_subdirectory(hw)
 add_subdirectory(hostdevcommon)
 add_subdirectory(common)
