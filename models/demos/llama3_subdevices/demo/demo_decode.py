@@ -444,7 +444,7 @@ def run_llama3_demo(
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
     tsu_failures_pre_boundary = 0
     tsu_failures_post_boundary = 0
-
+    avg_tsu = 0
     while users_decoding:
         if iteration == 0:  # First iteration also accounts for compile time
             profiler.start(f"compile_decode", iteration=iteration)
@@ -491,6 +491,7 @@ def run_llama3_demo(
             total_tokens_generated += 1
 
         tokens_per_second_per_user = 1 / iteration_time
+        avg_tsu += tokens_per_second_per_user
 
         profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
         # Print out generated outputs for each user at the end of every iteration
@@ -532,17 +533,20 @@ def run_llama3_demo(
     profiler.end(profiler_step_name)
     profiler.end("run")
 
+    # Get Average tok/s/u
+    avg_tsu /= max_generated_tokens
+
     # Gather measurements from run (only collected if in CI environment)
     measurements = {
         "capture_trace": profiler.get_duration("capture_trace"),
         "loading_inputs": profiler.get_duration("loading_inputs"),
         "loading_weights_to_device": profiler.get_duration("loading_weights_to_device"),
-        "compile_prefill": None,
+        "compile_prefill": 0.0,
         "compile_decode": profiler.get_duration("compile_decode"),
-        "prefill_t/s": None,
-        "prefill_time_to_token": None,
-        "decode_t/s": tokens_per_second_per_user * batch_size,
-        "decode_t/s/u": tokens_per_second_per_user,
+        "prefill_t/s": 0.0,
+        "prefill_time_to_token": 0.0,
+        "decode_t/s": avg_tsu * batch_size,
+        "decode_t/s/u": avg_tsu,
     }
 
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, json_perf_targets)
