@@ -105,9 +105,9 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
         }
     }
     TT_ASSERT(cluster_desc->get_all_chips().size() > 0, "No chips detected in the cluster");
-    auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
+    const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
     bool all_same_board = true;
-    for (auto& chip_id : cluster_desc->get_all_chips()) {
+    for (const auto& chip_id : cluster_desc->get_all_chips()) {
         if (cluster_desc->get_board_type(chip_id) != board_type) {
             all_same_board = false;
             break;
