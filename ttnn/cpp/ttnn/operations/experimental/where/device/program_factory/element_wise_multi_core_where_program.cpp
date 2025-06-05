@@ -164,5 +164,17 @@ void ElementWiseMultiCoreWhereProgram::override_runtime_arguments(
     cached_program_t& cached_program,
     const where_ttt_args::operation_attributes_type& operation_attributes,
     const where_ttt_args::tensor_args_type& tensor_args,
-    where_ttt_args::tensor_return_value_type& tensor_return_value) {};
+    where_ttt_args::tensor_return_value_type& tensor_return_value) {
+    const auto& sh_var = cached_program.shared_variables;
+    set_eltwise_ternary_runtime_args<false>(
+        cached_program.program,
+        tensor_args.input_tensor_a,
+        tensor_args.input_tensor_b,
+        tensor_args.input_tensor_c,
+        tensor_return_value,
+        sh_var.reader_kernel_id,
+        sh_var.writer_kernel_id,
+        sh_var.eltwise_kernel_id,
+        sh_var.all_device_cores);
+}
 }  // namespace ttnn::operations::ternary::experimental
