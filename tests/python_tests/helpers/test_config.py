@@ -76,5 +76,4 @@ def generate_make_command(
 
             make_cmd += f"kern_cnt={kern_cnt} pack_addr_cnt={pack_addr_cnt} pack_addrs={pack_addrs} "
 
-    print(make_cmd)
     return make_cmd
