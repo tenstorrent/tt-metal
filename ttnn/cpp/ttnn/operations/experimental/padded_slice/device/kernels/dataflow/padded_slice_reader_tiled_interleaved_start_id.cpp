@@ -65,10 +65,12 @@ void kernel_main() {
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;
                 if (id_per_dim[j] == num_unpadded_sticks[j]) {
+                    DPRINT << "j = " << j << " increment " << num_unpadded_sticks[j]
+                           << " id_per_dim = " << id_per_dim[0] << " " << id_per_dim[1] << " " << id_per_dim[2] << " "
+                           << id_per_dim[3] << ENDL();
                     id_per_dim[j] = 0;
                     src_stick_id += num_padded_sticks[j];
-                    DPRINT << "id_per_dim = " << id_per_dim[0] << " " << id_per_dim[1] << " " << id_per_dim[2] << " "
-                           << id_per_dim[3] << ENDL();
+
                 } else {
                     break;
                 }
