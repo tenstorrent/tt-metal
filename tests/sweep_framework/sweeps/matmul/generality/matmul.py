@@ -10,7 +10,9 @@ import ttnn
 from loguru import logger
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -211,46 +213,51 @@ def run_matmul(device, shapes, transpose_a, transpose_b) -> tuple:
     # Run ttnn matmul with the same operations
     ttnn_errored = False
     ttnn_error_msg = ""
+    start_time = start_measuring_time()
     try:
-        ttnn_result = ttnn.matmul(ttnn_a, ttnn_b, transpose_a=transpose_a, transpose_b=transpose_b)
+        op_output_tensor = ttnn.matmul(ttnn_a, ttnn_b, transpose_a=transpose_a, transpose_b=transpose_b)
+        output_tensor = ttnn.to_torch(op_output_tensor)
     except Exception as e:
         ttnn_errored = True
         ttnn_error_msg = str(e)
+    e2e_perf = stop_measuring_time(start_time)
 
     # Compare error behavior
     if torch_errored != ttnn_errored:
-        return (
-            False,
-            f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})",
-        )
+        return [
+            (
+                False,
+                f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})",
+            ),
+            e2e_perf,
+        ]
 
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:
         logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
-        return (True, "")
-
-    # Convert ttnn result to torch for comparison
-    ttnn_result_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
+        return [(True, ""), e2e_perf]
 
     # Check shape compatibility
-    if ttnn_result_torch.shape != torch_result.shape:
-        return (
-            False,
-            f"shape mismatch: torch: {torch_result.shape}, ttnn: {ttnn_result_torch.shape}",
-        )
-
-    # Check values with PCC
-    pcc_result, msg = check_with_pcc(torch_result, ttnn_result_torch, 0.99)
-    if not pcc_result:
-        return (False, msg)
+    if output_tensor.shape != torch_result.shape:
+        return [
+            (
+                False,
+                f"shape mismatch: torch: {torch_result.shape}, ttnn: {output_tensor.shape}",
+            ),
+            e2e_perf,
+        ]
 
     # Allow some tolerance for numeric differences
     atol = rtol = 0.1
+    allclose = (torch.allclose(torch_result, output_tensor, atol=atol, rtol=rtol, equal_nan=True),)
+    if not allclose:
+        return [(False, f"mismatch in allclose: torch: {torch_result}, ttnn: {output_tensor}"), e2e_perf]
 
-    return (
-        torch.allclose(torch_result, ttnn_result_torch, atol=atol, rtol=rtol, equal_nan=True),
-        f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result_torch}",
-    )
+    expected_pcc = 0.99
+    tensors = [ttnn_a, ttnn_b, op_output_tensor]
+
+    flop_counts = list(shape_a) + [2, shape_b[-1]]  # shape_a: all batch dimensions, m, k; shape_b[-1]: n
+    return get_run_return(torch_result, output_tensor, expected_pcc, tensors, e2e_perf, flop_counts)
 
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))

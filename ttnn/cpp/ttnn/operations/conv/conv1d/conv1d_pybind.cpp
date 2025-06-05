@@ -2,18 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "conv1d_pybind.hpp"
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <variant>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
 #include <tt-metalium/constants.hpp>
 #include "ttnn-pybind/decorators.hpp"
 
-#include "conv1d_pybind.hpp"
 #include "conv1d.hpp"
 #include "ttnn/types.hpp"
 
-namespace py = pybind11;
-
-namespace ttnn {
-namespace operations::conv {
-namespace conv1d {
+namespace ttnn::operations::conv::conv1d {
 
 void py_bind_conv1d(py::module& module) {
     bind_registered_operation(
@@ -174,6 +179,4 @@ void py_bind_conv1d(py::module& module) {
             py::arg("return_weights_and_bias") = false,
             py::arg("queue_id") = DefaultQueueId});
 }
-}  // namespace conv1d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv1d

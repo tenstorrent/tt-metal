@@ -121,6 +121,26 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
         if (board_type == BoardType::N300) {
             if (cluster_desc->get_all_chips().size() == 8) {
                 cluster_type = ClusterType::T3K;
+                // Basic check to determine if the cluster is a T3K cluster
+                // MMIO chips should have 3 connections to other chips, remote chips should have 2 connections to other
+                // chips
+                for (const auto& [chip_id, connections] : cluster_desc->get_ethernet_connections()) {
+                    std::unordered_set<chip_id_t> remote_chips;
+                    for (const auto& [channel, remote_chip_and_channel] : connections) {
+                        remote_chips.insert(std::get<0>(remote_chip_and_channel));
+                    }
+                    if (cluster_desc->is_chip_mmio_capable(chip_id)) {
+                        if (remote_chips.size() != 3) {
+                            cluster_type = ClusterType::N300;
+                            break;
+                        }
+                    } else {
+                        if (remote_chips.size() != 2) {
+                            cluster_type = ClusterType::N300;
+                            break;
+                        }
+                    }
+                }
             } else {
                 cluster_type = ClusterType::N300;
             }
@@ -190,7 +210,6 @@ bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == ClusterT
 
 ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
-tt_metal::FabricConfig Cluster::get_fabric_config() const { return this->fabric_config_; }
 
 BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
@@ -608,8 +627,23 @@ void Cluster::read_dram_vec(
     read_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
 }
 
+bool Cluster::supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const {
+    if (this->rtoptions_.get_disable_dma_ops()) {
+        return false;
+    }
+
+    // Currently, DMA reads/writes hang for small sizes. As a safety measure, we disable DMA for small sizes.
+    // TODO: Remove this once we have a proper fix for small DMA sizes.
+    constexpr uint32_t min_dma_size_bytes = 32;
+
+    // DMA reads and writes are only supported on WH. If/when DMA reads and writes are supported on BH, this should be
+    // updated to support BH architectures as well. See https://github.com/tenstorrent/tt-metal/issues/22957
+    return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->cluster_desc_->is_chip_mmio_capable(chip_id) &&
+           sz_in_bytes >= min_dma_size_bytes;
+}
+
 void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
-    chip_id_t chip_id = core.chip;
+    const chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_write(
@@ -624,14 +658,20 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
+        // tt::log_info(tt::LogMetal, "Writing to device {} using DMA", core.chip);
+        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    } else {
+        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    }
+
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
 }
 
 void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
-    int chip_id = core.chip;
+    const chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
@@ -647,7 +687,12 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
+    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+        // tt::log_info(tt::LogMetal, "Reading from device {} using DMA", core.chip);
+        this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
+    } else {
+        this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
+    }
 }
 
 void Cluster::read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
@@ -1072,50 +1117,12 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     return active_ethernet_cores;
 }
 
-tt::tt_fabric::ControlPlane* Cluster::get_control_plane() {
-    if (global_control_plane_.get() == nullptr) {
-        this->initialize_control_plane();
-    }
-    return global_control_plane_->get_local_node_control_plane();
-}
-
-void Cluster::set_custom_control_plane_mesh_graph(
-    const std::string& mesh_graph_desc_file,
-    const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
-        "Modifying control plane requires no devices to be active");
-    if (global_control_plane_.get() != nullptr) {
-        global_control_plane_.reset();
-    }
-    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
-        mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-    this->initialize_fabric_config(fabric_config_);
-}
-
-void Cluster::set_default_control_plane_mesh_graph() {
-    TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
-        "Modifying control plane requires no devices to be active");
-    if (global_control_plane_.get() != nullptr) {
-        global_control_plane_.reset();
-    }
-    this->initialize_control_plane();
-    this->initialize_fabric_config(fabric_config_);
-}
-
-void Cluster::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
-    this->fabric_config_ = fabric_config;
+void Cluster::configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig fabric_config) {
     if (fabric_config != tt_metal::FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
-        if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
-            this->get_control_plane()->initialize_fabric_context(fabric_config);
-        }
     } else {
         this->release_ethernet_cores_for_fabric_routers();
-        this->get_control_plane()->clear_fabric_context();
     }
-    this->get_control_plane()->configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 void Cluster::reserve_ethernet_cores_for_fabric_routers() {
@@ -1398,36 +1405,6 @@ uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
     return (mmio_device_id == chip_id) ? 0 : this->cluster_desc_->get_ethernet_link_distance(chip_id, mmio_device_id);
 }
 
-void Cluster::initialize_control_plane() {
-    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
-    // descriptors
-    std::string mesh_graph_descriptor;
-    switch (this->cluster_type_) {
-        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::GALAXY:
-            if (tt::tt_fabric::get_fabric_type(this->fabric_config_, this->cluster_type_) ==
-                tt::tt_fabric::FabricType::TORUS_2D) {
-                mesh_graph_descriptor = "quanta_galaxy_torus_2d_graph_descriptor.yaml";
-            } else {
-                mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml";
-            }
-            break;
-        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        default: TT_THROW("Unknown cluster type"); // TODO: we could expose this as a custom mesh graph option
-    }
-    const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
-                                                       "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
-
-    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(mesh_graph_desc_path.string());
-}
 
 std::uint32_t Cluster::get_ubb_asic_id(chip_id_t physical_chip_id) const {
     auto unique_chip_id = this->get_unique_chip_ids().at(physical_chip_id);

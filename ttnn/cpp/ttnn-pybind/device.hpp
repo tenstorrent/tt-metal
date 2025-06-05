@@ -5,12 +5,9 @@
 #pragma once
 
 #include "ttnn-pybind/pybind_fwd.hpp"
-#include "ttnn/device.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-
-namespace py = pybind11;
 
 namespace ttnn::device {
+namespace py = pybind11;
 
 void py_device_module_types(py::module& module);
 void py_device_module(py::module& module);

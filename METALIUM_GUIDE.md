@@ -163,7 +163,7 @@ compilation command information like:
 cd /path/to/tt-metal//built/2052/kernels/single_tile_matmul/1584599061800683236/trisc2/ \
 && \
 /path/to/tt-metal//tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ \
--mgrayskull -march=rv32iy -mtune=rvtt-b1 -mabi=ilp32 -std=c++17 -flto -ffast-math \
+-mgrayskull -march=rv32iy -mtune=rvtt-b1 -mabi=ilp32 -std=c++17 -flto=auto -ffast-math \
 -fno-use-cxa-atexit -fno-exceptions -Wall -Werror -Wno-unknown-pragmas \
 -Wno-error=multistatement-macros -Wno-error=parentheses \
 -Wno-error=unused-but-set-variable -Wno-unused-variable \

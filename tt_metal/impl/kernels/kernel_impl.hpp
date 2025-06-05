@@ -5,6 +5,8 @@
 #pragma once
 
 #include "api/tt-metalium/kernel.hpp"
+#include "jit_build/jit_build_settings.hpp"
+#include "jit_build/jit_build_options.hpp"
 
 namespace tt::tt_metal {
 
