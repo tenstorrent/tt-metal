@@ -20,7 +20,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_generator import flatten_list, generate_stimuli
 from helpers.test_config import generate_make_command
-from helpers.utils import compare_pcc, run_shell_command
+from helpers.utils import passed_test, run_shell_command
 
 
 def generate_golden(operations, operand1, operand2, data_format):
@@ -113,7 +113,7 @@ def test_fill_dest(testname, formats, dest_acc):
     for address in pack_addresses:
         res_from_L1.append(
             collect_results(formats, tensor_size=len(src_A), address=address)
-        )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
+        )
     res_from_L1 = flatten_list(res_from_L1)
 
     assert len(res_from_L1) == len(golden)
@@ -135,20 +135,4 @@ def test_fill_dest(testname, formats, dest_acc):
         ),
     )
 
-    if (
-        formats.output_format == DataFormat.Float16_b
-        or formats.output_format == DataFormat.Float16
-    ):
-        atol = 0.05
-        rtol = 0.1
-    elif formats.output_format == DataFormat.Bfp8_b:
-        atol = 0.1
-        rtol = 0.2
-
-    for i in range(len(golden)):
-        assert torch.isclose(
-            golden_tensor[i], res_tensor[i], rtol=rtol, atol=atol
-        ), f"Failed at index {i} with values {golden[i]} and {res_from_L1[i]}"
-
-    _, pcc = compare_pcc(golden_tensor, res_tensor, pcc=0.99)
-    assert pcc > 0.99
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)

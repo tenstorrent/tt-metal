@@ -21,7 +21,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import generate_make_command
-from helpers.utils import compare_pcc, run_shell_command
+from helpers.utils import passed_test, run_shell_command
 
 
 def generate_golden(operation, operand1, operand2, data_format):
@@ -96,12 +96,14 @@ def test_all(testname, formats, dest_acc, mathop):
     golden = generate_golden(mathop, src_A, src_B, formats.output_format)
     write_stimuli_to_l1(src_A, src_B, formats.input_format, formats.input_format)
 
+    unpack_to_dest = formats.input_format == DataFormat.Float32
+
     test_config = {
         "formats": formats,
         "testname": testname,
         "dest_acc": dest_acc,
         "mathop": mathop,
-        "unpack_to_dest": True,  # This test does a datacopy and unpacks input into dest register
+        "unpack_to_dest": unpack_to_dest,
     }
 
     make_cmd = generate_make_command(test_config)
@@ -113,17 +115,6 @@ def test_all(testname, formats, dest_acc, mathop):
     res_from_L1 = collect_results(formats, tensor_size=len(src_A))
 
     assert len(res_from_L1) == len(golden)
-
-    if formats.output_format in [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-        DataFormat.Float32,
-    ]:
-        atol = 0.05
-        rtol = 0.1
-    elif formats.output_format == DataFormat.Bfp8_b:
-        atol = 0.1
-        rtol = 0.2
 
     golden_tensor = torch.tensor(
         golden,
@@ -144,10 +135,4 @@ def test_all(testname, formats, dest_acc, mathop):
         ),
     )
 
-    for i in range(len(golden)):
-        assert torch.isclose(
-            golden_tensor[i], res_tensor[i], rtol=rtol, atol=atol
-        ), f"Failed at index {i} with values {golden[i]} and {res_from_L1[i]}"
-
-    _, pcc = compare_pcc(golden_tensor, res_tensor, pcc=0.99)
-    assert pcc > 0.99
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)
