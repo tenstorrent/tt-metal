@@ -314,7 +314,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_alt_complex_rotate90.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_bitwise.h
-                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binop_with_unary.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bitwise_and.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bitwise_not.h
@@ -388,6 +387,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_exp.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_binary_max_min.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_init.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_params.h
                 ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_rounding_ops.h
@@ -428,6 +428,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_io/llk_outputs.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_init.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_abs.h
+                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_binary_max_min.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_comp.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_unary_max_min.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_exp2.h
