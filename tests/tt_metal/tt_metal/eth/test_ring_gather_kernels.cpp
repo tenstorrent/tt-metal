@@ -130,6 +130,10 @@ std::vector<std::tuple<tt_metal::IDevice*, tt_metal::IDevice*, CoreCoord, CoreCo
         const auto& second_device = device_ring[1];
         uint32_t i = 0;
         for (const auto& first_eth_core : first_device->get_active_ethernet_cores(true)) {
+            if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                    first_device->id(), first_eth_core)) {
+                continue;
+            }
             auto [device_id, second_eth_core] = first_device->get_connected_ethernet_core(first_eth_core);
             if (second_device->id() == device_id) {
                 tt_metal::IDevice *sender_device, *receiver_device;

@@ -36,10 +36,10 @@ TEST_F(N300DeviceFixture, EthValidateEthernetConnectivity) {
     const auto& device_0_active_eth_cores = device_0->get_active_ethernet_cores();
     const auto& device_1_active_eth_cores = device_1->get_active_ethernet_cores();
 
-    ASSERT_TRUE(device_0_active_eth_cores.size() == 2);
+    // mmio device (0) has 2 ports (8, 9) reserved for umd non-mmio access which are also active links.
+    // mmio device (0) port 15 is reserved for syseng tools and is active without any remote connections.
+    ASSERT_TRUE(device_0_active_eth_cores.size() == 3);
     ASSERT_TRUE(device_1_active_eth_cores.size() == 2);
-    // mmio device (0) has 2 ports (8, 9) reserved for umd non-mmio access.
-    // mmio device (0) port 15 is reserved for syseng tools.
     ASSERT_TRUE(device_0->get_inactive_ethernet_cores().size() == 13);
     ASSERT_TRUE(device_1->get_inactive_ethernet_cores().size() == 14);
 
