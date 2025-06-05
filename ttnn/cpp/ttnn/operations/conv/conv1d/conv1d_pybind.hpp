@@ -7,5 +7,6 @@
 #include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::conv::conv1d {
-void py_bind_conv1d(pybind11::module& module);
+namespace py = pybind11;
+void py_bind_conv1d(py::module& module);
 }

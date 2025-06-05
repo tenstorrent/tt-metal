@@ -8,9 +8,22 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::gather {
 
+constexpr uint32_t WT_THRESHOLD = 60;
+
 GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return gather::program::GatherProgramFactory{};
+    // Calculate Wt to decide which program factory to use
+    const auto input_tensor_shape = tensor_args.input_tensor.get_padded_shape();
+    const auto input_index_tensor_shape = tensor_args.input_index_tensor.get_padded_shape();
+    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const uint32_t Wt_input = input_tensor_shape[3] / tile_width;
+    const uint32_t Wt_index = input_index_tensor_shape[3] / tile_width;
+
+    if (Wt_input > WT_THRESHOLD || Wt_index > WT_THRESHOLD) {
+        // Use GatherProgramFactorySingleRowMultiCore for larger Wt
+        return gather::program::GatherProgramFactorySingleRowMultiCore{};
+    }
+    return gather::program::GatherProgramFactorySingleRowSingleCore{};
 }
 
 void GatherDeviceOperation::validate_on_program_cache_hit(

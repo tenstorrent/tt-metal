@@ -277,7 +277,7 @@ install_mpi_ulfm(){
         return
     fi
 
-    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
+    DEB_URL="https://github.com/tenstorrent/ompi/releases/download/v5.0.7/openmpi-ulfm_5.0.7-1_amd64.deb"
     DEB_FILE="$(basename "$DEB_URL")"
 
     # 1. Create temp workspace

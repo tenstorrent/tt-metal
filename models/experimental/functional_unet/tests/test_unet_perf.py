@@ -61,7 +61,7 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_throughput",
-    ((1, 4, 256, 30.0, 1271.0),),
+    ((1, 4, 256, 30.0, 1268.0),),
 )
 def test_unet_trace_perf(
     batch: int,

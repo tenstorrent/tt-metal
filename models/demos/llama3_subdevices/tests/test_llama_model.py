@@ -255,7 +255,7 @@ def test_llama_model_inference(
             )
 
             # Get cos/sin matrices for the current position of each user
-            rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
+            rot_mats = tt_model.rope_setup.get_rm_rot_mats(current_pos)
 
             # Run TT model
             tt_out = tt_model(

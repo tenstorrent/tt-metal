@@ -12,7 +12,6 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/utils.hpp>
-#include <tt_memory.h>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -20,6 +19,8 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
+
+#include "tt_memory.h"
 
 enum class CoreType;
 enum class AddressableCoreType : uint8_t;

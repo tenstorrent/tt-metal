@@ -54,6 +54,7 @@ class TT_CCL:
             self.persistent_buffers = self.get_persistent_buffers()
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
+            self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             self.support_seqlens = [16 * 1024, 8192, 4096, 1024, 2048, 128]
             if allocate_prefill_buffers:
@@ -297,6 +298,37 @@ class TT_CCL:
 
         return persistent_buffers
 
+    def get_decode_rs_create_heads_buffers(self):
+        """
+        Currently, this is hardcoded with llama specific shapes.
+
+        Creates double buffered persistent CCL buffers for each cluster axis.
+
+        """
+
+        persistent_buffers = [None, None]
+
+        cluster_shape = (8, 4)
+        num_pages_per_packet = 4
+        shard_height = 32
+
+        # Create persistent buffers for cluster axis 1
+        cluster_axis = 1
+        buffer_mem_cfg = self.model_config["RS_CREATE_HEADS_INTERIM_MEMCFG"]
+        torch_buffer = torch.zeros(
+            (*cluster_shape, shard_height, cluster_shape[cluster_axis] * num_pages_per_packet * 32 * 5)
+        )
+        persistent_buffers[cluster_axis] = ttnn.from_torch(
+            torch_buffer,
+            device=self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=buffer_mem_cfg,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+        )
+
+        return persistent_buffers
+
     def get_prefill_reduce_scatter_buffers(self):
         """
         Currently, this is hardcoded with llama specific shapes.
@@ -501,6 +533,37 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return xqkv_reduced, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
 
+    def llama_rs_create_heads(
+        self,
+        input_tensor_mesh,
+        num_links,
+        cluster_axis,
+        dim,
+        qkv_memory_config,
+    ):
+        persistent_interim_buffer = self.rs_create_heads_buffers[cluster_axis]
+        (
+            q_heads_pre_rot_1BQD,
+            k_heads_pre_rot_1BKD,
+            v_heads_1BKD,
+        ) = ttnn.experimental.llama_rs_create_heads(
+            input_tensor=input_tensor_mesh,
+            intermediate_packet_buffer=persistent_interim_buffer,
+            dim=dim,
+            cross_device_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            subdevice_id=self.worker_sub_device_id,
+            cluster_axis=1,
+            mesh_device=self.mesh_device,
+            topology=ttnn.Topology.Linear,
+            num_links=num_links,
+            num_heads=8,
+            num_kv_heads=1,
+            memory_config=qkv_memory_config,
+            qkv_memory_config=qkv_memory_config,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
+
     def line_reduce_scatter(
         self,
         input_tensor_mesh,
@@ -546,6 +609,7 @@ class TT_CCL:
             persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
                 self.reduce_scatter_buffer_idx[cluster_axis]
             ]
+
             ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
                 input_tensor_mesh,
                 persistent_interim_buffer,

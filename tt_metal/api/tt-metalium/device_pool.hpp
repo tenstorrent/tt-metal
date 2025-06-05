@@ -20,12 +20,10 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt {
-namespace tt_metal::detail {
-void CloseDevices(const std::map<chip_id_t, tt_metal::IDevice*>& devices);
-}  // namespace tt_metal::detail
 
 class DevicePool {
     friend void tt_metal::detail::CloseDevices(const std::map<chip_id_t, tt_metal::IDevice*>& devices);

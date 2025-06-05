@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
 #include "dataflow_api.h"
+#include "pad_tile.hpp"
 
 void kernel_main() {
     // in0/in1 common args
@@ -30,6 +31,7 @@ void kernel_main() {
     // COMPILE TIME ARGS
     // interleaved accessor args
     constexpr bool in0_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t last_ktile_w = get_compile_time_arg_val(1);
 
     constexpr uint32_t cb_id_in0 = 0;
 
@@ -39,8 +41,8 @@ void kernel_main() {
     cb_push_back(cb_id_in0, in0_num_tiles);
 #else
 
-    const uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
+    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
+    constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
     constexpr const uint32_t in0_tile_hw = get_tile_hw(cb_id_in0);
 
     uint32_t l1_write_addr_in0;
@@ -60,6 +62,14 @@ void kernel_main() {
                 uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                 for (uint32_t w = 0; w < in0_block_w; ++w) {
                     noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
+
+                    // Zero out padded regions for the very last tile
+                    if constexpr (last_ktile_w > 0) {
+                        if ((block == num_blocks - 1) && (w == in0_block_w - 1)) {
+                            noc_async_read_barrier();
+                            pad_last_ktile<in0_data_format, last_ktile_w>(l1_write_addr_in0);
+                        }
+                    }
 
                     l1_write_addr_in0 += in0_single_tile_size_bytes;
                     in0_tensor_tile_id += in0_tensor_stride_w;
