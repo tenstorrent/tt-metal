@@ -674,24 +674,6 @@ void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t n
 
 // clang-format off
 /**
- * Initiates an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
- * Refer to \a noc_async_write for more details.
- */
-// clang-format on
-FORCE_INLINE
-void noc_async_write_one_packet(
-    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
-    WAYPOINT("NWPW");
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
-    WAYPOINT("NWPD");
-
-    ncrisc_noc_fast_write<noc_mode>(
-        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
-}
-
-// clang-format off
-/**
  * Initiates an asynchronous write from a source address in L1 memory on the
  * Tensix core executing this function call. The destination is specified using
  * a uint64_t encoding referencing an on-chip node located at NOC coordinates
@@ -716,16 +698,10 @@ template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
 inline void noc_async_write(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
 
-    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc);
-    } else {
-        WAYPOINT("NAWW");
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len<noc_mode>(
-            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
-        WAYPOINT("NAWD");
-    }
+    ncrisc_noc_fast_write_any_len<noc_mode, false /* use_trid */, max_page_size <= NOC_MAX_BURST_SIZE>(
+        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
 }
 
 // clang-format off

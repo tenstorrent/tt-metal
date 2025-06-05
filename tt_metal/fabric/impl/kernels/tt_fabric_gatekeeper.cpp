@@ -157,7 +157,7 @@ inline socket_handle_t* socket_receiver_available(packet_header_t* packet) {
 inline void set_socket_active(socket_handle_t* handle) {
     handle->socket_state = SocketState::ACTIVE;
     // send socket connection state to send socket opener.
-    noc_async_write_one_packet(
+    noc_async_write<sizeof(socket_handle_t)>(
         (uint32_t)(handle), handle->status_notification_addr, sizeof(socket_handle_t), noc_index);
 }
 
@@ -336,7 +336,7 @@ inline bool send_gk_message(uint64_t dest_addr, packet_header_t* packet) {
 
     uint32_t dest_wr_index = wrptr & FVCC_SIZE_MASK;
     noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, msg_buf) + dest_wr_index * sizeof(packet_header_t);
-    noc_async_write_one_packet((uint32_t)(packet), noc_addr, sizeof(packet_header_t), noc_index);
+    noc_async_write<sizeof(packet_header_t)>((uint32_t)(packet), noc_addr, sizeof(packet_header_t), noc_index);
     return true;
 }
 
@@ -352,7 +352,7 @@ inline bool retry_gk_message(uint64_t dest_addr, packet_header_t* packet) {
 
     uint32_t dest_wr_index = wrptr & FVCC_SIZE_MASK;
     noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, msg_buf) + dest_wr_index * sizeof(packet_header_t);
-    noc_async_write_one_packet((uint32_t)(packet), noc_addr, sizeof(packet_header_t), noc_index);
+    noc_async_write<sizeof(packet_header_t)>((uint32_t)(packet), noc_addr, sizeof(packet_header_t), noc_index);
     gk_message_pending = 0;
     return true;
 }

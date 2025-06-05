@@ -88,7 +88,7 @@ void kernel_main() {
 
         // Test write
         noc_async_write(l1_read_addr, noc_addr, page_size, noc);
-        noc_async_write_one_packet(l1_read_addr, noc_addr, page_size, noc);
+        noc_async_write<page_size>(l1_read_addr, noc_addr, page_size, noc);
         // interleaved write
         noc_async_write_tile(i % 1024, s0, l1_read_addr, noc);
 
