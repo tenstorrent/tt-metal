@@ -201,6 +201,12 @@ def run_all_to_all_dispatch_test(
         input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
             batch, experts, select_experts_k, hidden_size, devices, scheme=scheme
         )
+        if iter == 0:
+            logger.info(f"input_tokens shape: {input_tokens.shape}")
+            logger.info(f"expert_indices shape: {expert_indices.shape}")
+            logger.info(f"expert_mapping shape: {expert_mapping.shape}")
+            logger.info(f"sparse_output_token_tensor shape: {sparse_output_token_tensor.shape}")
+            logger.info(f"metadata_tensor shape: {metadata_tensor.shape}")
 
         output_tensor_goldens_list.append(sparse_output_token_tensor)
         output_metadata_goldens_list.append(metadata_tensor)
@@ -220,6 +226,7 @@ def run_all_to_all_dispatch_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
             memory_config=input_memory_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
         )
 
         tt_expert_mapping = ttnn.from_torch(
@@ -228,7 +235,13 @@ def run_all_to_all_dispatch_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
             memory_config=input_memory_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
         )
+
+        if iter == 0:
+            logger.info(f"tt_input shape: {tt_input.shape}")
+            logger.info(f"tt_expert_indices shape: {tt_expert_indices.shape}")
+            logger.info(f"tt_expert_mapping shape: {tt_expert_mapping.shape}")
 
         input_tensors.append(tt_input)
         expert_indices_tensors.append(tt_expert_indices)
@@ -261,12 +274,13 @@ def run_all_to_all_dispatch_test(
                 input_tensors[buffer_index],
                 expert_indices_tensors[buffer_index],
                 expert_mapping_tensors[buffer_index],
-                ccl_semaphore_handles[buffer_index],
-                worker_sub_device_id,
                 num_links=num_links,
-                memory_config=output_memory_config,
                 topology=topology,
+                memory_config=output_memory_config,
+                global_semaphore=ccl_semaphore_handles[buffer_index],
+                subdevice_id=worker_sub_device_id,
             )
+
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
             if store_all_results:
@@ -341,6 +355,12 @@ def run_all_to_all_dispatch_test(
             tt_metadata_list[tensor_index],
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         )
+
+        logger.info(f"tt_output_tensor shape: {tt_torch_tensor.shape}")
+        logger.info(f"tt_metadata_tensor shape: {tt_metadata_tensor.shape}")
+
+        logger.info(f"golden_output_tensor shape: {output_tensor_goldens_list[tensor_index].shape}")
+        logger.info(f"golden_metadata_tensor shape: {output_metadata_goldens_list[tensor_index].shape}")
 
         batch = tt_torch_tensor.shape[1]
         devices = tt_metadata_tensor.shape[0]
