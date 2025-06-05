@@ -170,9 +170,6 @@ KernelHandle FDKernel::configure_kernel_variant(
     if (rt_options.get_fd_fabric()) {
         defines["FABRIC_RELAY"] = "1";
     }
-    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != FabricConfig::FABRIC_2D) {
-        defines["FVC_MODE_PULL"] = "1";
-    }
     if (!DPrintServerReadsDispatchCores(device_->id())) {
         defines["FORCE_DPRINT_OFF"] = "1";
     }
