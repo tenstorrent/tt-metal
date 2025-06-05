@@ -229,7 +229,7 @@ void DeviceProfiler::resetControlBuffers(IDevice* device, const CoreCoord& worke
     chip_id_t device_id = device->id();
     HalProgrammableCoreType CoreType = tt::llrt::get_core_type(device_id, worker_core);
 
-    std::vector<uint32_t> control_buffer = core_control_buffers.at(worker_core);
+    const std::vector<uint32_t>& control_buffer = core_control_buffers.at(worker_core);
     std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
 
     control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] =
@@ -251,7 +251,7 @@ void DeviceProfiler::readRiscProfilerResults(
     nlohmann::ordered_json& noc_trace_json_log) {
     ZoneScoped;
 
-    std::vector<uint32_t> control_buffer = core_control_buffers.at(worker_core);
+    const std::vector<uint32_t>& control_buffer = core_control_buffers.at(worker_core);
 
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
@@ -1121,6 +1121,8 @@ void DeviceProfiler::dumpResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
+    tt::log_info(tt::LogMetal, "dumpResults for device {} state {} data_source {}", device->id(), state, data_source);
+
     const chip_id_t device_id = device->id();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
@@ -1137,21 +1139,23 @@ void DeviceProfiler::dumpResults(
     if (!do_L1_data_buffer) {
         for (const auto& worker_core : worker_cores) {
             readControlBuffers(device, worker_core, state);
+            tt::log_info(tt::LogMetal, "Read control buffer for device {} worker core {}", device_id, worker_core);
         }
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
-            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE || state == ProfilerDumpState::FORCE_UMD_READ) {
-                if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
-                    issueSlowDispatchReadFromProfilerBuffer(device);
-                }
+            if (state == ProfilerDumpState::FORCE_UMD_READ) {
+                issueSlowDispatchReadFromProfilerBuffer(device);
             } else {
                 issueFastDispatchReadFromProfilerBuffer(device);
+                tt::log_info(tt::LogMetal, "Issued fast dispatch read from profiler buffer for device {}", device_id);
             }
         } else {
             issueSlowDispatchReadFromProfilerBuffer(device);
+            tt::log_info(tt::LogMetal, "Issued slow dispatch read from profiler buffer for device {}", device_id);
         }
         for (const auto& worker_core : worker_cores) {
             resetControlBuffers(device, worker_core, state);
+            tt::log_info(tt::LogMetal, "Reset control buffer for device {} worker core {}", device_id, worker_core);
         }
     }
 
@@ -1185,6 +1189,8 @@ void DeviceProfiler::dumpResults(
             if (do_L1_data_buffer) {
                 ZoneScopedN("Reading L1 profiler Data buffer");
                 readControlBuffers(device, worker_core, state);
+                tt::log_info(
+                    tt::LogMetal, "Read L1 control buffer for device {} worker core {}", device_id, worker_core);
                 resetControlBuffers(device, worker_core, state);
 
                 std::vector<uint32_t> core_l1_data_buffer;
@@ -1234,6 +1240,8 @@ void DeviceProfiler::dumpResults(
 
         log_file_ofs.close();
     }
+
+    tt::log_info(tt::LogMetal, "FinisheddumpResults for device {} state {}", device->id(), state);
 #endif
 }
 
@@ -1518,6 +1526,11 @@ void DeviceProfiler::updateTracyContext(std::pair<uint32_t, CoreCoord> device_co
 }
 
 bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled(); }
+
+bool onlyProfileDispatchCores(ProfilerDumpState state) {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
+           state == ProfilerDumpState::ONLY_DISPATCH_CORES;
+}
 
 }  // namespace tt_metal
 
