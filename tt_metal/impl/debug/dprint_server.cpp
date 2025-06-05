@@ -149,7 +149,7 @@ struct HartKeyComparator {
 struct DebugPrintServerContext {
     // only one instance is allowed at the moment
     static DebugPrintServerContext* inst;
-    static bool ProfilerIsRunning;
+    static std::atomic<bool> ProfilerIsRunning;
 
     // Constructor/destructor, reads dprint options from RTOptions.
     DebugPrintServerContext();
@@ -1313,7 +1313,7 @@ ostream* DebugPrintServerContext::GetOutputStream(const HartKey& risc_key) {
 }  // GetOutputStream
 
 DebugPrintServerContext* DebugPrintServerContext::inst = nullptr;
-bool DebugPrintServerContext::ProfilerIsRunning = false;
+std::atomic<bool> DebugPrintServerContext::ProfilerIsRunning = false;
 
 }  // namespace
 
