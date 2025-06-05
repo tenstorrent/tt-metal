@@ -61,9 +61,37 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(input_shard_height % TILE_HEIGHT == 0, "Input shard height must be a multiple of tile height");
     }
 
-    // We always support uneven input sharding. Uneven output sharding is only supported if the input and output memory
-    // layouts are identical (i.e. height->height, width->width, block->block) and the input and output shard specs
-    // are identical. Otherwise uneven output sharding is not supported.
+    // We don't support input or output uneven sharding for the single core implementation
+    if (!this->use_multicore) {
+        // Check for input uneven sharding
+        if (input_is_sharded) {
+            std::array<uint32_t, 2> input_shard_shape = input_tensor_a.shard_spec().value().shape;
+            uint32_t input_shard_width = input_shard_shape[1];
+            uint32_t input_shard_height = input_shard_shape[0];
+            TT_FATAL(
+                tensor_width % input_shard_width == 0,
+                "Uneven input shard shape not supported for single core implementation");
+            TT_FATAL(
+                tensor_height % input_shard_height == 0,
+                "Uneven input shard shape not supported for single core implementation");
+        }
+        // Check for output uneven sharding
+        if (output_is_sharded) {
+            std::array<uint32_t, 2> output_shard_shape = this->output_mem_config.shard_spec().value().shape;
+            uint32_t output_shard_width = output_shard_shape[1];
+            uint32_t output_shard_height = output_shard_shape[0];
+            TT_FATAL(
+                tensor_width % output_shard_width == 0,
+                "Uneven output shard shape not supported for single core implementation");
+            TT_FATAL(
+                tensor_height % output_shard_height == 0,
+                "Uneven output shard shape not supported for single core implementation");
+        }
+    }
+
+    // We always support uneven input sharding for the multicore implementation. Uneven output sharding is only
+    // supported if the input and output memory layouts are identical (i.e. height->height, width->width, block->block)
+    // and the input and output shard specs are identical. Otherwise uneven output sharding is not supported.
     if (output_is_sharded) {
         std::array<uint32_t, 2> output_shard_shape = this->output_mem_config.shard_spec().value().shape;
         uint32_t output_shard_width = output_shard_shape[1];
