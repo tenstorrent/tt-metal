@@ -8,10 +8,10 @@ link_libraries(tt-logger::tt-logger)
 
 # Control compile time logging
 if(NOT DEFINED TT_METAL_ENABLE_LOGGING)
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        set(_default_enable_logging ON)
-    else()
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
         set(_default_enable_logging OFF)
+    else()
+        set(_default_enable_logging ON)
     endif()
 endif()
 option(
