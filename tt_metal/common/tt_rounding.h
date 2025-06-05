@@ -53,6 +53,21 @@ constexpr T round_up_to(T x, U multiple) {
 }
 
 template <class T, class U>
+constexpr T round_down_to(T x, U multiple) {
+    static_assert(std::numeric_limits<T>::is_integer, "T (first parameter) must be an integer type.");
+    static_assert(std::numeric_limits<U>::is_integer, "U (second parameter) must be an integer type.");
+    assert(multiple > 0);
+
+    T remainder(x % multiple);
+
+    if (remainder != 0) {
+        return x - remainder;
+    } else {
+        return x;
+    }
+}
+
+template <class T, class U>
 constexpr T round_up_div(T dividend, U divisor) {
     static_assert(std::numeric_limits<T>::is_integer, "T (first parameter) must be an integer type.");
     static_assert(std::numeric_limits<U>::is_integer, "U (second parameter) must be an integer type.");

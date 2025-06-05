@@ -14,9 +14,9 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(2);
     const uint32_t total_tile_count = get_arg_val<uint32_t>(0);
     const uint32_t per_core_block_cnt = total_tile_count / per_core_block_tile_cnt;
-    DPRINT_MATH(DPRINT << "pack_untilize_runtime_arg: per_core_block_tile_cnt: " << per_core_block_tile_cnt
-                       << ", src_cb_id: " << src_cb_id << ", out_cb_id: " << out_cb_id
-                       << ", per_core_block_cnt: " << per_core_block_cnt << ENDL();)
+    // DPRINT_MATH(DPRINT << "pack_untilize_runtime_arg: per_core_block_tile_cnt: " << per_core_block_tile_cnt
+    //                    << ", src_cb_id: " << src_cb_id << ", out_cb_id: " << out_cb_id
+    //                    << ", per_core_block_cnt: " << per_core_block_cnt << ENDL();)
 
     pack_untilize_init<per_core_block_tile_cnt>(src_cb_id, out_cb_id);
 
