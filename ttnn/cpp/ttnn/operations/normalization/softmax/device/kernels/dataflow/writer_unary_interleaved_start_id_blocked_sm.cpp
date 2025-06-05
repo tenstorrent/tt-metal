@@ -3,56 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/matmul/device/kernels/dataflow/pad_tile.hpp"
-
-// H-bcast mask
-FORCE_INLINE void generate_bcast_row_mask(
-    const uint32_t cb_id, const uint32_t num_datum_padded, const uint16_t mask_val) {
-    cb_reserve_back(cb_id, 1);
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
-
-    if (num_datum_padded > 16) {
-        uint32_t num_datum_unpadded_f1 = 32 - num_datum_padded;
-        uint32_t idx = 0;
-        for (uint32_t j = 0; j < num_datum_unpadded_f1; ++j) {  // first face
-            ptr[idx + j] = 0;
-        }
-        for (uint32_t j = num_datum_unpadded_f1; j < 16; ++j) {  // first face
-            ptr[idx + j] = mask_val;
-        }
-
-        idx = 1 << 8;
-        for (uint32_t j = 0; j < 16; ++j) {  // second face
-            ptr[idx + j] = mask_val;
-        }
-    } else {
-        uint32_t num_datum_unpadded_f2 = 16 - num_datum_padded;
-        uint32_t idx = 0;
-        for (uint32_t j = 0; j < 16; ++j) {  // first face
-            ptr[idx + j] = 0;
-        }
-
-        idx = 1 << 8;
-        for (uint32_t j = 0; j < num_datum_unpadded_f2; ++j) {  // second face
-            ptr[idx + j] = 0;
-        }
-        for (uint32_t j = num_datum_unpadded_f2; j < 16; ++j) {  // second face
-            ptr[idx + j] = mask_val;
-        }
-    }
-
-    cb_push_back(cb_id, 1);
-}
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "======" << ENDL();
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
+#include "cpp/ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -85,10 +36,8 @@ void kernel_main() {
             zero_ptr[i] = 0.0f;
         }
         constexpr uint32_t num_datum_unpadded = 32 - num_datum_padded;
-        DPRINT << num_datum_unpadded << ENDL();
         fill_pad_tile<uint16_t, num_datum_unpadded, 32>(ptr, mask_val);
         cb_push_back(cb_id_mask, 1);
-        print_full_tile(cb_id_mask, 0, true);
     }
 
     const InterleavedAddrGenFast<dst_is_dram> s = {

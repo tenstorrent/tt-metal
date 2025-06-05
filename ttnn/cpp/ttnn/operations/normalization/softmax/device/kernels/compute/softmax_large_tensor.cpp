@@ -2,6 +2,7 @@
 //
 // SPDX-Lice
 #include <cstdint>
+// #include <numeric>
 
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
@@ -37,10 +38,11 @@ void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
-    // uint32_t blk = get_arg_val<uint32_t>(3);
+    uint32_t blk = get_arg_val<uint32_t>(3);
     uint32_t start_ht = get_arg_val<uint32_t>(4);
     uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
     uint32_t cb_length_t = get_arg_val<uint32_t>(6);
+    bool dest_fp_32 = get_arg_val<uint32_t>(6) == 1;
 
     // reserve one tile for zeros on cb_in2
     // We only do the reserve for the intermediates once and use pack_tile
@@ -75,6 +77,7 @@ void MAIN {
     // First loop is to parse and find the sum
     uint32_t dst0 = 0;
     uint32_t cb_processed_input;
+    uint32_t max_blk = dest_fp_32 ? 8 : 4;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // This and all inner loops are for parsing the length of Wt in terms of chunks of the width that can fit in the
@@ -93,6 +96,7 @@ void MAIN {
          */
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
+            // uint32_t blk = std::gcd(max_blk, cb_length_t);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
             apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
@@ -129,6 +133,7 @@ void MAIN {
          */
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
+            // uint32_t blk = std::gcd(max_blk, cb_length_t);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
             apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
@@ -198,6 +203,7 @@ void MAIN {
         cur_cb_length_t = cb_length_t;
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
+            // uint32_t blk = std::gcd(max_blk, cb_length_t);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
             apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
@@ -241,6 +247,9 @@ void apply_fused_scale_mask(
         tile_regs_acquire();
         cb_wait_front(cb_in, blk);
         cb_reserve_back(cb_out, blk);
+        if (cb_length_t - cur_blk < blk) {
+            blk = cb_length_t - cur_blk;
+        }
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             mul_tiles_bcast_scalar(cb_in, cb_fused_scale_mask, cur_dst, 0, cur_dst);
         }
@@ -270,6 +279,9 @@ void apply_fused_attn_mask(
         cb_wait_front(cb_in, blk);
         cb_wait_front(cb_fused_attn_mask, blk);  // cumulative wait for up to wt tiles
         cb_reserve_back(cb_out, blk);
+        if (cb_length_t - cur_blk < blk) {
+            blk = cb_length_t - cur_blk;
+        }
 #ifdef CAUSAL_MASK
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             add_tiles(cb_in, cb_fused_attn_mask, cur_dst, cur_dst, cur_dst);  // tile *= 1/(sum(exp(x)))
@@ -307,6 +319,9 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
         tile_regs_acquire();
         cb_wait_front(cb_in, blk);
         cb_reserve_back(cb_out, blk);
+        if (cb_length_t - cur_blk < blk) {
+            blk = cb_length_t - cur_blk;
+        }
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             if (cur_dst == blk - 1 && cur_blk == cb_length_t - blk) {
                 add_tiles_init(cb_in, cb_mask_padded);
@@ -327,7 +342,7 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
     }
 }
 
-void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_length_t, const uint32_t blk) {
+void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_length_t, uint32_t blk) {
     // requirements:
     //   cb_length_t of cb_in and cb_out are the same.
     //   blk is a divisor of cb_length_t
@@ -344,6 +359,9 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     exp_tile_init<EXP_APPROX>();
     uint32_t loop = 0;
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
+        if (cb_length_t - cur_blk < blk) {
+            blk = cb_length_t - cur_blk;
+        }
         cb_wait_front(cb_in, blk);
         cb_reserve_back(cb_out, blk);
         tile_regs_acquire();
@@ -428,6 +446,9 @@ void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb
         cb_wait_front(cb_in, blk);
         tile_regs_acquire();
         tile_regs_wait();
+        if (cb_length_t - cur_blk < blk) {
+            blk = cb_length_t - cur_blk;
+        }
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             mul_tiles_bcast_cols(cb_in, cb_recip, cur_dst, 0, cur_dst);
         }
