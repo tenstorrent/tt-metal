@@ -103,6 +103,8 @@ class TtResnetBlock2D(nn.Module):
                 self.conv1_config.weights_dtype,
                 split_in,
                 split_out,
+                fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
+                and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
             )
         else:
             (
@@ -116,7 +118,7 @@ class TtResnetBlock2D(nn.Module):
                 conv_bias_1,
                 self.conv1_config.weights_dtype,
                 fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
-                and (self.conv1_config.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+                and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
             )
 
         self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
@@ -131,7 +133,7 @@ class TtResnetBlock2D(nn.Module):
             conv_bias_2,
             self.conv2_config.weights_dtype,
             fp32_dest_acc_en=(self.conv2_config.weights_dtype == ttnn.bfloat8_b)
-            and (self.conv2_config.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+            and (self.conv2_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
         if conv_shortcut:
