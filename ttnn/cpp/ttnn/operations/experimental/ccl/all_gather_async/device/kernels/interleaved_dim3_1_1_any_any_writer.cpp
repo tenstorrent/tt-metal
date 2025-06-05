@@ -12,17 +12,6 @@
 #include <cstdint>
 #include <utility>
 
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "======" << ENDL();
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
-
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
 using ttnn::ccl::Topology;
@@ -37,7 +26,7 @@ constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
 constexpr BufferType output_type = static_cast<BufferType>(get_compile_time_arg_val(3));
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(4);
 constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
-constexpr uint32_t intermediate_page_size = get_compile_time_arg_val(6);
+constexpr uint32_t output_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
 constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
@@ -87,7 +76,7 @@ void kernel_main() {
     constexpr bool output_is_dram = output_type == tt::tt_metal::BufferType::DRAM;
     auto output_addrgen = InterleavedAddrGenFast<output_is_dram>{
         .bank_base_address = output_address,
-        .page_size = intermediate_page_size,
+        .page_size = output_page_size,
         .data_format = get_dataformat(cb_output_id)};
 
     fabric_connection.open();
@@ -119,19 +108,27 @@ void kernel_main() {
             uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
             if (direction == 1) {
                 noc_async_write_tile(tile_id, output_addrgen, l1_read_addr);
-                write_and_advance_local_read_address_for_fabric_write_backward(
-                    noc0_dest_noc_addr,
-                    pkt_hdr,
-                    fabric_connection,
-                    l1_read_addr,
-                    intermediate_page_size * contig_pages_advanced);
+                if (num_targets_backward_direction) {
+                    write_and_advance_local_read_address_for_fabric_write_backward(
+                        noc0_dest_noc_addr,
+                        pkt_hdr,
+                        fabric_connection,
+                        l1_read_addr,
+                        output_page_size * contig_pages_advanced);
+                } else {
+                    l1_read_addr += output_page_size * contig_pages_advanced;
+                }
             } else {
-                write_and_advance_local_read_address_for_fabric_write_forward(
-                    noc0_dest_noc_addr,
-                    pkt_hdr,
-                    fabric_connection,
-                    l1_read_addr,
-                    intermediate_page_size * contig_pages_advanced);
+                if (num_targets_forward_direction) {
+                    write_and_advance_local_read_address_for_fabric_write_forward(
+                        noc0_dest_noc_addr,
+                        pkt_hdr,
+                        fabric_connection,
+                        l1_read_addr,
+                        output_page_size * contig_pages_advanced);
+                } else {
+                    l1_read_addr += output_page_size * contig_pages_advanced;
+                }
             }
             pages_read_in_row += 1;
             if (pages_read_in_row >= input_tensor_Wt) {
@@ -153,15 +150,19 @@ void kernel_main() {
         32});
     // Write the unicast packet
     if (direction == 1) {
-        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        pkt_hdr_sem_inc->to_chip_unicast(1);
-        fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        if (num_targets_backward_direction) {
+            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+            pkt_hdr_sem_inc->to_chip_unicast(1);
+            fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        }
     } else {
-        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr_sem_inc->to_chip_unicast(1);
-        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        if (num_targets_forward_direction) {
+            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+            pkt_hdr_sem_inc->to_chip_unicast(1);
+            fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        }
     }
 
     // increment locally
@@ -170,12 +171,12 @@ void kernel_main() {
         op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
     }
 
-    uint32_t writes_expected;
+    uint32_t writes_expected = 0;
     if (topology == Topology::Linear) {
-        if (direction == 1) {
-            writes_expected = num_targets_backward_direction;
-        } else {
+        if (direction == 1 && num_targets_backward_direction) {
             writes_expected = num_targets_forward_direction;
+        } else if (direction == 0 && num_targets_forward_direction) {
+            writes_expected = num_targets_backward_direction;
         }
     } else if (topology == Topology::Ring) {
         if (direction == 1) {
@@ -232,14 +233,14 @@ void kernel_main() {
                         pkt_hdr,
                         fabric_connection,
                         l1_read_addr,
-                        contig_pages_advanced * intermediate_page_size);
+                        contig_pages_advanced * output_page_size);
                 } else {
                     write_and_advance_local_read_address_for_fabric_write_forward(
                         noc0_dest_noc_addr,
                         pkt_hdr,
                         fabric_connection,
                         l1_read_addr,
-                        contig_pages_advanced * intermediate_page_size);
+                        contig_pages_advanced * output_page_size);
                 }
                 tiles_read += contig_pages_advanced;
             }

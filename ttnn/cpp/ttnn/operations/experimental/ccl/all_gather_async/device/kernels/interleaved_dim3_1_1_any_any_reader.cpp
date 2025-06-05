@@ -80,8 +80,10 @@ void kernel_main() {
     if (topology == Topology::Linear) {
         if (direction == 1) {
             slices_expected = num_targets_forward_direction;
+            writes_expected = num_targets_backward_direction;
         } else {
             slices_expected = num_targets_backward_direction;
+            writes_expected = num_targets_forward_direction;
         }
     } else if (topology == Topology::Ring) {
         if (direction == 1) {
@@ -124,7 +126,7 @@ void kernel_main() {
         // Direction == forward: Should I forward what I got from the right to my left?
         // In the linear case, if I have any targets to my left, always forward
         // In the ring case, if I have received on the right less than my targets on the left, forward
-        if ((topology == Topology::Linear && slices_expected > 0) ||
+        if ((topology == Topology::Linear && writes_expected > 0) ||
             (topology == Topology::Ring && (slices_received < (writes_expected + 1)))) {
             // read the next backward slice out of memory, and put it in CB
             uint32_t output_tile_id_start = actual_sender_chip_id * input_tensor_Wt;

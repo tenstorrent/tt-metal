@@ -352,8 +352,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
-    TT_FATAL(
-        !((topology == ccl::Topology::Linear) && fuse_op), "Fusing operations is not supported for linear topology");
+    TT_FATAL(!((topology == ccl::Topology::Linear) && fuse_op));
     if (topology == ccl::Topology::Ring && ring_index % 2 == 0) {
         std::swap(num_targets_forward, num_targets_backward);
     }
