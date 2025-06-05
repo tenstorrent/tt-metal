@@ -167,9 +167,6 @@ KernelHandle FDKernel::configure_kernel_variant(
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (rt_options.get_fd_fabric()) {
-        defines["FABRIC_RELAY"] = "1";
-    }
     if (!DPrintServerReadsDispatchCores(device_->id())) {
         defines["FORCE_DPRINT_OFF"] = "1";
     }

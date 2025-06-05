@@ -337,13 +337,8 @@ void PrefetchKernel::GenerateDependentConfigs() {
             TT_FATAL(false, "Path not implemented");
         }
 
-        // Downstream, expect a DISPATCH_D and s DISPATCH_S
-        // Prefetch_d will always be local with dispatch_d
-        if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
-            TT_ASSERT(downstream_kernels_.size() == 2);
-        } else {
-            TT_ASSERT(downstream_kernels_.size() == 1);
-        }
+        // Downstream
+        // DISPATCH_D || DISPATCH_S || FABRIC_MUX
         bool found_dispatch = false;
         bool found_dispatch_s = false;
         bool found_relay_mux = false;

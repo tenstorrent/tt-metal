@@ -386,6 +386,7 @@ void DispatchKernel::GenerateDependentConfigs() {
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
                 tt::tt_metal::assemble_fabric_mux_client_config_args(
                     node_id_, ch_type, relay_mux, dependent_config_.fabric_mux_client_config);
+            } else {
                 TT_FATAL(false, "Unexpected downstream kernel for dispatch_d");
             }
         }
