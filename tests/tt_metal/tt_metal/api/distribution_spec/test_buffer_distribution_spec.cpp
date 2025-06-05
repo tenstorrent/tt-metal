@@ -363,8 +363,8 @@ INSTANTIATE_TEST_SUITE_P(
     BufferDistributionSpec,
     MeshBufferReadWriteTests,
     ::testing::Combine(
-        ::testing::Values(true),  // cq_write
-        ::testing::Values(true),  // cq_read
+        ::testing::Values(true, false),  // cq_write
+        ::testing::Values(true, false),  // cq_read
         ::testing::Values(
             // BLOCK sharding; tile layout
             // page size = 32 x 32 x 2 = 2048 bytes (eg. bfloat16, uint16, etc...)
