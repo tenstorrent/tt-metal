@@ -21,7 +21,7 @@ inline void reduce_configure_addrmod();
 template <ReduceDim dim, int num_fidelity_phases>
 inline void reduce_configure_mop();
 
-template <PoolType type, ReduceDim dim, int MATH_FIDELITY_DESC = 0, bool is_fp32_dest_acc_en = false, bool is_int_fpu_en = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, int MATH_FIDELITY_DESC = 0, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, const uint num_faces = 4)
 {
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);

@@ -175,7 +175,7 @@ inline void _llk_unpack_A_mop_config_(
     }
 }
 
-template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None, bool disable_src_zero_flag = false>
+template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None, bool disable_src_zero_flag = false>
 inline void _llk_unpack_A_hw_configure_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
@@ -187,7 +187,7 @@ inline void _llk_unpack_A_hw_configure_(
     constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
     constexpr bool fpu_srnd_en  = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
     constexpr bool pack_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Pack);
-    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en, disable_src_zero_flag>(
+    configure_unpack_AB<is_fp32_dest_acc_en, is_row_pool, fpu_srnd_en, pack_srnd_en, disable_src_zero_flag>(
         unpack_src_format, unpack_src_format, unpack_dst_format, unpack_dst_format, face_r_dim, face_r_dim, within_face_16x16_transpose, num_faces, num_faces);
 }
 

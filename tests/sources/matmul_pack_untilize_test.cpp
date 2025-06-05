@@ -67,12 +67,12 @@ void run_kernel()
     std::fill(buffer_Dest, buffer_Dest + tile_size, 0xdeadbeef);
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en, false>(PACK_IN, PACK_OUT, tile_size);
-    _llk_pack_dest_init_<sync, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(PACK_IN, PACK_OUT, tile_size);
+    _llk_pack_dest_init_<sync, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor>();
     _llk_pack_untilize_init_<ct_dim>(PACK_IN, PACK_OUT, FACE_R_DIM, 4);
 #else
-    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en>(PACK_IN, PACK_OUT, tile_size);
-    _llk_pack_dest_init_<sync, DstTileFaceLayout::RowMajor, UNTILIZE, is_fp32_dest_acc_en>();
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(PACK_IN, PACK_OUT, tile_size);
+    _llk_pack_dest_init_<sync, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor, UNTILIZE>();
     _llk_pack_untilize_init_<ct_dim>(PACK_OUT, FACE_R_DIM, 4);
 #endif
     _llk_packer_wait_for_math_done_();

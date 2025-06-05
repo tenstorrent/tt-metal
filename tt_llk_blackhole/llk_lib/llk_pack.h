@@ -495,7 +495,7 @@ inline void _llk_pack_reconfig_data_format_(
     }
 }
 
-template <bool untilize = false, bool is_fp32_dest_acc_en = false, bool tilize = false>
+template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
 inline void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -511,7 +511,7 @@ inline void _llk_pack_hw_configure_(
         pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
-template <bool untilize = false, PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, bool untilize = false>
 inline void _llk_pack_reduce_hw_configure_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -594,7 +594,7 @@ inline void _llk_pack_init_(
         pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
 }
 
-template <DstSync Dst, bool untilize = false, bool is_fp32_dest_acc_en = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
     if constexpr (Dst == DstSync::SyncTile16)

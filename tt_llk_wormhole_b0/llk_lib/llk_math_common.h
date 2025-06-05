@@ -45,7 +45,7 @@ inline void _llk_math_wait_for_dest_available_()
 #endif
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_math_dest_section_done_()
 {
 #ifdef PERF_DUMP
@@ -71,7 +71,7 @@ inline void _llk_math_dest_section_done_()
     }
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_math_pack_sync_init_()
 {
 #ifdef PERF_DUMP
@@ -153,7 +153,7 @@ inline void _llk_math_debug_dump_seek_(std::uint8_t offset)
     debug_dump_seek(offset);
 }
 
-template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format)
 {
     if constexpr (to_from_int8)
@@ -167,7 +167,7 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
     }
 }
 
-template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format)
 {
     if constexpr (to_from_int8)
@@ -181,7 +181,7 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
     }
 }
 
-template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
     if constexpr (to_from_int8)

@@ -206,7 +206,7 @@ inline void enable_int8_fpu_math()
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, ALU_ACC_CTRL_INT8_math_enabled_MASK>(alu_payload.val);
 }
 
-template <bool row_pool = false, bool is_fp32_dest_acc_en = false, bool fpu_srnd_en = false, bool pack_srnd_en = false, bool disable_src_zero_flag = false>
+template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false, bool disable_src_zero_flag = false>
 inline void configure_unpack_AB(
     const uint unpA_src_format,
     const uint unpB_src_format,

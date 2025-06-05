@@ -293,7 +293,7 @@ inline void set_packer_config(const uint pack_src_format, const uint pack_dst_fo
     sync_regfile_write(p_gpr_pack::EXP0_SEC_SIZE_BFP);
 }
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void reconfig_packer_data_format(
     const uint pack_src_format, const uint pack_dst_format, const uint tile_size, const uint face_r_dim, const uint tile_c_dim)
 {

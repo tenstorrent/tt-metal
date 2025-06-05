@@ -18,7 +18,7 @@ using namespace ckernel;
 // local function declarations
 inline void eltwise_unary_configure_addrmod();
 
-template <DataCopyType type, DstSync Dst, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool is_fp32_dest_acc_en = false, bool unpack_to_dest = false>
+template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format)
 {
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
@@ -129,7 +129,7 @@ inline void eltwise_unary_configure_addrmod()
     }
 }
 
-template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE, bool is_fp32_dest_acc_en = false, bool is_int_fpu_en = false>
+template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool is_int_fpu_en = false>
 inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, const uint num_faces, const uint dst_format)
 {
     // always move 32x32 tile, packed as 16x16x4
@@ -212,7 +212,7 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, con
     }
 }
 
-template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool is_fp32_dest_acc_en = false, bool is_int_fpu_en = false>
+template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool is_int_fpu_en = false>
 // within_face_16x16_transpose is used by unpacker, math does not transpose
 inline void _llk_math_eltwise_unary_datacopy_init_(
     const std::uint32_t transpose_of_faces          = 0 /*unused*/,
@@ -224,11 +224,11 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
 
     if constexpr (type == A2D)
     {
-        eltwise_unary_configure_mop<type, src_b_bcast_type, is_fp32_dest_acc_en, is_int_fpu_en>(p_mova2d::MOV_8_ROWS, 16, num_faces, dst_format);
+        eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(p_mova2d::MOV_8_ROWS, 16, num_faces, dst_format);
     }
     else if constexpr (type == B2D)
     {
-        eltwise_unary_configure_mop<type, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces, dst_format);
+        eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces, dst_format);
     }
     else
     {
