@@ -20,6 +20,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <vector>
 
 #include "padded_slice_op.hpp"
 using namespace tt::constants;
@@ -561,11 +562,13 @@ get_padded_slice_runtime_args_tile_sharded_output(
                                    num_output_tiles_per_dim[0];
         }
         tt::log_debug(
-            "For Core {}, Input Start ID {}, Output Start Coord: {}, End Coord : {}, Input Start Coord: {}, End Coord "
+            "For Core {}, Input Start ID {}, End ID {}, Output Start Coord: {}, End Coord : {}, Input Start Coord: {}, "
+            "End Coord "
             ": {}, Num Full Rows "
             ": {}, Num Tiles : {}",
             core,
             input_start_id,
+            input_end_id,
             start_index_per_dim,
             end_index_per_dim,
             start_index_in_input_per_dim,
@@ -579,14 +582,32 @@ get_padded_slice_runtime_args_tile_sharded_output(
         uint32_t addr_offset = 2;
         reader_kernel_args[addr_offset++] = input_start_id;
         reader_kernel_args[addr_offset++] = num_tiles_this_core;
-        auto reversed_start_index = std::ranges::reverse_view(start_index_per_dim);
-        reader_kernel_args.insert(reader_kernel_args.end(), reversed_start_index.begin(), reversed_start_index.end());
+        auto reversed_start_index = start_index_per_dim;
+        std::ranges::reverse(reversed_start_index);
+        auto reversed_tile_start_index = reversed_start_index;
+        reversed_tile_start_index[0] /= TILE_WIDTH;
+        reversed_tile_start_index[1] /= TILE_HEIGHT;
+        std::vector<uint32_t> reversed_output_start_in_input(num_dims);
+        std::vector<uint32_t> reversed_output_end(num_dims);
+
+        for (uint32_t index = 0; index < num_dims; index++) {
+            reversed_output_start_in_input[index] = output_tensor_start[num_dims - index - 1];
+            reversed_output_end[index] = actual_output_shape[num_dims - index - 1];
+        }
+
+        reader_kernel_args.insert(
+            reader_kernel_args.end(), reversed_tile_start_index.begin(), reversed_tile_start_index.end());
 
         std::vector<uint32_t> compute_kernel_args = {
             num_tiles_this_core,  // number of tiles to read
         };
 
         std::vector<uint32_t> writer_kernel_args = {num_tiles_this_core, num_tiles_per_channel};
+        writer_kernel_args.insert(writer_kernel_args.end(), reversed_start_index.begin(), reversed_start_index.end());
+        writer_kernel_args.insert(
+            writer_kernel_args.end(), reversed_output_start_in_input.begin(), reversed_output_start_in_input.end());
+        writer_kernel_args.insert(writer_kernel_args.end(), reversed_output_end.begin(), reversed_output_end.end());
+
         ret_val[core_index] = {reader_kernel_args, compute_kernel_args, writer_kernel_args};
         core_index++;
     }
@@ -737,7 +758,8 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     auto untilize_compute_kernel_id = CreateKernel(
         program, compute_kernel, total_cores, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = compute_args});
 
-    std::vector<uint32_t> writer_compile_time_args_vec = {cb_untilized_index, cb_output_index};
+    std::vector<uint32_t> writer_compile_time_args_vec = {
+        cb_untilized_index, cb_output_index, input_padded_shape.rank() /* == 4*/};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram, misalignment};
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -762,12 +784,12 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, std::get<0>(all_runtime_args[i]));
         tt::tt_metal::SetRuntimeArgs(program, untilize_compute_kernel_id, core, std::get<1>(all_runtime_args[i]));
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::get<2>(all_runtime_args[i]));
-        tt::log_info(
-            "Core {} Reader {}, Compute {} Writer {}",
-            core,
-            std::get<0>(all_runtime_args[i]),
-            std::get<1>(all_runtime_args[i]),
-            std::get<2>(all_runtime_args[i]));
+        // tt::log_info(
+        //     "Core {} Reader {}, Compute {} Writer {}",
+        //     core,
+        //     std::get<0>(all_runtime_args[i]),
+        //     std::get<1>(all_runtime_args[i]),
+        //     std::get<2>(all_runtime_args[i]));
         i++;
     }
 
