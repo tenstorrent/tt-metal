@@ -9,7 +9,6 @@
 
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
-#include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 
@@ -125,7 +124,7 @@ uint32_t calculate_L1_usage(
     uint32_t out_nbytes = in_nbytes;
 
     auto pconfig = input.memory_config();
-    auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
+    const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (pconfig.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_shards_c = 1;
@@ -162,7 +161,7 @@ uint32_t calculate_L1_usage(
     // CBs
     uint32_t multi_buffering_factor = 2;
 
-    uint32_t split_reader = 1;
+    bool split_reader = true;
 
     // scalar CB as coefficient of reduce
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);

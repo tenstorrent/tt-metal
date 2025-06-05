@@ -25,7 +25,7 @@ struct Pool2D {
         Pool2DType pool_type_;
         DataType output_dtype_;
         MemoryConfig memory_config_;
-        int32_t memory_used;
+        uint32_t memory_used;
     };
 
     struct tensor_args_t {

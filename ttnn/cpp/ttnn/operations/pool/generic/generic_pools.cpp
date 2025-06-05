@@ -12,7 +12,6 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
-#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include <limits>
 
 namespace ttnn {
@@ -159,7 +158,7 @@ Tensor Pool2DOp<pool_type>::invoke(
         is_out_tiled,
         in_place_halo);
 
-    uint32_t pre_allocate_size =
+    const uint32_t pre_allocate_size =
         haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
     auto output_tensor = ttnn::prim::pool2d(
