@@ -10,19 +10,20 @@ EXAMPLES_TO_BUILD=(
     "hello_world_datamovement_kernel"
     "loopback"
     "matmul_multicore_reuse"
-)
-
-BOOST_SPAN_BROKEN_EXAMPLES=(
+    "add_2_integers_in_riscv"
     "hello_world_datatypes_kernel"
     "add_2_integers_in_compute"
-    "add_2_integers_in_riscv"
     "eltwise_binary"
     "matmul_multi_core"
     "eltwise_sfpu"
     "matmul_single_core"
-    "pad"
-    "sharding"
+    "pad_multi_core"
+    "shard_data_rm"
     "contributed/vecadd"
+)
+
+BOOST_SPAN_BROKEN_EXAMPLES=(
+
 )
 
 # Loop through specified examples
@@ -35,6 +36,24 @@ for example in "${EXAMPLES_TO_BUILD[@]}"; do
         cd build
         cmake -G Ninja ..
         ninja
+        cd "/usr/share/tt-metalium/examples"  # Go back to original directory
+    else
+        echo "Warning: Example directory not found: $example"
+    fi
+done
+
+echo "--------------------------------"
+echo "TESTING ALL EXAMPLES"
+echo "--------------------------------"
+
+set -e
+for example in "${EXAMPLES_TO_BUILD[@]}"; do
+    dir="$EXAMPLES_DIR/$example"
+    if [ -d "$dir" ]; then
+        echo "Testing example: $example"
+        cd "$dir"
+        cd build
+        ./metal_example_${example##*/}
         cd "/usr/share/tt-metalium/examples"  # Go back to original directory
     else
         echo "Warning: Example directory not found: $example"
