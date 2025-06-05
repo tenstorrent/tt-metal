@@ -1,35 +1,45 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "pytensor.hpp"
+
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <vector>
+
+#include <fmt/format.h>
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <chrono>
-#include <memory>
-
-#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
-#include <tt-metalium/host_buffer.hpp>
-#include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/graph_tracking.hpp>
-#include <tt_stl/overloaded.hpp>
-#include <tt_stl/span.hpp>
+#include "tools/profiler/op_profiler.hpp"
+#include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include "tools/profiler/op_profiler.hpp"
-
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/types.hpp"
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt_stl/overloaded.hpp>
+#include <tt_stl/span.hpp>
 
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
-
-namespace py = pybind11;
 
 namespace ttnn::tensor {
 
@@ -75,7 +85,8 @@ Tensor create_typed_tt_tensor_from_py_data(
     ttnn::QueueId cq_id,
     float pad_value) {
     TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec().has_value(),
+        !tensor_spec.memory_config().is_sharded() || tensor_spec.memory_config().shard_spec().has_value() ||
+            tensor_spec.memory_config().nd_shard_spec().has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
     const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
@@ -371,20 +382,7 @@ Tensor convert_python_tensors_to_tt_tensors(
             pad_value,
             /*force_disable_borrow=*/true));
     }
-    std::vector<HostBuffer> host_owned_buffers;
-    std::vector<ttnn::TensorSpec> host_owned_specs;
-    for (const auto& shard : tt_shards) {
-        TT_ASSERT(
-            std::holds_alternative<HostStorage>(shard.get_storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(shard.get_storage()));
-        host_owned_buffers.push_back(std::get<HostStorage>(shard.get_storage()).buffer);
-        host_owned_specs.push_back(shard.get_tensor_spec());
-    }
-    auto distributed_tensor_config = get_distributed_tensor_config(strategy);
-    auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers), host_owned_specs};
-
-    auto output = Tensor(std::move(storage), tt_shards.at(0).get_tensor_spec(), distributed_tensor_config);
+    auto output = distributed::aggregate_as_tensor(tt_shards, get_distributed_tensor_config(strategy));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -394,7 +392,8 @@ template <typename T>
 HostBuffer create_row_major_host_buffer(
     HostBuffer host_buffer, const ttnn::TensorSpec& tensor_spec, const bool padded_output) {
     TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec().has_value(),
+        !tensor_spec.memory_config().is_sharded() || tensor_spec.memory_config().shard_spec().has_value() ||
+            tensor_spec.memory_config().nd_shard_spec().has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
     if (padded_output) {

@@ -24,7 +24,6 @@
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include <tt-metalium/mesh_device.hpp>
@@ -2791,6 +2790,16 @@ void Run1DFabricPacketSendTest(
 
             std::vector<uint32_t> worker_ct_args = {params.line_sync, params.line_sync};
 
+            TT_FATAL(
+                std::any_of(
+                    worker_cores_vec.begin(),
+                    worker_cores_vec.end(),
+                    [&sync_core_coord](const CoreCoord& core) {
+                        return core.x == sync_core_coord.x && core.y == sync_core_coord.y;
+                    }),
+                "Atleast one worker core must be mapped onto sync core: x={}, y={}",
+                sync_core_coord.x,
+                sync_core_coord.y);
             auto worker_kernel_id = tt_metal::CreateKernel(
                 program,
                 "tests/ttnn/unit_tests/gtests/ccl/kernels/edm_fabric_writer.cpp",

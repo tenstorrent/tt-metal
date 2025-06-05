@@ -92,11 +92,9 @@ target_sources(
             api/tt-metalium/tile.hpp
             api/tt-metalium/tt_align.hpp
             api/tt-metalium/tt_backend_api_types.hpp
-            api/tt-metalium/tt_memory.h
             api/tt-metalium/tt_metal.hpp
             api/tt-metalium/util.hpp
             api/tt-metalium/utils.hpp
-            api/tt-metalium/work_executor_types.hpp
             api/tt-metalium/work_split.hpp
             api/tt-metalium/distributed_context.hpp
 )

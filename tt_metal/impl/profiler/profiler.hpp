@@ -37,7 +37,6 @@
 namespace tt {
 enum class ARCH;
 namespace tt_metal {
-class Buffer;
 class IDevice;
 class Program;
 }  // namespace tt_metal
@@ -202,6 +201,8 @@ private:
         IDevice* device,
         const CoreCoord& worker_core,
         const ProfilerDumpState state,
+        const std::vector<uint32_t>& data_buffer,
+        const ProfilerDataBufferSource data_source,
         const std::optional<ProfilerOptionalMetadata>& metadata,
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log);
@@ -219,8 +220,6 @@ public:
 
     ~DeviceProfiler();
 
-    // DRAM buffer for device side results
-    distributed::AnyBuffer output_dram_buffer;
     std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
 
     // Device-core Syncdata
@@ -228,6 +227,9 @@ public:
 
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
+
+    // Number of bytes reserved in each DRAM bank for storing device profiling data
+    uint32_t profile_buffer_bank_size_bytes;
 
     // (Device ID, Core Coord) pairs that keep track of cores which need to have their Tracy contexts updated
     std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
@@ -258,7 +260,8 @@ public:
     void dumpResults(
         IDevice* device,
         const std::vector<CoreCoord>& worker_cores,
-        ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        const ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        const ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
     // Push device results to tracy
@@ -266,9 +269,13 @@ public:
 
     // Update sync info for this device
     void setSyncInfo(const std::tuple<double, double, double>& sync_info);
-};
 
-void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data);
+    // Read data from profiler buffer using fast dispatch
+    void issueFastDispatchReadFromProfilerBuffer(IDevice* device);
+
+    // Read data from profiler buffer using slow dispatch
+    void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
+};
 
 void write_control_buffer_to_core(
     IDevice* device,

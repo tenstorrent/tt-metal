@@ -97,7 +97,6 @@ void kernel_main() {
 
             // Zero out padded regions for the very last tile
             if constexpr (in0_last_ktile_w > 0) {
-                DPRINT << "is_last_ktile_padded: " << (uint32_t)is_last_ktile_padded << ENDL();
                 if (is_last_ktile_padded && (i == num_blocks_per_shard - 1)) {
                     auto in0_last_ktile_ptr = local_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
                     pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);

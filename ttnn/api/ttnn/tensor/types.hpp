@@ -90,8 +90,11 @@ using Array8D = std::array<uint32_t, 8>;
 
 struct NdShardSpec {
     Shape shard_shape;
-    CoreRangeSet cores;
-    ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
+    CoreRangeSet grid;
+    ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
+
+    bool operator==(const NdShardSpec& other) const = default;
+    bool operator!=(const NdShardSpec& other) const = default;
 };
 
 class MemoryConfig final {

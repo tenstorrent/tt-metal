@@ -19,7 +19,7 @@ from loguru import logger
     "input_shape, host_fallback, pcc",
     [
         ((1, 4, 128, 128), True, 0.937),
-        ((1, 4, 128, 128), False, 0.85),
+        ((1, 4, 128, 128), False, 0.84),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)

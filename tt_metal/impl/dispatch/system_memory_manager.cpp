@@ -32,6 +32,16 @@ enum class CoreType;
 
 namespace tt::tt_metal {
 
+namespace {
+
+bool wrap_ge(uint32_t a, uint32_t b) {
+    // SIgned Diff uses 2's Complement to handle wrap
+    // Works as long as a and b are 2^31 apart
+    int32_t diff = a - b;
+    return diff >= 0;
+}
+}  // namespace
+
 SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
     device_id(device_id),
     num_hw_cqs(num_hw_cqs),
@@ -152,7 +162,7 @@ void SystemMemoryManager::increment_event_id(const uint8_t cq_id, const uint32_t
 
 void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const uint32_t event_id) {
     TT_ASSERT(
-        event_id >= this->cq_to_last_completed_event[cq_id],
+        wrap_ge(event_id, this->cq_to_last_completed_event[cq_id]),
         "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded "
         "completed event is {}",
         event_id,

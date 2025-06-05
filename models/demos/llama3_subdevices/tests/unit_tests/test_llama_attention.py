@@ -197,7 +197,7 @@ def test_llama_attention_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mats = rope_setup.get_rm_rot_mats(current_pos)
 
         ttnn.dram_prefetcher(
             prefetcher_setup.get_input_tensors(),
@@ -236,7 +236,7 @@ def test_llama_attention_inference(
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,

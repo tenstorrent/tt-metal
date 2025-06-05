@@ -33,6 +33,7 @@
 #include "data_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
+#include "kernels/kernel_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
@@ -320,7 +321,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-        host_buffer, device->id(), dram_channel, address);
+        host_buffer.data(), host_buffer.size() * sizeof(uint32_t), device->id(), dram_channel, address);
     return pass;
 }
 
@@ -328,8 +329,9 @@ bool ReadFromDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer) {
     bool pass = true;
     tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
+    host_buffer.resize((size + sizeof(uint32_t) - 1) / sizeof(uint32_t));
     tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-        host_buffer, size, device->id(), dram_channel, address);
+        host_buffer.data(), size, device->id(), dram_channel, address);
     return pass;
 }
 
@@ -374,7 +376,7 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
 }
 
 void InitializeFabricConfig(FabricConfig fabric_config) {
-    tt::tt_metal::MetalContext::instance().get_cluster().initialize_fabric_config(fabric_config);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config(fabric_config);
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
@@ -533,16 +535,32 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
     if (buffer.is_nd_sharded()) {
-        TT_FATAL(buffer.is_l1(), "Buffer with BufferDistributionSpec must be L1 for WriteToDevice!");
+        auto device_id = buffer.device()->id();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
-        for (size_t i = 0; i < banks.size(); i++) {
-            const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                // TODO: subspan is in elements; here 1 element is 1 byte (ie. uint8_t) so using bytes here is fine
-                auto chunk_span = tt::stl::make_const_span(
-                    host_buffer.subspan(chunk_mapping_in_bytes.src, chunk_mapping_in_bytes.size));
-                llrt::write_hex_vec_to_core(
-                    buffer.device()->id(), virtual_core, chunk_span, buffer.address() + chunk_mapping_in_bytes.dst);
+        if (buffer.is_dram()) {
+            for (size_t i = 0; i < banks.size(); i++) {
+                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+                auto dram_channel = buffer.device()->dram_channel_from_virtual_core(virtual_core);
+                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                    cluster.write_dram_vec(
+                        host_buffer.data() + chunk_mapping_in_bytes.src,
+                        chunk_mapping_in_bytes.size,
+                        device_id,
+                        dram_channel,
+                        buffer.address() + chunk_mapping_in_bytes.dst);
+                }
+            }
+        } else {
+            for (size_t i = 0; i < banks.size(); i++) {
+                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                    cluster.write_core(
+                        host_buffer.data() + chunk_mapping_in_bytes.src,
+                        chunk_mapping_in_bytes.size,
+                        tt_cxy_pair(device_id, virtual_core.x, virtual_core.y),
+                        buffer.address() + chunk_mapping_in_bytes.dst);
+                }
             }
         }
     } else if (
@@ -656,17 +674,32 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
 void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
     ZoneScoped;
     if (buffer.is_nd_sharded()) {
-        TT_FATAL(buffer.is_l1(), "Buffer with BufferDistributionSpec must be L1 for ReadFromDevice!");
+        auto device_id = buffer.device()->id();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
-        for (size_t i = 0; i < banks.size(); i++) {
-            const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                // Using cluster read_core API (as opposed to ReadFromDeviceL1) because it is inplace
-                tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                    host_buffer + chunk_mapping_in_bytes.src,
-                    chunk_mapping_in_bytes.size,
-                    tt_cxy_pair(buffer.device()->id(), virtual_core),
-                    buffer.address() + chunk_mapping_in_bytes.dst);
+        if (buffer.is_dram()) {
+            for (size_t i = 0; i < banks.size(); i++) {
+                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+                auto dram_channel = buffer.device()->dram_channel_from_virtual_core(virtual_core);
+                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                    cluster.read_dram_vec(
+                        host_buffer + chunk_mapping_in_bytes.src,
+                        chunk_mapping_in_bytes.size,
+                        device_id,
+                        dram_channel,
+                        buffer.address() + chunk_mapping_in_bytes.dst);
+                }
+            }
+        } else {
+            for (size_t i = 0; i < banks.size(); i++) {
+                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
+                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
+                    cluster.read_core(
+                        host_buffer + chunk_mapping_in_bytes.src,
+                        chunk_mapping_in_bytes.size,
+                        tt_cxy_pair(device_id, virtual_core),
+                        buffer.address() + chunk_mapping_in_bytes.dst);
+                }
             }
         }
     } else if (
@@ -740,7 +773,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
         if (!force_slow_dispatch) {
             detail::DispatchStateCheck(false);
+        } else {
+            TT_ASSERT(!tt::DevicePool::instance().is_dispatch_firmware_active());
         }
+
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
             program.finalize_offsets(device);
@@ -772,6 +808,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
+                if (force_slow_dispatch) {
+                    tt::llrt::send_reset_go_signal(device->id(), physical_core);
+                }
+
                 tt::llrt::write_launch_msg_to_core(
                     device->id(),
                     physical_core,
@@ -1032,8 +1072,8 @@ KernelHandle CreateDataMovementKernel(
         kernel_name);
 
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto mode = control_plane->get_routing_mode();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
     }
@@ -1061,8 +1101,8 @@ KernelHandle CreateEthernetKernel(
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto mode = control_plane->get_routing_mode();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
     }

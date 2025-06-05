@@ -168,6 +168,16 @@ struct ExecuteUnaryWithIntegerParameter {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+template <UnaryOpType unary_op_type, typename T = int32_t>
+struct ExecuteUnaryWithOptionalIntegerParameter {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const std::optional<T>& parameter,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 template <UnaryOpType unary_op_type, typename T = float>
 struct SymmetricBinop {
     static Tensor invoke(
@@ -203,6 +213,14 @@ struct AsymmetricBinop {
 };
 
 struct Mish {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Tanhshrink {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
@@ -250,6 +268,13 @@ struct Tanh {
         "ttnn::" #operation_name,                                                                  \
         ttnn::operations::unary::                                                                  \
             ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::operation_type, data_type>>();
+
+#define REGISTER_UNARY_OPERATION_WITH_OPTIONAL_INTEGER_PARAMETER(operation_name, operation_type, data_type) \
+    constexpr auto operation_name = ttnn::register_operation<                                               \
+        "ttnn::" #operation_name,                                                                           \
+        ttnn::operations::unary::ExecuteUnaryWithOptionalIntegerParameter<                                  \
+            ttnn::operations::unary::UnaryOpType::operation_type,                                           \
+            data_type>>();
 
 REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
@@ -317,13 +342,17 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(eq_unary, UNARY_EQ);
 
 // Unaries with integer parameter
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(round, ROUND, int32_t);
+
+// Unaries with optional integer parameter
+REGISTER_UNARY_OPERATION_WITH_OPTIONAL_INTEGER_PARAMETER(round, ROUND, int32_t);
 
 // Other unaries
 constexpr auto identity = ttnn::register_operation<"ttnn::identity", ttnn::operations::unary::Identity>();
 constexpr auto abs = ttnn::register_operation<"ttnn::abs", ttnn::operations::unary::Abs>();
 constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::unary::Eqz>();
 constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
+constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
+
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
