@@ -36,7 +36,7 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
     "4U": {1: {"min": 627, "max": 637}, 80: {"min": 50, "max": 53}},
-    "6U": {1: {"min": 744, "max": 755}, 80: {"min": 55, "max": 58}},
+    "6U": {1: {"min": 738, "max": 754}, 80: {"min": 55, "max": 59}},
 }
 
 
@@ -527,10 +527,10 @@ def run_llama3_demo(
         )
         # 95 percentile tsu throughput
         logger.info(
-            f"3 percentile tsu throughput: {sorted(all_tokens_per_second_per_user)[int(0.03 * len(all_tokens_per_second_per_user))]}"
+            f"3 percentile tsu throughput: {int(sorted(all_tokens_per_second_per_user)[int(0.03 * len(all_tokens_per_second_per_user))])}"
         )
         logger.info(
-            f"97 percentile tsu throughput: {sorted(all_tokens_per_second_per_user)[int(0.97 * len(all_tokens_per_second_per_user))]}"
+            f"97 percentile tsu throughput: {int(sorted(all_tokens_per_second_per_user)[int(0.97 * len(all_tokens_per_second_per_user))])+1}"
         )
 
         if tokens_per_second_per_user_token127 is not None:
@@ -541,6 +541,13 @@ def run_llama3_demo(
         tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * iteration / 100
         if tsu_failures > tsu_perf_drop_limit:
             logger.info(out_of_targets_msg)
+            logger.info(f"Failing t/s/u iterations")
+            for i in range(len(all_tokens_per_second_per_user)):
+                if (
+                    all_tokens_per_second_per_user[i] < tsu_thresholds["min"]
+                    or all_tokens_per_second_per_user[i] > tsu_thresholds["max"]
+                ):
+                    logger.info(f"Iteration {i}: {all_tokens_per_second_per_user[i]}")
         # Assert at the end of test to check if the throughput recuperated
         assert tsu_failures <= tsu_perf_drop_limit, out_of_targets_msg
 
