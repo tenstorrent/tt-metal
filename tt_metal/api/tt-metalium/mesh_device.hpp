@@ -53,7 +53,6 @@ namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
 class ThreadPool;
-class ProgramCache;
 class TraceDescriptor;
 
 namespace distributed {
