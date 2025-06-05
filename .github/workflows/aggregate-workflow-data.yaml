@@ -177,5 +177,8 @@ jobs:
           method: chat.postMessage
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
-            channel: ${{ secrets. SLACK_METAL_INFRA_PIPELINE_CHANNEL_ID }}
+            channel: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_CHANNEL_ID }}
             text: ${{ toJSON(steps.message.outputs.content) }}
+          errors: false
+          payload-templated: false
+          retries: 5
