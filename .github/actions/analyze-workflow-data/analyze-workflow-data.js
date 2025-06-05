@@ -347,7 +347,17 @@ async function run() {
       // Check if latest run is failing
       const sortedRuns = runs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       if (sortedRuns[0]?.conclusion !== 'success') {
-        failedWorkflows.push(name);
+        const lastRun = sortedRuns[0];
+        const { lastGoodSha, earliestBadSha } = findGoodBadCommits(sortedRuns, github.context);
+        const prInfo = await fetchPRInfo(github, github.context, lastRun.head_sha);
+
+        failedWorkflows.push({
+          name,
+          pr: prInfo.prNumber,
+          author: prInfo.prAuthor,
+          badSha: earliestBadSha,
+          goodSha: lastGoodSha
+        });
       }
     }
 
