@@ -15,6 +15,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 import os
+import gc
 
 
 # Copied from sdxl pipeline
@@ -470,7 +471,12 @@ def run_demo_inference(
             image.save(f"output/output{iter + start_from}.png")
             logger.info(f"Image saved to output/output{iter + start_from}.png")
 
-        ttnn.deallocate(latents)
+        if vae_on_device:
+            ttnn.deallocate(latents)
+        else:
+            del latents
+            gc.collect()
+
         latents = latents_clone.clone()
         latents = ttnn.from_torch(
             latents,
