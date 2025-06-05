@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <vector>
+#include "chlkc_unpack_data_format.h"
 
 inline uint32_t get_operand_id(uint32_t operand) { return (operand); }
 

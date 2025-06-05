@@ -15,8 +15,8 @@ using namespace ckernel;
 // clang-format off
 #include "chlkc_dst_accum_mode.h"
 #include "chlkc_dst_sync_mode.h"
-//#include "chlkc_math_approx_mode.h"
-//#include "chlkc_math_fidelity.h"
+#include "chlkc_math_approx_mode.h"
+#include "chlkc_math_fidelity.h"
 #include "chlkc_unpack_data_format.h"
 #include "chlkc_math.cpp"
 // clang-format on
@@ -26,13 +26,12 @@ using namespace ckernel;
 // clang-format off
 #include "chlkc_dst_accum_mode.h"
 #include "chlkc_dst_sync_mode.h"
-//#include "chlkc_pack_data_format.h"
+#include "chlkc_pack_data_format.h"
 #include "chlkc_pack.cpp"
 // clang-format on
 #endif
 
 #ifdef UCK_CHLKC_UNPACK
-
 // clang-format off
 #include "chlkc_dst_accum_mode.h"
 #include "chlkc_dst_sync_mode.h"
@@ -40,15 +39,6 @@ using namespace ckernel;
 #include "chlkc_unpack.cpp"
 // clang-format on
 #endif
-
-// MATH includes
-#include "chlkc_math_approx_mode.h"
-#include "chlkc_math_fidelity.h"
-
-// PACK includes
-#include "chlkc_pack_data_format.h"
-
-
 
 uint run_kernel() {
 #ifdef UCK_CHLKC_MATH

@@ -29,6 +29,7 @@
 #endif
 
 #ifdef TRISC_UNPACK
+#include "chlkc_math_fidelity.h"
 #include "llk_pack_api.h"
 #include "llk_math_common_api.h"
 #include "llk_unpack_common_api.h"
