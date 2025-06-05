@@ -102,10 +102,10 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
         output_h = std::ceil(output_h_float) + 1;
         output_w = std::ceil(output_w_float) + 1;
         if (is_avg_pool) {
-            if (output_h - 1 * stride_hw.first >= input_hw.first + padding[0]) {
+            if (((output_h - 1) * stride_hw.first) >= (input_hw.first + padding[0])) {
                 output_h--;
             }
-            if (output_w - 1 * stride_hw.second >= input_hw.second + padding[2]) {
+            if (((output_w - 1) * stride_hw.second) >= (input_hw.second + padding[2])) {
                 output_w--;
             }
         }
