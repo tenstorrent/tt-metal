@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <stddef.h>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -523,7 +523,8 @@ TEST_P(MatmulOpIfTest, Matmul) {
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 ttnn::L1_MEMORY_CONFIG));
 
-        tt::log_info(
+        log_info(
+            tt::LogTest,
             "input_a_shape = {}, input_b_shape = {}, output_shape = {}",
             input_spec_a.logical_shape(),
             input_spec_b.logical_shape(),
@@ -540,7 +541,8 @@ TEST_P(MatmulOpIfTest, Matmul) {
             output_spec.data_type(),
             matmul_program_config);
 
-        tt::log_info("query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));
+        log_info(
+            tt::LogTest, "query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);

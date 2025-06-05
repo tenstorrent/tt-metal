@@ -35,9 +35,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    tt::log_debug("untilize_with_unpadding_single_core");
-    tt::log_debug("input_cb_data_format: {}", input_cb_data_format);
-    tt::log_debug("output_cb_data_format: {}", output_cb_data_format);
+    log_debug(tt::LogOp, "untilize_with_unpadding_single_core");
+    log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);
+    log_debug(tt::LogOp, "output_cb_data_format: {}", output_cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 

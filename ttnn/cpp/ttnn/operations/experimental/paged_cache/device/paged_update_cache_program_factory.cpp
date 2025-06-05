@@ -103,12 +103,12 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     uint32_t B = input_tensor.get_padded_shape()[1];
     uint32_t num_heads = cache_tensor.get_padded_shape()[1];
 
-    log_debug("cache_cb_data_format: {}", cache_cb_data_format);
-    log_debug("input_cb_data_format: {}", input_cb_data_format);
-    log_debug("interm_cb_data_format: {}", interm_cb_data_format);
-    log_debug("Wbytes: {}", Wbytes);
-    log_debug("Wt: {}", Wt);
-    log_debug("St: {}", St);
+    log_debug(tt::LogOp, "cache_cb_data_format: {}", cache_cb_data_format);
+    log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);
+    log_debug(tt::LogOp, "interm_cb_data_format: {}", interm_cb_data_format);
+    log_debug(tt::LogOp, "Wbytes: {}", Wbytes);
+    log_debug(tt::LogOp, "Wt: {}", Wt);
+    log_debug(tt::LogOp, "St: {}", St);
 
     std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
     bool row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;

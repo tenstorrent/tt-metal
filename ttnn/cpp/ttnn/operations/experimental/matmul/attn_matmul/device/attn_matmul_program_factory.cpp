@@ -49,14 +49,14 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
         TT_ASSERT(fp32_dest_acc_en == true, "when inputs/output are in fp32 format, fp32_dest_acc_en must be set");
     }
 
-    log_debug("math_fidelity: {}", math_fidelity);
-    log_debug("math_approx_mode: {}", math_approx_mode);
-    log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
-    log_debug("packer_l1_acc: {}", packer_l1_acc);
-    log_debug("in0_data_format: {}", in0_data_format);
-    log_debug("in1_data_format: {}", in1_data_format);
-    log_debug("interm_data_format: {}", interm_data_format);
-    log_debug("output_data_format: {}", output_data_format);
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "packer_l1_acc: {}", packer_l1_acc);
+    log_debug(tt::LogOp, "in0_data_format: {}", in0_data_format);
+    log_debug(tt::LogOp, "in1_data_format: {}", in1_data_format);
+    log_debug(tt::LogOp, "interm_data_format: {}", interm_data_format);
+    log_debug(tt::LogOp, "output_data_format: {}", output_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* src1_buffer = b.buffer();

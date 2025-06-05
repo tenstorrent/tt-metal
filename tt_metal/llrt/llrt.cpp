@@ -6,7 +6,7 @@
 #include "dev_msgs.h"
 #include <fmt/base.h>
 #include <fmt/ranges.h>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
 #include <cassert>
 #include <chrono>

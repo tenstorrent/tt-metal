@@ -6,7 +6,7 @@
 #include <fmt/base.h>
 #include <nlohmann/json.hpp>
 #include <stddef.h>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <cstdint>
 #include <optional>
 #include <set>
@@ -78,7 +78,7 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
 
         auto json_trace = graph::query_trace(call);
 
-        tt::log_info("Trace: {}", json_trace.dump(4));
+        log_info(tt::LogTest, "Trace: {}", json_trace.dump(4));
 
         // Direct calls
         {
@@ -115,19 +115,20 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             if (output_info.size() != params.expected_output_info.size()) {
                 auto print = [](const auto& infos) {
                     for (const auto& info : infos) {
-                        tt::log_info("{}", info);
+                        log_info(tt::LogTest, "{}", info);
                     }
                 };
 
-                tt::log_info(
+                log_info(
+                    tt::LogTest,
                     "Output info size mismatch. Expected {} but got {}",
                     params.expected_output_info.size(),
                     output_info.size());
 
-                tt::log_info("Expected output info:");
+                log_info(tt::LogTest, "Expected output info:");
                 print(params.expected_output_info);
 
-                tt::log_info("Actual output info:");
+                log_info(tt::LogTest, "Actual output info:");
                 print(output_info);
                 ASSERT_TRUE(false);
             }

@@ -32,7 +32,7 @@
 #include <tt-metalium/data_types.hpp>
 #include "dispatch_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -357,7 +357,7 @@ void matmul_tile(
     }
     DeallocateBuffer(*dst_dram_buffer);
 
-    tt::log_info(
+    log_info(
         tt::LogTest,
         "Math Fidelity = {}, FP32_DestAcc = {}, DstSyncFull = {}",
         cfg.math_fidelity,

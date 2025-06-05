@@ -257,7 +257,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
                 // on cos/sin data which will never arrive.
                 continue;
             }
-            tt::log_debug(
+            log_debug(
                 tt::LogTest,
                 "core: {}, start_batch: {}, end_batch: {}, start_seq: {}, end_seq: {}",
                 core_idx,

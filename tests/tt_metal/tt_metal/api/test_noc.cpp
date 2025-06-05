@@ -23,7 +23,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -95,14 +95,14 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     }
     auto logical_grid_size = device->logical_grid_size();
     if (logical_grid_size == unharvested_logical_grid_size) {
-        tt::log_info("Harvesting Disabled in SW");
+        log_info(tt::LogTest, "Harvesting Disabled in SW");
     } else {
-        tt::log_info("Harvesting Enabled in SW");
-        tt::log_info("Number of Harvested Rows={}", unharvested_logical_grid_size.y - logical_grid_size.y);
+        log_info(tt::LogTest, "Harvesting Enabled in SW");
+        log_info(tt::LogTest, "Number of Harvested Rows={}", unharvested_logical_grid_size.y - logical_grid_size.y);
     }
 
-    tt::log_info("Logical -- Virtual Mapping");
-    tt::log_info("[Logical <-> Virtual] Coordinates");
+    log_info(tt::LogTest, "Logical -- Virtual Mapping");
+    log_info(tt::LogTest, "[Logical <-> Virtual] Coordinates");
     for (int r = 0; r < logical_grid_size.y; r++) {
         string output_row = "";
         for (int c = 0; c < logical_grid_size.x; c++) {
@@ -114,7 +114,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
             output_row += "-y" + std::to_string(noc_coord.y);
             output_row += "]}, ";
         }
-        tt::log_info("{}", output_row);
+        log_info(tt::LogTest, "{}", output_row);
     }
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }

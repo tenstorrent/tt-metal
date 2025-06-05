@@ -296,4 +296,4 @@ CPMAddPackage(
 ####################################################################################################################
 # tt-logger
 ####################################################################################################################
-CPMAddPackage(NAME tt-logger GITHUB_REPOSITORY tenstorrent/tt-logger VERSION 1.0.5)
+CPMAddPackage(NAME tt-logger GITHUB_REPOSITORY tenstorrent/tt-logger VERSION 1.0.6)

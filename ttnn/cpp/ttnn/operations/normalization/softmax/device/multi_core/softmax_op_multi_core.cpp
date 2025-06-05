@@ -5,7 +5,7 @@
 #include <math.h>
 #include <optional>
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
@@ -92,14 +92,14 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_cb_data_format);
 
-    tt::log_debug("in0_cb_data_format: {}", in0_cb_data_format);
-    tt::log_debug("out0_cb_data_format: {}", out0_cb_data_format);
-    tt::log_debug("mask_cb_data_format: {}", mask_cb_data_format);
-    tt::log_debug("im_cb_data_format: {}", im_cb_data_format);
-    tt::log_debug("math_fidelity: {}", math_fidelity);
-    tt::log_debug("math_approx_mode: {}", math_approx_mode);
-    tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
-    tt::log_debug("num_datum_padded: {}", num_datum_padded);
+    log_debug(tt::LogOp, "in0_cb_data_format: {}", in0_cb_data_format);
+    log_debug(tt::LogOp, "out0_cb_data_format: {}", out0_cb_data_format);
+    log_debug(tt::LogOp, "mask_cb_data_format: {}", mask_cb_data_format);
+    log_debug(tt::LogOp, "im_cb_data_format: {}", im_cb_data_format);
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "num_datum_padded: {}", num_datum_padded);
 
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
@@ -624,15 +624,15 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     tt::DataFormat scale_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
 
-    tt::log_debug("in0_cb_data_format: {}", in0_cb_data_format);
-    tt::log_debug("out0_cb_data_format: {}", out0_cb_data_format);
-    tt::log_debug("mask_cb_data_format: {}", mask_cb_data_format);
-    tt::log_debug("im_cb_data_format: {}", im_cb_data_format);
-    tt::log_debug("scale_cb_data_format: {}", im_cb_data_format);
-    tt::log_debug("scalar_cb_data_format: {}", im_cb_data_format);
-    tt::log_debug("math_fidelity: {}", math_fidelity);
-    tt::log_debug("math_approx_mode: {}", math_approx_mode);
-    tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "in0_cb_data_format: {}", in0_cb_data_format);
+    log_debug(tt::LogOp, "out0_cb_data_format: {}", out0_cb_data_format);
+    log_debug(tt::LogOp, "mask_cb_data_format: {}", mask_cb_data_format);
+    log_debug(tt::LogOp, "im_cb_data_format: {}", im_cb_data_format);
+    log_debug(tt::LogOp, "scale_cb_data_format: {}", im_cb_data_format);
+    log_debug(tt::LogOp, "scalar_cb_data_format: {}", im_cb_data_format);
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     // tensor shape
     const auto shard_orient = input_tensor.shard_spec().value().orientation;

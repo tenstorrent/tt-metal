@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 #include <stdlib.h>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
@@ -189,7 +189,7 @@ bool send_over_eth(
     const CoreCoord& sender_core,
     const CoreCoord& receiver_core,
     const size_t& byte_size) {
-    tt::log_debug(
+    log_debug(
         tt::LogTest,
         "Running direct send test with sender chip {} core {}, receiver chip {} core {}, sending {} bytes",
         sender_device->id(),

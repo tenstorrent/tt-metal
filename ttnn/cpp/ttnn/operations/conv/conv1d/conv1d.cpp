@@ -13,7 +13,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

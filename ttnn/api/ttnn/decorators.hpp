@@ -40,7 +40,7 @@ void log(const std::string& prefix, args_t&&... args) {
     for (int i = 0; i < sizeof...(args); i++) {
         fmt += fmt::format("\t{:2}: {}\n", i, "{}");
     }
-    std::apply([&fmt](const auto&... args) { tt::log_debug(tt::LogOp, fmt.c_str(), args...); }, args_tuple);
+    std::apply([&fmt](const auto&... args) { log_debug(tt::LogOp, fmt.c_str(), args...); }, args_tuple);
 }
 
 // Get "add" from "ttnn::add"
@@ -134,13 +134,13 @@ struct registered_operation_t {
 private:
     template <typename... args_t>
     auto traced_invoke(args_t&&... args) const {
-        tt::log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
 
         auto output = invoke(std::forward<args_t>(args)...);
 
         tt::tt_metal::GraphTracker::instance().track_function_end(output);
-        tt::log_debug(tt::LogOp, "Finished C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        log_debug(tt::LogOp, "Finished C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
     }
 

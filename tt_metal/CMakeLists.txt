@@ -4,6 +4,8 @@ if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_link_options(--coverage)
 endif()
 
+link_libraries(tt-logger::tt-logger)
+
 add_library(tt_metal)
 add_library(TT::Metalium ALIAS tt_metal)
 add_library(Metalium::Metal ALIAS tt_metal) # For backwards compatibility
@@ -412,6 +414,7 @@ if(TT_INSTALL)
             TracyClient
             span
             small_vector
+            tt-logger
         EXPORT Metalium
         FILE_SET
         api

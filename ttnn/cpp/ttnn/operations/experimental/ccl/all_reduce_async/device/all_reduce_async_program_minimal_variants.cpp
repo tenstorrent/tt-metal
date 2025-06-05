@@ -115,13 +115,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     // all_cores is both sender and worker cores
     auto all_cores = output_cores_all.merge(sender_worker_core_range);
 
-    tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
-    tt::log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
-    tt::log_debug(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
-    tt::log_debug(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
-    tt::log_debug(tt::LogOp, "output_tensor_cores: {}", output_tensor_cores);
-    tt::log_debug(tt::LogOp, "output_tensor_shard_shape: {}", output_tensor_shard_shape);
-    tt::log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
+    log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
+    log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
+    log_debug(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
+    log_debug(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
+    log_debug(tt::LogOp, "output_tensor_cores: {}", output_tensor_cores);
+    log_debug(tt::LogOp, "output_tensor_shard_shape: {}", output_tensor_shard_shape);
+    log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();

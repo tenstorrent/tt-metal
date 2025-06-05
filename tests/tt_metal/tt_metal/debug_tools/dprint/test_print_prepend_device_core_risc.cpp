@@ -20,7 +20,7 @@
 #include "debug_tools_test_utils.hpp"
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/xy_pair.h"

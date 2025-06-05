@@ -240,14 +240,14 @@ int main() {
         pass &= CloseDevice(device);
 
     } catch (const std::exception& e) {
-        tt::log_error(tt::LogTest, "Test failed with exception!");
-        tt::log_error(tt::LogTest, "{}", e.what());
+        log_error(tt::LogTest, "Test failed with exception!");
+        log_error(tt::LogTest, "{}", e.what());
 
         throw;
     }
 
     if (pass) {
-        tt::log_info(tt::LogTest, "Test Passed");
+        log_info(tt::LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

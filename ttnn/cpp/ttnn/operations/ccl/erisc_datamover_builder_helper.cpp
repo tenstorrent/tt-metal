@@ -131,7 +131,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     "Building forward direction EDM on chip {} on link {}",
                     src_device->id(),
                     edm_builders_forward_direction[src_device->id()].size());
-                tt::log_debug(
+                log_debug(
                     "src_device {}, dest_device {}, is_dateline {}", src_device->id(), dest_device->id(), dateline);
                 edm_builders_forward_direction[src_device->id()].push_back(
                     tt::tt_fabric::FabricEriscDatamoverBuilder::build(
@@ -674,7 +674,7 @@ void initialize_edm_fabric(
 
         for (size_t r = 0; r < num_rows; r++) {
             for (size_t c = 0; c < num_cols; c++) {
-                log_info(tt::LogAlways, "Compile EDM program");
+                log_info(tt::LogOp, "Compile EDM program");
                 tt::tt_metal::IDevice* device = mesh_device->get_device(r, c);
                 auto& program = programs.at(r).at(c);
                 tt::tt_metal::detail::CompileProgram(device, program);

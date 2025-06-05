@@ -1004,7 +1004,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                 tile_start_id                         // start_id
             };
         }
-        // log_debug("reader[{}]: {},{} = {} ({})", src0_buffer->address(), core.x, core.y, tile_start_id,
+        // log_debug(tt::LogOp, "reader[{}]: {},{} = {} ({})", src0_buffer->address(), core.x, core.y, tile_start_id,
         // ntiles_per_block * nblocks_per_core);
 
         // writer runtime args
@@ -1064,7 +1064,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     row_start_id};
             }
         }
-        // log_debug("writer[{}]: {},{} = {} {}", dst_buffer->address(), core.x, core.y, block_size_nbytes,
+        // log_debug(tt::LogOp, "writer[{}]: {},{} = {} {}", dst_buffer->address(), core.x, core.y, block_size_nbytes,
         // row_start_id);
 
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
@@ -1092,7 +1092,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                 tile_start_id                                         // start_id
             };
         }
-        // log_debug("reader: {},{} = {} ({})", core.x, core.y, tile_start_id, ntiles_per_block *
+        // log_debug(tt::LogOp, "reader: {},{} = {} ({})", core.x, core.y, tile_start_id, ntiles_per_block *
         // nblocks_per_core_cliff);
 
         // writer runtime args
@@ -1151,7 +1151,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     row_start_id};
             }
         }
-        // log_debug("writer: {},{} = {} {}", core.x, core.y, block_size_nbytes, row_start_id);
+        // log_debug(tt::LogOp, "writer: {},{} = {} {}", core.x, core.y, block_size_nbytes, row_start_id);
 
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
 

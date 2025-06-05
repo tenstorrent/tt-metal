@@ -17,7 +17,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -141,7 +141,7 @@ void persistent_fabric_teardown_sequence(
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     tt::tt_fabric::TerminationSignal termination_mode) {
-    log_info("Tearing down fabric");
+    log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
     auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];

@@ -7,7 +7,7 @@
 #include <iostream>
 #include "light_metal_binary_generated.h"
 #include "command_generated.h"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include <host_api.hpp>
 #include "env_lib.hpp"
@@ -752,7 +752,7 @@ bool LightMetalReplayImpl::run() {
 
         return true;
     } catch (const std::exception& e) {
-        log_fatal(e.what());
+        log_fatal(tt::LogMetalTrace, "{}", e.what());
         clear_object_maps();
         if (replay_manages_device) {
             close_devices();

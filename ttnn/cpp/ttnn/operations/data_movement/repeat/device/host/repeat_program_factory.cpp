@@ -41,10 +41,10 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     ttnn::Shape input_log_shape = ttnn::Shape(input.get_logical_shape().view());
     ttnn::Shape output_log_shape = ttnn::Shape(output.get_logical_shape().view());
-    tt::log_debug("row major reshape");
-    tt::log_debug("input shape: {}", input_log_shape);
-    tt::log_debug("output shape: {}", output_log_shape);
-    tt::log_debug("data size: {}", data_size);
+    log_debug(tt::LogOp, "row major reshape");
+    log_debug(tt::LogOp, "input shape: {}", input_log_shape);
+    log_debug(tt::LogOp, "output shape: {}", output_log_shape);
+    log_debug(tt::LogOp, "data size: {}", data_size);
     uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
     uint32_t dest_page_size_bytes = source_page_size_bytes * num_repeats;
     TT_FATAL(
@@ -157,10 +157,10 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
 
     ttnn::Shape input_log_shape = ttnn::Shape(input.get_logical_shape().view());
     ttnn::Shape output_log_shape = ttnn::Shape(output.get_logical_shape().view());
-    tt::log_debug("row major reshape");
-    tt::log_debug("input shape: {}", input_log_shape);
-    tt::log_debug("output shape: {}", output_log_shape);
-    tt::log_debug("data size: {}", data_size);
+    log_debug(tt::LogOp, "row major reshape");
+    log_debug(tt::LogOp, "input shape: {}", input_log_shape);
+    log_debug(tt::LogOp, "output shape: {}", output_log_shape);
+    log_debug(tt::LogOp, "data size: {}", data_size);
     uint32_t page_size_bytes = input_log_shape[3] * data_size;
     TT_ASSERT(
         page_size_bytes == output_log_shape[3] * data_size,

@@ -123,7 +123,7 @@ std::tuple<BcastToOperation::operation_attributes_t, BcastToOperation::tensor_ar
         input.get_logical_shape()[-1],
         output_shape[output_shape.size() - 2],
         output_shape[output_shape.size() - 1]);
-    tt::log_debug(tt::LogOp, "get_subtile_broadcast_type: {}\n", subtile_broadcast_type);
+    log_debug(tt::LogOp, "get_subtile_broadcast_type: {}\n", subtile_broadcast_type);
     return {
         operation_attributes_t{output_shape, memory_config.value_or(input.memory_config()), subtile_broadcast_type},
         tensor_args_t{input, output}};

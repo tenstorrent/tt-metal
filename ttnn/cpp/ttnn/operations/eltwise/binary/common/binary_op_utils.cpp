@@ -396,7 +396,7 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         default:
-            tt::log_debug(tt::LogOp, "Undefined op type {}", op_type);
+            log_debug(tt::LogOp, "Undefined op type {}", op_type);
             TT_FATAL(false, "Undefined op type for binary sfpu operation {}", op_type);
     }
 

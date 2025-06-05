@@ -145,12 +145,12 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
     uint32_t B = input_tensor1.get_padded_shape()[1];
     uint32_t num_heads = cache_tensor1.get_padded_shape()[1];
 
-    log_debug("cache_cb_data_format: {}", cache_cb_data_format);
-    log_debug("input_cb_data_format: {}", input_cb_data_format);
-    log_debug("interm_cb_data_format: {}", interm_cb_data_format);
-    log_debug("Wbytes: {}", Wbytes);
-    log_debug("Wt: {}", Wt);
-    log_debug("St: {}", St);
+    log_debug(tt::LogOp, "cache_cb_data_format: {}", cache_cb_data_format);
+    log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);
+    log_debug(tt::LogOp, "interm_cb_data_format: {}", interm_cb_data_format);
+    log_debug(tt::LogOp, "Wbytes: {}", Wbytes);
+    log_debug(tt::LogOp, "Wt: {}", Wt);
+    log_debug(tt::LogOp, "St: {}", St);
 
     std::optional<ShardSpec> input1_shard_spec = input_tensor1.shard_spec();
     std::optional<ShardSpec> input2_shard_spec = input_tensor2.shard_spec();
@@ -609,12 +609,12 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     const uint32_t B = input_tensor1.get_padded_shape()[1];
     const uint32_t num_heads = cache_tensor1.get_padded_shape()[1];
 
-    log_debug("cache_cb_data_format: {}", cache_cb_data_format);
-    log_debug("input_cb_data_format: {}", input_cb_data_format);
-    log_debug("interm_cb_data_format: {}", interm_cb_data_format);
-    log_debug("Wbytes: {}", Wbytes);
-    log_debug("Wt: {}", Wt);
-    log_debug("St: {}", St);
+    log_debug(tt::LogOp, "cache_cb_data_format: {}", cache_cb_data_format);
+    log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);
+    log_debug(tt::LogOp, "interm_cb_data_format: {}", interm_cb_data_format);
+    log_debug(tt::LogOp, "Wbytes: {}", Wbytes);
+    log_debug(tt::LogOp, "Wt: {}", Wt);
+    log_debug(tt::LogOp, "St: {}", St);
 
     const auto input1_shard_spec_opt = input_tensor1.shard_spec();
     const auto input2_shard_spec_opt = input_tensor2.shard_spec();

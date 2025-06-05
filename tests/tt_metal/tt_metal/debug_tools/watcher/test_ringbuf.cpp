@@ -20,7 +20,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "umd/device/types/xy_pair.h"
 
@@ -119,15 +119,13 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
                 logical_core,
                 EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
             break;
-        default:
-            log_info("Unsupported risc type: {}, skipping test...", riscv_type);
-            GTEST_SKIP();
+        default: log_info(tt::LogTest, "Unsupported risc type: {}, skipping test...", riscv_type); GTEST_SKIP();
     }
 
     // Run the program
     fixture->RunProgram(device, program, true);
 
-    log_info("Checking file: {}", fixture->log_file_name);
+    log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
     // Check log
     EXPECT_TRUE(

@@ -18,7 +18,7 @@
 #include "hostdevcommon/dprint_common.h"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/tt_soc_descriptor.h>
 #include "utils.hpp"
 
@@ -88,7 +88,7 @@ void DumpNocData(const std::vector<chip_id_t>& devices) {
 
     noc_data_t noc_data = {}, dispatch_noc_data = {};
     for (chip_id_t device_id : devices) {
-        log_info("Dumping noc data for Device {}...", device_id);
+        log_info(tt::LogMetal, "Dumping noc data for Device {}...", device_id);
         DumpDeviceNocData(device_id, noc_data, dispatch_noc_data);
     }
 

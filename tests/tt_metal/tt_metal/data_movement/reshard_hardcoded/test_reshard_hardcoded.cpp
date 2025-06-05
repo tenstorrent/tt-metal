@@ -49,7 +49,7 @@ bool run_dm(IDevice* device, const ReshardConfig& test_config) {
     SetRuntimeArgs(program, receiver_kernel, test_config.dest_core_set, test_config.dest_core_runtime_args);
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Launch program

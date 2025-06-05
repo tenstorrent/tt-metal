@@ -24,6 +24,7 @@ ALLOWED_PREFIXES = {
     "fmt",
     "magic_enum",
     "nlohmann",
+    "tt-logger",
 }
 
 STD_HEADERS = {

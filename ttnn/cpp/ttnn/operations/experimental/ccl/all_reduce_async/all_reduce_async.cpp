@@ -21,7 +21,7 @@ uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t n
         input_tensor_padded_shape[3] / tt::constants::TILE_WIDTH};
     for (uint32_t dim = 0; dim < 4; ++dim) {
         if (input_tensor_shape_in_tiles[dim] % num_workers == 0) {
-            tt::log_debug(
+            log_debug(
                 "Found scatter dimension {} for input tensor with padded shape {}", dim, input_tensor_padded_shape);
             return dim;
         }

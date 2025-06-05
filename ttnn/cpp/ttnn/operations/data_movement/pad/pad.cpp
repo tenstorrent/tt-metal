@@ -60,7 +60,7 @@ ttnn::Tensor pad_impl(
             }
         }
         if (input_output_same) {
-            tt::log_debug("Pad Input and Output Shapes are the same. Skipping pad and returning input tensor.");
+            log_debug(tt::LogOp, "Pad Input and Output Shapes are the same. Skipping pad and returning input tensor.");
             return input_tensor;
         }
         using ShardStrategy = ttnn::operations::data_movement::ShardStrategy;

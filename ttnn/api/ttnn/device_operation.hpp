@@ -180,7 +180,7 @@ struct CheckDeviceBufferIsAllocated {
 
     void operator()(const Tensor& tensor) {
         if (not tensor.is_allocated()) {
-            tt::log_debug(tt::LogOp, "Tensor at index {} is not allocated", index);
+            log_debug(tt::LogOp, "Tensor at index {} is not allocated", index);
         }
         index++;
     }
@@ -208,27 +208,27 @@ inline void log_operation(
     const typename device_operation_t::tensor_args_t& tensor_args,
     tt::stl::hash::hash_t program_hash,
     bool program_cache_hit) {
-    tt::log_debug(
+    log_debug(
         tt::LogOp, "Launching Device Operation: \"{}\"", get_operation_name<device_operation_t>(operation_attributes));
 
-    tt::log_debug(tt::LogOp, "Program Hash: {}", program_hash);
-    tt::log_debug(tt::LogOp, "Program Cache Hit: {}", program_cache_hit);
+    log_debug(tt::LogOp, "Program Hash: {}", program_hash);
+    log_debug(tt::LogOp, "Program Cache Hit: {}", program_cache_hit);
 
-    tt::log_debug(tt::LogOp, "Attributes:");
+    log_debug(tt::LogOp, "Attributes:");
     for (const auto& [key, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
-        tt::log_debug(tt::LogOp, "\t{} = {}", key, value);
+        log_debug(tt::LogOp, "\t{} = {}", key, value);
     }
 
-    tt::log_debug(tt::LogOp, "Tensors Args:");
+    log_debug(tt::LogOp, "Tensors Args:");
     auto index = 0;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&index](auto&& tensor) {
-            tt::log_debug(tt::LogOp, "\t{}: {}", index, tensor);
+            log_debug(tt::LogOp, "\t{}: {}", index, tensor);
             index++;
         },
         tensor_args);
 
-    tt::log_debug(tt::LogOp, "");
+    log_debug(tt::LogOp, "");
 }
 
 #else
@@ -458,7 +458,7 @@ void create_and_cache_mesh_workload(
                 tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
             } else {
                 // Slow path - iterate over coordinates and merge them into a range set one by one.
-                tt::log_warning(
+                log_warning(
                     tt::LogOp,
                     "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch "
                     "performance.");
