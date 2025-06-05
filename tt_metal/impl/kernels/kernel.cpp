@@ -22,7 +22,7 @@
 #include "data_types.hpp"
 #include "hal.hpp"
 #include "jit_build/build.hpp"
-#include "jit_build_options.hpp"
+#include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
 #include "logger.hpp"
 #include <tt_stl/span.hpp>
@@ -32,6 +32,7 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/arch.h>
+#include "kernel_impl.hpp"
 
 namespace tt {
 
@@ -83,7 +84,7 @@ void Kernel::register_kernel_with_watcher() {
     }
 }
 
-void Kernel::register_kernel_elf_paths_with_watcher(IDevice& device) {
+void KernelImpl::register_kernel_elf_paths_with_watcher(IDevice& device) const {
     TT_ASSERT(this->kernel_full_name_.size() > 0, "Kernel full name not set!");
     watcher_register_kernel_elf_paths(this->watcher_kernel_id_, this->file_paths(device));
 }
@@ -125,13 +126,13 @@ CoreType Kernel::get_kernel_core_type() const {
     return CoreType::WORKER;
 }
 
-const std::string& Kernel::get_full_kernel_name() const { return this->kernel_full_name_; }
+const std::string& KernelImpl::get_full_kernel_name() const { return this->kernel_full_name_; }
 
 void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
     this->defines_.insert(defines.begin(), defines.end());
 }
 
-void Kernel::process_defines(const std::function<void(const string &define, const string &value)> callback) const {
+void KernelImpl::process_defines(const std::function<void(const string& define, const string& value)> callback) const {
     for (const auto &[define, value] : this->defines_) {
         callback(define, value);
     }
@@ -139,7 +140,7 @@ void Kernel::process_defines(const std::function<void(const string &define, cons
 
 void DataMovementKernel::process_defines(
     const std::function<void(const string &define, const string &value)> callback) const {
-    Kernel::process_defines(callback);
+    KernelImpl::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
     callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
@@ -155,7 +156,7 @@ void ComputeKernel::process_defines(
 
 void EthernetKernel::process_defines(
     const std::function<void(const string &define, const string &value)> callback) const {
-    Kernel::process_defines(callback);
+    KernelImpl::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
     // pass default noc mode as eth does not need it, just for compile to pass
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
@@ -179,7 +180,8 @@ std::string_view EthernetKernel::get_compiler_opt_level() const {
 
 std::string_view EthernetKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
-void Kernel::process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)> callback) const {
+void KernelImpl::process_compile_time_args(
+    const std::function<void(const std::vector<uint32_t>& values)> callback) const {
     callback(this->compile_time_args());
 }
 
@@ -192,7 +194,7 @@ uint8_t ComputeKernel::expected_num_binaries() const {
     return 3;
 }
 
-std::vector<ll_api::memory const*> const& Kernel::binaries(uint32_t build_key) const {
+const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint32_t build_key) const {
     auto iter = binaries_.find(build_key);
     TT_ASSERT(iter != binaries_.end(), "binary not found");
     if (iter->second.size() != expected_num_binaries()) {
@@ -231,11 +233,16 @@ std::string ComputeKernel::config_hash() const {
 }
 
 std::string Kernel::compute_hash() const {
+    size_t hash_value = 0;
+    for (const auto& [define, value] : this->defines_) {
+        tt::utils::hash_combine(hash_value, std::hash<std::string>{}(define + value));
+    }
+
     return fmt::format(
         "{}_{}_{}_{}",
         std::hash<std::string>{}(this->kernel_src_.source_),
         fmt::join(this->compile_time_args_, "_"),
-        tt::utils::DefinesHash{}(this->defines_),
+        hash_value,
         this->config_hash());
 }
 
@@ -358,13 +365,13 @@ bool Kernel::is_idle_eth() const {
     return std::holds_alternative<EthernetConfig>(this->config()) && std::get<EthernetConfig>(this->config()).eth_mode == Eth::IDLE;
 }
 
-uint32_t Kernel::get_binary_packed_size(IDevice* device, int index) const {
+uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
     auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
     return iter != this->binaries_.end() ? iter->second[index]->get_packed_size() : 0;
 }
 
-uint32_t Kernel::get_binary_text_size(IDevice* device, int index) const {
+uint32_t KernelImpl::get_binary_text_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
     auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
     return iter != this->binaries_.end() ? iter->second[index]->get_text_size() : 0;
@@ -416,7 +423,7 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
     jit_build_subset(build_states, this);
 }
 
-void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory const*>&& binaries) {
+void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memory*>&& binaries) {
     // Try inserting an empry vector, as that is cheap to construct
     // and avoids an additonal move.
     auto pair = binaries_.insert({build_key, {}});

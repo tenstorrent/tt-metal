@@ -57,7 +57,7 @@ chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) 
 }
 
 uint32_t SystemMesh::Impl::get_physical_mesh_id(const MeshCoordinate& coord) const {
-    return physical_coordinates_.at(coord).mesh_id();
+    return *physical_coordinates_.at(coord).mesh_id();
 }
 
 MeshCoordinate SystemMesh::Impl::get_global_device_coordinate(int physical_device_id) const {

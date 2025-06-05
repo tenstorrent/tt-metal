@@ -62,8 +62,6 @@ def prepare_conv_params(
     weights,
     bias,
     dtype,
-    act_dtype=ttnn.bfloat16,
-    act_block_h_override=0,
     fp32_dest_acc_en=False,
     math_fidelity=ttnn.MathFidelity.HiFi4,
     packer_l1_acc=False,
@@ -73,23 +71,6 @@ def prepare_conv_params(
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=packer_l1_acc,
-    )
-
-    conv_config = ttnn.Conv2dConfig(
-        dtype=act_dtype,
-        weights_dtype=dtype,
-        shard_layout=None,
-        deallocate_activation=True,
-        reallocate_halo_output=False,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        reshard_if_not_optimal=True,
-        act_block_w_div=1,
-        act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=True,
-        always_preprocess_weights=True,
-        transpose_shards=True,
     )
 
     dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype
@@ -102,18 +83,16 @@ def prepare_conv_params(
         "kernel_size": (tt_weights.shape[2], tt_weights.shape[3]),
     }
 
-    return compute_config, conv_config, tt_weights, tt_bias, conv_params
+    return compute_config, tt_weights, tt_bias, conv_params
 
 
 def prepare_split_conv_params(
     device,
     weights,
     bias,
+    dtype,
     split_in,
     split_out,
-    dtype,
-    act_dtype=ttnn.bfloat16,
-    act_block_h_override=0,
     fp32_dest_acc_en=False,
     math_fidelity=ttnn.MathFidelity.HiFi4,
 ):
@@ -124,21 +103,7 @@ def prepare_split_conv_params(
         packer_l1_acc=False,
     )
 
-    conv_config = ttnn.Conv2dConfig(
-        dtype=act_dtype,
-        weights_dtype=dtype,
-        shard_layout=None,
-        deallocate_activation=True,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        reshard_if_not_optimal=True,
-        act_block_w_div=1,
-        act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=True,
-        always_preprocess_weights=True,
-        transpose_shards=True,
-    )
+    dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype  # TODO: figure out why PCC drops when dtype is used
 
     Cout, Cin, _, _ = weights.shape
     Cout_split = Cout // split_out
@@ -190,7 +155,7 @@ def prepare_split_conv_params(
         ]
         for tt_w_out in tt_weights
     ]
-    return compute_config, conv_config, tt_weights, tt_bias, conv_params
+    return compute_config, tt_weights, tt_bias, conv_params
 
 
 def split_conv2d(

@@ -33,7 +33,11 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
-    TT_ASSERT(sizeof float_num == sizeof uint32_data);
+    TT_FATAL(
+        sizeof float_num == sizeof uint32_data,
+        "Float size ({}) must equal uint32 size ({})",
+        sizeof float_num,
+        sizeof uint32_data);
 
     uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
     // just move upper 16 to lower 16 (truncate)
@@ -141,7 +145,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     auto a_addr = a.buffer()->address();
     auto stats_addr = stats.buffer()->address();
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    TT_FATAL(gamma_dram_addr != 0, "Gamma must be provided");
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
@@ -203,30 +206,47 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     const uint32_t intermed7_tiles = Wt;
     const uint32_t out0_tiles = Wt;
 
-    TT_ASSERT(
-        W <= TILE_WIDTH * in0_tiles &&
-        "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
-    TT_ASSERT(
-        in0_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        in2_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        in3_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        out0_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        intermed5_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        intermed6_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        intermed7_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_FATAL(
+        W <= TILE_WIDTH * in0_tiles,
+        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now)",
+        W,
+        TILE_WIDTH,
+        in0_tiles);
+    TT_FATAL(
+        in0_tiles % block_size == 0,
+        "Buffer size in0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in0_tiles,
+        block_size);
+    TT_FATAL(
+        in2_tiles % block_size == 0,
+        "Buffer size in2_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in2_tiles,
+        block_size);
+    TT_FATAL(
+        in3_tiles % block_size == 0,
+        "Buffer size in3_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in3_tiles,
+        block_size);
+    TT_FATAL(
+        out0_tiles % block_size == 0,
+        "Buffer size out0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        out0_tiles,
+        block_size);
+    TT_FATAL(
+        intermed5_tiles % block_size == 0,
+        "Buffer size im0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed5_tiles,
+        block_size);
+    TT_FATAL(
+        intermed6_tiles % block_size == 0,
+        "Buffer size im6_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed6_tiles,
+        block_size);
+    TT_FATAL(
+        intermed7_tiles % block_size == 0,
+        "Buffer size im7_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed7_tiles,
+        block_size);
 
     auto grid_size = device->compute_with_storage_grid_size();
     auto
@@ -265,7 +285,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
         reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         // if (gamma_stick_size_is_power_of_two) {
-        uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)log2(gamma_stick_size) : 0;
+        uint32_t gamma_log2_stick_size =
+            gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
         reader_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
     }
 
@@ -289,7 +310,9 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
-    TT_FATAL(use_row_major_kernel, "Only row major gamma and beta are supported");
+    TT_FATAL(
+        use_row_major_kernel || (!gamma.has_value() && !beta.has_value()),
+        "Only row major gamma and beta are supported");
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
@@ -439,7 +462,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t tile_offset = curr_row * Wt;

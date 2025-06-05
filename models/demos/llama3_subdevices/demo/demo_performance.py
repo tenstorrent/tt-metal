@@ -10,6 +10,8 @@ import os
 import ttnn
 import pytest
 
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+
 from models.demos.llama3_subdevices.tt.llama_common import (
     PagedAttentionConfig,
 )
@@ -197,7 +199,7 @@ def run_llama3_decode_performance(
     logger.info("Current pos tensor done")
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     logger.info("Rot mats done")
 
@@ -260,7 +262,7 @@ def run_llama3_decode_performance(
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+    rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
     tt_decode_input = tt_embd(tt_out_tok)
     tt_out = tt_model(
         tt_decode_input,
@@ -307,7 +309,7 @@ def run_llama3_decode_performance(
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
     ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     profiler.end(f"capture_trace")
@@ -436,7 +438,7 @@ def run_llama3_decode_performance(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,

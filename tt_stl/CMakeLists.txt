@@ -37,6 +37,7 @@ target_link_libraries(
         magic_enum::magic_enum
         nlohmann_json::nlohmann_json
         span
+        fmt::fmt-header-only
 )
 
 target_precompile_headers(

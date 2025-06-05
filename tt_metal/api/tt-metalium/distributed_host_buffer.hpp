@@ -39,10 +39,10 @@ public:
     // Throws if the index is out of global bounds.
     std::optional<HostBuffer> get_shard(const distributed::MeshCoordinate& coord) const;
 
-    // Emplaces the shard at the specified `coord`.
+    // Emplaces the shard at the specified `coord`, calling `produce_buffer` to create the buffer only when needed.
     // No-op if the index is out of local bounds.
     // Throws if the index is out of global bounds.
-    void emplace_shard(const distributed::MeshCoordinate& coord, HostBuffer buffer);
+    void emplace_shard(const distributed::MeshCoordinate& coord, const std::function<HostBuffer()>& produce_buffer);
 
     // `transform` and `apply` functions abstract away the details of the underlying data storage.
     // `linear_index` will be supplied by `DistributedHostBuffer` to indicate the position of the buffer.
@@ -59,7 +59,7 @@ public:
     distributed::MeshShape shape() const;
 
     // Returns the coordinates of populated shards in the buffer.
-    std::unordered_set<distributed::MeshCoordinate> shard_coords() const;
+    const std::unordered_set<distributed::MeshCoordinate>& shard_coords() const;
 
 private:
     std::optional<distributed::MeshCoordinate> global_to_local(const distributed::MeshCoordinate& coord) const;

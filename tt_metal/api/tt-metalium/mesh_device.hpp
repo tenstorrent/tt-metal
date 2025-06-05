@@ -33,7 +33,6 @@
 #include <tt-metalium/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <umd/device/types/arch.h>
-#include <tt-metalium/work_executor_types.hpp>
 
 enum class CoreType;
 namespace tt {
@@ -54,7 +53,6 @@ namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
 class ThreadPool;
-class ProgramCache;
 class TraceDescriptor;
 
 namespace distributed {
@@ -177,6 +175,7 @@ public:
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
+    uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         tt::stl::Span<const SubDeviceId> sub_device_ids) const override;

@@ -6,9 +6,7 @@
 #include <optional>
 #include <array>
 
-#include <optional>
 #include <algorithm>
-#include <array>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>

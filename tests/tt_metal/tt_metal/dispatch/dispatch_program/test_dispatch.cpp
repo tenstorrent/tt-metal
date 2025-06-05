@@ -124,8 +124,10 @@ TEST_F(DispatchFixture, EthTestBlank) {
     Program program = CreateProgram();
 
     // TODO: tweak when FD supports idle eth
-    const auto& eth_cores =
+    const auto& eth_cores_unordered =
         this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores();
+
+    std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();

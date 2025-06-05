@@ -572,6 +572,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
         input_width,
         compute_grid_size,
         input_layout,
+        conv_config.dtype,
         input_memory_config,
         kernel_size,
         groups,

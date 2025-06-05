@@ -13,6 +13,9 @@ endif()
 
 set(LIB_TYPE OBJECT)
 if(ENABLE_TTNN_SHARED_SUBLIBS)
+    # Building various components as .so reduces the final link of ttnn.so (and will make loading a bit slower).
+    # This is important for development iterations in TT-NN.
+    # TODO: Measure whether linker improvements (choice of linker + parallelism flags) render this obsolete.
     set(LIB_TYPE SHARED)
 endif()
 
@@ -20,12 +23,25 @@ add_library(ttnn_core ${LIB_TYPE})
 add_library(TT::NN::Core ALIAS ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
 
-GENERATE_FBS_HEADER(${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_types.fbs)
+set(TENSOR_FLATBUFFER_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_coordinate.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_spec.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
+)
+
+set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
+foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE})
+    list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
+endforeach()
+
 target_sources(
     ttnn_core
     PRIVATE
-        ${FBS_GENERATED_HEADER_FILE}
+        ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
         core/cluster.cpp
         core/config.cpp
@@ -42,9 +58,10 @@ target_sources(
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
         core/old_infra_device_operation.cpp
+        core/reports.cpp
         core/run_operation.cpp
-        core/tensor/flatbuffer/tensor_types_from_flatbuffer.cpp
-        core/tensor/flatbuffer/tensor_types_to_flatbuffer.cpp
+        core/tensor/flatbuffer/tensor_flatbuffer.cpp
+        core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
         core/tensor/host_buffer/functions.cpp
         core/tensor/layout/alignment.cpp
         core/tensor/layout/page_config.cpp
@@ -59,6 +76,7 @@ target_sources(
         core/tensor/tensor_utils.cpp
         core/tensor/types.cpp
         core/tensor/xtensor/partition.cpp
+        core/tensor/nd_sharding_utils.cpp
 )
 target_include_directories(
     ttnn_core
@@ -67,10 +85,10 @@ target_include_directories(
     PRIVATE
         api/ttnn
         core
-        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
         cpp # FIXME: Depend on the Ops needed (make the circular obvious)
         . # FIXME: Depend on the Ops needed (make the circular obvious)
 )
+target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
     ttnn_core
     PRIVATE
@@ -80,169 +98,6 @@ target_link_libraries(
         Boost::algorithm
 )
 install(TARGETS ttnn_core LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-
-##################################################
-# Define a method build_library to define all the options and properties for a library
-##################################################
-function(build_library LIBRARY_NAME ALIAS)
-    set(options
-        SHARED
-        STATIC
-    )
-    set(oneValueArgs) # No single-value args
-    set(multiValueArgs
-        SOURCES
-        PUBLIC_LINK_DIRECTORIES
-        INCLUDE_DIRECTORIES
-        TARGET_LINK_LIBRARIES
-    ) # All are multi-value
-
-    cmake_parse_arguments(BUILD_LIB "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-    # Determine library type
-    if(BUILD_LIB_SHARED)
-        set(LIBRARY_TYPE "SHARED")
-    elseif(BUILD_LIB_STATIC)
-        set(LIBRARY_TYPE "STATIC")
-    else()
-        message(FATAL_ERROR "You must specify SHARED or STATIC for library type")
-    endif()
-
-    # Assign values
-    set(SOURCES "${BUILD_LIB_SOURCES}")
-    set(TARGET_LINK_LIBRARIES "${BUILD_LIB_TARGET_LINK_LIBRARIES}")
-    set(LINK_DIRECTORIES "${BUILD_LIB_LINK_DIRECTORIES}")
-    set(INCLUDE_DIRS "${BUILD_LIB_INCLUDE_DIRECTORIES}")
-
-    ##################################################
-    # Declare and define the library
-    ##################################################
-    #todo: Ideally declaring the library should be the first thing to do, sadly making it shared requires to add sources
-    # Assign values to variables for clarity
-
-    add_library(
-        ${LIBRARY_NAME}
-        ${LIBRARY_TYPE}
-        ${SOURCES}
-    )
-
-    add_library(Metalium::${ALIAS} ALIAS ${LIBRARY_NAME})
-    target_include_directories(${LIBRARY_NAME} PUBLIC "${INCLUDE_DIRS}")
-    target_link_directories(${LIBRARY_NAME} PUBLIC ${LINK_DIRECTORIES})
-
-    if("${build_library}" STREQUAL "ttnncpp")
-        target_precompile_headers(${LIBRARY_NAME} REUSE_FROM ${PRECOMPILED_HEADER_TARGET})
-    endif()
-
-    target_link_libraries(
-        ${LIBRARY_NAME}
-        PUBLIC
-            ${TARGET_LINK_LIBRARIES}
-            Boost::algorithm
-    )
-
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_compile_definitions(${LIBRARY_NAME} PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)
-    endif()
-
-    TT_ENABLE_UNITY_BUILD(${LIBRARY_NAME})
-
-    #We move the library binaries to a different path rather than PROJECT_BINARY_DIR
-    #in the Python wheel
-    set(TTNN_INSTALL_RPATH
-        "${PROJECT_BINARY_DIR}/lib"
-        "$ORIGIN/build/lib"
-        "$ORIGIN"
-    )
-
-    if(BUILD_LIB_SHARED)
-        #Make sure library built is _ttnn.so / _ttnnpycpp.so and that it can find all it's linked libraries
-        #ttnn breaks if - fvisibility = hidden, so CXX_VISIBILITY_PRESET set to default
-        set_target_properties(
-            ${LIBRARY_NAME}
-            PROPERTIES
-                OUTPUT_NAME
-                    "_${LIBRARY_NAME}"
-                PREFIX
-                    ""
-                SUFFIX
-                    ".so"
-                BUILD_RPATH
-                    "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-                INSTALL_RPATH
-                    "${TTNN_INSTALL_RPATH}"
-                CXX_VISIBILITY_PRESET
-                    "default"
-                ADDITIONAL_CLEAN_FILES
-                    "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info"
-        )
-    endif()
-endfunction()
-
-##################################################
-# Collect all the files and folders that TTNNCPP will use
-##################################################
-set(TTNN_PUBLIC_INCLUDE_DIRS
-    # ${CMAKE_CURRENT_SOURCE_DIR}
-    ${PROJECT_SOURCE_DIR}/ttnn
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp
-)
-
-set(TTNN_BASE_SRCS
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/compute_throttle_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sharding_utilities.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/trace.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
-)
-
-set(TTNN_OP_SRCS
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/generic_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/padded_slice/padded_slice.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/slice_write/device/slice_write_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/slice_write/device/slice_write_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/slice_write/slice_write.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/gather.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/device/gather_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/device/gather_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/tosa/gather_tosa.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/rms_allgather_pf.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/softmax/softmax.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/softmax/device/multi_core/softmax_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/softmax/device/softmax_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/copy/typecast/typecast.cpp
-)
-
-set(TTNN_SRC)
-list(
-    APPEND
-    TTNN_SRC
-    ${TTNN_BASE_SRCS}
-    ${TTNN_OP_SRCS}
-    ${TENSOR_SRC}
-)
-
-set(TTNN_PUBLIC_LINK_LIBRARIES
-    metal_common_libs
-    Metalium::Metal
-    TT::STL
-    xtensor
-    xtensor-blas
-    xtl
-    TT::NN::Core
-)
-
-set(PRECOMPILED_HEADER_TARGET "TT::CommonPCH")
 
 ##################################################
 # Collect all the files and folders that TTNN will use
@@ -324,6 +179,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/paged_cache/paged_cache_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/plusone_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/argmax/argmax_${PY_BINDING}.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/scatter/scatter_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/cumprod/cumprod_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/cumsum/cumsum_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_${PY_BINDING}.cpp
@@ -435,6 +291,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/ccl_experimental_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/scatter/scatter_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/sort/sort_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/gather_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/tosa/gather_tosa_${PY_BINDING}.cpp
@@ -456,46 +313,25 @@ list(
     APPEND
     TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/__init__.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/activation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/cluster.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/events.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/global_semaphore.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/cluster.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/program_descriptors.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/pytensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/reports.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/operations/copy.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/operations/core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/operations/creation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/operations/trace.cpp
 )
-
-set(TTNN_PUBLIC_INCLUDE_DIRS_PYBIND ${Python3_INCLUDE_DIRS})
-
-##################################################
-# Prepare the variables to define the library to be built
-##################################################
-set(SOURCES_PYBIND
-    ${SRC_PYBIND}
-    ${TTNN_SRC_PYBIND}
-    ${CCL_TTNN_SRCS_PYBIND}
-    ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
-    ${Python3_LIBRARY_DIRS}
-)
-
-set(SOURCES_CPP
-    ${TTNN_SRC}
-    ${QUEUE_SRCS}
-)
-
-set(TARGET_LINK_LIBRARIES_PYBIND
-    ttnncpp
-    ${Python3_LIBRARIES}
-    pybind11::module
-)
-
-set(TARGET_LINK_LIBRARIES_CPP ${TTNN_PUBLIC_LINK_LIBRARIES})
-
-list(APPEND TTNN_PUBLIC_INCLUDE_DIRS_PYBIND ${TTNN_PUBLIC_INCLUDE_DIRS})
 
 ##################################################
 # Build the libraries!
@@ -517,18 +353,80 @@ endif()
 # Most of the use cases will link to ttnn without caring a lot about the backend, but
 # for those who need this second use case, now it is officially supported
 
-build_library(
-    "ttnncpp"                        #LIBRARY_NAME
-    "TTNNCPP"                        #ALIAS
-    ${TTNN_CPP_BUILD_TYPE}
-    SOURCES
-        "${SOURCES_CPP}"
-    PUBLIC_LINK_DIRECTORIES
-        "${TTNN_PUBLIC_LINK_DIRS}"
-    INCLUDE_DIRECTORIES
-        "${TTNN_PUBLIC_INCLUDE_DIRS}"
-    TARGET_LINK_LIBRARIES
-        "${TARGET_LINK_LIBRARIES_CPP}"
+add_library(ttnncpp ${TTNN_CPP_BUILD_TYPE})
+add_library(TT::NN::CPP ALIAS ttnncpp)
+add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
+
+target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnncpp)
+
+if(TTNN_CPP_BUILD_TYPE STREQUAL "SHARED")
+    set_target_properties(
+        ttnncpp
+        PROPERTIES
+            PREFIX
+                "_"
+            BUILD_RPATH
+                "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
+            INSTALL_RPATH
+                "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
+            CXX_VISIBILITY_PRESET
+                "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
+            ADDITIONAL_CLEAN_FILES
+                "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info" # FIXME: Confirm this is a relic of the past and can be deleted; No generated files should land in the source tree!
+    )
+endif()
+
+target_sources(
+    ttnncpp
+    PRIVATE
+        # FIXME: Move these out to appropriate sub targets
+        cpp/ttnn/operations/compute_throttle_utils.cpp
+        cpp/ttnn/operations/sharding_utilities.cpp
+        cpp/ttnn/operations/trace.cpp
+        cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
+        cpp/ttnn/operations/generic/generic_op.cpp
+        cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
+        cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
+        cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_op.cpp
+        cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_program_factory.cpp
+        cpp/ttnn/operations/experimental/padded_slice/padded_slice.cpp
+        cpp/ttnn/operations/experimental/slice_write/device/slice_write_op.cpp
+        cpp/ttnn/operations/experimental/slice_write/device/slice_write_program_factory.cpp
+        cpp/ttnn/operations/experimental/slice_write/slice_write.cpp
+        cpp/ttnn/operations/experimental/gather/gather.cpp
+        cpp/ttnn/operations/experimental/gather/device/gather_device_operation.cpp
+        cpp/ttnn/operations/experimental/gather/device/gather_program_factory.cpp
+        cpp/ttnn/operations/experimental/gather/tosa/gather_tosa.cpp
+        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.cpp
+        cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
+        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/rms_allgather_pf.cpp
+        cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
+        cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
+        cpp/ttnn/operations/normalization/softmax/softmax.cpp
+        cpp/ttnn/operations/normalization/softmax/device/multi_core/softmax_op_multi_core.cpp
+        cpp/ttnn/operations/normalization/softmax/device/softmax_op.cpp
+        cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
+        cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
+        cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
+        cpp/ttnn/operations/copy/typecast/typecast.cpp
+)
+
+target_include_directories(
+    ttnncpp
+    PUBLIC
+        api
+        # FIXME: decide what to do about these dirs. Device includes complicate matters.
+        .
+        cpp
+)
+
+target_link_libraries(
+    ttnncpp
+    PRIVATE
+        TT::Metalium
+        TT::NN::Core
         TT::NN::Ops::Bernoulli
         TT::NN::Ops::CCL
         TT::NN::Ops::Conv
@@ -561,6 +459,7 @@ build_library(
         TT::NN::Ops::Experimental::PlusOne
         TT::NN::Ops::Experimental::Reduction
         TT::NN::Ops::Experimental::Reshape
+        TT::NN::Ops::Experimental::Scatter
         TT::NN::Ops::Experimental::SSM
         TT::NN::Ops::Experimental::Transformer
         TT::NN::Ops::Experimental::UnaryBackward
@@ -581,18 +480,50 @@ build_library(
 )
 
 if(WITH_PYTHON_BINDINGS)
-    build_library(
-        "ttnn"                           #LIBRARY_NAME
-        "TTNN"	                         #ALIAS
-        SHARED
-        SOURCES
-            "${SOURCES_PYBIND}"
-        PUBLIC_LINK_DIRECTORIES
-            "${TTNN_PUBLIC_LINK_DIRS_PYBIND}"
-        INCLUDE_DIRECTORIES
-            "${TTNN_PUBLIC_INCLUDE_DIRS_PYBIND}"
-        TARGET_LINK_LIBRARIES
-            "${TARGET_LINK_LIBRARIES_PYBIND}"
+    add_library(ttnn SHARED)
+    add_library(TT::NN::PYTHON ALIAS ttnn)
+    add_library(Metalium::TTNN ALIAS ttnn) # backwards compatibility. FIXME: remove
+    target_compile_definitions(ttnn PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+    TT_ENABLE_UNITY_BUILD(ttnn)
+
+    set_target_properties(
+        ttnn
+        PROPERTIES
+            PREFIX
+                "_"
+            BUILD_RPATH
+                "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
+            INSTALL_RPATH
+                "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
+            CXX_VISIBILITY_PRESET
+                "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
+            ADDITIONAL_CLEAN_FILES
+                "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info" # FIXME: Confirm this is a relic of the past and can be deleted; No generated files should land in the source tree!
+    )
+
+    target_sources(
+        ttnn
+        PRIVATE
+            ${SRC_PYBIND}
+            ${TTNN_SRC_PYBIND}
+            ${CCL_TTNN_SRCS_PYBIND}
+            ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
+    )
+    target_include_directories(
+        ttnn
+        PUBLIC
+            ${PROJECT_SOURCE_DIR}/ttnn
+            ${CMAKE_CURRENT_SOURCE_DIR}/cpp
+    )
+
+    target_link_libraries(
+        ttnn
+        PUBLIC
+            TT::NN::CPP
+        PRIVATE
+            pybind11::module
+            Boost::algorithm
+            TT::Metalium
     )
 endif()
 
@@ -665,6 +596,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
 add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/reshape)
+add_subdirectory(cpp/ttnn/operations/experimental/scatter)
 add_subdirectory(cpp/ttnn/operations/experimental/ssm)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)

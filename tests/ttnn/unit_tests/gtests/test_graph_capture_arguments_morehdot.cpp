@@ -113,7 +113,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation3.arguments.size(), 5);
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 1, 1, 1])");
     EXPECT_EQ(operation3.arguments[1], "DataType::BFLOAT16");
-    EXPECT_EQ(operation3.arguments[2], "Tile");
+    EXPECT_EQ(operation3.arguments[2], "Layout::TILE");
     EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]");
     EXPECT_EQ(
         operation3.arguments[4],

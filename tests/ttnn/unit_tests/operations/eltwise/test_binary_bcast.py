@@ -2012,3 +2012,233 @@ def test_bcast(input_shape_a, device, bcast_dim, math_op):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor], 0.9999)
     assert comp_pass
+
+
+height_sharded_memory_config_1 = ttnn.create_sharded_memory_config(
+    [1024, 256],
+    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 7))}),
+    strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
+
+height_sharded_memory_config_2 = ttnn.create_sharded_memory_config(
+    [1024, 128],
+    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 7))}),
+    strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
+height_sharded_memory_config_3 = ttnn.create_sharded_memory_config(
+    [4096, 64],
+    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 7))}),
+    strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
+height_sharded_memory_config_4 = ttnn.create_sharded_memory_config(
+    [4096, 32],
+    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 7))}),
+    strategy=ttnn.ShardStrategy.HEIGHT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    use_height_and_width_as_shard_shape=True,
+)
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    ([torch.bfloat16, ttnn.bfloat16],),
+)
+def test_binary_sharded_decoder_program_cache(dtype_pt, dtype_tt, device, use_program_cache):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.x < 8 or compute_grid_size.y < 8:
+        pytest.skip("Test is skipped because the device does not have full coregrid 8x8")
+
+    torch.manual_seed(0)
+    # device.disable_and_clear_program_cache()
+
+    input_tensors = (
+        (torch.Size([1, 1, 65536, 256]), torch.Size([1, 1, 65536, 256]), height_sharded_memory_config_1),
+        (torch.Size([1, 1, 65536, 128]), torch.Size([1, 1, 65536, 128]), height_sharded_memory_config_2),
+        (torch.Size([1, 1, 262144, 64]), torch.Size([1, 1, 262144, 64]), height_sharded_memory_config_3),
+        (torch.Size([1, 1, 262144, 3]), torch.Size([1, 1, 262144, 3]), height_sharded_memory_config_4),
+    )
+    for _i in range(2):
+        for a_shape, b_shape, sharded_config in input_tensors:
+            input_combinations = (
+                (ttnn.DRAM_MEMORY_CONFIG, sharded_config),
+                (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+            )
+            for src_a_config, src_b_config in input_combinations:
+                a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(
+                    a_shape
+                )
+                b_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(
+                    b_shape
+                )
+
+                a_tt = ttnn.from_torch(
+                    a_pt,
+                    dtype=dtype_tt,
+                    device=device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=src_a_config,
+                )
+                b_tt = ttnn.from_torch(
+                    b_pt,
+                    dtype=dtype_tt,
+                    device=device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=src_b_config,
+                )
+
+                out_pt = torch.add(a_pt, b_pt)
+                ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=a_tt, use_legacy=False)
+                out_tt_interleaved = ttnn.to_torch(a_tt)
+
+                pcc = ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt)
+                # print(f"Pearson correlation coefficient: {pcc}")
+                print(f"device.num_program_cache_entries(): {device.num_program_cache_entries()}")
+                assert pcc >= 0.99988
+    assert (
+        device.num_program_cache_entries() == 5
+    ), f"device.num_program_cache_entries(): {device.num_program_cache_entries()}"
+
+
+def test_yolov8_add_small(device):
+    tor_a = torch.tensor(
+        [
+            [
+                [
+                    [
+                        1.843750000000000,
+                        2.546875000000000,
+                        2.968750000000000,
+                        2.109375000000000,
+                        2.156250000000000,
+                        2.718750000000000,
+                        2.000000000000000,
+                        1.312500000000000,
+                        1.976562500000000,
+                        2.187500000000000,
+                        1.468750000000000,
+                        1.578125000000000,
+                        1.851562500000000,
+                        1.812500000000000,
+                        1.648437500000000,
+                        1.687500000000000,
+                    ]
+                ],
+                [
+                    [
+                        1.484375000000000,
+                        1.398437500000000,
+                        1.570312500000000,
+                        1.757812500000000,
+                        2.343750000000000,
+                        1.851562500000000,
+                        2.359375000000000,
+                        1.976562500000000,
+                        1.679687500000000,
+                        2.062500000000000,
+                        1.000000000000000,
+                        1.093750000000000,
+                        0.910156250000000,
+                        1.789062500000000,
+                        1.882812500000000,
+                        2.218750000000000,
+                    ]
+                ],
+                [
+                    [
+                        36.750000000000000,
+                        36.750000000000000,
+                        39.250000000000000,
+                        40.750000000000000,
+                        41.000000000000000,
+                        37.000000000000000,
+                        37.250000000000000,
+                        35.250000000000000,
+                        36.750000000000000,
+                        34.750000000000000,
+                        37.500000000000000,
+                        34.250000000000000,
+                        37.500000000000000,
+                        37.500000000000000,
+                        36.500000000000000,
+                        37.000000000000000,
+                    ]
+                ],
+                [
+                    [
+                        0.656250000000000,
+                        0.562500000000000,
+                        0.476562500000000,
+                        0.460937500000000,
+                        0.730468750000000,
+                        0.578125000000000,
+                        0.679687500000000,
+                        0.718750000000000,
+                        0.988281250000000,
+                        0.761718750000000,
+                        0.765625000000000,
+                        0.730468750000000,
+                        0.574218750000000,
+                        0.671875000000000,
+                        0.777343750000000,
+                        0.589843750000000,
+                    ]
+                ],
+            ]
+        ],
+        dtype=torch.bfloat16,
+    )
+
+    tor_b = torch.tensor(
+        [[[[-1.541992187500000]], [[-1.537109375000000]], [[-0.816894531250000]], [[-0.034881591796875]]]],
+        dtype=torch.float32,
+    )
+
+    print("tor_a", tor_a.shape)
+    print("tor_b", tor_b.shape)
+    tor_res = torch.add(tor_a, tor_b)
+    mem = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.L1, shard_spec=None
+    )
+
+    tt_a = ttnn.from_torch(tor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+    tt_b = ttnn.from_torch(tor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+    #  print("with typecast")
+    #  tt_a = ttnn.typecast(tt_a, dtype=ttnn.float32)
+    print("add")
+    result = ttnn.add(tt_a, tt_b, use_legacy=False)
+
+    tt_res = ttnn.to_torch(result)
+    #  print("tt_res", tt_res)
+
+    pcc = compare_pcc([result], [tor_res], 0.999)
+    assert pcc
+
+
+def rand_gen(shape, device, *, dtype, tt_dtype, min=0, max=1, memory_config):
+    pt = torch.rand(shape, dtype=dtype) * (max - min) + min
+    tt = ttnn.from_torch(pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, dtype=tt_dtype)
+    return pt, tt
+
+
+def test_binary_mixed_add(device):
+    torch.manual_seed(0)
+    a_shape = torch.Size([1, 4, 2, 160])
+    b_shape = torch.Size([1, 4, 1, 160])
+    mem = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.L1, shard_spec=None
+    )
+    a_pt, a_tt = rand_gen(a_shape, device, dtype=torch.bfloat16, tt_dtype=ttnn.bfloat16, memory_config=mem)
+    b_pt, b_tt = rand_gen(b_shape, device, dtype=torch.float32, tt_dtype=ttnn.float32, memory_config=mem)
+
+    golden_fn = ttnn.get_golden_function(ttnn.add)
+
+    out_tt = ttnn.add(a_tt, b_tt, use_legacy=False)
+    out_pt = golden_fn(a_pt, b_pt)
+
+    assert compare_pcc([out_tt], [out_pt])

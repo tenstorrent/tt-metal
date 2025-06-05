@@ -146,8 +146,7 @@ ttml::autograd::TensorPtr DistributedTransformer::operator()(
 
     out = (*ln_fc)(out);
     auto logits = (*fc)(out);
-    auto log_softmax = ttml::ops::log_softmax_moreh(logits, 3);
-    return log_softmax;
+    return logits;
 }
 
 std::shared_ptr<DistributedTransformer> create(const TransformerConfig& config) {

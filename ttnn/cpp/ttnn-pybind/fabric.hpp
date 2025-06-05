@@ -6,10 +6,9 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::fabric {
 
+namespace py = pybind11;
 void py_bind_fabric_api(py::module& module);
 
 }  // namespace ttnn::fabric

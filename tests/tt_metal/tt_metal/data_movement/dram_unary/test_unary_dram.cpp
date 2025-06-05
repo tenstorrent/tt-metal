@@ -183,8 +183,8 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
 
 /* ========== Test case for varying core locations; Test id = 1 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
-    uint32_t num_of_transactions = 1;     // Bound for testing different number of transactions
-    uint32_t transaction_size_pages = 1;  // Bound for testing different transaction sizes
+    uint32_t num_of_transactions = 128;     // Bound for testing different number of transactions
+    uint32_t transaction_size_pages = 128;  // Bound for testing different transaction sizes
     uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
 
     for (unsigned int id = 0; id < num_devices_; id++) {

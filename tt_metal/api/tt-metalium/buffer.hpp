@@ -91,8 +91,8 @@ struct ShardSpec {
             shard_shape_[1]);
     }
 
-    const uint32_t num_cores() const { return this->grid.num_cores(); }
-    const uint32_t numel() const { return this->shape[0] * this->shape[1]; }
+    uint32_t num_cores() const { return this->grid.num_cores(); }
+    uint32_t numel() const { return this->shape[0] * this->shape[1]; }
 
     bool operator==(const ShardSpec& other) const;
     bool operator!=(const ShardSpec& other) const;

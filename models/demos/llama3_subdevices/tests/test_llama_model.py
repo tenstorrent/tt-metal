@@ -5,6 +5,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+import os
 from models.demos.llama3_subdevices.tt.llama_common import (
     sample_host,
     HostEmbedding,
@@ -19,6 +20,8 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 @torch.no_grad()
@@ -76,7 +79,7 @@ from models.utility_functions import skip_for_grayskull
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
@@ -255,7 +258,7 @@ def test_llama_model_inference(
             )
 
             # Get cos/sin matrices for the current position of each user
-            rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
+            rot_mats = tt_model.rope_setup.get_rm_rot_mats(current_pos)
 
             # Run TT model
             tt_out = tt_model(

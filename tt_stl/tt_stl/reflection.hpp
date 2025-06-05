@@ -143,7 +143,7 @@ struct Attribute final {
     using storage_t = std::array<std::byte, 1312>;
 
     const std::string to_string() const { return this->implementations.to_string_impl_(this->type_erased_storage); }
-    const std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
+    std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
     const nlohmann::json to_json() const { return this->implementations.to_json_impl_(this->type_erased_storage); }
 
     template <typename Type, typename BaseType = std::decay_t<Type>>
@@ -174,7 +174,7 @@ struct Attribute final {
                     return fmt::format("{}", object);
                 }
             },
-            .to_hash_impl_ = [](const storage_t& storage) -> const std::size_t {
+            .to_hash_impl_ = [](const storage_t& storage) -> std::size_t {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 return hash::detail::hash_object(object);
             },
@@ -249,7 +249,7 @@ private:
 
     struct implementations_t {
         const std::string (*to_string_impl_)(const storage_t&) = nullptr;
-        const std::size_t (*to_hash_impl_)(const storage_t&) = nullptr;
+        std::size_t (*to_hash_impl_)(const storage_t&) = nullptr;
         const nlohmann::json (*to_json_impl_)(const storage_t&) = nullptr;
     };
 
@@ -1304,7 +1304,6 @@ template <typename T, std::size_t N>
 struct to_json_t<std::array<T, N>> {
     nlohmann::json operator()(const std::array<T, N>& array) noexcept {
         nlohmann::json json_array = nlohmann::json::array();
-        std::size_t hash = 0;
         [&array, &json_array]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
                 [&array, &json_array] {

@@ -5,12 +5,10 @@
 #pragma once
 
 #include "ttnn-pybind/pybind_fwd.hpp"
-#include "ttnn/global_semaphore.hpp"
-
-namespace py = pybind11;
 
 namespace ttnn::global_semaphore {
 
+namespace py = pybind11;
 void py_module_types(py::module& module);
 void py_module(py::module& module);
 

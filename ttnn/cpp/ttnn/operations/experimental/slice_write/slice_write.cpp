@@ -1,11 +1,13 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "slice_write.hpp"
 #include "device/slice_write_op.hpp"
 #include "tt-metalium/assert.hpp"
+#include "tt-metalium/constants.hpp"
 #include "tt-metalium/logger.hpp"
+#include "tt-metalium/math.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -84,15 +86,32 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
 
     // Sharding is only 2D.
     if (input.is_sharded() && logical_input_shape[0] == 1 && logical_input_shape[1] == 1) {
-        uint32_t input_nhw_volume = padded_input_shape[0] * padded_input_shape[1] * padded_input_shape[2];
         uint32_t calc_nhw_volume = actual_shape[0] * actual_shape[1] * actual_shape[2];
+        auto shard_spec = input_tensor.shard_spec().value();
 
-        // TODO: Account for padding along NHW dimensions.
+        auto input_cores = shard_spec.grid;
+        auto input_shard_shape = shard_spec.shape;
+        bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+        bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+        auto total_cores = shard_spec.grid;
+        uint32_t num_cores_nhw = total_cores.num_cores();
+        if (is_block_sharded) {
+            if (rm_orientation) {
+                num_cores_nhw = total_cores.bounding_box().grid_size().y;
+            } else {
+                num_cores_nhw = total_cores.bounding_box().grid_size().x;
+            }
+        }
+
+        uint32_t input_nhw_volume = shard_spec.shape[0] * num_cores_nhw;
+        uint32_t calc_nhw_volume_padded =
+            tt::round_up(tt::div_up(calc_nhw_volume, num_cores_nhw), tt::constants::TILE_HEIGHT) * num_cores_nhw;
         TT_FATAL(
-            input_nhw_volume == calc_nhw_volume,
+            input_nhw_volume == calc_nhw_volume_padded,
             "Input tensor size {} does not match the size of the slice being written {}",
             input_nhw_volume,
-            calc_nhw_volume);
+            calc_nhw_volume_padded);
+
     } else {
         for (int i = 0; i < 4; i++) {
             TT_FATAL(

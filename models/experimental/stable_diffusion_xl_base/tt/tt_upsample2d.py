@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ class TtUpsample2D(nn.Module):
         padding,
         dilation,
         groups,
-        conv_weights_dtype=ttnn.bfloat16,
+        model_config,
     ):
         super().__init__()
 
@@ -35,8 +35,14 @@ class TtUpsample2D(nn.Module):
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        self.compute_config, self.conv_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device, weights, bias, conv_weights_dtype
+        self.conv_config = model_config.get_conv_config(conv_path=module_path)
+        self.compute_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
+            device,
+            weights,
+            bias,
+            self.conv_config.weights_dtype,
+            fp32_dest_acc_en=(self.conv_config.weights_dtype == ttnn.bfloat8_b)
+            and (self.conv_config.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         )
 
     def interpolate(self, hidden_states):
@@ -48,7 +54,7 @@ class TtUpsample2D(nn.Module):
         hidden_states, input_shape = self.interpolate(hidden_states)
         B, C, H, W = input_shape
 
-        [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [hidden_states, [H, W], [self.tt_weights, self.tt_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_weights,
             in_channels=self.conv_params["input_channels"],
@@ -70,11 +76,6 @@ class TtUpsample2D(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv_params["output_channels"]
-        self.tt_weights = d_w
-        self.tt_bias = d_b
-
-        self.conv_config.preprocess_weights_on_device = False
-        self.conv_config.always_preprocess_weights = False
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         return hidden_states, [C, H, W]

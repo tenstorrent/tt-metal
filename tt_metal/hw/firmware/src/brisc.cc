@@ -325,7 +325,6 @@ inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb
 
 int main() {
     configure_csr();
-    DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 
     do_crt1((uint32_t*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -370,17 +369,21 @@ int main() {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+            if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
+                (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST)) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
-                // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently guaranteed
-                // to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid value.
-                // For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn is not issued.
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
-                mailboxes->go_message.signal = RUN_MSG_DONE;
-                // Notify dispatcher that this has been done
-                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                notify_dispatch_core_done(dispatch_addr, noc_index);
+                if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+                    // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
+                    // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
+                    // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn
+                    // is not issued.
+                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+                    mailboxes->go_message.signal = RUN_MSG_DONE;
+                    // Notify dispatcher that this has been done
+                    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                    notify_dispatch_core_done(dispatch_addr, noc_index);
+                }
             }
         }
 
@@ -451,10 +454,10 @@ int main() {
                 barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
-                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
+                uint32_t (*kernel_address)(uint32_t) = (uint32_t (*)(uint32_t))
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                (*kernel_address)((uint32_t)kernel_address);
-                RECORD_STACK_USAGE();
+                auto stack_free = (*kernel_address)((uint32_t)kernel_address);
+                record_stack_usage(stack_free);
             } else {
 #if defined(PROFILE_KERNEL)
                 // This was not initialized in the kernel

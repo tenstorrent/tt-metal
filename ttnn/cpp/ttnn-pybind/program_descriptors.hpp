@@ -6,11 +6,9 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::program_descriptors {
 
+namespace py = pybind11;
 void py_module_types(py::module& module);
-// void py_module(py::module& module);
 
 }  // namespace ttnn::program_descriptors

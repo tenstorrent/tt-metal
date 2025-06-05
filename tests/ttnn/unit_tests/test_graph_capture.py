@@ -94,7 +94,7 @@ def test_graph_capture_with_all_parameters(device):
     node7 = captured_graph[7]["arguments"]
     assert node7[0] == "Shape([1, 4, 2048, 128])"
     assert node7[1] == "DataType::BFLOAT16"
-    assert node7[2] == "Row Major"
+    assert node7[2] == "Layout::ROW_MAJOR"
     assert node7[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
         node7[4]
@@ -171,7 +171,7 @@ def test_graph_capture_without_memory_config(device):
     node10 = captured_graph[10]["arguments"]
     assert node10[0] == "Shape([1, 1, 1, 1])"
     assert node10[1] == "DataType::BFLOAT16"
-    assert node10[2] == "Tile"
+    assert node10[2] == "Layout::TILE"
     assert node10[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
         node10[4]
@@ -223,7 +223,7 @@ def test_graph_capture_without_dtype(device):
     node7 = captured_graph[7]["arguments"]
     assert node7[0] == "Shape([32, 32])"
     assert node7[1] == "DataType::INT32"
-    assert node7[2] == "Tile"
+    assert node7[2] == "Layout::TILE"
     assert node7[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
         node7[4]
@@ -330,7 +330,7 @@ def test_graph_capture_with_all_parameters_json_output(device):
     arg0_item3 = item3["arguments"][0]["arg0"]
     assert arg0_item3["Shape"] == [1, 4, 2048, 128]
     assert item3["arguments"][1]["arg1"] == "DataType::BFLOAT16"
-    assert item3["arguments"][2]["arg2"] == "Row Major"
+    assert item3["arguments"][2]["arg2"] == "Layout::ROW_MAJOR"
     assert item3["arguments"][3]["arg3"] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
 
     arg4_item3 = item3["arguments"][4]["arg4"]
@@ -501,7 +501,7 @@ def test_graph_capture_without_memory_config_json_output(device):
     arg0_item3 = item3["arguments"][0]["arg0"]
     assert arg0_item3["Shape"] == [1, 1, 1, 1]
     assert item3["arguments"][1]["arg1"] == "DataType::BFLOAT16"
-    assert item3["arguments"][2]["arg2"] == "Tile"
+    assert item3["arguments"][2]["arg2"] == "Layout::TILE"
     assert item3["arguments"][3]["arg3"] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
 
     arg4_item3 = item3["arguments"][4]["arg4"]
@@ -623,7 +623,7 @@ def test_graph_capture_without_dtype_json_output(device):
     # arg1
     assert item3["arguments"][1]["arg1"] == "DataType::INT32"
     # arg2
-    assert item3["arguments"][2]["arg2"] == "Tile"
+    assert item3["arguments"][2]["arg2"] == "Layout::TILE"
     # arg3
     assert item3["arguments"][3]["arg3"] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
 

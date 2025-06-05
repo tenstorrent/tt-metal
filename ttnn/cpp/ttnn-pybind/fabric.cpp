@@ -12,7 +12,7 @@
 
 namespace ttnn::fabric {
 
-void py_bind_fabric_api(pybind11::module& module) {
+void py_bind_fabric_api(py::module& module) {
     py::enum_<tt::tt_metal::FabricConfig>(module, "FabricConfig")
         .value("DISABLED", tt::tt_metal::FabricConfig::DISABLED)
         .value("FABRIC_1D", tt::tt_metal::FabricConfig::FABRIC_1D)

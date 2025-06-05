@@ -25,6 +25,26 @@ constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE =
     ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
+constexpr static std::uint32_t DRAM_PROFILER_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE;
+#if defined(TRACY_ENABLE)
+constexpr static std::uint32_t MAX_NUM_UNHARVESTED_TENSIX_CORES = 80;
+constexpr static std::uint32_t MAX_NUM_ETH_CORES = 16;
+constexpr static std::uint32_t MAX_NUM_CORES = MAX_NUM_UNHARVESTED_TENSIX_CORES + MAX_NUM_ETH_CORES;
+constexpr static std::uint32_t NUM_DRAM_CHANNELS = 12;
+constexpr static std::uint32_t CEIL_NUM_CORES_PER_DRAM_CHANNEL =
+    (MAX_NUM_CORES + NUM_DRAM_CHANNELS - 1) / NUM_DRAM_CHANNELS;
+constexpr static std::uint32_t DRAM_PROFILER_SIZE =
+    (((PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * CEIL_NUM_CORES_PER_DRAM_CHANNEL) +
+      DRAM_ALIGNMENT - 1) /
+     DRAM_ALIGNMENT) *
+    DRAM_ALIGNMENT;
+#else
+constexpr static std::uint32_t DRAM_PROFILER_SIZE = 0;
+#endif
+
+constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_PROFILER_BASE + DRAM_PROFILER_SIZE;
+constexpr static std::uint32_t DRAM_UNRESERVED_SIZE = MEM_DRAM_SIZE - DRAM_UNRESERVED_BASE;
+
 static constexpr float EPS_WHB0 = 1.19209e-7f;
 static constexpr float NAN_WHB0 = 7.0040e+19;
 static constexpr float INF_WHB0 = 1.7014e+38;
@@ -53,8 +73,12 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
-    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BARRIER)] = DRAM_BARRIER_BASE;
-    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BARRIER)] = DRAM_BARRIER_SIZE;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::BARRIER)] = DRAM_BARRIER_BASE;
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::BARRIER)] = DRAM_BARRIER_SIZE;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_SIZE;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] = DRAM_UNRESERVED_BASE;
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] = DRAM_UNRESERVED_SIZE;
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
@@ -111,19 +135,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
     this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
 
-    this->stack_size_func_ = [](uint32_t type) -> uint32_t {
-        switch (type) {
-            case DebugBrisc: return MEM_BRISC_STACK_SIZE;
-            case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
-            case DebugErisc: return 0;  // Not managed/checked by us.
-            case DebugIErisc: return MEM_IERISC_STACK_SIZE;
-            case DebugSubordinateIErisc: return MEM_BRISC_STACK_SIZE;
-            case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
-            case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
-            case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
-        }
-        return 0xdeadbeef;
-    };
+    this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t { return 0; };
 
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;

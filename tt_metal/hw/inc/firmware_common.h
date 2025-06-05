@@ -26,7 +26,6 @@ extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
 extern void kernel_init(uint32_t kernel_init);
-extern void kernel_launch(uint32_t kernel_base_addr);
 void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 
 inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
@@ -124,11 +123,11 @@ bool is_message_go() {
 }
 
 #define EARLY_RETURN_FOR_DEBUG \
-    if (is_message_go()) {     \
-        return;                \
-    }
+    if (is_message_go()) { goto early_debug_exit; }
+#define EARLY_RETURN_FOR_DEBUG_EXIT early_debug_exit:
 #else
 #define EARLY_RETURN_FOR_DEBUG
+#define EARLY_RETURN_FOR_DEBUG_EXIT
 #endif
 
 inline __attribute__((always_inline)) void configure_gathering() {

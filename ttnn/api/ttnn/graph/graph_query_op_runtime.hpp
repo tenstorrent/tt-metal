@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -42,6 +43,12 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
     auto transform_arg = [device](auto&& arg) {
         if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
             return create_device_tensor(arg, device);
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
+            std::vector<Tensor> result(arg.size());
+            std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& arg) {
+                return create_device_tensor(arg, device);
+            });
+            return result;
         } else {
             return std::forward<decltype(arg)>(arg);
         }
