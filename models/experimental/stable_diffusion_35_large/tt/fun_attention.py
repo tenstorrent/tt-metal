@@ -13,6 +13,7 @@ from .fun_linear import sd_linear, TtLinearParameters
 from .fun_normalization import sd_rms_norm, TtRmsNormParameters
 from .substate import has_substate, substate
 from .parallel_config import DiTParallelConfig
+from .utils import unpadded_all_gather_async
 
 
 @dataclass
@@ -320,7 +321,7 @@ def sd_joint_attention(
             topology=parallel_config.topology,
             multi_device_global_semaphore=ag_global_semaphore,
         )
-        prompt = ttnn.experimental.all_gather_async(
+        prompt = unpadded_all_gather_async(
             prompt,
             dim=3,
             cluster_axis=parallel_config.tensor_parallel.mesh_axis,

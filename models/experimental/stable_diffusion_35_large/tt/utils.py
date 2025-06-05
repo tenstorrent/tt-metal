@@ -311,3 +311,32 @@ def all_gather(
 def silu(x: ttnn.Tensor) -> ttnn.Tensor:
     """More accurate version of `ttnn.silu`"""
     return ttnn.div(x, ttnn.exp(ttnn.neg(x)) + 1)
+
+
+def unpadded_all_gather_async(
+    x,
+    dim,
+    cluster_axis,
+    mesh_device,
+    topology,
+    multi_device_global_semaphore,
+    memory_config=None,
+    num_links=1,
+):
+    shape = list(x.shape)
+
+    x = ttnn.experimental.all_gather_async(
+        x,
+        dim=dim,
+        cluster_axis=cluster_axis,
+        mesh_device=mesh_device,
+        topology=topology,
+        multi_device_global_semaphore=multi_device_global_semaphore,
+        memory_config=memory_config,
+        num_links=num_links,
+    )
+
+    shape[dim] = x.shape[dim]
+    x = ttnn.reshape(x, shape, x.padded_shape)
+
+    return x

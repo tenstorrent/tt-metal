@@ -138,13 +138,13 @@ def test_transformer_block(
         prompt_padded_4d = torch.nn.functional.pad(
             prompt_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
         )
-    if prompt_padded_4d.shape[2] % TILE_SIZE:
-        prompt_padded_4d = torch.nn.functional.pad(
-            prompt_padded_4d,
-            pad=(0, 0, 0, TILE_SIZE - (prompt_padded_4d.shape[2] % TILE_SIZE)),
-            mode="constant",
-            value=0,
-        )
+    # if prompt_padded_4d.shape[2] % TILE_SIZE:
+    #     prompt_padded_4d = torch.nn.functional.pad(
+    #         prompt_padded_4d,
+    #         pad=(0, 0, 0, TILE_SIZE - (prompt_padded_4d.shape[2] % TILE_SIZE)),
+    #         mode="constant",
+    #         value=0,
+    #     )
     tt_prompt = from_torch_fast_2d(
         prompt_padded_4d,
         mesh_device=mesh_device,

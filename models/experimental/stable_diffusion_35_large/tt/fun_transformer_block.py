@@ -15,6 +15,7 @@ from .fun_linear import sd_linear, TtLinearParameters
 from .fun_normalization import sd_layer_norm, TtLayerNormParameters
 from .parallel_config import DiTParallelConfig
 from .substate import has_substate, substate
+from .utils import unpadded_all_gather_async
 
 if TYPE_CHECKING:
     import torch
@@ -178,7 +179,7 @@ def sd_dual_attn_block(
             topology=parallel_config.topology,
             multi_device_global_semaphore=ag_global_semaphore,
         )
-        prompt_scaled = ttnn.experimental.all_gather_async(
+        prompt_scaled = unpadded_all_gather_async(
             prompt_scaled,
             dim=3,
             cluster_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -221,7 +222,7 @@ def sd_gated_ff_block(
 
     scaled = inp * (1 + scale) + shift
     if parallel_config.tensor_parallel.factor > 1:
-        scaled = ttnn.experimental.all_gather_async(
+        scaled = unpadded_all_gather_async(
             scaled,
             dim=3,
             cluster_axis=parallel_config.tensor_parallel.mesh_axis,
