@@ -72,11 +72,11 @@ TEST_P(NDShardingTests, LoopbackTest) {
     }
 
     auto tensor = Tensor::from_vector(data, tensor_spec, device_);
-    /*auto readback_data = tensor.to_vector<uint16_t>();
+    auto readback_data = tensor.to_vector<uint16_t>();
 
     for (size_t i = 0; i < volume; i++) {
         ASSERT_EQ(data[i], readback_data[i]);
-    }*/
+    }
 }
 
 class LegacyToNdShardingTests : public ::testing::TestWithParam<LegacyToNdShardingParams> {};
