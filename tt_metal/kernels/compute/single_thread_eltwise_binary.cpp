@@ -33,7 +33,7 @@ void MAIN {
         cb_wait_front(cb_in1, per_core_block_size);
 	
 	// Wait for enough space to be available in the output circular buffer
-        cb_reserve_back(cb_out0, per_core_block_size);
+        cb_reserve_back_st(cb_out0, per_core_block_size);
 
 
         tile_regs_acquire();
@@ -57,7 +57,7 @@ void MAIN {
         tile_regs_release();
 
 	// Update the write pointer and counts for the output circular buffer. 
-        cb_push_back(cb_out0, per_core_block_size);
+        cb_push_back_st(cb_out0, per_core_block_size);
 
 	// Pop out the used input tiles
         cb_pop_front(cb_in0, per_core_block_size);

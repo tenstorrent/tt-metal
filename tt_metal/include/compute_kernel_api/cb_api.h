@@ -9,12 +9,12 @@
 #include "llk_io_pack.h"
 #endif
 #ifdef TRISC_UNPACK
+#include "llk_io_pack.h"
 #include "llk_io_unpack.h"
 #endif
 
 namespace ckernel {
 
-#if 0
 // clang-format off
 /**
  * A blocking call that waits for the specified number of tiles to be free in the specified circular buffer. This call
@@ -66,7 +66,6 @@ ALWI void cb_reserve_back_st(uint32_t cbid, uint32_t ntiles) {
  // clang-format on
 ALWI void cb_push_back_st(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_push_tiles<false, false>(cbid, ntiles))); }
 
-#endif
 
 
 // clang-format off
