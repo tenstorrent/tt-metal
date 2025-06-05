@@ -29,10 +29,10 @@ namespace ckernel {
  *
  * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
  * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::sfpu::BinaryOp::ADD>(idst0, idst1)));
 }
@@ -55,6 +55,30 @@ ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1) {
 
 ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::sfpu::BinaryOp::POW>(idst0, idst1)));
+}
+
+ALWI void eq_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::sfpu::BinaryOp::EQ>(idst0, idst1)));
+}
+
+ALWI void ne_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::sfpu::BinaryOp::NE>(idst0, idst1)));
+}
+
+ALWI void lt_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::sfpu::BinaryOp::LT>(idst0, idst1)));
+}
+
+ALWI void le_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::sfpu::BinaryOp::LE>(idst0, idst1)));
+}
+
+ALWI void gt_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::sfpu::BinaryOp::GT>(idst0, idst1)));
+}
+
+ALWI void ge_binary_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::sfpu::BinaryOp::GE>(idst0, idst1)));
 }
 
 /**
@@ -82,6 +106,30 @@ ALWI void rsub_binary_tile_init() {
 
 ALWI void power_binary_tile_init() {
     MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::sfpu::BinaryOp::POW>()));
+}
+
+ALWI void eq_binary_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::sfpu::BinaryOp::EQ>()));
+}
+
+ALWI void ne_binary_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::sfpu::BinaryOp::NE>()));
+}
+
+ALWI void lt_binary_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::sfpu::BinaryOp::LT>()));
+}
+
+ALWI void le_binary_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::sfpu::BinaryOp::LE>()));
+}
+
+ALWI void gt_binary_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::sfpu::BinaryOp::GT>()));
+}
+
+ALWI void ge_binary_tile_init() {
+    MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::sfpu::BinaryOp::GE>()));
 }
 
 }  // namespace ckernel

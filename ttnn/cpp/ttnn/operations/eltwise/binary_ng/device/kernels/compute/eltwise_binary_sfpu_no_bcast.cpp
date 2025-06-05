@@ -8,6 +8,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/relational_int32_sfpu.h"
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
 #include "compute_kernel_api/binary_shift.h"
 #include "compute_kernel_api/add_int32_sfpu.h"
