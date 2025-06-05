@@ -184,19 +184,11 @@ jobs:
                 text:
                   type: mrkdwn
                   text: |
-                    🚨 *Failed Workflows Report*
-                    *Repository:* ${{ github.repository }}
-                    *Branch:* ${{ github.ref_name }}
-                    *Time Period:* ${{ github.event.inputs.days || 15 }} days
-              - type: section
-                text:
-                  type: mrkdwn
-                  text: |
                     *Failed Workflows:*
-                    ${{ join(fromJson(needs.analyze-data.outputs.failed_workflows), '\n') }}
+                    ${{ toJSON(needs.analyze-data.outputs.failed_workflows) }}
               - type: section
                 text:
                   type: mrkdwn
                   text: |
                     *Full Report:*
-                    ${{ needs.analyze-data.outputs.report }}
+                    ${{ toJSON(needs.analyze-data.outputs.report) }}
