@@ -26,8 +26,8 @@ struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Celu>
         // param0 = alpha
         // param1 = alpha_recip
 
-        sfpi::vFloat alpha       = sfpi::s2vFloat16(param0);
-        sfpi::vFloat alpha_recip = sfpi::s2vFloat16(param1);
+        sfpi::vFloat alpha       = param0;
+        sfpi::vFloat alpha_recip = param1;
 
         v_if (v < 0.0f)
         {
