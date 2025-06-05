@@ -24,7 +24,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-const uint32_t cb_buffer_size = 3;
+const uint32_t cb_buffer_size = 1;
 const uint32_t cb_input_index = 0;
 const uint32_t cb_untilized_index = 1;
 const uint32_t cb_output_index = 2;
@@ -532,9 +532,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
         uint32_t output_end_id = ttnn::operations::data_movement::get_tiled_start_offset(
             actual_output_shape, ttnn::Shape(end_index_per_dim), true);
 
-        // uint32_t num_tiles_this_core = (tt::round_up(end_index_in_input_per_dim[-2], TILE_HEIGHT) -
-        // tt::round_down(start_index_in_input_per_dim[-2], TILE_HEIGHT))/TILE_HEIGHT;
-
         int32_t num_full_rows = ((end_index_per_dim[0] - start_index_per_dim[0]) * actual_output_shape[1]) +
                                 end_index_per_dim[1] - start_index_per_dim[1];
         if (start_index_per_dim[2] != 0) {
@@ -563,9 +560,11 @@ get_padded_slice_runtime_args_tile_sharded_output(
                                    num_output_tiles_per_dim[0];
         }
         tt::log_debug(
-            "For Core {}, Output Start Coord: {}, End Coord : {}, Input Start Coord: {}, End Coord : {}, Num Full Rows "
+            "For Core {}, Input Start ID {}, Output Start Coord: {}, End Coord : {}, Input Start Coord: {}, End Coord "
+            ": {}, Num Full Rows "
             ": {}, Num Tiles : {}",
             core,
+            input_start_id,
             start_index_per_dim,
             end_index_per_dim,
             start_index_in_input_per_dim,
@@ -758,14 +757,16 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         a, output, output_tensor_start, actual_output_shape, iter_cores, max_read_size);
 
     uint32_t i = 0;
-    tt::log_debug("Reader args : {}", std::get<0>(all_runtime_args[i]));
-    tt::log_debug("Compute args : {}", std::get<1>(all_runtime_args[i]));
-    tt::log_debug("Writer args : {}", std::get<2>(all_runtime_args[i]));
     for (const auto& core : iter_cores) {
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, std::get<0>(all_runtime_args[i]));
         tt::tt_metal::SetRuntimeArgs(program, untilize_compute_kernel_id, core, std::get<1>(all_runtime_args[i]));
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::get<2>(all_runtime_args[i]));
-        tt::log_info("Core {} Writer Args : {}", core, std::get<2>(all_runtime_args[i]));
+        tt::log_info(
+            "Core {} Reader {}, Compute {} Writer {}",
+            core,
+            std::get<0>(all_runtime_args[i]),
+            std::get<1>(all_runtime_args[i]),
+            std::get<2>(all_runtime_args[i]));
         i++;
     }
 
