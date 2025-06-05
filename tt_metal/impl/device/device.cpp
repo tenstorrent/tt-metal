@@ -147,7 +147,7 @@ std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord e
 }
 
 std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config() !=
+    if (tt::tt_metal::MetalContext::instance().get_fabric_config() !=
         tt::tt_metal::FabricConfig::DISABLED) {
         return tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_routers_between_src_and_dest(
             this->id_, connected_chip_id);
@@ -479,10 +479,13 @@ void Device::reset_cores() {
         // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
         // app FW Only applicable to WORMHOLE ethernet cores today, but could in theory extend to other cores, remove
         // assert if so
+        if (this->arch() != ARCH::WORMHOLE_B0) {
+            return false;
+        }
         TT_ASSERT(
-            (this->arch() == ARCH::WORMHOLE_B0) and
-                (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id())),
-            "Invalid core type for context switch check");
+            tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id()),
+            "Invalid core {} for context switch check",
+            virtual_core.str());
         auto core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
         std::uint32_t launch_erisc_addr = hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
         auto data =

@@ -44,6 +44,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
+    bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding) {
     using tt::tt_metal::CBHandle;
@@ -98,9 +99,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t max_subblock_h = fp32_dest_acc_en ? 4 : 8;
     uint32_t act_block_h_ntiles_padded = act_block_h_ntiles;
     uint32_t out_subblock_h_ntiles_padded = out_subblock_h_ntiles;
-    // bool enable_subblock_padding = false;
-    // bool enable_split_reader = false;
-    // enable_act_double_buffer = false;
     if (enable_subblock_padding) {
         TT_FATAL(
             act_block_h_ntiles == out_block_h_ntiles, "to pad subblock, the number of blocks on height dim must be 1");
@@ -630,14 +628,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         a.buffer());
 
     cb_indices.act_cb = cb_indices.get_next_cb_index();
+    const uint32_t act_cb_num_tiles =
+        enable_act_double_buffer ? act_block_num_tiles_split * 2 : act_block_num_tiles_split;
     tt::tt_metal::create_cb(
-        cb_indices.act_cb, program, all_cores, tilized_act_tile_size, act_block_num_tiles_split, tilized_act_df);
+        cb_indices.act_cb, program, all_cores, tilized_act_tile_size, act_cb_num_tiles, tilized_act_df);
     log_debug(
-        LogOp,
-        "Act CB: {}, npages: {}, pagesize: {}",
-        cb_indices.act_cb,
-        act_block_num_tiles_split,
-        tilized_act_tile_size);
+        LogOp, "Act CB: {}, npages: {}, pagesize: {}", cb_indices.act_cb, act_cb_num_tiles, tilized_act_tile_size);
 
     // Used for placing tilized activations
     cb_indices.tilize_mode_tilized_act_cb = cb_indices.get_next_cb_index();
@@ -657,23 +653,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         tilized_act_tile_size);
 
     cb_indices.weight_cb = cb_indices.get_next_cb_index();
+    const uint32_t weights_cb_num_tiles =
+        enable_weights_double_buffer ? weight_block_num_tiles * 2 : weight_block_num_tiles;
     tt::tt_metal::create_cb(
-        cb_indices.weight_cb, program, all_cores, weight_tile_size, weight_block_num_tiles, weight_df);
+        cb_indices.weight_cb, program, all_cores, weight_tile_size, weights_cb_num_tiles, weight_df);
     log_debug(
         LogOp,
         "Weight CB: {}, npages: {}, pagesize: {}, ",
         cb_indices.weight_cb,
-        weight_block_num_tiles,
+        weights_cb_num_tiles,
         weight_tile_size);
 
     cb_indices.act_cb_row_major_bfloat16 = cb_indices.get_next_cb_index();
     tt::tt_metal::create_cb(
-        cb_indices.act_cb_row_major_bfloat16, program, all_cores, act_tile_size, act_block_num_tiles_split, act_df);
+        cb_indices.act_cb_row_major_bfloat16, program, all_cores, act_tile_size, 2 * act_block_w_ntiles, act_df);
     log_debug(
         LogOp,
         "Act Row Major CB: {}, npages: {}, pagesize: {}",
         cb_indices.act_cb_row_major_bfloat16,
-        act_block_num_tiles_split,
+        2 * act_block_w_ntiles,
         act_tile_size);
 
     auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();

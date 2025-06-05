@@ -210,7 +210,6 @@ bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == ClusterT
 
 ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
-tt_metal::FabricConfig Cluster::get_fabric_config() const { return this->fabric_config_; }
 
 BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
@@ -221,8 +220,11 @@ bool Cluster::is_base_routing_fw_enabled() const { return Cluster::is_base_routi
 void Cluster::generate_cluster_descriptor() {
     this->cluster_desc_ = this->driver_->get_cluster_description();
     this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_);
+    if (this->target_type_ == TargetDevice::Simulator) {
+        return;
+    }
 
-    if (this->target_type_ != TargetDevice::Simulator && this->arch_ == tt::ARCH::BLACKHOLE) {
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
         TT_FATAL(
             this->cluster_desc_->get_noc_translation_table_en().at(0),
             "Running Metal on Blackhole requires FW >= 80.18.0.0");
@@ -238,7 +240,7 @@ void Cluster::generate_cluster_descriptor() {
             this->cluster_desc_->get_all_chips().size()/4,
             this->cluster_desc_->get_all_chips().size(),
             total_num_hugepages);
-    } else if (this->target_type_ != TargetDevice::Simulator) {
+    } else {
         // TODO (abhullar): ignore hugepage set up for BH bringup
         TT_FATAL(
             this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->cluster_desc_->get_all_chips().size(),
@@ -1118,50 +1120,12 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     return active_ethernet_cores;
 }
 
-tt::tt_fabric::ControlPlane* Cluster::get_control_plane() {
-    if (global_control_plane_.get() == nullptr) {
-        this->initialize_control_plane();
-    }
-    return global_control_plane_->get_local_node_control_plane();
-}
-
-void Cluster::set_custom_control_plane_mesh_graph(
-    const std::string& mesh_graph_desc_file,
-    const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
-        "Modifying control plane requires no devices to be active");
-    if (global_control_plane_.get() != nullptr) {
-        global_control_plane_.reset();
-    }
-    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
-        mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-    this->initialize_fabric_config(fabric_config_);
-}
-
-void Cluster::set_default_control_plane_mesh_graph() {
-    TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
-        "Modifying control plane requires no devices to be active");
-    if (global_control_plane_.get() != nullptr) {
-        global_control_plane_.reset();
-    }
-    this->initialize_control_plane();
-    this->initialize_fabric_config(fabric_config_);
-}
-
-void Cluster::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
-    this->fabric_config_ = fabric_config;
+void Cluster::configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig fabric_config) {
     if (fabric_config != tt_metal::FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
-        if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
-            this->get_control_plane()->initialize_fabric_context(fabric_config);
-        }
     } else {
         this->release_ethernet_cores_for_fabric_routers();
-        this->get_control_plane()->clear_fabric_context();
     }
-    this->get_control_plane()->configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 void Cluster::reserve_ethernet_cores_for_fabric_routers() {
@@ -1444,36 +1408,6 @@ uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
     return (mmio_device_id == chip_id) ? 0 : this->cluster_desc_->get_ethernet_link_distance(chip_id, mmio_device_id);
 }
 
-void Cluster::initialize_control_plane() {
-    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
-    // descriptors
-    std::string mesh_graph_descriptor;
-    switch (this->cluster_type_) {
-        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::GALAXY:
-            if (tt::tt_fabric::get_fabric_type(this->fabric_config_, this->cluster_type_) ==
-                tt::tt_fabric::FabricType::TORUS_2D) {
-                mesh_graph_descriptor = "quanta_galaxy_torus_2d_graph_descriptor.yaml";
-            } else {
-                mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml";
-            }
-            break;
-        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        default: TT_THROW("Unknown cluster type"); // TODO: we could expose this as a custom mesh graph option
-    }
-    const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
-                                                       "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
-
-    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(mesh_graph_desc_path.string());
-}
 
 std::uint32_t Cluster::get_ubb_asic_id(chip_id_t physical_chip_id) const {
     auto unique_chip_id = this->get_unique_chip_ids().at(physical_chip_id);
