@@ -130,7 +130,7 @@ void dump_multi_device_host_storage(
     safe_fwrite(&strategy, sizeof(strategy), 1, output_file);
 
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
-        dump_host_storage(output_file, *storage.get_shard_at_origin(), tensor_spec.data_type());
+        dump_host_storage(output_file, buffers.front(), tensor_spec.data_type());
         dump_tensor_spec(tensor_spec, output_file);
     } else {
         for (int i = 0; i < num_buffers; i++) {

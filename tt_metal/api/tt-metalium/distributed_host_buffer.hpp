@@ -34,7 +34,7 @@ public:
         const distributed::MeshShape& local_shape,
         const distributed::MeshCoordinate& local_offset);
 
-    // Shorhand for creating a distributed buffer for a single host.
+    // Shorthand for creating a distributed buffer for a single host.
     static DistributedHostBuffer create(const distributed::MeshShape& shape);
 
     // Returns the shard at the specified `coord`.

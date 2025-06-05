@@ -81,9 +81,12 @@ std::optional<HostBuffer> DistributedHostBuffer::get_shard(const distributed::Me
         coord,
         global_shape_);
 
-    auto local_coord_opt = global_to_local(coord);
-    return local_coord_opt.has_value() ? std::optional<HostBuffer>(local_shards_.at(*local_coord_opt).buffer)
-                                       : std::nullopt;
+    if (auto local_coord_opt = global_to_local(coord);
+        local_coord_opt.has_value() && local_shards_.at(*local_coord_opt).is_populated) {
+        return std::make_optional(local_shards_.at(*local_coord_opt).buffer);
+    } else {
+        return std::nullopt;
+    }
 }
 
 void DistributedHostBuffer::emplace_shard(
