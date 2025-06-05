@@ -5,13 +5,13 @@
 import math
 
 import ttnn
-from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
-    ttnn_decode_bboxes,
+from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
     concat,
     determine_num_cores_for_upsample,
     get_core_grid_from_num_cores,
     tt_adaptive_to_max_pool2d,
     ttnn_custom_normalize,
+    ttnn_decode_bboxes,
 )
 
 

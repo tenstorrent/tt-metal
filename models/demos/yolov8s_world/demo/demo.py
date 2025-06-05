@@ -1,26 +1,26 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-
-import torch
-import pytest
-import cv2
-from loguru import logger
 from datetime import datetime
 
+import cv2
+import pytest
+import torch
+from loguru import logger
+from ttnn.model_preprocessing import preprocess_model_parameters
+
 import ttnn
-from models.experimental.yolov8s_world.reference import yolov8s_world
-from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
-from models.utility_functions import disable_persistent_kernel_cache
-from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
-    create_custom_preprocessor,
+from models.demos.yolov8s_world.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
+from models.demos.yolov8s_world.reference import yolov8s_world
+from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
+from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
     attempt_load,
+    create_custom_preprocessor,
     move_to_device,
 )
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.yolov8s_world.demo.demo_utils import LoadImages, preprocess, postprocess, load_coco_class_names
+from models.utility_functions import disable_persistent_kernel_cache
 
 
 def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
@@ -61,8 +61,8 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
 @pytest.mark.parametrize(
     "source",
     [
-        ("models/experimental/yolov8s_world/demo/images/bus.jpg"),
-        # ("models/experimental/yolov8s_world/demo/images/elephants.jpg"), # Uncomment to run the demo with another image for the second example.
+        ("models/demos/yolov8s_world/demo/images/bus.jpg"),
+        # ("models/demos/yolov8s_world/demo/images/elephants.jpg"), # Uncomment to run the demo with another image for the second example.
     ],
 )
 @pytest.mark.parametrize(
@@ -130,7 +130,7 @@ def test_demo(device, source, model_type, res, use_pretrained_weight):
         model = TtYOLOWorld(device=device, parameters=parameters)
         logger.info("Inferencing using ttnn Model")
 
-    save_dir = "models/experimental/yolov8s_world/demo/runs"
+    save_dir = "models/demos/yolov8s_world/demo/runs"
 
     dataset = LoadImages(path=source)
 
