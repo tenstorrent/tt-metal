@@ -99,7 +99,7 @@ AllReduceAsync create_all_reduce_async_struct(
 }  // namespace ccl
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
-    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores);
+    size_t num_links, size_t num_workers_per_link, const CoreRangeSet& available_cores);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
