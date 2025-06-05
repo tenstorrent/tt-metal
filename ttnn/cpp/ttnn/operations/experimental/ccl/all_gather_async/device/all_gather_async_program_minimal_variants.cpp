@@ -535,11 +535,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     for (uint32_t link = 0; link < num_links; link++) {
         /* All gather fusion */
         if (fuse_op) {
-            auto sender_workers = corerange_to_cores(sender_worker_core_range, std::nullopt, true);
-            fused_op_signaler_forward->init_all_gather(program, mesh_device, sender_worker_core_range, sender_workers);
-            fused_op_signaler_backward->init_all_gather(program, mesh_device, sender_worker_core_range, sender_workers);
+            auto sender_workers_forward = corerange_to_cores(sender_forward_core_ranges, std::nullopt, true);
+            auto sender_workers_backward = corerange_to_cores(sender_backward_core_ranges, std::nullopt, true);
+            fused_op_signaler_forward->init_all_gather(
+                program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+            fused_op_signaler_backward->init_all_gather(
+                program, mesh_device, sender_backward_core_ranges, sender_workers_backward);
             fused_op_signaler_sender_workers->init_all_gather(
-                program, mesh_device, sender_worker_core_range, sender_workers);
+                program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
         }
 
         // Set Sender Reader runtime args
@@ -643,7 +646,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         }
         writer_backward_rt_args.push_back(false);
         if (fuse_op) {
-            fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_backward_rt_args, 1, 0, 1);
+            fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_backward_rt_args, 1, 0, 0);
         }
         tt::tt_metal::SetRuntimeArgs(
             program, worker_sender_writer_backward_kernel_id, sender_worker_cores[0], writer_backward_rt_args);
