@@ -164,7 +164,6 @@ bool is_sharded(const TensorMemoryLayout& layout);
 
 struct BufferPageMapping {
     std::vector<CoreCoord> all_cores_;
-    std::vector<uint32_t> core_bank_indices_;
     std::vector<std::vector<uint32_t>> core_host_page_indices_;
     std::vector<uint32_t> dev_page_to_core_mapping_;
 

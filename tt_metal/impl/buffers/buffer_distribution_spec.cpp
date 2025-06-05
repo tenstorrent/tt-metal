@@ -10,21 +10,61 @@ namespace tt::tt_metal {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-tt::tt_metal::Shape convert_shape_to_shape_in_pages(const tt::tt_metal::Shape& shape, const Shape2D& page_shape) {
-    auto shape_in_pages = shape;
-    TT_FATAL(
-        shape[-2] % page_shape.height() == 0,
-        "Shape height ({}) must be divisible by page height ({})!",
-        shape[-2],
-        page_shape.height());
-    TT_FATAL(
-        shape[-1] % page_shape.width() == 0,
-        "Shape width ({}) must be divisible by page width ({})!",
-        shape[-1],
-        page_shape.width());
-    shape_in_pages[-2] /= page_shape.height();
-    shape_in_pages[-1] /= page_shape.width();
-    return shape_in_pages;
+struct PageMappingIntermData {
+    std::vector<std::optional<uint32_t>>* page_mapping;
+
+    const size_t num_cores;
+    const size_t rank;
+    const uint32_t* tensor_shape;
+    const uint32_t* shard_shape;
+    const uint64_t shard_volume;
+    const uint32_t* shard_grid;
+    const uint32_t* tensor_strides;
+    const uint32_t* shard_strides;
+
+    uint32_t* actual_shard_size;
+    size_t shard_id;
+};
+
+void iterate_within_shard(
+    PageMappingIntermData& params, size_t dim, size_t src_offset, size_t core_id, size_t dst_offset) {
+    if (dim == params.rank) {
+        params.page_mapping[core_id][dst_offset] = src_offset;
+        return;
+    }
+
+    for (size_t i = 0; i < params.actual_shard_size[dim]; i++) {
+        iterate_within_shard(params, dim + 1, src_offset, core_id, dst_offset);
+        src_offset += params.tensor_strides[dim];
+        dst_offset += params.shard_strides[dim];
+    }
+}
+
+void iterate_over_shards(PageMappingIntermData& params, size_t dim, size_t src_offset) {
+    if (dim == params.rank) {
+        size_t core_id = params.shard_id % params.num_cores;
+        size_t dst_offset = (params.shard_id / params.num_cores) * params.shard_volume;
+
+        iterate_within_shard(params, 0, src_offset, core_id, dst_offset);
+
+        params.shard_id++;
+        return;
+    }
+
+    size_t shard_size = params.shard_shape[dim];
+    params.actual_shard_size[dim] = shard_size;
+
+    for (size_t i = 0; i < params.shard_grid[dim] - 1; i++) {
+        iterate_over_shards(params, dim + 1, src_offset + i * params.shard_shape[dim] * params.tensor_strides[dim]);
+    }
+
+    // Last shard may be partial, so we need to handle it separately
+    size_t partial_shard_size = params.tensor_shape[dim] % shard_size;
+    params.actual_shard_size[dim] = partial_shard_size == 0 ? shard_size : partial_shard_size;
+    iterate_over_shards(
+        params,
+        dim + 1,
+        src_offset + (params.shard_grid[dim] - 1) * params.shard_shape[dim] * params.tensor_strides[dim]);
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -43,10 +83,11 @@ BufferDistributionSpec::BufferDistributionSpec(
         "Tensor shape rank ({}) must be same as shard shape rank ({})!",
         tensor_shape_in_pages.rank(),
         shard_shape_in_pages.rank());
+    TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.volume() == 0, "Shard shape must have non zero volume!");
-    TT_FATAL(
-        tensor_shape_in_pages.volume() != 0 || cores_.size() == 0,
-        "Can't distribute non zero volume tensor over an empty set of cores");
+    if (tensor_shape_in_pages.volume() != 0) {
+        TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
+    }
 
     compute_page_mapping();
 }
@@ -80,46 +121,34 @@ void BufferDistributionSpec::compute_page_mapping() {
     for (size_t i = 0; i < cores_.size(); i++) {
         page_mapping_[i].resize(num_shards_per_core * shard_pages);
     }
+
+    if (tensor_shape_in_pages_.volume() == 0) {
+        return;
+    }
+
+    tt::stl::SmallVector<uint32_t> shard_grid(tensor_shape_in_pages_.rank());
+    for (size_t i = 0; i < tensor_shape_in_pages_.rank(); i++) {
+        shard_grid[i] = (tensor_shape_in_pages_[i] + shard_shape_in_pages_[i] - 1) / shard_shape_in_pages_[i];
+    }
+
+    tt::stl::SmallVector<uint32_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape_in_pages_);
+    tt::stl::SmallVector<uint32_t> shard_strides = tt::tt_metal::compute_strides(shard_shape_in_pages_);
+    tt::stl::SmallVector<uint32_t> actual_shard_size(tensor_shape_in_pages_.rank());
+
+    CMAKE_UNIQUE_NAMESPACE::PageMappingIntermData params{
+        .page_mapping = page_mapping_.data(),
+        .num_cores = cores_.size(),
+        .rank = tensor_shape_in_pages_.rank(),
+        .tensor_shape = tensor_shape_in_pages_.view().data(),
+        .shard_shape = shard_shape_in_pages_.view().data(),
+        .shard_volume = shard_shape_in_pages_.volume(),
+        .shard_grid = shard_grid.data(),
+        .tensor_strides = tensor_strides.data(),
+        .shard_strides = shard_strides.data(),
+        .actual_shard_size = actual_shard_size.data(),
+        .shard_id = 0,
+    };
+    CMAKE_UNIQUE_NAMESPACE::iterate_over_shards(params, 0, 0);
 }
-
-/*
-BufferDistributionSpec::BufferDistributionSpec(
-    const DistributionSpec& page_distribution_spec, const std::vector<CoreCoord>& cores) :
-    page_distribution_spec_(page_distribution_spec), cores_(cores) {};
-
-BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
-    const tt::tt_metal::Shape& tensor_shape,
-    const tt::tt_metal::Shape& physical_shard_shape,
-    const Shape2D& page_shape,
-    const CoreRangeSet& corerangeset,
-    const ShardOrientation shard_orientation) {
-    TT_FATAL(
-        physical_shard_shape.rank() == tensor_shape.rank(),
-        "Physical shard shape rank ({}) must be same as tensor shape rank ({})!",
-        physical_shard_shape.rank(),
-        tensor_shape.rank());
-    auto tensor_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_shape_in_pages(tensor_shape, page_shape);
-    auto shard_shape_in_pages =
-        CMAKE_UNIQUE_NAMESPACE::convert_shape_to_shape_in_pages(physical_shard_shape, page_shape);
-    auto page_distribution_spec =
-        DistributionSpec::from_shard_shape(tensor_shape_in_pages, shard_shape_in_pages, corerangeset.num_cores());
-
-    const bool row_major = shard_orientation == ShardOrientation::ROW_MAJOR;
-    auto cores = corerange_to_cores(corerangeset, page_distribution_spec.get_num_targets(), row_major);
-
-    return BufferDistributionSpec(page_distribution_spec, cores);
-}
-
-const std::vector<DistributionSpec::TargetData>& BufferDistributionSpec::get_page_mapping(
-    DistributionSpec::MappingMode mapping_mode) {
-    const auto& page_mapping = page_distribution_spec_.get_metadata_for_targets(mapping_mode);
-    TT_FATAL(
-        page_mapping.size() == cores_.size(),
-        "Number of targets for page mapping {} must match number of cores {}!",
-        page_mapping.size(),
-        cores_.size());
-    return page_mapping;
-};
-*/
 
 }  // namespace tt::tt_metal
