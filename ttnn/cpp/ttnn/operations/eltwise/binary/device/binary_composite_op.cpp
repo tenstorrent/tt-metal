@@ -7,7 +7,6 @@
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include <iomanip>
 #include "ttnn/types.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -186,14 +185,10 @@ Tensor ExecuteMaximum::invoke(
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     if (value.index() == 0) {  // int
-        std::cout << "In composite file --> param0 : " << std::fixed << std::setprecision(15) << std::get<int>(value)
-                  << std::endl;
         return ttnn::operations::unary::
             ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MAXIMUM, int>::invoke(
                 queue_id, input_a, std::get<int>(value), memory_config, optional_output_tensor);
     }
-    std::cout << "In composite file in float--> param0 : " << std::fixed << std::setprecision(15)
-              << std::get<float>(value) << std::endl;
     return ttnn::operations::unary::
         ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MAXIMUM, float>::invoke(
             queue_id, input_a, std::get<float>(value), memory_config, optional_output_tensor);

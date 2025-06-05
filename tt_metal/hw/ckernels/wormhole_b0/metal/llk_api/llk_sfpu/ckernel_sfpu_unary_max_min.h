@@ -42,15 +42,15 @@ inline void calculate_unary_max_min(uint value) {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_int32(uint value) {
-    int inp = value;
-    if (inp < 0) {  // To convert from 2's complement to sign+magnitude
-        inp = -inp;
-        int res = 0x80000000 | (inp & 0x7FFFFFFF);
-        inp = res;
+    int scalar = value;
+    if (scalar < 0) {  // To convert from 2's complement to sign+magnitude
+        scalar = -scalar;
+        int res = 0x80000000 | (scalar & 0x7FFFFFFF);
+        scalar = res;
     }
 
     // Load value param to lreg2
-    _sfpu_load_imm32_(p_sfpu::LREG2, inp);
+    _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
