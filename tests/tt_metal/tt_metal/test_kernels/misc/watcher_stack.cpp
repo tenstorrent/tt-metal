@@ -6,7 +6,8 @@
 
 #include "compile_time_args.h"
 #include <dev_mem_map.h>
-#include "debug/stack_usage.h"
+
+extern uint32_t __stack_base[];
 
 #if defined(COMPILE_FOR_TRISC)
 #include "compute_kernel_api/common.h"
@@ -16,8 +17,7 @@ void MAIN {
 void kernel_main() {
 #endif
     uint32_t usage = get_compile_time_arg_val (0);
-    auto base = (uint32_t tt_l1_ptr *)get_stack_base();
-    auto point = &base[usage/sizeof(uint32_t)];
+    auto point = &__stack_base[usage / sizeof(uint32_t)];
     uint32_t *sp;
     asm ("mv %0,sp" : "=r"(sp));
 

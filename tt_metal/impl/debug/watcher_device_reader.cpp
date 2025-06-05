@@ -67,15 +67,6 @@ const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
     return nullptr;
 }
 
-// Helper function to get stack size by riscv core type
-uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) {
-    auto stack_size = MetalContext::instance().hal().get_stack_size(type);
-    if (stack_size == 0xdeadbeef) {
-        TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
-    }
-    return stack_size;
-}
-
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
 CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtual_coord) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
