@@ -137,7 +137,7 @@ jobs:
         id: prepare-slack
         run: |
           # Create base message
-          cat > slack-message.json << 'EOF'
+          cat > slack-message.json << 'EOT'
           {
             "channel": "${{ secrets.SLACK_METAL_INFRA_PIPELINE_CHANNEL_ID }}",
             "text": "Workflow Status Report",
@@ -172,7 +172,7 @@ jobs:
               }
             ]
           }
-          EOF
+          EOT
 
           # Parse and merge workflow blocks
           WORKFLOW_BLOCKS='${{ needs.analyze-data.outputs.failed_workflows }}'
