@@ -38,12 +38,12 @@ inline void llk_math_wait_for_dest_available() {
 
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<is_fp32_dest_acc_en, DST_SYNC_MODE>();
+    _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_pack_sync_init() {
-    _llk_math_pack_sync_init_<is_fp32_dest_acc_en, DST_SYNC_MODE>();
+    _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
 template <bool mail2math = true, bool mail2pack = true>

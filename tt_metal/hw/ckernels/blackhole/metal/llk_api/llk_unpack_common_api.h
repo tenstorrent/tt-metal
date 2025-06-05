@@ -53,7 +53,7 @@ inline void llk_unpack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) {
 
 inline void llk_unpack_debug_dump_seek(std::uint8_t offset) { _llk_unpack_debug_dump_seek_(offset); }
 
-template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en, bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
@@ -64,7 +64,7 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
         get_local_cb_interface(srca_operand_id).fifo_page_size);
 }
 
-template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en, bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srcb_operand_id);
@@ -75,7 +75,7 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
         get_local_cb_interface(srcb_operand_id).fifo_page_size);
 }
 
-template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en, bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 inline void llk_unpack_reconfig_data_format_srca(
     const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
@@ -90,7 +90,7 @@ inline void llk_unpack_reconfig_data_format_srca(
     }
 }
 
-template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en, bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 inline void llk_unpack_reconfig_data_format_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
@@ -105,14 +105,14 @@ inline void llk_unpack_reconfig_data_format_srcb(
     }
 }
 
-template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en, bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     llk_unpack_reconfig_data_format_srca<to_from_int8, is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(srca_new_operand);
     llk_unpack_reconfig_data_format_srcb<to_from_int8, is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(srcb_new_operand);
 }
 
-template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en, bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_old_operand,
     const std::uint32_t srca_new_operand,
