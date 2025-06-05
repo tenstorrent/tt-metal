@@ -6,6 +6,9 @@ import math
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+import os
+
+is_6U_RING = os.environ.get("6U_RING", "0") == "1"
 
 
 class LMHead(LightweightModule):
@@ -186,7 +189,9 @@ class LMHead(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode):
         outputs = []
+        num_links = 3
         if mode == "decode":
+            num_links = 4 if is_6U_RING else 3
             for weight, pc in zip(self.output_weights_decode, self.program_configs):
                 x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
                 output = ttnn.linear(
@@ -216,7 +221,7 @@ class LMHead(LightweightModule):
         outputs_reduced = []
         for output in outputs:
             output_reduced = self.tt_ccl.line_all_reduce(
-                output, cluster_axis=1, num_links=3, memory_config=output.memory_config(), lm_head=True
+                output, cluster_axis=1, num_links=num_links, memory_config=output.memory_config(), lm_head=True
             )  # self.output_memory_config
             outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
 
