@@ -98,7 +98,7 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
             rtoptions, tt::umd::Cluster::create_cluster_descriptor().get());
     }
     ClusterType cluster_type = ClusterType::INVALID;
-    for (auto& chip_id : cluster_desc->get_all_chips()) {
+    for (const auto& chip_id : cluster_desc->get_all_chips()) {
         if (cluster_desc->get_board_type(chip_id) == BoardType::GALAXY) {
             cluster_type = ClusterType::TG;
             break;
