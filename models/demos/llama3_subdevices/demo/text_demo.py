@@ -554,6 +554,7 @@ def test_demo_text(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
+                    argmax_on_device=argmax_on_device,
                     reset_inputs=iteration == 0 or batch_size > 1,
                 )
             except Exception as e:
