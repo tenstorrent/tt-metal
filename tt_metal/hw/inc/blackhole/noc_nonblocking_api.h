@@ -546,15 +546,17 @@ inline __attribute__((always_inline)) void ncrisc_noc_full_sync() {
     }
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
-    while (len_bytes > NOC_MAX_BURST_SIZE) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE);
-        src_addr += NOC_MAX_BURST_SIZE;
-        dest_addr += NOC_MAX_BURST_SIZE;
-        len_bytes -= NOC_MAX_BURST_SIZE;
+    if constexpr (!one_packet) {
+        while (len_bytes > NOC_MAX_BURST_SIZE) {
+            while (!noc_cmd_buf_ready(noc, cmd_buf));
+            ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE);
+            src_addr += NOC_MAX_BURST_SIZE;
+            dest_addr += NOC_MAX_BURST_SIZE;
+            len_bytes -= NOC_MAX_BURST_SIZE;
+        }
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes);

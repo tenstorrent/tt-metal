@@ -2022,7 +2022,7 @@ struct fvcc_inbound_state_t {
         uint32_t wrptr = fvcc_buf->wrptr.ptr;
         noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, rdptr);
         while (1) {
-            noc_async_read_one_packet(noc_addr, (uint32_t)(&fvcc_buf->rdptr.ptr), 4);
+            noc_async_read<4>(noc_addr, (uint32_t)(&fvcc_buf->rdptr.ptr), 4);
             noc_async_read_barrier();
             if (!fvcc_buf_ptrs_full(wrptr, fvcc_buf->rdptr.ptr)) {
                 break;
@@ -2453,7 +2453,7 @@ template <bool blocking_mode = false>
 inline bool tt_fabric_check_pull_request_slot(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request, uint32_t wrptr) {
     uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, rdptr);
     do {
-        noc_async_read_one_packet(noc_addr, (uint32_t)(&local_pull_request->rdptr.ptr), 4);
+        noc_async_read<4>(noc_addr, (uint32_t)(&local_pull_request->rdptr.ptr), 4);
         noc_async_read_barrier();
         if (!req_buf_ptrs_full(wrptr, local_pull_request->rdptr.ptr)) {
             return true;

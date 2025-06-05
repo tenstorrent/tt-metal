@@ -536,7 +536,7 @@ inline void fabric_client_connect(
     uint64_t curr_client_idx_addr = client_q_addr + offsetof(fabric_push_client_queue_t, curr_client_idx);
     // wait until the client ahead in the queue disconnects
     while (true) {
-        noc_async_read_one_packet(curr_client_idx_addr, (uint32_t)&(local_req_entry->remote_curr_client_idx.ptr), 4);
+        noc_async_read<4>(curr_client_idx_addr, (uint32_t)&(local_req_entry->remote_curr_client_idx.ptr), 4);
         noc_async_read_barrier();
         if (local_req_entry->my_client_idx.ptr == local_req_entry->remote_curr_client_idx.ptr) {
             break;
@@ -544,7 +544,7 @@ inline void fabric_client_connect(
     }
 
     uint64_t router_wr_ptr_addr = client_q_addr + offsetof(fabric_push_client_queue_t, router_wr_ptr);
-    noc_async_read_one_packet(router_wr_ptr_addr, (uint32_t)&(local_req_entry->remote_router_wr_ptr.ptr), 4);
+    noc_async_read<4>(router_wr_ptr_addr, (uint32_t)&(local_req_entry->remote_router_wr_ptr.ptr), 4);
     noc_async_read_barrier();
 
     uint64_t router_addr = get_noc_addr_helper(router_addr_h, FABRIC_ROUTER_REQ_QUEUE_START);
@@ -1066,7 +1066,8 @@ inline void fabric_endpoint_init(tt_l1_ptr ClientInterfaceType client_interface,
         // read routing table
         uint64_t dest_addr = get_noc_addr_helper(
             eth_chan_to_noc_xy[noc_index][outbound_eth_chan], eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
-        noc_async_read_one_packet(dest_addr, routing_tables_offset, sizeof(fabric_router_l1_config_t));
+        noc_async_read<sizeof(fabric_router_l1_config_t)>(
+            dest_addr, routing_tables_offset, sizeof(fabric_router_l1_config_t));
         noc_async_read_barrier();
     }
 }
