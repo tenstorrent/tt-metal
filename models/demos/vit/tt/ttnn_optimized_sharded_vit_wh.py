@@ -12,6 +12,9 @@ import ttnn
 
 def update_model_config(config, batch_size):
     wh_core_grid_y = 8
+
+    # In case of < 6 cores per batch, we need to do move in attention to remove defragmentation
+    should_reallocate_in_attention = False
     if batch_size <= wh_core_grid_y:
         grid_y = batch_size
         grid_x = 6  ## it can be 4 or 3, for higher core utilization but less latency
@@ -20,7 +23,10 @@ def update_model_config(config, batch_size):
         batch_per_y_core = batch_size // wh_core_grid_y
         batch_size = grid_y * batch_per_y_core
         grid_x = 4
+        should_reallocate_in_attention = True
     core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+
     TILE_HEIGHT = 32
 
     patch_count = config.image_size // config.patch_size  # 224/16=14
@@ -29,6 +35,7 @@ def update_model_config(config, batch_size):
     seqL_t = seqL_padded // TILE_HEIGHT  # 224 / 32 = 7
     dim_t = config.hidden_size // TILE_HEIGHT  # 768 / 32 = 24
     dim_t__x = dim_t // core_grid.x  # 4
+    dim_t__x_full_grid = dim_t // core_grid_8x8.x  # 3
     head_num = config.num_attention_heads  # 12
     head_seqL_t__x = (head_num * seqL_t) // core_grid.x  # 14
     head_size_t = dim_t // head_num  # 2
@@ -46,19 +53,22 @@ def update_model_config(config, batch_size):
     # sharding configs
     program_configs = {
         "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            subblock_w=dim_t__x // 2,  # 1,
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
+            subblock_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             block_h=seqL_t,  # 7,
-            block_w=dim_t__x,  # 2,
+            block_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             inplace=False,
         ),
+        # shard_spec = [224, 96]
         "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=dim_t__x // 2,  # 2,
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
+            in0_block_w=dim_t__x_full_grid,  # 3
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,  # 6,
+            out_subblock_w=dim_t__x_full_grid,  # 3,
             per_core_M=seqL_t,  # 7,
-            per_core_N=3 * dim_t__x,  # 12,
+            per_core_N=3 * dim_t__x_full_grid,  # 9
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -85,39 +95,43 @@ def update_model_config(config, batch_size):
             per_core_N=head_size_t,  # 2,
         ),
         "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=dim_t__x // 2,  # 1,
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
+            in0_block_w=dim_t__x_full_grid,  # 3
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,  # 2,
+            out_subblock_w=dim_t__x_full_grid,  # 3
             per_core_M=seqL_t,  # 7,
-            per_core_N=dim_t__x,  # 4,
+            per_core_N=dim_t__x_full_grid,  # 3,
             transpose_mcast=False,
             fused_activation=None,
         ),
         "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            subblock_w=dim_t__x // 2,  # 1,
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
+            subblock_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             block_h=seqL_t,  # 7,
-            block_w=dim_t__x,  # 2,
+            block_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             inplace=False,
         ),
         "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=dim_t__x // 2,  # 1,
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
+            in0_block_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,  # 4,
+            out_subblock_w=(dim_t__x_full_grid * 4) // 2,  # 6,
             per_core_M=seqL_t,  # 7,
-            per_core_N=4 * dim_t__x,  # 16,
+            per_core_N=dim_t__x_full_grid * 4,  # 12,
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=2 * dim_t__x,  # 4,
-            out_subblock_h=1,  # seqL_t,  # 7,
-            out_subblock_w=dim_t__x,  # 2,
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            # shard shape is [seqL_t, dim_t__x_full_grid * 4], in tiles
+            in0_block_w=dim_t__x_full_grid * 4,  # 12
+            out_subblock_h=1,
+            out_subblock_w=dim_t__x_full_grid,
             per_core_M=seqL_t,  # 7,
-            per_core_N=dim_t__x,  # 4,
+            per_core_N=dim_t__x_full_grid,  # 3
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -131,9 +145,23 @@ def update_model_config(config, batch_size):
             transpose_mcast=False,
             fused_activation=None,
         ),
+        "ln_compute_config": ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        ),
     }
 
-    return DotAccessDict(dict(**config.to_dict(), core_grid=core_grid, program_configs=program_configs))
+    return DotAccessDict(
+        dict(
+            **config.to_dict(),
+            core_grid=core_grid,
+            core_grid_8x8=core_grid_8x8,
+            should_reallocate_in_attention=should_reallocate_in_attention,
+            program_configs=program_configs,
+        )
+    )
 
 
 # https://github.com/huggingface/transformers/blob/v4.37.2/src/transformers/models/vit/modeling_vit.py
@@ -197,7 +225,6 @@ def vit_embeddings(
 def vit_attention(
     config,
     hidden_states,
-    attention_mask,
     parameters,
 ):
     num_heads = config.num_attention_heads  # num_heads = 12
@@ -213,6 +240,16 @@ def vit_attention(
         program_config=config.program_configs["query_key_value_matmul_program_config"],
     )
 
+    # reshard back to 48 cores
+    block_sharded_config_48_cores = ttnn.create_sharded_memory_config(
+        query_key_value.padded_shape,
+        core_grid=config.core_grid,  # 48
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    query_key_value = ttnn.reshard(query_key_value, block_sharded_config_48_cores)
+
     (
         query,
         key,
@@ -224,7 +261,8 @@ def vit_attention(
     )
     ttnn.deallocate(query_key_value)
     ttnn.deallocate(hidden_states)
-    value = ttnn.reallocate(value)
+    if config.should_reallocate_in_attention:
+        value = ttnn.reallocate(value)
 
     attention_scores = ttnn.matmul(
         query,
@@ -236,10 +274,14 @@ def vit_attention(
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
-    attention_probs = ttnn.transformer.attention_softmax_(
+    scale = 1.0 / (head_size**0.5)
+    attention_scores = ttnn.mul_(
         attention_scores,
-        attention_mask=attention_mask,
-        head_size=head_size,
+        scale,
+    )
+
+    attention_probs = ttnn.softmax_in_place(
+        attention_scores,
         program_config=config.program_configs["softmax_program_config"],
     )
 
@@ -258,6 +300,19 @@ def vit_attention(
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
     )
 
+    block_sharded_config_64_cores = ttnn.create_sharded_memory_config(
+        context_layer.padded_shape,
+        core_grid=config.core_grid_8x8,  # 64 cores
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    # reshard back to 64 cores
+    # cant use reshard as it's not working here, so use s2i followed by i2s
+    # workaround for issue #22640, once fixed first call can be removed
+    context_layer = ttnn.to_memory_config(context_layer, ttnn.DRAM_MEMORY_CONFIG)
+    context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cores)
+
     self_output = ttnn.linear(
         context_layer,
         parameters.output.dense.weight,
@@ -267,7 +322,8 @@ def vit_attention(
         program_config=config.program_configs["self_output_matmul_program_config"],
     )
     ttnn.deallocate(context_layer)
-    self_output = ttnn.reallocate(self_output)
+    if config.should_reallocate_in_attention:
+        self_output = ttnn.reallocate(self_output)
 
     return self_output
 
@@ -329,7 +385,6 @@ def vit_feedforward(
 def vit_layer(
     config,
     hidden_states,
-    attention_mask,
     parameters,
 ):
     layernorm_before_output = ttnn.layer_norm(
@@ -338,12 +393,12 @@ def vit_layer(
         bias=parameters.layernorm_before.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         program_config=config.program_configs["layernorm_before_program_config"],
+        compute_kernel_config=config.program_configs["ln_compute_config"],
     )
 
     multi_head_attention_output = vit_attention(
         config,
         layernorm_before_output,
-        attention_mask=attention_mask,
         parameters=parameters.attention,
     )
 
@@ -360,6 +415,7 @@ def vit_layer(
         bias=parameters.layernorm_after.bias,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         program_config=config.program_configs["layernorm_after_output_program_config"],
+        compute_kernel_config=config.program_configs["ln_compute_config"],
     )
 
     feedforward_output = vit_feedforward(
@@ -375,7 +431,6 @@ def vit_layer(
 def vit_encoder(
     config,
     embeddings,
-    head_masks,
     parameters,
 ):
     TILE_HEIGHT = 32
@@ -385,7 +440,7 @@ def vit_encoder(
         embeddings,
         memory_config=ttnn.create_sharded_memory_config(
             [emb_N, emb_S, emb_D],
-            core_grid=config.core_grid,
+            core_grid=config.core_grid_8x8,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -397,7 +452,6 @@ def vit_encoder(
         encoder_output = vit_layer(
             config,
             encoder_input,
-            head_masks[index],
             encoder_parameters,
         )
         encoder_input = encoder_output
@@ -408,7 +462,6 @@ def vit_encoder(
 def vit(
     config,
     pixel_values,
-    attention_mask,
     cls_token,
     position_embeddings,
     parameters,
@@ -418,7 +471,6 @@ def vit(
     hidden_states = vit_encoder(
         config,
         embeddings_output,
-        attention_mask,
         parameters=parameters.vit.encoder,
     )
 
@@ -432,6 +484,16 @@ def vit(
         program_config=config.program_configs["layernorm_before_program_config"],
     )
 
+    # reshard back to 48 cores as we are losing a bit of precision if this is 64 cores
+    block_sharded_config_48_cores = ttnn.create_sharded_memory_config(
+        output.padded_shape,
+        core_grid=config.core_grid,  # 48
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    output = ttnn.reshard(output, block_sharded_config_48_cores)
+
     # Classifier
     classifier_output = ttnn.linear(
         output,
@@ -441,14 +503,12 @@ def vit(
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["classifer_matmul_program_config"],
     )
-
     return classifier_output
 
 
 def preprocess_inputs(
     input_ids,
     token_type_ids,
-    attention_mask,
     device,
 ):
     batch_size, _ = input_ids.shape
@@ -459,18 +519,7 @@ def preprocess_inputs(
         token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    if attention_mask is not None:
-        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
-        attention_mask = torch.nn.functional.pad(attention_mask, (0, 0, 0, 0, 0, 0, 0, batch_size - 1))
-        attention_mask = ttnn.from_torch(
-            attention_mask,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-    return input_ids, token_type_ids, attention_mask
+    return input_ids, token_type_ids
 
 
 def custom_preprocessor(torch_model, name):
