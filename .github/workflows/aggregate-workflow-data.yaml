@@ -125,14 +125,6 @@ jobs:
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Format Failed Workflows
-        id: format
-        run: |
-          FAILED_WORKFLOWS='${{ needs.analyze-data.outputs.failed_workflows }}'
-          echo "blocks<<EOF" >> $GITHUB_OUTPUT
-          echo "$FAILED_WORKFLOWS" | jq -r '.[] | "  - type: section\n    text:\n      type: mrkdwn\n      text: |\n        • *\(.name)*\n          PR: <https://github.com/${{ github.repository }}/pull/\(.pr|sub(\"#\"; \"\"))|\(.pr)> | Author: <https://github.com/\(.author)|\(.author)>\n          Bad: <https://github.com/${{ github.repository }}/commit/\(.badSha)|\(.badSha)> | Good: <https://github.com/${{ github.repository }}/commit/\(.goodSha)|\(.goodSha)>\n          <https://github.com/${{ github.repository }}/actions/runs/\(.runId)|View Run Details>"' >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
       - name: Prepare Slack Message
         id: prepare-slack
         run: |
@@ -140,48 +132,13 @@ jobs:
           cat > slack-message.json << 'EOT'
           {
             "channel": "${{ secrets.SLACK_METAL_INFRA_PIPELINE_CHANNEL_ID }}",
-            "text": "Workflow Status Report",
-            "blocks": [
-              {
-                "type": "header",
-                "text": {
-                  "type": "plain_text",
-                  "text": "🚨 Failed Workflows Report",
-                  "emoji": true
-                }
-              },
-              {
-                "type": "section",
-                "fields": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Repository:*\n${{ github.repository }}"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Branch:*\n${{ github.ref_name }}"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Time Period:*\n${{ github.event.inputs.days || 15 }} days"
-                  }
-                ]
-              },
-              {
-                "type": "divider"
-              }
-            ]
+            "text": "🚨 Failed Workflows Report\n\nRepository: ${{ github.repository }}\nBranch: ${{ github.ref_name }}\nTime Period: ${{ github.event.inputs.days || 15 }} days\n\n${{ needs.analyze-data.outputs.failed_workflows }}"
           }
           EOT
-
-          # Parse and merge workflow blocks
-          WORKFLOW_BLOCKS='${{ needs.analyze-data.outputs.failed_workflows }}'
-          echo "$WORKFLOW_BLOCKS" > workflow-blocks.json
-          jq -s '.[0].blocks += .[1] | .[0]' slack-message.json workflow-blocks.json > final-message.json
 
       - name: Send Slack Notification
         uses: slackapi/slack-github-action@v2.1.0
         with:
           method: chat.postMessage
           token: ${{ secrets.SLACK_BOT_TOKEN }}
-          payload-file-path: ./final-message.json
+          payload-file-path: ./slack-message.json
