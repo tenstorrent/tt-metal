@@ -95,7 +95,7 @@ void validate_buffer_parameters(
     }
 }
 
-std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 2>>> core_to_host_pages(
+std::tuple<std::vector<std::vector<std::optional<uint32_t>>>, std::vector<std::array<uint32_t, 2>>> core_to_host_pages(
     const uint32_t /*total_pages*/,
     const uint32_t pages_per_shard,
     const uint32_t num_shards,
@@ -106,7 +106,7 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
     std::array<uint32_t, 2> shard_in_pages = {
         page_shape[0] == 0 ? 0 : shard_shape[0] / page_shape[0],
         page_shape[1] == 0 ? 0 : shard_shape[1] / page_shape[1]};
-    std::vector<std::vector<uint32_t>> ret_vec(num_shards);
+    std::vector<std::vector<std::optional<uint32_t>>> ret_vec(num_shards);
     std::vector<std::array<uint32_t, 2>> ret_shard_shape(num_shards, shard_in_pages);
 
     if (layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -120,7 +120,7 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
                 if (pages_per_shard > rem_pages) {
                     ret_shard_shape[i] = {rem_pages / ret_shard_shape[i][1], ret_shard_shape[i][1]};
                 }
-                ret_vec[i] = std::vector<uint32_t>(num_cols);
+                ret_vec[i] = std::vector<std::optional<uint32_t>>(num_cols);
                 for (uint32_t j = 0; j < num_cols; j++) {
                     ret_vec[i][j] = page_id++;
                 }
@@ -212,12 +212,17 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     if (buffer.size() == 0) {
         return buffer_page_mapping;
     }
-    auto shard_spec = buffer.shard_spec();
 
-    bool row_major = shard_spec.orientation() == ShardOrientation::ROW_MAJOR;
     uint32_t num_cores = buffer.num_cores().value();
 
-    buffer_page_mapping.all_cores_ = corerange_to_cores(shard_spec.grid(), num_cores, row_major);
+    if (buffer.is_nd_sharded()) {
+        auto& buffer_distribution_spec = buffer.buffer_distribution_spec().value();
+        buffer_page_mapping.all_cores_ = buffer_distribution_spec.get_cores();
+    } else {
+        auto shard_spec = buffer.shard_spec();
+        bool row_major = shard_spec.orientation() == ShardOrientation::ROW_MAJOR;
+        buffer_page_mapping.all_cores_ = corerange_to_cores(shard_spec.grid(), num_cores, row_major);
+    }
     TT_FATAL(
         num_cores == buffer_page_mapping.all_cores_.size(),
         "Buffer has {} cores, but page mapping expects {} cores",
@@ -230,14 +235,32 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     }
 
     uint32_t num_dev_pages = buffer.num_dev_pages();
-    auto [core_host_page_indices, shard_shape] = core_to_host_pages(
-        num_dev_pages,
-        shard_spec.num_pages(),
-        num_cores,
-        buffer.buffer_layout(),
-        shard_spec.page_shape,
-        shard_spec.shape(),
-        shard_spec.tensor2d_shape_in_pages);
+
+    std::vector<std::vector<std::optional<uint32_t>>> core_host_page_indices;
+    std::vector<std::array<uint32_t, 2>> shard_shape;
+    std::array<uint32_t, 2> shape_in_pages;
+
+    if (buffer.is_nd_sharded()) {
+        const auto& buffer_distribution_spec = buffer.buffer_distribution_spec().value();
+        core_host_page_indices = buffer_distribution_spec.get_page_mapping();
+        auto nd_shard_shape = buffer_distribution_spec.get_shard_shape_in_pages();
+        std::array<uint32_t, 2> flattened_shard_shape(
+            {nd_shard_shape.volume() / nd_shard_shape[-1], nd_shard_shape[-1]});
+        shard_shape = std::vector<std::array<uint32_t, 2>>(num_cores, flattened_shard_shape);
+        auto tensor_shape = buffer_distribution_spec.get_tensor_shape_in_pages();
+        shape_in_pages = {tensor_shape.volume() / tensor_shape[-1], tensor_shape[-1]};
+    } else {
+        auto shard_spec = buffer.shard_spec();
+        std::tie(core_host_page_indices, shard_shape) = core_to_host_pages(
+            num_dev_pages,
+            shard_spec.num_pages(),
+            num_cores,
+            buffer.buffer_layout(),
+            shard_spec.page_shape,
+            shard_spec.shape(),
+            shard_spec.tensor2d_shape_in_pages);
+        shape_in_pages = shard_spec.shape_in_pages();
+    }
 
     buffer_page_mapping.core_host_page_indices_ = std::vector<std::vector<uint32_t>>(num_cores);
 
@@ -250,17 +273,20 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     buffer_page_mapping.core_shard_shape_ = std::move(shard_shape);
     uint32_t dev_page_index = 0;
 
-    auto shape_in_pages = shard_spec.shape_in_pages();
     for (uint32_t core_index = 0; core_index < core_host_page_indices.size(); core_index++) {
         uint32_t valid_shard_page = 0;
-        buffer_page_mapping.core_host_page_indices_[core_index].reserve(shard_spec.num_pages());
+        buffer_page_mapping.core_host_page_indices_[core_index].reserve(shape_in_pages[0] * shape_in_pages[1]);
         uint32_t shard_page_id = 0;
         for (uint32_t shard_page_x = 0; shard_page_x < shape_in_pages[0]; shard_page_x++) {
             for (uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
                 buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index] = core_index;
                 if (shard_page_x < buffer_page_mapping.core_shard_shape_[core_index][0] and
                     shard_page_y < buffer_page_mapping.core_shard_shape_[core_index][1]) {
-                    uint32_t host_page = core_host_page_indices[core_index][valid_shard_page];
+                    std::optional<uint32_t> host_page_optional = core_host_page_indices[core_index][valid_shard_page];
+                    if (!host_page_optional) {
+                        continue;
+                    }
+                    uint32_t host_page = *host_page_optional;
                     buffer_page_mapping.dev_page_to_host_page_mapping_[dev_page_index] = host_page;
                     buffer_page_mapping.core_host_page_indices_[core_index].push_back(host_page);
                     buffer_page_mapping.host_page_to_local_shard_page_mapping_[host_page] = shard_page_id;
@@ -619,14 +645,10 @@ const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping(
     return this->buffer_page_mapping_;
 }
 
-bool Buffer::is_nd_sharded() const {
-    if (this->buffer_distribution_spec_.has_value()) {
-        TT_FATAL(
-            this->buffer_layout_ == TensorMemoryLayout::BLOCK_SHARDED,
-            "Buffer with BufferDistributionSpec must have BLOCK_SHARDED layout!");
-        return true;
-    }
-    return false;
+bool Buffer::is_nd_sharded() const { return this->buffer_distribution_spec_.has_value(); }
+
+const std::optional<BufferDistributionSpec>& Buffer::buffer_distribution_spec() const {
+    return this->buffer_distribution_spec_;
 }
 
 bool ShardSpec::operator==(const ShardSpec&) const = default;

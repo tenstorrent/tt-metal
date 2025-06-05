@@ -266,6 +266,7 @@ public:
     // SHARDED API STARTS HERE
     // If buffer contains BufferDistributionSpec, it is considered ND sharded
     bool is_nd_sharded() const;
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
 
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
 
