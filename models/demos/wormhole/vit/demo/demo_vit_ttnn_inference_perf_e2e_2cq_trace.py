@@ -149,23 +149,22 @@ def test_vit(device, use_program_cache, batch_size, is_single_card_n300):
 
     run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations)
 
-    first_iter_time = profiler.get(f"compile") + profiler.get(f"cache")
-
     # ensuring inference time fluctuations is not noise
     inference_time_avg = profiler.get("run") / num_measurement_iterations
+    expected_inference_time_avg = batch_size / expected_samples_per_sec
 
     prep_perf_report(
-        model_name=f"ttnn_vit_base_batch_size{batch_size}",
+        model_name=f"ttnn_vit_base_trace_2cq_batch_size_{batch_size}",
         batch_size=batch_size,
-        inference_and_compile_time=first_iter_time,
+        inference_and_compile_time=0,
         inference_time=inference_time_avg,
         expected_compile_time=0,
-        expected_inference_time=0,
+        expected_inference_time=expected_inference_time_avg,
         comments="",
         inference_time_cpu=0,
     )
 
-    model_name = f"ttnn_vit_base_batch_size_{batch_size}"
+    model_name = f"ttnn_vit_base_batch_{batch_size}"
     comments = ""
     logger.info(f"{model_name} {comments} inference time (avg): {inference_time_avg}")
     samples_per_sec = 1 / inference_time_avg * batch_size
