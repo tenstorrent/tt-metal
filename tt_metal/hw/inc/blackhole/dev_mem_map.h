@@ -33,8 +33,8 @@
 #define MEM_L1_SIZE (1536 * 1024)
 
 #define MEM_ETH_BASE 0x0
-// Top 64K is reserved for syseng
-#define MEM_ETH_SIZE (512 * 1024 - 64 * 1024)
+// Top 64K is reserved for syseng but host reads/writes from that region
+#define MEM_ETH_SIZE (512 * 1024)
 
 #define MEM_DRAM_SIZE (4177920 * 1024U)
 
