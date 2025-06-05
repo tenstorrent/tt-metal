@@ -124,7 +124,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
     uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
-    TT_ASSERT(im0_t == Wt);
+    TT_FATAL(im0_t == Wt, "im0_t == Wt, (Non user error)");
 
     // used for buffering scale-mask
     // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
@@ -142,20 +142,22 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         im0_t = 120;
         im3_t = 120;
     }
-    TT_ASSERT(im3_t == Wt + block_size);
+    // TODO: Not sure why this fatal is here but not needed for use_large_kernel
+    TT_FATAL(im3_t == Wt + block_size && !use_large_kernel, "im3_t == Width in tiles + num_dest_regs to use");
 
-    TT_ASSERT(Wt % block_size == 0);
-    TT_ASSERT((block_size != -1) && "Wt must be divisible by one of the numbers in the range from 8 to 1.");
-    TT_ASSERT(
-        im0_t % block_size == 0 &&
+    TT_FATAL(Wt % block_size == 0, "Wt must be divisible by one of the numbers in the range from 8 to 1.");
+    TT_FATAL((block_size != -1), "Wt must be divisible by one of the numbers in the range from 8 to 1.");
+    TT_FATAL(
+        im0_t % block_size == 0,
         "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        out0_t % block_size == 0 &&
+    TT_FATAL(
+        out0_t % block_size == 0,
         "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(in4_t % block_size == 0);
-    TT_ASSERT(
-        W <= TILE_WIDTH * im0_t &&
-        "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
+    TT_FATAL(
+        in4_t % block_size == 0,
+        "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
+    TT_FATAL(
+        W <= TILE_WIDTH * im0_t, "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
 
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
@@ -331,7 +333,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_FATAL(false, "Core not in specified core ranges");
         }
 
         uint32_t tile_offset = curr_row * Wt;
@@ -463,18 +465,15 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
             // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
             uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
-            TT_ASSERT(im0_t == Wt);
+            TT_FATAL(im0_t == Wt, "im0_t == Wt must be true");
 
             // used for buffering scale-mask
             // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
             uint32_t im3_t = block_size * (tt::div_up(Wt, block_size) + 1);
-            TT_ASSERT(im3_t == Wt + block_size);
+            TT_FATAL(im3_t == Wt + block_size, "im3_t == Wt + block_size)");
 
-            TT_ASSERT(Wt % block_size == 0);
-            TT_ASSERT((block_size != -1) && "Wt must be divisible by one of the numbers in the range from 8 to 1.");
-            TT_ASSERT(
-                im0_t % block_size == 0 & im0_t &&
-                "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
+            TT_FATAL(Wt % block_size == 0, "Wt must be divisible by block size");
+            TT_FATAL((block_size != -1), "Wt must be divisible by one of the numbers in the range from 8 to 1.");
 
             uint32_t NCHt = NC * Ht;
             uint32_t num_tile_rows = NC * Ht;
@@ -534,7 +533,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 } else if (core_group_2.contains(core)) {
                     num_tile_rows_per_core = num_tile_rows_per_core_group_2;
                 } else {
-                    TT_ASSERT(false, "Core not in specified core ranges");
+                    TT_FATAL(false, "Core not in specified core ranges");
                 }
 
                 uint32_t tile_offset = curr_row * Wt;
