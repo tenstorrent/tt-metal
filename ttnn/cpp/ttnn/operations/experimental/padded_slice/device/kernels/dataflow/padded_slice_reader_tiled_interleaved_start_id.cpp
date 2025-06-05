@@ -28,7 +28,7 @@ void kernel_main() {
     const uint32_t tile_size = get_tile_size(cb_id_in0);
     const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = tile_size};
 
-// #define DEBUG
+#define DEBUG
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", num_dims: " << num_dims << ", start_id: " << start_id
            << ", num_tiles_per_core: " << num_tiles_per_core << ", num_tiles_per_barrier: " << num_tiles_per_barrier
@@ -54,8 +54,11 @@ void kernel_main() {
             tiles_read++;
             uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
             noc_async_read(src_noc_addr, src_buffer_l1_addr, tile_size);
+            noc_async_read_barrier();
+
 #ifdef DEBUG
-            DPRINT << "src_stick_id: " << src_stick_id << ENDL();
+            DPRINT << "src_stick_id: " << src_stick_id << " addr " << src_buffer_l1_addr - base_src_buffer_l1_addr
+                   << ENDL();
 #endif
             src_buffer_l1_addr += tile_size;
             src_stick_id++;
@@ -64,6 +67,8 @@ void kernel_main() {
                 if (id_per_dim[j] == num_unpadded_sticks[j]) {
                     id_per_dim[j] = 0;
                     src_stick_id += num_padded_sticks[j];
+                    DPRINT << "id_per_dim = " << id_per_dim[0] << " " << id_per_dim[1] << " " << id_per_dim[2] << " "
+                           << id_per_dim[3] << ENDL();
                 } else {
                     break;
                 }

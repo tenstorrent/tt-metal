@@ -26,6 +26,7 @@ void kernel_main() {
 #ifdef DEBUG
     DPRINT << "total_num_tiles: " << total_num_tiles << ", num_tiles_per_read: " << num_tiles_per_read
            << ", tile_size: " << tile_size << ", read_size: " << read_size << ENDL();
+    DPRINT << "untilized CB ID: " << cb_untilized_id << " Out CB ID: " << cb_out_id << ENDL();
 #endif
     noc_async_read_one_packet_set_state(get_noc_addr(read_addr), read_size);
 
@@ -33,6 +34,7 @@ void kernel_main() {
         cb_wait_front(cb_untilized_id, num_tiles_per_read);
         uint64_t noc_read_addr = get_noc_addr(get_read_ptr(cb_untilized_id));
         noc_async_read_one_packet_with_state<true>(noc_read_addr, write_addr);
+        DPRINT << "Write Addr: " << write_addr << " Read Addr: " << get_read_ptr(cb_untilized_id) << ENDL();
         write_addr += read_size;
         cb_pop_front(cb_untilized_id, num_tiles_per_read);
         tiles_read += num_tiles_per_read;
