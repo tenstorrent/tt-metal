@@ -66,7 +66,6 @@ void kernel_main() {
         reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
     *last_message_semaphore_address = 0;
     auto worker_buffer_index_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    bool connected_to_persistent_fabric = get_arg_val<uint32_t>(arg_idx++) != 0;
 
     // TODO: move to semaphore
     auto edm_buffer_index_sem_id = get_arg_val<uint32_t>(arg_idx++);
@@ -89,7 +88,7 @@ void kernel_main() {
 
     ASSERT(num_buffers_per_channel > 0);
     auto sender = tt::tt_fabric::WorkerToFabricEdmSender(
-        connected_to_persistent_fabric,
+        true,  // persistent fabric (always true)
         0,
         eth_sender_noc_x,
         eth_sender_noc_y,

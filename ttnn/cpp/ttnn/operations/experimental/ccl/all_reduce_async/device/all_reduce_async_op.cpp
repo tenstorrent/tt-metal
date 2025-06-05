@@ -268,33 +268,28 @@ std::vector<Tensor> all_reduce_async(
 }  // namespace operations
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
-    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores) {
+    size_t num_links, size_t num_workers_per_link, const CoreRangeSet& available_cores) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
-    if (persistent_fabric_mode) {
-        const size_t num_workers_preferred = num_workers_per_link * num_links;
-        if (available_cores.num_cores() < num_workers_preferred) {
-            log_warning(
-                tt::LogOp,
-                "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
-                "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
-                "performance loss.",
-                num_workers_preferred,
-                num_workers_per_link,
-                num_links,
-                available_cores.num_cores());
-        }
-        for (const auto& cr : available_cores.ranges()) {
-            auto start = cr.start_coord;
-            auto end = cr.end_coord;
-            for (size_t y = start.y; y <= end.y; y++) {
-                for (size_t x = start.x; x <= end.x; x++) {
-                    sender_worker_core_range =
-                        sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
-                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                        break;
-                    }
-                }
+    const size_t num_workers_preferred = num_workers_per_link * num_links;
+    if (available_cores.num_cores() < num_workers_preferred) {
+        log_warning(
+            tt::LogOp,
+            "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
+            "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
+            "performance loss.",
+            num_workers_preferred,
+            num_workers_per_link,
+            num_links,
+            available_cores.num_cores());
+    }
+    for (const auto& cr : available_cores.ranges()) {
+        auto start = cr.start_coord;
+        auto end = cr.end_coord;
+        for (size_t y = start.y; y <= end.y; y++) {
+            for (size_t x = start.x; x <= end.x; x++) {
+                sender_worker_core_range =
+                    sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
                 if (sender_worker_core_range.num_cores() == num_workers_preferred) {
                     break;
                 }
@@ -303,9 +298,9 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
                 break;
             }
         }
-    } else {
-        sender_worker_core_range =
-            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_workers_per_link - 1, num_links - 1)));
+        if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+            break;
+        }
     }
     return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }

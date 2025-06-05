@@ -39,7 +39,6 @@ void setup_test_with_persistent_fabric(
     std::optional<std::vector<Program>>& fabric_programs,
     std::vector<Program*>& fabric_program_ptrs,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
-    bool enable_persistent_fabric,
     std::optional<size_t> num_links = std::nullopt);
 
 void persistent_fabric_teardown_sequence(

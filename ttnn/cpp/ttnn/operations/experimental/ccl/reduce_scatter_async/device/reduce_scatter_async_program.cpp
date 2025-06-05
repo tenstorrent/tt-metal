@@ -2477,8 +2477,6 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     const std::optional<SubDeviceId>& sub_device_id) {
     auto program = tt::tt_metal::Program();
 
-    bool persistent_fabric = true;
-
     fabric_lifetime_mode fabric_mode = fabric_lifetime_mode::PERSISTENT;
     // Link Counting Scheme: By default use all the links between the current device
     // and its neighbors. If a user specifies a value through num_links_preferred, use
