@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       vllm-commit:
-        description: "The branch or SHA of vLLM to test"
+        description: "vLLM branch or sha"
         required: false
         default: dev
   schedule:
