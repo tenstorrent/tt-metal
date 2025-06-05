@@ -129,7 +129,7 @@ jobs:
         id: format
         run: |
           FAILED_WORKFLOWS='${{ needs.analyze-data.outputs.failed_workflows }}'
-          FORMATTED_WORKFLOWS=$(echo "$FAILED_WORKFLOWS" | jq -r '.[] | "• \(.name)\n  PR: \(.pr)\n  Author: \(.author)\n  Bad SHA: \(.badSha)\n  Good SHA: \(.goodSha)"')
+          FORMATTED_WORKFLOWS=$(echo "$FAILED_WORKFLOWS" | jq -r '.[] | "• \(.name)\n    PR: \(.pr)\n    Author: \(.author)\n    Bad SHA: \(.badSha)\n    Good SHA: \(.goodSha)\n    Run: https://github.com/${{ github.repository }}/actions/runs/\(.runId)"')
           echo "formatted_workflows<<EOF" >> $GITHUB_OUTPUT
           echo "$FORMATTED_WORKFLOWS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
