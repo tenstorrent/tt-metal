@@ -51,6 +51,63 @@ FORCE_INLINE void clear_out_tiles(uint64_t write_addr, uint64_t clear_value_addr
     noc_async_write_barrier();
 }
 
+template <
+    bool is_wide_reduction,
+    uint32_t in_nblocks_c,
+    uint32_t in_cb_id,
+    uint32_t npages_to_reserve,
+    uint32_t MAX_BYTES_PER_REDUCTION,
+    bool full_dest_width,
+    uint32_t in_nbytes_leftover,
+    uint32_t clear_value_cb_id,
+    uint32_t leftover_num_tiles,
+    uint32_t window_h,
+    uint32_t window_w,
+    uint32_t in_w_padded,
+    uint32_t in_nbytes_c>
+FORCE_INLINE void read_window_with_top_left_index(
+    uint64_t clear_value_addr, uint64_t in_l1_read_base_addr, uint64_t ind) {
+    if constexpr (is_wide_reduction) {
+        for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
+            cb_reserve_back(in_cb_id, npages_to_reserve);
+            uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
+
+            uint32_t read_bytes = MAX_BYTES_PER_REDUCTION;
+            if constexpr (!full_dest_width) {
+                if (c_i == in_nblocks_c - 1) {
+                    read_bytes = in_nbytes_leftover;
+                    clear_out_tiles<clear_value_cb_id, leftover_num_tiles>(out_l1_write_addr, clear_value_addr);
+                }
+            }
+
+            for (uint32_t h = 0; h < window_h; ++h) {
+                for (uint32_t w = 0; w < window_w; ++w) {
+                    const uint32_t stick_offset = ind + w + h * in_w_padded;
+                    const uint32_t read_offset =
+                        in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
+                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
+                    out_l1_write_addr += read_bytes;
+                }
+            }
+            noc_async_read_barrier();  // At this line, read is complete.
+
+            cb_push_back(in_cb_id, npages_to_reserve);
+        }
+    } else {
+        cb_reserve_back(in_cb_id, npages_to_reserve);
+        uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
+        uint32_t h_multiples = 0;
+        for (uint32_t h = 0; h < window_h; ++h, h_multiples += in_w_padded) {
+            const uint32_t stick_offset = ind + h_multiples;
+            const uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c);
+            noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
+            out_l1_write_addr += in_nbytes_c * window_w;
+        }
+        noc_async_read_barrier();
+        cb_push_back(in_cb_id, npages_to_reserve);
+    }
+}
+
 /**
  * Pool 2D (Max pool 2D and Avg pool 2D)
  */
@@ -92,6 +149,9 @@ void kernel_main() {
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
     constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(23);
+
+    constexpr uint32_t stride_w = get_compile_time_arg_val(24);
+
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
 
     if (reader_id == 0) {
@@ -118,59 +178,77 @@ void kernel_main() {
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
-    volatile tt_l1_ptr uint16_t* reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
+    volatile tt_l1_ptr uint32_t* reader_indices_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr uint32_t is_wide_reduction = in_c > MAX_TILES_PER_REDUCTION * TILE_WIDTH;
 
     constexpr uint32_t npages_to_reserve = 1;
-    uint32_t counter = reader_id;
-    while (counter < reader_nindices) {
-        if constexpr (is_wide_reduction) {
-            const uint16_t top_left_local_index = reader_indices_ptr[counter++];
-            for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
-                cb_reserve_back(in_cb_id, npages_to_reserve);
-                uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
+    uint32_t counter = 1;
 
-                uint32_t read_bytes = MAX_BYTES_PER_REDUCTION;
-                if constexpr (!full_dest_width) {
-                    if (c_i == in_nblocks_c - 1) {
-                        read_bytes = in_nbytes_leftover;
-                        clear_out_tiles<clear_value_cb_id, leftover_num_tiles>(out_l1_write_addr, clear_value_addr);
-                    }
-                }
+    uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
+    bool first_row_value = reader_id == 0;
+    uint32_t reader_indices_on_core = 0;
 
-                for (uint32_t h = 0; h < window_h; ++h) {
-                    for (uint32_t w = 0; w < window_w; ++w) {
-                        const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
-                        const uint32_t read_offset =
-                            in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
-                        noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
-                        out_l1_write_addr += read_bytes;
-                    }
-                }
-                noc_async_read_barrier();  // At this line, read is complete.
-
-                cb_push_back(in_cb_id, npages_to_reserve);
-            }
+    if (split_reader) {
+        if (reader_id == 0) {
+            reader_indices_on_core = (reader_nindices + 1) / 2;
         } else {
-            cb_reserve_back(in_cb_id, npages_to_reserve);
-            uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
-            uint16_t top_left_local_index = reader_indices_ptr[counter++];
-            uint32_t h_multiples = 0;
-            for (uint32_t h = 0; h < window_h; ++h, h_multiples += in_w_padded) {
-                const uint32_t stick_offset = top_left_local_index + h_multiples;
-                const uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c);
-                noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
-                out_l1_write_addr += in_nbytes_c * window_w;
-            }
-            noc_async_read_barrier();
-            cb_push_back(in_cb_id, npages_to_reserve);
+            reader_indices_on_core = reader_nindices / 2;
+        }
+    } else {
+        reader_indices_on_core = reader_nindices;
+    }
+
+    while (num_segments--) {
+        uint32_t start_end_segment = reader_indices_ptr[counter++];
+        uint16_t start = start_end_segment & 0xffff;
+        uint16_t end = start_end_segment >> 16;
+
+        if (!first_row_value) {
+            start += stride_w;
+            first_row_value = true;
         }
 
-        if constexpr (split_reader) {
-            counter++;  // interleave the indices
+        for (uint16_t ind = start; ind <= end; ind += 2 * stride_w) {
+            reader_indices_on_core--;
+
+            read_window_with_top_left_index<
+                is_wide_reduction,
+                in_nblocks_c,
+                in_cb_id,
+                npages_to_reserve,
+                MAX_BYTES_PER_REDUCTION,
+                full_dest_width,
+                in_nbytes_leftover,
+                clear_value_cb_id,
+                leftover_num_tiles,
+                window_h,
+                window_w,
+                in_w_padded,
+                in_nbytes_c>(clear_value_addr, in_l1_read_base_addr, ind);
+
+            if (split_reader && ind == end) {
+                first_row_value = false;
+            }
         }
+    }
+
+    while (reader_indices_on_core--) {
+        read_window_with_top_left_index<
+            is_wide_reduction,
+            in_nblocks_c,
+            in_cb_id,
+            npages_to_reserve,
+            MAX_BYTES_PER_REDUCTION,
+            full_dest_width,
+            in_nbytes_leftover,
+            clear_value_cb_id,
+            leftover_num_tiles,
+            window_h,
+            window_w,
+            in_w_padded,
+            in_nbytes_c>(clear_value_addr, in_l1_read_base_addr, 0);
     }
 }  // kernel_main()
