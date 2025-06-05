@@ -125,7 +125,7 @@ def run_all_gather_impl(
         # slice_shape=ag_output_shape
         # slice_shape[3]=slice_shape[3]//num_devices
         # for k in range(num_devices):
-        #     ag_output_tensor[:,:,:,slice_shape[3]*k:slice_shape[3]*(k+1)] = torch.full(slice_shape, k)
+        #     ag_output_tensor[:,:,:,slice_shape[3]*k:slice_shape[3]*(k+1)] = torch.full(slice_shape, k+1)
 
         input_tensors = torch.chunk(ag_output_tensor, num_devices, dim)
 
@@ -272,25 +272,26 @@ def run_all_gather_impl(
     if enable_trace:
         # Compile the op
         tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(0)
+        if not use_legacy_allgather:
+            ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done compiling Op")
 
         # Capture the trace
         trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
         tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(0)
         ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
+        if not use_legacy_allgather:
+            ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done capturing trace")
 
         # Execute trace
         for i in range(num_iters):
             ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
+            if not use_legacy_allgather:
+                ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+            tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
+            tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
         logger.info(f"Done executing trace")
-
-        # Synchronize the devices
-        if not use_legacy_allgather:
-            ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
-
-        tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
-        tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
     else:
         for i in range(num_iters):
             tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(i)
@@ -304,9 +305,9 @@ def run_all_gather_impl(
 
             logger.info(f"Done iteration {i}")
 
-    for i in range(1):
+    for i in range(num_iters):
         tt_mm_out_tensor = tt_matmul_out_tensor_list[i]
-        torch_mm_out_tensor = torch_matmul_output_list[i]
+        torch_mm_out_tensor = torch_matmul_output_list[i if not enable_trace else 0]
 
         tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
         tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
@@ -315,15 +316,15 @@ def run_all_gather_impl(
         assert eq, f"{i} FAILED mm: {output}"
 
         tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
-        torch_ag_out_tensor = ag_output_tensor_goldens_list[i]
+        torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
 
         tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
         tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
-
         tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
         eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED ag: {output}"
+
     if not use_legacy_allgather:
         t3k_mesh_device.reset_sub_device_stall_group()
         t3k_mesh_device.clear_loaded_sub_device_manager()
@@ -346,31 +347,34 @@ def run_all_gather_impl(
     ],
 )
 @pytest.mark.parametrize(
-    "enable_trace",
+    "enable_trace,num_iters",
     [
-        True,
-        # False,
+        (True, 10),
+        (False, 1),
     ],
+    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "use_non_fused",
     [
         True,
-        # False,
+        False,
     ],
+    ids=["nonfused", "fused"],
 )
 @pytest.mark.parametrize(
     "device_params, use_legacy_allgather, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Ring),
-        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
-        # (
-        #    {"trace_region_size": 90112},
-        #    True,
-        #    ttnn.Topology.Ring,
-        # ),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
+        (
+            {"trace_region_size": 90112},
+            True,
+            ttnn.Topology.Ring,
+        ),
     ],
     indirect=["device_params"],
+    ids=["fabric_ring", "fabric_linear", "legacy_ring"],
 )
 def test_all_gather_matmul_async(
     t3k_mesh_device,
@@ -392,6 +396,7 @@ def test_all_gather_matmul_async(
     use_legacy_allgather,
     use_program_cache,
     all_gather_topology,
+    num_iters,
 ):
     run_all_gather_impl(
         t3k_mesh_device,
@@ -413,5 +418,5 @@ def test_all_gather_matmul_async(
         enable_trace=enable_trace,
         use_non_fused=use_non_fused,
         use_legacy_allgather=use_legacy_allgather,
-        num_iters=10,
+        num_iters=num_iters,
     )
