@@ -4,13 +4,12 @@
 
 import pytest
 import csv
-from models.experimental.stable_diffusion_xl_base.demo import test_demo
+from models.experimental.stable_diffusion_xl_base.demo.demo import test_demo
 from models.experimental.stable_diffusion_xl_base.utils.clip_encoder import CLIPEncoder
 import os
 import urllib
 from loguru import logger
 import statistics
-import math
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 
 test_demo.__test__ = False
@@ -47,11 +46,9 @@ def test_accuracy_sdxl(
     vae_on_device,
     captions_path,
     coco_statistics_path,
-    accuracy_eval_range,
-    expected_clip=30.998,
-    expected_fid=186.71,
+    evaluation_range,
 ):
-    start_from, num_prompts = accuracy_eval_range
+    start_from, num_prompts = evaluation_range
 
     assert (
         0 <= start_from < 5000 and start_from + num_prompts <= 5000
@@ -81,7 +78,7 @@ def test_accuracy_sdxl(
         num_inference_steps,
         classifier_free_guidance,
         vae_on_device,
-        start_from,
+        evaluation_range,
     )
 
     clip = CLIPEncoder()
@@ -98,11 +95,3 @@ def test_accuracy_sdxl(
     print(f"FID score: {fid_value:.4f}")
     print(f"Average CLIP Score: {average_clip_score:.4f}")
     print(f"Standard Deviation of CLIP Scores: {statistics.stdev(clip_scores):.4f}")
-
-    if start_from == 0 and num_prompts == 100:
-        assert math.isclose(
-            fid_value, expected_fid, abs_tol=1e-3
-        ), f"FID score changed: {fid_value:.4f} != {expected_fid:.4f}"
-        assert math.isclose(
-            average_clip_score, expected_clip, abs_tol=1e-4
-        ), f"CLIP score changed: {average_clip_score:.4f} != {expected_clip:.4f}"

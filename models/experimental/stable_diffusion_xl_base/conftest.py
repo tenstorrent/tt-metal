@@ -21,7 +21,7 @@ def pytest_addoption(parser):
 
 
 @pytest.fixture
-def accuracy_eval_range(request):
+def evaluation_range(request):
     start_from = request.config.getoption("--start-from")
     num_prompts = request.config.getoption("--num-prompts")
     if start_from is not None:
