@@ -1355,7 +1355,7 @@ ttnn::Tensor fold_tensor(
     tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1]);
 
     if (is_weight_tensor) {
-        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({0, 3, 2, 1}));
+        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({0, 3, 1, 2}));
     }
 
     return tensor_on_device;
