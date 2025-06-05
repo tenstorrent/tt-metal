@@ -112,7 +112,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
         TT_FATAL(
             false,
             "Avg pool scalars config should be calulated only for ceil_mode == true and "
-            "(ceil_pad_h > 0 || ceil_pad_w > 0)");
+            "(ceil_pad_h > 0 || ceil_pad_w > 0) or count_include_pad == false and (pad_h > 0 || pad_w > 0)");
     }
     scalars.back().end = config.out_nhw_per_core;
     return scalars;
