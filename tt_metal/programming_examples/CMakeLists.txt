@@ -14,8 +14,8 @@ set(PROGRAMMING_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul_multicore_reuse/matmul_multicore_reuse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul_multicore_reuse_mcast/matmul_multicore_reuse_mcast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul_single_core/matmul_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pad/pad_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sharding/shard_data_rm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core/pad_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm/shard_data_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding/vecadd_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core/vecadd_multi_core.cpp
 )
@@ -43,6 +43,7 @@ install(
         hello_world_datatypes_kernel
         hello_world_datamovement_kernel
         add_2_integers_in_riscv
+        add_2_integers_in_compute
         eltwise_binary
         matmul_multi_core
         eltwise_sfpu
@@ -50,8 +51,8 @@ install(
         matmul_multicore_reuse
         matmul_common
         matmul_single_core
-        pad
-        sharding
+        pad_multi_core
+        shard_data_rm
         contributed
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into /usr/share/doc on a default Docker image.
@@ -70,6 +71,7 @@ install(
         hello_world_datatypes_kernel
         hello_world_datamovement_kernel
         add_2_integers_in_riscv
+        add_2_integers_in_compute
         eltwise_binary
         matmul_multi_core
         eltwise_sfpu
@@ -77,8 +79,8 @@ install(
         matmul_multicore_reuse
         matmul_common
         matmul_single_core
-        pad
-        sharding
+        pad_multi_core
+        shard_data_rm
         contributed
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples

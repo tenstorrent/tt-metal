@@ -104,7 +104,7 @@ int main() {
     // create kernels
     KernelHandle reader_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "pad/kernels/pad_reader_dims_rm_interleaved.cpp",
+        OVERRIDE_KERNEL_PREFIX "pad_multi_core/kernels/pad_reader_dims_rm_interleaved.cpp",
         cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -112,7 +112,7 @@ int main() {
             .compile_args = reader_compile_time_args});
     KernelHandle writer_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "pad/kernels/pad_writer_dims_rm_interleaved.cpp",
+        OVERRIDE_KERNEL_PREFIX "pad_multi_core/kernels/pad_writer_dims_rm_interleaved.cpp",
         cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,

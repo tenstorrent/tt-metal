@@ -74,7 +74,7 @@ int main() {
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index, (std::uint32_t)src_is_dram};
     auto reader_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "sharding/kernels/reader_sharded_rm.cpp",
+        OVERRIDE_KERNEL_PREFIX "shard_data_rm/kernels/reader_sharded_rm.cpp",
         cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
