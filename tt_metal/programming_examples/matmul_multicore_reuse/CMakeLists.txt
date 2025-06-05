@@ -8,5 +8,5 @@ find_package(TT-Metalium REQUIRED)
 target_link_libraries(metal_example_matmul_multicore_reuse PUBLIC TT::Metalium) 
 
 target_include_directories(metal_example_matmul_multicore_reuse PRIVATE
-    $ENV{TT_METAL_HOME}/tt_metal/programming_examples
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
 )

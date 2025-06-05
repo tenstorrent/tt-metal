@@ -31,8 +31,19 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 
+ARG BOOST_VERSION=1.86.0
+RUN mkdir -p /tmp/boost \
+    && BOOST_VERSION_UNDERSCORE=$(echo ${BOOST_VERSION} | sed 's/\./_/g') \
+    && wget -O /tmp/boost/boost_${BOOST_VERSION}.tar.gz "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz" \
+    && tar -xzf /tmp/boost/boost_${BOOST_VERSION}.tar.gz -C /tmp/boost --strip-components=1 \
+    && cd /tmp/boost \
+    && ./bootstrap.sh \
+    && ./b2 install --prefix=/usr/local \
+    && rm -rf /tmp/boost
+
 RUN mkdir /debians
 # Copy all .deb files from host into the image
 COPY .build/default/*.deb /debians/
 COPY personal_cmake_stuff.sh /
 RUN chmod +x /personal_cmake_stuff.sh
+RUN echo "BOOST_VERSION: ${BOOST_VERSION}"
