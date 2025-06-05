@@ -863,7 +863,7 @@ void Cluster::set_tunnels_from_mmio_device() {
             const auto &other_chip_id = std::get<0>(connected_chip_chan);
             if (device_ids.find(other_chip_id) != device_ids.end()) {
                 // mmio chip is connected to a remote chip in its mmio group.
-                // erase from the pool so multiple ethenret connections to same remote device do not
+                // erase from the pool so multiple ethernet connections to same remote device do not
                 // pollute the counts.
                 device_ids.erase(other_chip_id);
                 std::vector<chip_id_t> first_stop = {other_chip_id};
@@ -920,7 +920,7 @@ void Cluster::set_tunnels_from_mmio_device() {
                 "All tunnels from mmio device must have same depth. Found {}. Expected {}.",
                 dev_vec.size(),
                 tunnel_depth);
-            // Now that all remotete chips have been added to respective tunnels,
+            // Now that all remote chips have been added to respective tunnels,
             // add mmio device at start of each of the tunnels.
             if (dev_vec.size() > MAX_TUNNEL_DEPTH) {
                 dev_vec.resize(dev_vec.size() - (dev_vec.size() - MAX_TUNNEL_DEPTH));
@@ -1113,11 +1113,11 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
 
             active_ethernet_cores.insert(eth_core);
         }
-        if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-            // channel 15 is used by syseng tools and must always be active for mmio chips
+        // channel 15 is used by syseng tools and must always be active for WH mmio chips with remote connections
+        if (this->arch_ == tt::ARCH::WORMHOLE_B0 && this->cluster_desc_->is_chip_mmio_capable(chip_id) &&
+            this->get_tunnels_from_mmio_device(chip_id).size() > 0) {
             constexpr uint32_t syseng_eth_channel = 15;
-            if (this->cluster_desc_->is_chip_mmio_capable(chip_id) &&
-                logical_active_eth_channels.find(syseng_eth_channel) == logical_active_eth_channels.end()) {
+            if (logical_active_eth_channels.find(syseng_eth_channel) == logical_active_eth_channels.end()) {
                 tt::umd::CoreCoord eth_core =
                     soc_desc.get_eth_core_for_channel(syseng_eth_channel, CoordSystem::LOGICAL);
                 active_ethernet_cores.insert(eth_core);
