@@ -34,13 +34,15 @@ void kernel_main() {
     const auto page_size_bytes = get_arg_val<uint32_t>(4);
     const auto payload_size_bytes = get_arg_val<uint32_t>(5);
     const auto max_pages_per_packet = get_arg_val<uint32_t>(6);
-    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(7);
-    const bool dst_is_forward = get_arg_val<uint32_t>(8);
+    const auto page_segments = get_arg_val<uint32_t>(7);
+    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(8);
+    const bool dst_is_forward = get_arg_val<uint32_t>(9);
 
+    const uint32_t aligned_page_segment_size_bytes = round_up(page_size_bytes / page_segments, alignment);
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
     // reusing the last arg for fabric setup, therefore index overlaps.
-    size_t conn_arg_idx = 8;
+    size_t conn_arg_idx = 9;
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
 
@@ -70,32 +72,37 @@ void kernel_main() {
     for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end;
          ++page_idx, ++packet_page_idx) {
         cb_wait_front(sender_cb_id, 1);
-        const uint32_t src_page_ptr = get_read_ptr(sender_cb_id);
+        const uint32_t src_page_base_addr = get_read_ptr(sender_cb_id);
 
-        // copy page to packet buffer with offset
-        const uint32_t packet_addr = packet_base_addr + packet_page_idx * aligned_page_size_bytes;
-        tt_memmove<false, false, false, 0>(packet_addr, src_page_ptr, page_size_bytes);
+        for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
+            const uint32_t page_offset = page_segment_idx * aligned_page_segment_size_bytes;
+            const uint32_t src_addr = src_page_base_addr + page_offset;
+            const uint32_t transfer_size_bytes =
+                std::min(page_size_bytes - page_offset, aligned_page_segment_size_bytes);
 
-        // !TODO better use of async copies
-        cb_pop_front(sender_cb_id, 1);
+            // copy page to packet buffer with offset
+            const uint32_t packet_addr = packet_base_addr + packet_page_idx * aligned_page_size_bytes;
+            tt_memmove<false, false, false, 0>(packet_addr, src_addr, transfer_size_bytes);
 
-        if (packet_page_idx == curr_pages_per_packet - 1) {
-            const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+            if (packet_page_idx == curr_pages_per_packet - 1) {
+                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
-            packet_header_ptr->to_noc_unicast_write(
-                tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, payload_size_bytes);
+                packet_header_ptr->to_noc_unicast_write(
+                    tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, payload_size_bytes);
 
-            connection_direction.wait_for_empty_write_slot();
-            connection_direction.send_payload_without_header_non_blocking_from_address(
-                packet_base_addr, payload_size_bytes);
-            connection_direction.send_payload_blocking_from_address(
-                (uint32_t)packet_header_ptr, packet_header_size_bytes);
+                connection_direction.wait_for_empty_write_slot();
+                connection_direction.send_payload_without_header_non_blocking_from_address(
+                    packet_base_addr, payload_size_bytes);
+                connection_direction.send_payload_blocking_from_address(
+                    (uint32_t)packet_header_ptr, packet_header_size_bytes);
 
-            // reset counters
-            packet_page_idx = 0;
-            ++packet_idx;
-            curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx);
+                // reset counters
+                packet_page_idx = 0;
+                ++packet_idx;
+                curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx);
+            }
         }
+        cb_pop_front(sender_cb_id, 1);
     }
 
     cb_reserve_back(packet_header_cb_id, 1);
