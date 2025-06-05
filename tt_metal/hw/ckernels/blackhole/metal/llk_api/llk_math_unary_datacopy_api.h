@@ -50,6 +50,6 @@ inline void llk_math_eltwise_unary_datacopy_init(
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
-    _llk_math_eltwise_unary_datacopy_init_<type, src_b_bcast_type, tilize, is_fp32_dest_acc_en, is_int_fpu_en>(
+    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, tilize, is_int_fpu_en>(
         transpose_of_faces, within_face_16x16_transpose, num_faces, dst_format);
 }
