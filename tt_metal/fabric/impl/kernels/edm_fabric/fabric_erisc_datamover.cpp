@@ -1470,6 +1470,10 @@ void kernel_main() {
     init_ptr_val<to_sender_packets_completed_streams[0]>(0);
     init_ptr_val<to_sender_packets_completed_streams[1]>(0);
     init_ptr_val<to_sender_packets_completed_streams[2]>(0);
+    // The first sender channel in the array is always for the transient/worker connection
+    // For 2D, the assigned worker channel is into sender channel stream ID [my_direction]
+    // So when we are initializing the starting credit value, we offset by 1 for the non-worker connections
+    // when accessing `SENDER_NUM_BUFFERS_ARRAY` (to get the value for the correct direction)
     init_ptr_val<sender_channel_free_slots_stream_ids[0]>(
         is_2d_fabric ? SENDER_NUM_BUFFERS_ARRAY[my_direction] : SENDER_NUM_BUFFERS_ARRAY[0]);  // LOCAL
     init_ptr_val<sender_channel_free_slots_stream_ids[1]>(

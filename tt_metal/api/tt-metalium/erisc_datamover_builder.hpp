@@ -25,6 +25,37 @@ namespace tt::tt_fabric {
 
 struct FabricRiscConfig;
 
+/**
+ * Specify the EDM types—Default, Dateline, DatelineUpstream, and DatelineUpstreamAdjacentDevice—used to configure
+ * different EDM sender/receiver buffer slots. We don't need the S2, R0 channels for the dateline EDM, and no need for
+ * S1, R1 channels for the Upstream dateline EDM.
+ *
+ *      ┌────────────────────────────────────────────────┐    ┌─────────────────────────────────────────────────────┐
+ *      │                                                │    │                                                     │
+ *      │                                                │    │                                                     │
+ *      │         Dateline           Dateline Upstream   │    │   Dateline Upstream Device Adjacent                 │
+ *      │  ┌──────────────────┐     ┌─────────────────┐  │    │         ┌─────────────────┐                         │
+ *      │  │ ┌──────────────┐ │     │ ┌─────────────┐ │  │    │         │ ┌─────────────┐ │                         │
+ *      │  │ │      S0      │ │     │ │     S0     ─┼─┼──┼────┼─────┐   │ │     S0      │ │                         │
+ *      │  │ └──────────────┘ │     │ └─────────────┘ │  │    │     │   │ └─────────────┘ │                         │
+ *      │  │ ┌──────────────┐ │     │                 │  │    │     │   │ ┌─────────────┐ │                         │
+ *      │  │ │      S1      ◄─┼──┐  │                 │  │    │     │   │ │     S1      │ │                         │
+ *      │  │ └──────────────┘ │  │  │                 │  │    │     │   │ └─────────────┘ │                         │
+ *      │  │                  │  │  │ ┌─────────────┐ │  │    │     │   │ ┌─────────────┐ │                         │
+ *      │  │        ┌─────────┼──┼──┼─►     S2      ┼─┼──┼────┼─┐   │   │ │     S2      │ │                         │
+ *      │  │        │         │  │  │ └─────────────┘ │  │    │ │   │   │ └─────────────┘ │                         │
+ *      │  │        │         │  │  │ ┌─────────────┐ │  │    │ │   │   │ ┌─────────────┐ │                         │
+ *      │  │        │         │  └──┼─┼─    R0      │ │  │    │ │   └───┼─┼►    R0      │ │                         │
+ *      │  │        │         │     │ └─────────────┘ │  │    │ │       │ └─────────────┘ │                         │
+ *      │  │ ┌──────┼───────┐ │     │                 │  │    │ │       │ ┌─────────────┐ │                         │
+ *──────┼──┼─►      R1      │ │     │                 │  │    │ └───────┼─┼►    R1      │ │                         │
+ *      │  │ └──────────────┘ │     │                 │  │    │         │ └─────────────┘ │                         │
+ *      │  └──────────────────┘     └─────────────────┘  │    │         └─────────────────┘                         │
+ *      │                                                │    │                                                     │
+ *      │                                                │    │                                                     │
+ *      │                                                │    │                                                     │
+ *      └────────────────────────────────────────────────┘    └─────────────────────────────────────────────────────┘
+ */
 enum class FabricEriscDatamoverType {
     Default = 0,
     Dateline = 1,
@@ -33,6 +64,7 @@ enum class FabricEriscDatamoverType {
     Invalid = 4,
 };
 
+// enable extra buffer slots configuration based on sender/receiver channel and EDM type.
 struct FabricEriscDatamoverOptions {
     FabricEriscDatamoverType edm_type = FabricEriscDatamoverType::Default;
     bool enable_dateline_sender_extra_buffer_slots = false;
@@ -52,6 +84,11 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
     static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
     static constexpr uint32_t DEFAULT_SENDER_ACK_NOC = 0;
+
+    static constexpr std::size_t dateline_sender_channel_skip_idx = 2;
+    static constexpr std::size_t dateline_receiver_channel_skip_idx = 0;
+    static constexpr std::size_t dateline_upstream_sender_channel_skip_idx = 1;
+    static constexpr std::size_t dateline_upstream_receiver_channel_skip_idx = 1;
 
     static constexpr std::size_t num_sender_channels_1d = 3;
     static constexpr std::size_t num_sender_channels_2d = 5;
@@ -185,6 +222,15 @@ struct FabricEriscDatamoverConfig {
     std::size_t edm_noc_vc = 0;
 
 private:
+    void configure_buffer_slots_helper(
+        Topology topology,
+        const FabricEriscDatamoverOptions& options,
+        std::array<size_t, num_sender_channels>& num_sender_buffer_slots,
+        std::array<size_t, num_sender_channels>& num_remote_sender_buffer_slots,
+        std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
+        std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
+        std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots);
+
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };
 
