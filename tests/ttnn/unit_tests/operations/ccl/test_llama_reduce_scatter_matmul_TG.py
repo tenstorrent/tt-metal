@@ -486,7 +486,7 @@ def run_reduce_scatter_test(
         tt_output_list = []
         for i in range(n_iters):
             buffer_index = 0 if trace_mode else i
-            _, tt_out_tensor = ttnn.experimental.rs_matmul(
+            _, tt_out_tensor = ttnn.experimental.llama_rs_matmul(
                 in0_t,
                 in1_t,
                 tt_input_tensors_list[buffer_index],

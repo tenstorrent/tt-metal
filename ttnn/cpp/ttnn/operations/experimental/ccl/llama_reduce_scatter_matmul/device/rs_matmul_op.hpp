@@ -106,6 +106,6 @@ struct Matmul_RS {
 
 }  // namespace ttnn::operations::experimental::ccl
 namespace ttnn::prim {
-constexpr auto rs_matmul =
-    ttnn::register_operation<"ttnn::prim::rs_matmul", ttnn::operations::experimental::ccl::Matmul_RS>();
+constexpr auto llama_rs_matmul =
+    ttnn::register_operation<"ttnn::prim::llama_rs_matmul", ttnn::operations::experimental::ccl::Matmul_RS>();
 }

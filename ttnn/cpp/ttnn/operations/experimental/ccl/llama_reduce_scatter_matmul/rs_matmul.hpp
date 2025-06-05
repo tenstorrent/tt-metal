@@ -6,13 +6,13 @@
 
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include "ttnn/operations/experimental/ccl/reduce_scatter_matmul/device/rs_matmul_op.hpp"
+#include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp"
 #include "ttnn/distributed/api.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {
 
-struct ExecuteReduceScatterMatmul {
+struct ExecuteLlamaReduceScatterMatmul {
     static std::vector<ttnn::Tensor> invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,               // mm0 used
@@ -45,8 +45,8 @@ struct ExecuteReduceScatterMatmul {
 
 }  // namespace operations::experimental::ccl
 namespace experimental {
-constexpr auto rs_matmul = ttnn::register_operation<
-    "ttnn::experimental::rs_matmul",
-    ttnn::operations::experimental::ccl::ExecuteReduceScatterMatmul>();
+constexpr auto llama_rs_matmul = ttnn::register_operation<
+    "ttnn::experimental::llama_rs_matmul",
+    ttnn::operations::experimental::ccl::ExecuteLlamaReduceScatterMatmul>();
 }  // namespace experimental
 }  // Namespace ttnn

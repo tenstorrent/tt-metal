@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_matmul/rs_matmul.hpp"
+#include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::ccl {
@@ -19,7 +19,7 @@ void py_bind_rs_matmul(pybind11::module& module) {
 
     ttnn::bind_registered_operation(
         module,
-        ttnn::experimental::rs_matmul,
+        ttnn::experimental::llama_rs_matmul,
         R"doc(all_gather_matmul(input_tensor: ttnn.Tensor, weight_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> (ttnn.Tensor, ttnn.Tensor)
 
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
@@ -50,7 +50,7 @@ void py_bind_rs_matmul(pybind11::module& module) {
 
         )doc",
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::experimental::rs_matmul)& self,
+            [](const decltype(ttnn::experimental::llama_rs_matmul)& self,
                const ttnn::Tensor& input_tensor,               // mm0 used
                const ttnn::Tensor& weight_tensor,              // mm1 used
                const ttnn::Tensor& rs_tensor,                  // rs1

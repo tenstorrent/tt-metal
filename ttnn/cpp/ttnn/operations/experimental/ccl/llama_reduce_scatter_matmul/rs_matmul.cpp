@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/ccl/reduce_scatter_matmul/device/rs_matmul_op.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_matmul/rs_matmul.hpp"
+#include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp"
+#include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
-std::vector<ttnn::Tensor> ExecuteReduceScatterMatmul::invoke(
+std::vector<ttnn::Tensor> ExecuteLlamaReduceScatterMatmul::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,               // mm0 used
     const ttnn::Tensor& weight_tensor,              // mm1 used
@@ -36,7 +36,7 @@ std::vector<ttnn::Tensor> ExecuteReduceScatterMatmul::invoke(
     const auto& mesh_view = mesh_device.get_view();
     const uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
-    return ttnn::prim::rs_matmul(
+    return ttnn::prim::llama_rs_matmul(
         input_tensor,
         weight_tensor,
         rs_tensor,
