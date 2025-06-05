@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import sys
+import subprocess
+import time
+import threading
 
 from enum import Enum
 from loguru import logger
@@ -20,6 +22,138 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
 machine_type_suffix = None
+
+# Global daemon management variables
+daemon_process = None
+# NOTE: This paths need to be same as the one written in test_fabric_edm.cpp
+daemon_pipe_path = "/tmp/tt_metal_fabric_edm_daemon"
+daemon_result_pipe_path = "/tmp/tt_metal_fabric_edm_daemon_result"
+daemon_lock = threading.Lock()
+binary_path = os.environ.get("TT_METAL_HOME", "") + "/build/test/ttnn/unit_tests_ttnn_fabric_edm"
+
+# Global direct execution mode setting (determined once per test session)
+_direct_mode_enabled = None
+
+
+def start_fabric_edm_daemon():
+    """Start the fabric EDM daemon if not already running"""
+    global daemon_process
+
+    with daemon_lock:
+        if daemon_process is not None and daemon_process.poll() is None:
+            return  # Daemon already running
+
+        logger.info("Starting fabric EDM daemon...")
+
+        # Clean up any existing pipes
+        try:
+            os.unlink(daemon_pipe_path)
+        except FileNotFoundError:
+            pass
+        try:
+            os.unlink(daemon_result_pipe_path)
+        except FileNotFoundError:
+            pass
+
+        # Start daemon process
+        cmd = [
+            binary_path,
+            "daemon_mode",
+        ]
+
+        env = os.environ.copy()
+        env["TT_METAL_ENABLE_ERISC_IRAM"] = "1"
+        env["TT_METAL_DEVICE_PROFILER"] = "1"
+
+        daemon_process = subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=None,
+            stderr=None,
+            text=True,
+        )
+
+        # Wait for daemon to create the pipe
+        max_wait = 10  # seconds
+        wait_time = 0
+        while not os.path.exists(daemon_pipe_path) and wait_time < max_wait:
+            time.sleep(0.1)
+            wait_time += 0.1
+
+        if not os.path.exists(daemon_pipe_path):
+            raise RuntimeError("Daemon failed to create communication pipe")
+
+        logger.info(f"Fabric EDM daemon started with PID {daemon_process.pid}")
+
+
+def stop_fabric_edm_daemon():
+    """Stop the fabric EDM daemon"""
+    global daemon_process
+
+    with daemon_lock:
+        if daemon_process is None:
+            return
+
+        logger.info("Stopping fabric EDM daemon...")
+
+        try:
+            # Send shutdown command
+            with open(daemon_pipe_path, "w") as pipe:
+                pipe.write("SHUTDOWN\n")
+                pipe.flush()
+
+            # Wait for process to terminate
+            daemon_process.wait(timeout=5)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            # Force kill if graceful shutdown fails
+            if daemon_process.poll() is None:
+                daemon_process.kill()
+                daemon_process.wait()
+
+        daemon_process = None
+
+        # Clean up pipes
+        try:
+            os.unlink(daemon_pipe_path)
+        except FileNotFoundError:
+            pass
+        try:
+            os.unlink(daemon_result_pipe_path)
+        except FileNotFoundError:
+            pass
+
+        logger.info("Fabric EDM daemon stopped")
+
+
+def send_test_to_daemon(test_mode, test_params_str):
+    """Send test parameters to daemon and get result"""
+
+    # Create result pipe if it doesn't exist
+    try:
+        os.mkfifo(daemon_result_pipe_path, 0o666)
+    except FileExistsError:
+        pass
+
+    # Send test command
+    command = f"TEST:{test_mode}:{test_params_str}\n"
+
+    with open(daemon_pipe_path, "w") as pipe:
+        pipe.write(command)
+        pipe.flush()
+
+    # Read result
+    with open(daemon_result_pipe_path, "r") as result_pipe:
+        result_line = result_pipe.readline().strip()
+        return int(result_line)
+
+
+def get_direct_mode():
+    return _direct_mode_enabled
+
+
+def set_direct_mode(enabled):
+    global _direct_mode_enabled
+    _direct_mode_enabled = enabled
 
 
 def update_machine_type_suffix(machine_type: str):
@@ -321,38 +455,61 @@ def run_fabric_edm(
         raise ValueError(f"Invalid test mode: {test_mode}")
 
     logger.warning("removing file profile_log_device.csv")
-    os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
+    subprocess.run(["rm", "-rf", f"{os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv"])
 
     enable_persistent_kernel_cache()
-    cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
-            {os.environ['TT_METAL_HOME']}/build/test/ttnn/unit_tests_ttnn_fabric_edm \
-                {test_mode} \
-                {int(is_unicast)} \
-                {noc_message_type} \
-                {num_messages} \
-                {num_links} \
-                {num_op_invocations} \
-                {int(line_sync)} \
-                {line_size} \
-                {packet_size} \
-                {fabric_mode.value} \
-                {int(disable_sends_for_interior_workers)} \
-                {int(unidirectional)} \
-                {int(senders_are_unidirectional)}"
-    if test_mode == "1D_fabric_on_mesh":
-        cmd += f" \
-            {num_cluster_rows} \
-            {num_cluster_cols} \
-            0"
-    logger.info(f"Running command: {cmd}")
-    rc = os.system(cmd)
+
+    use_direct_exec = get_direct_mode()
+
+    if not use_direct_exec:
+        try:
+            # Start daemon if not already running
+            start_fabric_edm_daemon()
+
+            # Create parameter string for daemon
+            test_params_str = f"{int(is_unicast)}|{noc_message_type}|{num_messages}|{num_links}|{num_op_invocations}|{int(line_sync)}|{line_size}|{packet_size}|{fabric_mode.value}|{int(disable_sends_for_interior_workers)}|{int(unidirectional)}|{int(senders_are_unidirectional)}"
+
+            if test_mode == "1D_fabric_on_mesh":
+                test_params_str += f"|{num_cluster_rows}|{num_cluster_cols}|0"
+
+            logger.info(f"Sending test to daemon: {test_mode}:{test_params_str}")
+            rc = send_test_to_daemon(test_mode, test_params_str)
+
+        except Exception as e:
+            logger.warning(f"Daemon mode failed: {e}, falling back to direct execution")
+    else:
+        # Fallback to original direct execution
+        cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
+                    {binary_path} \
+                    {test_mode} \
+                    {int(is_unicast)} \
+                    {noc_message_type} \
+                    {num_messages} \
+                    {num_links} \
+                    {num_op_invocations} \
+                    {int(line_sync)} \
+                    {line_size} \
+                    {packet_size} \
+                    {fabric_mode.value} \
+                    {int(disable_sends_for_interior_workers)} \
+                    {int(unidirectional)} \
+                    {int(senders_are_unidirectional)}"
+        if test_mode == "1D_fabric_on_mesh":
+            cmd += f" \
+                {num_cluster_rows} \
+                {num_cluster_cols} \
+                0"
+        logger.info(f"Running command: {cmd}")
+        result = subprocess.run(cmd, shell=True, capture_output=False)
+        rc = result.returncode
 
     disable_persistent_kernel_cache()
     if rc != 0:
-        if os.WEXITSTATUS(rc) == 1:
+        # Handle exit codes differently for daemon vs direct execution
+        if rc == 1:
             pytest.skip("Skipping test because it only works with T3000")
             return
-        logger.info("Error in running the test")
+        logger.info(f"Error in running the test {rc}")
         assert False
 
     zone_name_inner = "MAIN-TEST-BODY"
@@ -376,6 +533,26 @@ def run_fabric_edm(
 
     # Reset for the next test case
     reset_machine_type_suffix()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def initialize_daemon_mode(request):
+    """Initialize global daemon mode setting once per test session"""
+    # Check pytest command line option first, then fall back to environment variable
+    direct_exec_mode_enabled = hasattr(request.config.option, "direct_exec") and request.config.option.direct_exec
+
+    # Set global daemon mode
+    set_direct_mode(direct_exec_mode_enabled)
+
+    if direct_exec_mode_enabled:
+        logger.info("Fabric EDM daemon mode disabled, using direct execution")
+        yield
+    else:
+        logger.info("Fabric EDM daemon mode enabled for this test session")
+        start_fabric_edm_daemon()
+        yield
+        logger.info("Stopping fabric EDM daemon after test session")
+        stop_fabric_edm_daemon()
 
 
 @pytest.mark.ubench_quick_tests
