@@ -36,26 +36,32 @@ TEST_F(N300DeviceFixture, EthValidateEthernetConnectivity) {
     const auto& device_0_active_eth_cores = device_0->get_active_ethernet_cores();
     const auto& device_1_active_eth_cores = device_1->get_active_ethernet_cores();
 
-    ASSERT_TRUE(device_0_active_eth_cores.size() == 2);
+    // mmio device (0) has 2 ports (8, 9) reserved for umd non-mmio access which are also active links.
+    // mmio device (0) port 15 is reserved for syseng tools and is active without any remote connections.
+    ASSERT_TRUE(device_0_active_eth_cores.size() == 3);
     ASSERT_TRUE(device_1_active_eth_cores.size() == 2);
-    // mmio device (0) has 2 ports (8, 9) reserved for umd non-mmio access.
-    // mmio device (0) port 15 is reserved for syseng tools.
     ASSERT_TRUE(device_0->get_inactive_ethernet_cores().size() == 13);
     ASSERT_TRUE(device_1->get_inactive_ethernet_cores().size() == 14);
 
     for (const auto& core : device_0_active_eth_cores) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), core)) {
+            continue;
+        }
         std::tuple<chip_id_t, CoreCoord> core_on_chip_1 = device_0->get_connected_ethernet_core(core);
         ASSERT_TRUE(std::get<0>(core_on_chip_1) == 1);
         ASSERT_TRUE(device_1_active_eth_cores.find(std::get<1>(core_on_chip_1)) != device_1_active_eth_cores.end());
     }
     for (const auto& core : device_1_active_eth_cores) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), core)) {
+            continue;
+        }
         std::tuple<chip_id_t, CoreCoord> core_on_chip_0 = device_1->get_connected_ethernet_core(core);
         ASSERT_TRUE(std::get<0>(core_on_chip_0) == 0);
         ASSERT_TRUE(device_0_active_eth_cores.find(std::get<1>(core_on_chip_0)) != device_0_active_eth_cores.end());
     }
 
     // Check conversion to noc coords
-    std::vector<CoreCoord> chip_0_eth_noc_coords_expected = {CoreCoord(25, 17), CoreCoord(18, 17)};
+    std::vector<CoreCoord> chip_0_eth_noc_coords_expected = {CoreCoord(25, 17), CoreCoord(18, 17), CoreCoord(21, 17)};
 
     std::vector<CoreCoord> chip_0_eth_logical_coords;
     std::copy(
