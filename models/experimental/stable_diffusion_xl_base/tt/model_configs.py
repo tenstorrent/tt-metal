@@ -79,6 +79,24 @@ class ModelOptimisations:
             always_preprocess_weights=False,
             transpose_shards=True,
         )
+
+        self.conv_configs["ABH_64_NO_ADB_BS_BF16"] = ttnn.Conv2dConfig(
+            dtype=conv_act_dtype,
+            weights_dtype=self.conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=64,
+            preprocess_weights_on_device=False,
+            always_preprocess_weights=False,
+            transpose_shards=True,
+        )
+
         self.conv_configs["ABH_128_ADB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
             weights_dtype=self.conv_ws_dtype,
@@ -129,7 +147,7 @@ class ModelOptimisations:
         )
         self.conv_configs["ABH_256_NO_ADB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
-            weights_dtype=self.conv_ws_dtype,
+            weights_dtype=self.conv_w_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=False,
@@ -320,7 +338,7 @@ class ModelOptimisations:
             elif "up_blocks.0.upsamplers.0" == conv_path:
                 return self.conv_configs["ABH_256_NO_ADB_WS"]
             elif ("up_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
-                return self.conv_configs["ABH_64_NO_ADB_BS"]
+                return self.conv_configs["ABH_64_NO_ADB_BS_BF16"]
             elif "up_blocks.0.resnets.2.conv1" == conv_path:
                 return self.conv_configs["ABH_512_NO_ADB_WS"]
 
