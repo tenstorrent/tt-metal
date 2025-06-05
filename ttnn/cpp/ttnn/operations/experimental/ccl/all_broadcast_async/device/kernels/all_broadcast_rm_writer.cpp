@@ -133,7 +133,6 @@ void kernel_main() {
             offset += packet_size;  // advance the noc address for the next packet
         }
         row_id++;
-        noc_async_write_barrier();
         cb_pop_front(cb0_id, 1);
     }
 
