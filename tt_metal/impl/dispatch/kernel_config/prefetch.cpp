@@ -209,8 +209,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         TT_FATAL(false, "PrefetchKernel must be one of (or both) H and D variants");
     }
 
-    if ((static_config_.is_h_variant.value() ^ static_config_.is_d_variant.value()) &&
-        tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+    if (!is_hd() && tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
         create_edm_connection_sems(edm_connection_attributes_);
     }
 }
@@ -474,6 +473,10 @@ void PrefetchKernel::CreateKernel() {
         {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
     };
+
+    if (!is_hd() && tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+        defines["FABRIC_RELAY"] = "1";
+    }
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
     configure_kernel_variant(
