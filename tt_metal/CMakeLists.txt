@@ -168,11 +168,11 @@ target_sources(
             include/compute_kernel_api/tile_move_copy.h
             include/compute_kernel_api/tilize.h
             include/compute_kernel_api/transpose_wh.h
-            include/compute_kernel_api/untilize.h
+            include/compute_kernel_api/untilize.h            include/compute_kernel_api/eltwise_binary.h
+            include/compute_kernel_api/tile_move_copy.h
+
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
-            programming_examples/matmul_common/bmm_op.hpp
-            programming_examples/matmul_common/kernels/compute/bmm_large_block_zm.cpp
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_addr_map.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_addrmod.h
@@ -345,6 +345,9 @@ target_sources(
             kernels/dataflow/reader_unary.cpp
             kernels/dataflow/writer_unary.cpp
             kernels/dataflow/writer_unary_1.cpp
+
+            jit_build/genfiles.cpp
+            jit_build/genfiles.hpp
 
 
 )
