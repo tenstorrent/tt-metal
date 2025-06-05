@@ -10,6 +10,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.ttnn_utility_fuction import create_random_torch_tensors, convert_torch_to_ttnn_tensor
 
+DEFAULT_SHAPE = (64, 64)
+
 
 def _ttt_where_test_impl(
     device, tensor_shape: tuple, tt_dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, mem_config=None
@@ -62,17 +64,17 @@ def test_ttt_where_multidim(device, d5, d4, d3, h, w):
 @pytest.mark.xfail(reason="Integer data types are not yet supported.")
 @pytest.mark.parametrize("tt_dtype", [ttnn.uint8, ttnn.uint16, ttnn.int32, ttnn.uint32])
 def test_ttt_where_int_types(device, tt_dtype):
-    _ttt_where_test_impl(device, (64, 64), tt_dtype=tt_dtype)
+    _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
 
 
 @pytest.mark.xfail(reason="ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b data types are not yet supported.")
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_ttt_where_float_types(device, tt_dtype):
-    _ttt_where_test_impl(device, (64, 64), tt_dtype=tt_dtype)
+    _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
 
 
 @pytest.mark.xfail(reason="ROW_MAJOR_LAYOUT is not yet supported.")
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_ttt_where_layouts(device, layout):
     # Missing parameters in from_torch() for layout test coverage: tile, pad_value
-    _ttt_where_test_impl(device, (64, 64), layout=layout)
+    _ttt_where_test_impl(device, DEFAULT_SHAPE, layout=layout)
