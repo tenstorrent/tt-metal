@@ -576,14 +576,11 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
     const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping,
     uint32_t starting_host_page_idx,
     uint32_t ending_host_page_idx) {
-    const auto& core_host_pages_vec = buffer_page_mapping->core_host_page_indices_[core_id];
-    const tt::stl::Span<const std::optional<uint32_t>> core_host_pages(
-        core_host_pages_vec.data(), buffer_page_mapping->num_pages_per_core_[core_id]);
+    const std::vector<std::optional<uint32_t>> core_host_pages = buffer_page_mapping->core_host_page_indices_[core_id];
+    TT_ASSERT(std::is_sorted(core_host_pages.begin(), core_host_pages.end()));
+    TT_ASSERT(!buffer.is_nd_sharded());
 
     auto is_host_page_within_region = [&](const std::optional<uint32_t> host_page) {
-        if (!host_page) {
-            return false;
-        }
         return *host_page >= starting_host_page_idx && *host_page < ending_host_page_idx;
     };
 
@@ -609,21 +606,12 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
 
     const bool is_core_end_host_page_last_page_in_shard = core_end_host_page_it == core_host_pages.rbegin();
     if (is_core_end_host_page_last_page_in_shard) {
-        uint32_t num_dev_pages_in_shard;
-        if (buffer.is_nd_sharded()) {
-            num_dev_pages_in_shard = buffer_page_mapping->num_pages_per_core_[core_id];
-        } else {
-            num_dev_pages_in_shard =
-                buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
-        }
+        const uint32_t num_dev_pages_in_shard =
+            buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
         num_dev_pages_to_process =
             num_dev_pages_in_shard - buffer_page_mapping->host_page_to_local_shard_page_mapping_[start_host_page];
     } else {
-        auto host_page_after_end_host_page_it = core_end_host_page_it - 1;
-        while (!host_page_after_end_host_page_it->has_value()) {
-            host_page_after_end_host_page_it--;
-        }
-        const uint32_t host_page_after_end_host_page = **host_page_after_end_host_page_it;
+        const uint32_t host_page_after_end_host_page = **(core_end_host_page_it - 1);
         num_dev_pages_to_process =
             buffer_page_mapping->host_page_to_local_shard_page_mapping_[host_page_after_end_host_page] -
             buffer_page_mapping->host_page_to_local_shard_page_mapping_[start_host_page];

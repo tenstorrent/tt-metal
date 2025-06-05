@@ -6,7 +6,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distribution_spec.hpp>
+#include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
 

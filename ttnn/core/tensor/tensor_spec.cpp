@@ -142,7 +142,7 @@ TensorSpec TensorSpec::with_memory_config(MemoryConfig memory_config) const {
 }
 
 void TensorSpec::populate_sharding_specs() {
-    /*if (memory_config().created_with_nd_shard_spec()) {
+    if (memory_config().created_with_nd_shard_spec()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
             tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
         }
@@ -150,7 +150,7 @@ void TensorSpec::populate_sharding_specs() {
         if (auto upd_mem_config = populate_nd_shard_spec_from_legacy()) {
             tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
         }
-    }*/
+    }
 }
 
 std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() const {
