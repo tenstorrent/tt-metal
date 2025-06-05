@@ -269,11 +269,11 @@ void SortProgramFactorySingleRowSingleCore::override_runtime_arguments(
             auto& reader_runtime_args =
                 GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core);
             reader_runtime_args[0] = input_tensor_buffer->address();
+            reader_runtime_args[1] = index_tensor_buffer->address();
 
             auto& writer_runtime_args =
                 GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core);
             writer_runtime_args[0] = value_tensor_buffer->address();
-            writer_runtime_args[1] = index_tensor_buffer->address();
 
             if (all_core_utilization_loop_count < 1 && all_core_utilization_loop_residuum != 0) {
                 residuum_count++;
@@ -570,9 +570,9 @@ void SortProgramFactorySingleRowMultiCore::override_runtime_arguments(
         cached_program.program,
         cached_program.shared_variables.coordinator_kernel_id,
         cached_program.shared_variables.coordinator_core);
-    coordinator_core_runtime_args[5] = input_tensor_buffer->address();
-    coordinator_core_runtime_args[6] = value_tensor_buffer->address();
-    coordinator_core_runtime_args[7] = index_tensor_buffer->address();
+    coordinator_core_runtime_args[7] = input_tensor_buffer->address();
+    coordinator_core_runtime_args[8] = value_tensor_buffer->address();
+    coordinator_core_runtime_args[9] = index_tensor_buffer->address();
 
     for (const auto& core_range : cached_program.shared_variables.worker_core_range.ranges()) {
         for (const auto& core : core_range) {
