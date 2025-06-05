@@ -36,7 +36,7 @@ void MAIN {
         cb_reserve_back_st(cb_out0, per_core_block_size);
 
 
-        tile_regs_acquire();
+        tile_regs_acquire_st();
         
 	// Perform the elementwise operation on the tiles in the block 
 	// and store them in the destination register
@@ -44,9 +44,9 @@ void MAIN {
             add_tiles_st(cb_in0, cb_in1, i, i, i);
         }
 
-        tile_regs_commit();
+        tile_regs_commit_st();
 
-        tile_regs_wait();
+        tile_regs_wait_st();
 
         // Pack all the output tiles from destination register out to 
 	// the output circular buffer that resides in L1 memory	
@@ -54,7 +54,7 @@ void MAIN {
             pack_tile(i, cb_out0);
         }
 
-        tile_regs_release();
+        tile_regs_release_st();
 
 	// Update the write pointer and counts for the output circular buffer. 
         cb_push_back_st(cb_out0, per_core_block_size);

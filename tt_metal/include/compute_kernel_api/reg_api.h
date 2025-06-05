@@ -8,7 +8,6 @@
 
 namespace ckernel {
 
-#if 0 
 
 /**
  * Acquire an exclusive lock on the DST register for the UNPACK thread.
@@ -34,7 +33,6 @@ ALWI void tile_regs_wait_st() { UNPACK((llk_packer_wait_for_math_done())); }
  */
 ALWI void tile_regs_release_st() { UNPACK((llk_pack_dest_section_done())); }
 
-#endif
 
 /**
  * @deprecated This function is deprecated, please use `tile_regs_acquire()` instead.
