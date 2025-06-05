@@ -62,7 +62,7 @@ struct WorkerToFabricEdmSenderImpl {
     static constexpr uint32_t close_connection_request_value = 2;
     // HACK: Need a way to properly set this up
 
-    WorkerToFabricEdmSenderImpl() : from_remote_buffer_free_slots_ptr(nullptr) {}
+    WorkerToFabricEdmSenderImpl() = default;
 
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
@@ -174,7 +174,7 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
-    WorkerToFabricEdmSenderImpl(
+    FORCE_INLINE WorkerToFabricEdmSenderImpl(
         bool connected_to_persistent_fabric,
         uint8_t direction,
         uint8_t edm_worker_x,
@@ -371,9 +371,12 @@ struct WorkerToFabricEdmSenderImpl {
         // We need to write our read counter value to the register before we signal the EDM
         // As EDM will potentially increment the register as well
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+            this->buffer_slot_write_counter.reset();
             this->buffer_slot_write_counter.counter = *this->worker_teardown_addr;
             this->buffer_slot_write_counter.index = BufferIndex{static_cast<uint8_t>(this->buffer_slot_write_counter.counter % static_cast<uint32_t>(this->num_buffers_per_channel))};
             this->buffer_slot_index = this->buffer_slot_write_counter.get_buffer_index();
+        } else {
+            this->buffer_slot_index = BufferIndex(0);
         }
 
         // write-back the read counter
@@ -461,7 +464,7 @@ struct WorkerToFabricEdmSenderImpl {
     volatile tt_l1_ptr uint32_t* worker_teardown_addr;
     size_t edm_buffer_base_addr;
 
-    BufferIndex buffer_slot_index{0};
+    BufferIndex buffer_slot_index;
 
     // WORKER ONLY
     ChannelCounter<EDM_NUM_BUFFER_SLOTS> buffer_slot_write_counter;
