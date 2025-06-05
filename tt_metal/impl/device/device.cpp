@@ -1095,10 +1095,6 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
-    if (this->is_profiler_active()) {
-        tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
-    }
-
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
 
@@ -1659,20 +1655,6 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
         return HalMemType::L1;
     }
 }
-
-void Device::mark_profiler_as_active() {
-#if defined(TRACY_ENABLE)
-    this->is_profiler_active_ = true;
-#endif
-}
-
-void Device::mark_profiler_as_inactive() {
-#if defined(TRACY_ENABLE)
-    this->is_profiler_active_ = false;
-#endif
-}
-
-bool Device::is_profiler_active() const { return this->is_profiler_active_; }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
 
