@@ -12,6 +12,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      vllm-commit:
+        description: "The branch or SHA of vLLM to test"
+        required: false
+        default: dev
 
 jobs:
   vllm-tests:
@@ -84,7 +88,7 @@ jobs:
         with:
           repository: tenstorrent/vllm
           path: docker-job/vllm
-          ref: dev
+          ref: ${{ inputs.vllm-commit }}
           fetch-depth: 1
 
       - name: 📀 Install vLLM
