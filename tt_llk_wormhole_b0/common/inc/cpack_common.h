@@ -358,7 +358,7 @@ inline void set_packer_l1_offset(const uint pack_dst_format, const uint face_r_d
     TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC1_REG8_L1_Dest_addr_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
 }
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void reconfig_packer_data_format(const uint pack_src_format, const uint pack_dst_format, const uint tile_size, const uint face_r_dim = FACE_R_DIM)
 {
     // Get pointer to registers for current state ID

@@ -45,14 +45,14 @@ void run_kernel()
 
 // copy srca to dest
 #ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, BroadcastType::NONE, false, is_fp32_dest_acc_en, is_int_fpu_en>(0, 0, 4, MATH_FORMAT);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, is_int_fpu_en>(0, 0, 4, MATH_FORMAT);
 #else
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, BroadcastType::NONE, is_fp32_dest_acc_en, is_int_fpu_en>(0, 0, 4, MATH_FORMAT);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en>(0, 0, 4, MATH_FORMAT);
 #endif
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<true, false>(MATH_FORMAT, MATH_FORMAT);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, BroadcastType::NONE, is_fp32_dest_acc_en, false>(0, MATH_FORMAT, MATH_FORMAT);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, false>(0, MATH_FORMAT, MATH_FORMAT);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
@@ -74,14 +74,14 @@ void run_kernel()
     std::fill(buffer_Dest, buffer_Dest + 16 * 16 * 4, 0xdeadbeef);
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en, false>(PACK_IN, PACK_OUT, 16 * 16 * 4);
-    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE, false>(PACK_IN, PACK_OUT, 16 * 16 * 4);
+    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor>();
     _llk_pack_untilize_init_<ct_dim>(PACK_IN, PACK_OUT, FACE_R_DIM, 4);
     // Seperated pack_untilize_init for archs because BH takes in 2 formats and WH takes in one.
     // Added second format argument (PACK_OUT). Was missing second format argument for BH, this is why tests were previously failing.
 #else
-    _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en>(PACK_IN, PACK_OUT, 16 * 16 * 4);
-    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, UNTILIZE, is_fp32_dest_acc_en>();
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, UNTILIZE>(PACK_IN, PACK_OUT, 16 * 16 * 4);
+    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor, UNTILIZE>();
     _llk_pack_untilize_init_<ct_dim>(PACK_OUT, FACE_R_DIM, 4);
 #endif
 

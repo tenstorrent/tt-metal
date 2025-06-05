@@ -43,7 +43,7 @@ inline void _llk_packer_set_math_semaphore_()
 // Wait for all writes to complete in L1 (header + data)
 // Tell math it can write again
 // Clear dest
-template <DstSync Dst, bool is_fp32_dest_acc_en = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_dest_section_done_()
 {
 #ifdef PERF_DUMP
@@ -98,7 +98,7 @@ inline void _llk_init_packer_dest_offset_registers_(const std::uint32_t face_r_d
     select_packer_dest_registers<Dst>();
 }
 
-template <DstSync Dst, DstTileFaceLayout FaceLayout = RowMajor, bool is_fp32_dest_acc_en = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, DstTileFaceLayout FaceLayout = RowMajor>
 inline void _llk_pack_dest_init_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
 {
     tensix_sync();
