@@ -388,6 +388,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     EXPECT_EQ(src, dst);
 }
 
+// clang-format off
 INSTANTIATE_TEST_SUITE_P(
     BufferDistributionSpec,
     MeshBufferReadWriteTests,
@@ -408,17 +409,16 @@ INSTANTIATE_TEST_SUITE_P(
                     .buffer_type = BufferType::L1,
                 },
                 MeshBufferReadWriteExpected{
-                    .explicit_core_page_mapping =
-                        {
-                            {0, 1},
-                            {2, std::nullopt},
-                            {3, 4},
-                            {5, std::nullopt},
-                            {6, 7},
-                            {8, std::nullopt},
-                            {9, 10},
-                            {11, std::nullopt},
-                        },
+                    .explicit_core_page_mapping = {
+                        {0, 1},
+                        {2, std::nullopt},
+                        {3, 4},
+                        {5, std::nullopt},
+                        {6, 7},
+                        {8, std::nullopt},
+                        {9, 10},
+                        {11, std::nullopt},
+                    },
                 },
             },
             // HEIGHT sharding with padding along shard width + random CoreRangeSet; tile layout
@@ -435,13 +435,12 @@ INSTANTIATE_TEST_SUITE_P(
                     .buffer_type = BufferType::L1,
                 },
                 MeshBufferReadWriteExpected{
-                    .explicit_core_page_mapping =
-                        {
-                            {0, 1, std::nullopt, 2, 3, std::nullopt},
-                            {4, 5, std::nullopt, 6, 7, std::nullopt},
-                            {8, 9, std::nullopt, 10, 11, std::nullopt},
-                            {12, 13, std::nullopt, 14, 15, std::nullopt},
-                        },
+                    .explicit_core_page_mapping = {
+                        {0, 1, std::nullopt, 2, 3, std::nullopt},
+                        {4, 5, std::nullopt, 6, 7, std::nullopt},
+                        {8, 9, std::nullopt, 10, 11, std::nullopt},
+                        {12, 13, std::nullopt, 14, 15, std::nullopt},
+                    },
                 },
             },
             // WIDTH sharding with padding along shard height; row major layout with aligned page size
@@ -457,11 +456,10 @@ INSTANTIATE_TEST_SUITE_P(
                     .buffer_type = BufferType::L1,
                 },
                 MeshBufferReadWriteExpected{
-                    .explicit_core_page_mapping =
-                        {
-                            {0, 2, 4, std::nullopt, 6, 8, 10, std::nullopt},
-                            {1, 3, 5, std::nullopt, 7, 9, 11, std::nullopt},
-                        },
+                    .explicit_core_page_mapping = {
+                        {0, 2, 4, std::nullopt, 6, 8, 10, std::nullopt},
+                        {1, 3, 5, std::nullopt, 7, 9, 11, std::nullopt},
+                    },
                 },
             },
             // ND sharding with multiple shards per bank; row major layout with non-aligned page size
@@ -478,17 +476,18 @@ INSTANTIATE_TEST_SUITE_P(
                     .buffer_type = BufferType::L1,
                 },
                 MeshBufferReadWriteExpected{
-                    .explicit_core_page_mapping =
-                        {{0, 1, 3, 4, 30, 31, 33, 34},
-                         {2, std::nullopt, 5, std::nullopt, 32, std::nullopt, 35, std::nullopt},
-                         {6, 7, 9, 10, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                         {8, std::nullopt, 11, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                         {12, 13, 15, 16, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                         {14, std::nullopt, 17, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                         {18, 19, 21, 22, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                         {20, std::nullopt, 23, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                         {24, 25, 27, 28, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                         {26, std::nullopt, 29, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}},
+                    .explicit_core_page_mapping = {
+                        {0, 1, 3, 4, 30, 31, 33, 34},
+                        {2, std::nullopt, 5, std::nullopt, 32, std::nullopt, 35, std::nullopt},
+                        {6, 7, 9, 10, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+                        {8, std::nullopt, 11, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+                        {12, 13, 15, 16, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+                        {14, std::nullopt, 17, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+                        {18, 19, 21, 22, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+                        {20, std::nullopt, 23, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+                        {24, 25, 27, 28, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+                        {26, std::nullopt, 29, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}
+                    },
                 },
             },
             // ND sharding with multiple shards per bank; tile layout
@@ -505,87 +504,15 @@ INSTANTIATE_TEST_SUITE_P(
                     .buffer_type = BufferType::L1,
                 },
                 MeshBufferReadWriteExpected{
-                    .explicit_core_page_mapping =
-                        {{0,
-                          1,
-                          3,
-                          4,
-                          12,
-                          13,
-                          15,
-                          16,
-                          26,
-                          std::nullopt,
-                          29,
-                          std::nullopt,
-                          38,
-                          std::nullopt,
-                          41,
-                          std::nullopt,
-                          54,
-                          55,
-                          57,
-                          58,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt},
-                         {2,  std::nullopt, 5,  std::nullopt, 14,           std::nullopt, 17,           std::nullopt,
-                          30, 31,           33, 34,           42,           43,           45,           46,
-                          56, std::nullopt, 59, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                         {6,
-                          7,
-                          9,
-                          10,
-                          18,
-                          19,
-                          21,
-                          22,
-                          32,
-                          std::nullopt,
-                          35,
-                          std::nullopt,
-                          44,
-                          std::nullopt,
-                          47,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt},
-                         {8,
-                          std::nullopt,
-                          11,
-                          std::nullopt,
-                          20,
-                          std::nullopt,
-                          23,
-                          std::nullopt,
-                          48,
-                          49,
-                          51,
-                          52,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt},
-                         {24,           25,           27,           28,           36,           37,
-                          39,           40,           50,           std::nullopt, 53,           std::nullopt,
-                          std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
-                          std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}},
+                    .explicit_core_page_mapping = {
+                        {0, 1, 3, 4, 12, 13, 15, 16, 26, std::nullopt, 29, std::nullopt, 38, std::nullopt, 41, std::nullopt, 54, 55, 57, 58, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+                        {2, std::nullopt, 5, std::nullopt, 14, std::nullopt, 17, std::nullopt, 30, 31, 33, 34, 42, 43, 45, 46, 56, std::nullopt, 59, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+                        {6, 7, 9, 10, 18, 19, 21, 22, 32, std::nullopt, 35, std::nullopt, 44, std::nullopt, 47, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+                        {8, std::nullopt, 11, std::nullopt, 20, std::nullopt, 23, std::nullopt, 48, 49, 51, 52, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+                        {24, 25, 27, 28, 36, 37, 39, 40, 50, std::nullopt, 53, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}
+                    },
                 },
             })  // Values
         )       // Combine
 );
+// clang-format on
