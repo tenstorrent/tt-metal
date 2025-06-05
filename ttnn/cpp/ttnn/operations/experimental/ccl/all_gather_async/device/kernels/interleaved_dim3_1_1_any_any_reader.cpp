@@ -86,10 +86,10 @@ void kernel_main() {
     if (topology == Topology::Linear) {
         if (direction == 1) {
             slices_expected = num_targets_forward_direction;
-            writes_expected = num_targets_backward_direction;
+            writes_expected = num_targets_backward_direction ? num_targets_forward_direction : 0;
         } else {
             slices_expected = num_targets_backward_direction;
-            writes_expected = num_targets_forward_direction;
+            writes_expected = num_targets_forward_direction ? num_targets_backward_direction : 0;
         }
     } else if (topology == Topology::Ring) {
         if (direction == 1) {
