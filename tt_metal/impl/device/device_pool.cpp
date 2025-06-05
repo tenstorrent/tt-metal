@@ -688,6 +688,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     std::vector<chip_id_t> devices_to_close;
 
     ZoneScoped;
+    tt::log_info(tt::LogMetal, "close_devices for {} devices", devices.size());
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;
@@ -732,9 +733,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
     for (const chip_id_t device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
-        if (device->is_profiler_active()) {
-            detail::DumpDeviceProfileResults(device, ProfilerDumpState::LAST_CLOSE_DEVICE);
-        }
+        detail::DumpDeviceProfileResults(device, ProfilerDumpState::LAST_CLOSE_DEVICE);
     }
 
     dispatch_firmware_active_ = false;
@@ -749,6 +748,11 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
         auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(dev_id);
         tt::llrt::internal_::wait_until_cores_done(dev_id, RUN_MSG_GO, dispatch_cores, 0);
+    }
+
+    for (const chip_id_t device_id : devices_to_close) {
+        IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
+        detail::DumpDeviceProfileResults(device, ProfilerDumpState::ONLY_DISPATCH_CORES);
     }
 
     // Process registered termination signals from topology
