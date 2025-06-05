@@ -474,6 +474,14 @@ void Device::reset_cores() {
     ZoneScoped;
 
     const auto& hal = MetalContext::instance().hal();
+    auto get_active_erisc_launch_flag_addr = [&]() {
+        auto core_type_idx =
+            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        std::uint32_t launch_erisc_addr =
+            tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
+        return launch_erisc_addr;
+    };
+
     auto erisc_app_still_running = [&](CoreCoord virtual_core) {
         // Check if the kernel/erisc_app is still running on a ethernet core with context switching enabled
         // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
@@ -486,19 +494,10 @@ void Device::reset_cores() {
             tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id()),
             "Invalid core {} for context switch check",
             virtual_core.str());
-        auto core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-        std::uint32_t launch_erisc_addr = hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
+        std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
         auto data =
             tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
         return (data[0] != 0);
-    };
-
-    auto get_active_erisc_launch_flag_addr = [&]() {
-        auto core_type_idx =
-            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-        std::uint32_t launch_erisc_addr =
-            tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
-        return launch_erisc_addr;
     };
 
     // Send exit_erisc_kernel to the launch message
