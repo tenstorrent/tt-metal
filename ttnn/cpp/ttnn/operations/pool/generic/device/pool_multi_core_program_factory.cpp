@@ -453,8 +453,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
     bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
-                               (ceil_mode == false && count_include_pad == true) ||
-                               (ceil_pad_h == 0 && ceil_pad_w == 0 && pad_h == 0 && pad_w == 0);
+                               ((ceil_mode == false || (ceil_pad_h == 0 && ceil_pad_w == 0)) &&
+                                (count_include_pad == true || pad_h == 0 && pad_w == 0));
 
     CBHandle config_cb;
     tt::tt_metal::DeviceStorage scalar_config_storage;
