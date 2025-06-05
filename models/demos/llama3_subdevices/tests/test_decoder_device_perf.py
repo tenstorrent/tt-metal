@@ -845,6 +845,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         perf_targets["model_tail"]
     ), f"Expected {len(perf_targets['model_tail'])} operations in model tail, got {len(avg_dispatch_duration_model_tail)}. If the number or type of operations changed, expected times must be updated."
 
+    print("Decoder")
     passing = True
     for op_code_with_id, avg_dispatch_duration in avg_dispatch_duration_mid_layers.items():
         if op_code_with_id in perf_targets["decoder"]:
@@ -893,6 +894,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             passing = False
             logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
 
+    print("Model tail")
     all_passing = True
     for op_code_with_id, avg_dispatch_duration in avg_dispatch_duration_model_tail.items():
         if op_code_with_id in perf_targets["model_tail"]:

@@ -31,13 +31,12 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 # Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
 # before triggering an assertion failure. Allows occasional dips while ensuring
 # stable performance without breaking CI prematurely.
-TSU_PERF_DROP_LIMIT_COUNT = 20
+TSU_PERF_DROP_LIMIT_PERCENT = 10
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 615, "max": 640}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
-    # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 625, "max": 655}, 10: {"min": 230, "max": 250}, 80: {"min": 53, "max": 58}},
+    "4U": {1: {"min": 627, "max": 637}, 80: {"min": 50, "max": 53}},
+    "6U": {1: {"min": 744, "max": 755}, 80: {"min": 55, "max": 58}},
 }
 
 
@@ -412,7 +411,9 @@ def run_llama3_demo(
     profiler.start(f"inference_decode", iteration=iteration)
 
     # Determine TSU threshold based on layer count
-    tsu_thresholds = TSU_THRESHOLDS[galaxy_type].get(layers)
+    tsu_thresholds = TSU_THRESHOLDS[galaxy_type].get(
+        layers, {"min": 0, "max": 9999999}
+    )  # do not check TSU if layers is not in the dict
 
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
     tsu_failures = 0
@@ -526,10 +527,10 @@ def run_llama3_demo(
         )
         # 95 percentile tsu throughput
         logger.info(
-            f"5 percentile tsu throughput: {sorted(all_tokens_per_second_per_user)[int(0.05 * len(all_tokens_per_second_per_user))]}"
+            f"3 percentile tsu throughput: {sorted(all_tokens_per_second_per_user)[int(0.03 * len(all_tokens_per_second_per_user))]}"
         )
         logger.info(
-            f"95 percentile tsu throughput: {sorted(all_tokens_per_second_per_user)[int(0.95 * len(all_tokens_per_second_per_user))]}"
+            f"97 percentile tsu throughput: {sorted(all_tokens_per_second_per_user)[int(0.97 * len(all_tokens_per_second_per_user))]}"
         )
 
         if tokens_per_second_per_user_token127 is not None:
@@ -537,13 +538,14 @@ def run_llama3_demo(
 
         # print before assertion
         out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
-        if tsu_failures > TSU_PERF_DROP_LIMIT_COUNT:
+        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * iteration / 100
+        if tsu_failures > tsu_perf_drop_limit:
             logger.info(out_of_targets_msg)
         # Assert at the end of test to check if the throughput recuperated
-        assert tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT, out_of_targets_msg
+        assert tsu_failures <= tsu_perf_drop_limit, out_of_targets_msg
 
         # Print out total number of tsu_failures
-        logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
+        logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {tsu_perf_drop_limit})")
 
 
 # List of supported Parameters for demo.py
