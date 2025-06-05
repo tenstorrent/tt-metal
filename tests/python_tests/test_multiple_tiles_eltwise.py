@@ -26,7 +26,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_generator import flatten_list, generate_stimuli
 from helpers.test_config import generate_make_command
-from helpers.utils import compare_pcc, format_kernel_list, run_shell_command
+from helpers.utils import format_kernel_list, passed_test, run_shell_command
 
 
 def generate_golden(op, operand1, operand2, data_format, math_fidelity):
@@ -119,7 +119,7 @@ def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile
 
     src_A, src_B = generate_stimuli(
         formats.input_format, formats.input_format, tile_cnt=tile_cnt
-    )  # , const_face=True, const_value_A=3, const_value_B=2)
+    )
     golden = generate_golden(mathop, src_A, src_B, formats.output_format, math_fidelity)
     write_stimuli_to_l1(
         src_A, src_B, formats.input_format, formats.input_format, "0,0", tile_cnt
@@ -171,17 +171,4 @@ def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile
         ),
     )
 
-    if formats.output_format in [DataFormat.Float16_b, DataFormat.Float16]:
-        atol = 0.05
-        rtol = 0.1
-    elif formats.output_format == DataFormat.Bfp8_b:
-        atol = 0.1
-        rtol = 0.2
-
-    for i in range(len(golden_tensor)):
-        assert torch.isclose(
-            golden_tensor[i], res_tensor[i], rtol=rtol, atol=atol
-        ), f"Failed at index {i} with values {golden_tensor[i]} and {res_from_L1[i]}"
-
-    _, pcc = compare_pcc(golden_tensor, res_tensor, pcc=0.99)
-    assert pcc > 0.99
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)

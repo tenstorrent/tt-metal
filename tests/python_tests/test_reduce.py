@@ -27,7 +27,7 @@ from helpers.param_config import (
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import generate_make_command
 from helpers.tilize_untilize import untilize
-from helpers.utils import compare_pcc, run_shell_command
+from helpers.utils import passed_test, run_shell_command
 
 # Helper dictionary to map reduce dimensions to math operations
 mathop_mapping = {
@@ -171,19 +171,6 @@ def test_reduce(testname, formats, dest_acc, reduce_dim, pool_type):
     )
     res_tensor = untilize(res_tensor, formats.output_format)
 
-    if formats.output_format in [DataFormat.Float16_b, DataFormat.Float16]:
-        atol = 0.015
-        rtol = 0.015
-    elif formats.output_format == DataFormat.Bfp8_b:
-        atol = 0.1
-        rtol = 0.2
-
     run_shell_command(f"cd .. && make clean")
 
-    _, pcc = compare_pcc(golden_tensor, res_tensor, pcc=0.99)
-    assert pcc > 0.99
-
-    for i in range(len(golden_tensor)):
-        assert torch.isclose(
-            golden_tensor[i], res_tensor[i], rtol=rtol, atol=atol
-        ), f"Failed at index {i} with values {golden_tensor[i]} and {res_from_L1[i]}"
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)

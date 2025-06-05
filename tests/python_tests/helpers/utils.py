@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import subprocess
+from collections import namedtuple
 
 import numpy as np
 import torch
@@ -70,56 +71,123 @@ def format_kernel_list(kernels, as_hex=False):
     return ",".join(formatter(i) for i in kernels)
 
 
-def compare_pcc(golden, calculated, pcc=0.99):
-    golden = torch.Tensor(golden)
-    calculated = torch.Tensor(calculated)
+def calculate_pcc(golden, input):
+    """Calculate Pearson Correlation Coefficient between two tensors.
 
-    if golden.dtype != calculated.dtype:
-        calculated = calculated.type(golden.dtype)
+    Handles special cases like NaN/Inf values and returns correlation coefficient.
+    1.0 indicates perfect correlation, 0.0 indicates no correlation.
 
-    if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
-        # logger.warning("Both tensors are 'nan'")
-        return True, 1.0
+    Args:
+        golden: Reference tensor
+        input: Tensor to compare against golden
 
-    if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
-        # logger.error("One tensor is all nan, the other is not.")
-        return False, 0.0
+    Returns:
+        float: Pearson correlation coefficient
+    """
+    golden = torch.as_tensor(golden)
+    input = torch.as_tensor(input)
+
+    if golden.dtype != input.dtype:
+        input = input.type(golden.dtype)
+
+    # Handle special cases
+    if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(input)):
+        return 1.0
+
+    if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(input)):
+        return 0.0
 
     # Test if either is completely zero
-    if torch.any(golden.bool()) != torch.any(calculated.bool()):
-        # logger.error("One tensor is all zero")
-        return False, 0.0
+    if torch.any(golden.bool()) != torch.any(input.bool()):
+        return 0.0
 
-    # For now, mask all infs and nans so that we check the rest... TODO
-    golden = golden.clone()
-    golden[
-        torch.logical_or(
-            torch.isnan(golden),
-            torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
+    # Handle exact equality case
+    if torch.equal(golden, input):
+        return 1.0
+
+    # Mask invalid values (nan/inf)
+    def mask_invalid(x):
+        x = x.clone()
+        mask = torch.logical_or(
+            torch.isnan(x), torch.logical_or(torch.isinf(x), torch.isneginf(x))
         )
-    ] = 0
-    calculated = calculated.clone()
-    calculated[
-        torch.logical_or(
-            torch.isnan(calculated),
-            torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-        )
-    ] = 0
+        x[mask] = 0
+        return x
 
-    if torch.equal(golden, calculated):
-        return True, 1.0
+    golden = mask_invalid(golden)
+    input = mask_invalid(input)
 
+    # Convert bfloat16 to float32 for correlation calculation
     if golden.dtype == torch.bfloat16:
         golden = golden.type(torch.float32)
-        calculated = calculated.type(torch.float32)
-    cal_pcc = np.min(
+        input = input.type(torch.float32)
+
+    # Calculate correlation
+    pcc_result = np.min(
         np.ma.corrcoef(
             np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-            np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
+            np.ma.masked_invalid(torch.squeeze(input).detach().numpy()).flatten(),
         )
     )
 
-    if isinstance(cal_pcc, np.ma.core.MaskedConstant):
-        return True, 1.0
+    if isinstance(pcc_result, np.ma.core.MaskedConstant):
+        return 1.0
 
-    return cal_pcc >= pcc, cal_pcc
+    return pcc_result
+
+
+def get_tolerance(output_data_format):
+    if output_data_format in [
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+        DataFormat.Int32,
+    ]:
+        atol = 0.05
+        rtol = 0.05
+    elif output_data_format == DataFormat.Bfp8_b:
+        atol = 0.1
+        rtol = 0.2
+    else:
+        raise ValueError(f"Unsupported output data format: {output_data_format}")
+
+    return atol, rtol
+
+
+def passed_test(golden_tensor, res_tensor, output_data_format=DataFormat.Float16_b):
+
+    Tolerance = namedtuple("Tolerance", ["atol", "rtol"])
+
+    def get_tolerance(output_data_format):
+        tolerances = {
+            DataFormat.Float16: Tolerance(atol=0.05, rtol=0.05),
+            DataFormat.Float16_b: Tolerance(atol=0.05, rtol=0.05),
+            DataFormat.Float32: Tolerance(atol=0.05, rtol=0.05),
+            DataFormat.Int32: Tolerance(atol=0.05, rtol=0.05),
+            DataFormat.Bfp8_b: Tolerance(atol=0.1, rtol=0.2),
+        }
+
+        try:
+            return tolerances[output_data_format]
+        except KeyError:
+            raise ValueError(f"Unsupported output data format: {output_data_format}")
+
+    tolerance = get_tolerance(output_data_format)
+
+    is_close = torch.isclose(
+        golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
+    )
+    is_within_tolerance = torch.all(is_close)
+
+    if not is_within_tolerance:
+        # Find all indices where values differ
+        diff_indices = torch.where(~is_close)[0]
+        print(f"Found {len(diff_indices)} differences:")
+        for idx in diff_indices:
+            print(
+                f"Failed at index {idx} with values {res_tensor[idx]} and {golden_tensor[idx]}"
+            )
+
+    pcc = calculate_pcc(res_tensor, golden_tensor)
+
+    return is_within_tolerance and (pcc > 0.99)
