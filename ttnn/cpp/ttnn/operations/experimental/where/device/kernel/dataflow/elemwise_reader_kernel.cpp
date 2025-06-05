@@ -11,9 +11,6 @@ void kernel_main() {
     uint32_t false_tensor_base_addr = get_arg_val<uint32_t>(2);
     uint32_t num_tiles = get_arg_val<uint32_t>(3);
     uint32_t tile_ofs = get_arg_val<uint32_t>(4);
-    uint32_t block_height = get_arg_val<uint32_t>(5);
-    uint32_t block_width = get_arg_val<uint32_t>(6);
-    uint32_t num_cores_y = get_arg_val<uint32_t>(7);
 
     constexpr bool is_cond_tensor_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool is_true_tensor_in_dram = get_compile_time_arg_val(1) == 1;
