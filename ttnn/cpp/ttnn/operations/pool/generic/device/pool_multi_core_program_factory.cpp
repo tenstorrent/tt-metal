@@ -506,7 +506,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         max_pool_partials_cb_id,
         in_one_cb_id,
         clear_value_cb_id,
-        is_blackhole,
         (uint32_t)pool_type,
         one_scalar_per_core,
         config_cb_id};
@@ -558,7 +557,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        is_blackhole,
         one_scalar_per_core};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
