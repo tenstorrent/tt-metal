@@ -32,7 +32,8 @@ using namespace tt::tt_metal;
 namespace {
 
 // Threshold for switch for mmap-based allocations to regular allocations.
-constexpr size_t kMmapThresholdBytes = 8 << 20;  // 8MB
+// Determined empirically using a microbenchmark; see https://github.com/tenstorrent/tt-metal/pull/22959 for details.
+constexpr size_t kMmapThresholdBytes = 1 << 20;  // 1MB
 
 // Allocates memory on the host in batch; using either mmap for large allocations or std::vector for small allocations.
 std::shared_ptr<void> allocate_host_data(size_t size_bytes) {
