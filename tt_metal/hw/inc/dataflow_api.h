@@ -706,38 +706,6 @@ inline void noc_async_write(
 
 // clang-format off
 /**
- * Initiates an asynchronous multicast write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
- * Refer to \a noc_async_write_multicast for more details.
- */
-// clang-format on
-FORCE_INLINE
-void noc_async_write_multicast_one_packet(
-    std::uint32_t src_local_l1_addr,
-    std::uint64_t dst_noc_addr_multicast,
-    std::uint32_t size,
-    std::uint32_t num_dests,
-    bool linked = false,
-    uint8_t noc = noc_index) {
-    WAYPOINT("NWPW");
-    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
-    WAYPOINT("NWPD");
-
-    ncrisc_noc_fast_write<noc_mode>(
-        noc,
-        write_cmd_buf,
-        src_local_l1_addr,
-        dst_noc_addr_multicast,
-        size,
-        NOC_MULTICAST_WRITE_VC,
-        true /* mcast */,
-        linked,
-        num_dests,
-        true /* multicast_path_reserve */);
-}
-
-// clang-format off
-/**
  * Initiates an asynchronous write from a source address in L1 memory on the
  * Tensix core executing this function call to a rectangular destination grid.
  * The destinations are specified using a uint64_t encoding referencing an
@@ -779,25 +747,19 @@ inline void noc_async_write_multicast(
     bool linked = false,
     uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
+    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
 
-    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_multicast_one_packet(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
-    } else {
-        WAYPOINT("NMWW");
-        DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len<noc_mode>(
-            noc,
-            write_cmd_buf,
-            src_local_l1_addr,
-            dst_noc_addr_multicast,
-            size,
-            NOC_MULTICAST_WRITE_VC,
-            true /* mcast */,
-            linked,
-            num_dests,
-            true /* multicast_path_reserve */);
-        WAYPOINT("NMWD");
-    }
+    ncrisc_noc_fast_write_any_len<noc_mode, false /* use_trid */, max_page_size <= NOC_MAX_BURST_SIZE>(
+        noc,
+        write_cmd_buf,
+        src_local_l1_addr,
+        dst_noc_addr_multicast,
+        size,
+        NOC_MULTICAST_WRITE_VC,
+        true /* mcast */,
+        linked,
+        num_dests,
+        true /* multicast_path_reserve */);
 }
 
 // TODO: write docs
