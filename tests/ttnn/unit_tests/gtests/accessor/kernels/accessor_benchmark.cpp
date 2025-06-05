@@ -14,27 +14,27 @@ void kernel_main() {
     constexpr uint32_t num_banks = get_compile_time_arg_val(3);
     constexpr uint32_t base_idx_cta = 4;
 
-    using input_dspec_cta = distribution_spec_t<base_idx_cta, rank, num_banks>;
+    using input_dspec_cta = nd_sharding::distribution_spec_t<base_idx_cta, rank, num_banks>;
     // runtime tensor shape, runtime shard shape, and static bank coords
-    constexpr uint32_t base_idx_cta_DDS = base_idx_cta + compile_time_args_skip<input_dspec_cta>;
+    constexpr uint32_t base_idx_cta_DDS = base_idx_cta + nd_sharding::compile_time_args_skip<input_dspec_cta>;
     constexpr uint32_t base_idx_crta_DDS = 0;
-    using input_dspec_crta_DDS = distribution_spec_t<base_idx_cta_DDS, rank, num_banks>;
+    using input_dspec_crta_DDS = nd_sharding::distribution_spec_t<base_idx_cta_DDS, rank, num_banks>;
 
-    constexpr uint32_t base_idx_cta_SSD = base_idx_cta_DDS + compile_time_args_skip<input_dspec_crta_DDS>;
-    constexpr uint32_t base_idx_crta_SSD = base_idx_crta_DDS + runtime_args_skip<input_dspec_crta_DDS>;
-    using input_dspec_crta_SSD = distribution_spec_t<base_idx_cta_SSD, rank, num_banks>;
+    constexpr uint32_t base_idx_cta_SSD = base_idx_cta_DDS + nd_sharding::compile_time_args_skip<input_dspec_crta_DDS>;
+    constexpr uint32_t base_idx_crta_SSD = base_idx_crta_DDS + nd_sharding::runtime_args_skip<input_dspec_crta_DDS>;
+    using input_dspec_crta_SSD = nd_sharding::distribution_spec_t<base_idx_cta_SSD, rank, num_banks>;
 
-    constexpr uint32_t base_idx_cta_DDD = base_idx_cta_SSD + compile_time_args_skip<input_dspec_crta_SSD>;
-    constexpr uint32_t base_idx_crta_DDD = base_idx_crta_SSD + runtime_args_skip<input_dspec_crta_SSD>;
-    using input_dspec_crta_DDD = distribution_spec_t<base_idx_cta_DDD, rank, num_banks>;
+    constexpr uint32_t base_idx_cta_DDD = base_idx_cta_SSD + nd_sharding::compile_time_args_skip<input_dspec_crta_SSD>;
+    constexpr uint32_t base_idx_crta_DDD = base_idx_crta_SSD + nd_sharding::runtime_args_skip<input_dspec_crta_SSD>;
+    using input_dspec_crta_DDD = nd_sharding::distribution_spec_t<base_idx_cta_DDD, rank, num_banks>;
 
-    auto sharded_accessor_cta = ShardedAccessor<input_dspec_cta, page_size>(bank_base_address);
+    auto sharded_accessor_cta = nd_sharding::ShardedAccessor<input_dspec_cta, page_size>(bank_base_address);
     auto sharded_accessor_crta_DDS =
-        ShardedAccessor<input_dspec_crta_DDS, page_size, base_idx_crta_DDS>(bank_base_address);
+        nd_sharding::ShardedAccessor<input_dspec_crta_DDS, page_size, base_idx_crta_DDS>(bank_base_address);
     auto sharded_accessor_crta_SSD =
-        ShardedAccessor<input_dspec_crta_SSD, page_size, base_idx_crta_SSD>(bank_base_address);
+        nd_sharding::ShardedAccessor<input_dspec_crta_SSD, page_size, base_idx_crta_SSD>(bank_base_address);
     auto sharded_accessor_crta_DDD =
-        ShardedAccessor<input_dspec_crta_DDD, page_size, base_idx_crta_DDD>(bank_base_address);
+        nd_sharding::ShardedAccessor<input_dspec_crta_DDD, page_size, base_idx_crta_DDD>(bank_base_address);
 
     auto interleaved_accessor = InterleavedAddrGenFast</*DRAM=*/false>{
         .bank_base_address = bank_base_address, .page_size = page_size, .data_format = data_format};

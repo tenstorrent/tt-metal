@@ -15,16 +15,16 @@ void kernel_main() {
     constexpr uint32_t base_idx_cta = 2;
     constexpr uint32_t base_idx_crta = 1;
 
-    using input_dspec = distribution_spec_t<base_idx_cta, rank, num_banks>;
-    constexpr uint32_t new_base_idx_cta = base_idx_cta + compile_time_args_skip<input_dspec>;
-    constexpr uint32_t new_base_idx_crta = base_idx_crta + runtime_args_skip<input_dspec>;
+    using input_dspec = nd_sharding::distribution_spec_t<base_idx_cta, rank, num_banks>;
+    constexpr uint32_t new_base_idx_cta = base_idx_cta + nd_sharding::compile_time_args_skip<input_dspec>;
+    constexpr uint32_t new_base_idx_crta = base_idx_crta + nd_sharding::runtime_args_skip<input_dspec>;
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(new_base_idx_cta);
     // TODO: Expose generic interface to get page size for cb operand
     // - get_tile_size(cb_id) only works for tile layout
     constexpr uint32_t page_size = get_compile_time_arg_val(new_base_idx_cta + 1);
 
-    auto sharded_accessor = ShardedAccessor<input_dspec, page_size, base_idx_crta>(bank_base_address);
+    auto sharded_accessor = nd_sharding::ShardedAccessor<input_dspec, page_size, base_idx_crta>(bank_base_address);
 
     constexpr uint32_t one_tile = 1;
     for (size_t i = 0; i < sharded_accessor.get_dspec().get_tensor_volume(); ++i) {

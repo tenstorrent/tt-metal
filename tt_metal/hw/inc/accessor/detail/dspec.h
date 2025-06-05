@@ -6,8 +6,12 @@
 
 #include <variant>
 #include <tuple>
+#include "helpers.hpp"
+#include "shape_wrapper.hpp"
+#include "bank_coords.hpp"
 #include <hostdevcommon/flags.hpp>
 
+namespace nd_sharding {
 namespace detail {
 
 namespace {
@@ -25,121 +29,6 @@ constexpr ArgsConfig operator|(ArgConfig a, ArgConfig b) noexcept { return ArgsC
 constexpr ArgsConfig operator|(ArgConfig a, ArgsConfig b) noexcept { return ArgsConfig(a) | b; }
 constexpr ArgsConfig operator|(ArgsConfig a, ArgConfig b) noexcept { return a | ArgsConfig(b); }
 }  // namespace
-
-template <size_t... Dims>
-struct ShapeWrapper {
-    static constexpr size_t rank = sizeof...(Dims);
-    static constexpr bool is_static = true;
-    using ShapeBase = std::array<uint32_t, rank>;
-    static constexpr ShapeBase shape = {Dims...};
-
-    // Check that rank is > 0
-    static_assert(rank > 0, "Shape rank must be greater than 0!");
-
-    // Check that all Dims are > 0
-    static_assert(((Dims > 0) && ...), "Shape dims must be greater than 0!");
-
-    // Compute shape properities at compile time
-    static constexpr std::pair<size_t, ShapeBase> compute_volume_and_strides(const ShapeBase& shape) {
-        ShapeBase strides = {};
-        uint32_t stride = 1;
-        for (int i = rank - 1; i >= 0; --i) {
-            strides[i] = stride;
-            stride *= shape[i];
-        }
-        return {strides[0] * shape[0], strides};
-    }
-
-    // Compiler should optimize out the second call
-    static constexpr auto volume = compute_volume_and_strides(shape).first;
-    static constexpr auto strides = compute_volume_and_strides(shape).second;
-
-    constexpr explicit ShapeWrapper() = default;
-    constexpr explicit ShapeWrapper(const ShapeBase&) {}
-    constexpr explicit ShapeWrapper(ShapeBase&&) {}
-};
-
-template <size_t Rank>
-struct ShapeWrapperDynamic {
-    static constexpr size_t rank = Rank;
-    static constexpr bool is_static = false;
-    using ShapeBase = std::array<uint32_t, rank>;
-    ShapeBase shape;    // runtime shape
-    ShapeBase strides;  // runtime strides
-    size_t volume;      // runtime volume
-
-    // Check that rank is > 0
-    static_assert(rank > 0, "Shape rank must be greater than 0!");
-
-    template <class... Ts, std::enable_if_t<sizeof...(Ts) == Rank, int> = 0>
-    constexpr explicit ShapeWrapperDynamic(Ts... exts) : shape{static_cast<uint32_t>(exts)...} {
-        compute_volume_and_strides(shape);
-    }
-
-    constexpr explicit ShapeWrapperDynamic() = default;
-
-    constexpr explicit ShapeWrapperDynamic(const ShapeBase& shape) : shape{shape} { compute_volume_and_strides(shape); }
-
-    constexpr explicit ShapeWrapperDynamic(ShapeBase&& shape) : shape{std::move(shape)} {
-        compute_volume_and_strides(shape);
-    }
-
-    inline void compute_volume_and_strides(const ShapeBase& shape) {
-        uint32_t stride = 1;
-        for (int i = rank - 1; i >= 0; --i) {
-            strides[i] = stride;
-            stride *= shape[i];
-        }
-        volume = strides[0] * shape[0];
-    }
-};
-
-template <size_t... PackedCoords>
-struct BankCoordWrapper {
-    static constexpr bool is_static = true;
-    static constexpr size_t num_banks = sizeof...(PackedCoords);
-    // TODO: Each bank coord is packed as one uint32_t (ie. (16 bits) <x> | (16 bits) <y>)
-    // This can be optimized to be 8 bits per coord, so we pack two bank coords in one uint32_t compile time arg
-    using PackedCoordsArray = std::array<uint32_t, num_banks>;
-    static constexpr PackedCoordsArray packed_xy_coords = {PackedCoords...};
-    constexpr explicit BankCoordWrapper() = default;
-    constexpr explicit BankCoordWrapper(const PackedCoordsArray&) {}
-    constexpr explicit BankCoordWrapper(PackedCoordsArray&&) {}
-};
-
-template <size_t NumBanks>
-struct BankCoordWrapperDynamic {
-    static constexpr bool is_static = false;
-    static constexpr size_t num_banks = NumBanks;
-    using PackedCoordsArray = std::array<uint32_t, num_banks>;
-    PackedCoordsArray packed_xy_coords;
-    constexpr explicit BankCoordWrapperDynamic() = default;
-    constexpr explicit BankCoordWrapperDynamic(const PackedCoordsArray& banks_coords) :
-        packed_xy_coords(banks_coords) {}
-    constexpr explicit BankCoordWrapperDynamic(PackedCoordsArray&& banks_coords) :
-        packed_xy_coords(std::move(banks_coords)) {}
-};
-
-//
-template <template <size_t...> class Wrapper, size_t BASE_IDX, size_t... Is>
-constexpr auto make_struct_from_sequence_wrapper(std::index_sequence<Is...>)
-    -> Wrapper<get_compile_time_arg_val(BASE_IDX + Is)...>;
-
-template <template <size_t...> class Wrapper, size_t base, size_t rank>
-using struct_sequence_wrapper_t =
-    decltype(make_struct_from_sequence_wrapper<Wrapper, base>(std::make_index_sequence<rank>{}));
-
-// Helper to generate array using index sequence
-template <std::size_t Base, std::size_t... Is>
-constexpr std::array<uint32_t, sizeof...(Is)> make_runtime_array_from_sequence(std::index_sequence<Is...>) {
-    return {get_common_arg_val<uint32_t>(Base + Is)...};
-}
-
-// Public interface
-template <std::size_t Base, std::size_t Size>
-constexpr auto runtime_array_sequence_wrapper() {
-    return make_runtime_array_from_sequence<Base>(std::make_index_sequence<Size>{});
-}
 
 template <typename TensorShape, typename ShardShape, typename BankCoords>
 struct DistributionSpec {
@@ -332,7 +221,7 @@ struct TypeSelector<true, StaticWrapper, DynamicWrapper, BASE, SIZE> {
 // Specialization for static types
 template <template <size_t...> class StaticWrapper, template <size_t> class DynamicWrapper, size_t BASE, size_t SIZE>
 struct TypeSelector<false, StaticWrapper, DynamicWrapper, BASE, SIZE> {
-    using type = struct_sequence_wrapper_t<StaticWrapper, BASE, SIZE>;
+    using type = struct_cta_sequence_wrapper_t<StaticWrapper, BASE, SIZE>;
 };
 
 template <size_t CTA_BASE, size_t RANK, size_t NUM_BANKS>
@@ -348,13 +237,24 @@ struct DistributionSpecWrapper {
     static constexpr size_t ShardShapeBase = TensorShapeBase + (TensorShapeDynamic ? 0 : RANK);
     static constexpr size_t BankCoordsBase = ShardShapeBase + (ShardShapeDynamic ? 0 : RANK);
 
-    using TensorShapeType =
-        typename TypeSelector<TensorShapeDynamic, ShapeWrapper, ShapeWrapperDynamic, TensorShapeBase, RANK>::type;
-    using ShardShapeType =
-        typename TypeSelector<ShardShapeDynamic, ShapeWrapper, ShapeWrapperDynamic, ShardShapeBase, RANK>::type;
-    using BankCoordsType =
-        typename TypeSelector<BankCoordsDynamic, BankCoordWrapper, BankCoordWrapperDynamic, BankCoordsBase, NUM_BANKS>::
-            type;
+    using TensorShapeType = typename TypeSelector<
+        TensorShapeDynamic,
+        ShapeWrapperStaticDimsStaticRank,
+        ShapeWrapperDynamicDimsStaticRank,
+        TensorShapeBase,
+        RANK>::type;
+    using ShardShapeType = typename TypeSelector<
+        ShardShapeDynamic,
+        ShapeWrapperStaticDimsStaticRank,
+        ShapeWrapperDynamicDimsStaticRank,
+        ShardShapeBase,
+        RANK>::type;
+    using BankCoordsType = typename TypeSelector<
+        BankCoordsDynamic,
+        BankCoordWrapperStaticNBanksStaticCoords,
+        BankCoordWrapperDynamicStaticNBanksDynamicCoords,
+        BankCoordsBase,
+        NUM_BANKS>::type;
     using dspec = DistributionSpec<TensorShapeType, ShardShapeType, BankCoordsType>;
 };
 
@@ -370,18 +270,18 @@ auto build_dspec_from_runtime_args() {
     std::array<uint32_t, RANK> shard_shape_array;
     std::array<uint32_t, NUM_BANKS> bank_coord_array;
     if constexpr (TensorShapeDynamic) {
-        tensor_shape_array = runtime_array_sequence_wrapper<CRTA_BASE, RANK>();
+        tensor_shape_array = array_crta_sequence_wrapper<CRTA_BASE, RANK>();
     }
     if constexpr (ShardShapeDynamic) {
-        shard_shape_array = runtime_array_sequence_wrapper<CRTA_BASE + RANK * TensorShapeDynamic, RANK>();
+        shard_shape_array = array_crta_sequence_wrapper<CRTA_BASE + RANK * TensorShapeDynamic, RANK>();
     }
     if constexpr (BankCoordsDynamic) {
-        bank_coord_array = runtime_array_sequence_wrapper<
-            CRTA_BASE + RANK * TensorShapeDynamic + RANK * ShardShapeDynamic,
-            NUM_BANKS>();
+        bank_coord_array =
+            array_crta_sequence_wrapper<CRTA_BASE + RANK * TensorShapeDynamic + RANK * ShardShapeDynamic, NUM_BANKS>();
     }
 
     return DSpec(std::move(tensor_shape_array), std::move(shard_shape_array), std::move(bank_coord_array));
 }
 
 }  // namespace detail
+}  // namespace nd_sharding

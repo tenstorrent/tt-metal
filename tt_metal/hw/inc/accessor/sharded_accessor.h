@@ -5,12 +5,13 @@
 #pragma once
 
 #include <type_traits>
-#include "detail.h"
+#include "detail/dspec.h"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "dataflow_api.h"
 #endif
 
+namespace nd_sharding {
 template <size_t BASE, size_t RANK, size_t NUM_BANKS>
 using distribution_spec_t = typename detail::DistributionSpecWrapper<BASE, RANK, NUM_BANKS>::dspec;
 
@@ -134,3 +135,4 @@ struct ShardedAccessor {
         return {bank_id, bank_page_offset};
     }
 };
+}  // namespace nd_sharding
