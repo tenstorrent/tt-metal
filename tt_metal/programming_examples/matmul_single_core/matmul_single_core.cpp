@@ -22,6 +22,10 @@ using namespace tt::tt_metal;
 // Array A is of size MxK, Array B is of size KxN, and the output C is of size MxN.
 // The implementation is bare bones and does not include optimizations such as tiling or vectorization.
 // This is intended to be used as a golden reference for testing the Metalium implementation.
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
+
 void golden_matmul(
     const std::vector<bfloat16>& a,
     const std::vector<bfloat16>& b,
