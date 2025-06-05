@@ -8,6 +8,7 @@
 #include "dataflow_api.h"
 #include "cq_common.hpp"
 #include "fabric/hw/inc/tt_fabric_mux.hpp"
+#include "fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "risc_attribs.h"
 #include "debug/waypoint.h"
 #include "noc/noc_parameters.h"
