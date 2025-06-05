@@ -37,7 +37,7 @@ void kernel_main() {
             uint64_t noc_write_addr = NOC_XY_ADDR(NOC_X(NOC_ADDR_X), NOC_Y(NOC_ADDR_Y), write_ptr);
             noc_async_write(NOC_MEM_ADDR, noc_write_addr, page_size);
 #elif READ_ONE_PACKET
-            noc_async_read_one_packet(noc_addr, read_ptr, page_size);
+            noc_async_read<1 /* max_page_size */>(noc_addr, read_ptr, page_size);
 #else
             noc_async_read(noc_addr, read_ptr, page_size);
 #endif

@@ -30,7 +30,7 @@ void kernel_main() {
             uint64_t noc_read_addr = get_noc_addr(noc_coord_x[core], noc_coord_y[core], l1_read_addr);
             uint32_t l1_write_addr = get_write_ptr(cb_out0) + l1_write_offset + dst_write_stick_offset;
             for (uint32_t i = 0; i < num_sticks_per_shard_core; ++i) {
-                noc_async_read_one_packet(noc_read_addr, l1_write_addr, stick_size_bytes);
+                noc_async_read<stick_size_bytes>(noc_read_addr, l1_write_addr, stick_size_bytes);
                 noc_read_addr += read_stick_stride;
                 l1_write_addr += write_stick_stride;
             }
