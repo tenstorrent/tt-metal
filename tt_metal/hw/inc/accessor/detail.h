@@ -17,7 +17,7 @@ enum class ArgConfig : uint8_t {
     RuntimeTensorShape = 1 << 0,
     RuntimeShardShape = 1 << 1,
     RuntimeBankCoords = 1 << 2,
-    RTA = RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
+    CRTA = RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
 };
 
 using ArgsConfig = Flags<ArgConfig>;
@@ -132,7 +132,7 @@ using struct_sequence_wrapper_t =
 // Helper to generate array using index sequence
 template <std::size_t Base, std::size_t... Is>
 constexpr std::array<uint32_t, sizeof...(Is)> make_runtime_array_from_sequence(std::index_sequence<Is...>) {
-    return {get_arg_val<uint32_t>(Base + Is)...};
+    return {get_common_arg_val<uint32_t>(Base + Is)...};
 }
 
 // Public interface
@@ -358,7 +358,7 @@ struct DistributionSpecWrapper {
     using dspec = DistributionSpec<TensorShapeType, ShardShapeType, BankCoordsType>;
 };
 
-template <size_t RTA_BASE, typename DSpec>
+template <size_t CRTA_BASE, typename DSpec>
 auto build_dspec_from_runtime_args() {
     static constexpr bool TensorShapeDynamic = !DSpec::TensorShapeT::is_static;
     static constexpr bool ShardShapeDynamic = !DSpec::ShardShapeT::is_static;
@@ -370,14 +370,14 @@ auto build_dspec_from_runtime_args() {
     std::array<uint32_t, RANK> shard_shape_array;
     std::array<uint32_t, NUM_BANKS> bank_coord_array;
     if constexpr (TensorShapeDynamic) {
-        tensor_shape_array = runtime_array_sequence_wrapper<RTA_BASE, RANK>();
+        tensor_shape_array = runtime_array_sequence_wrapper<CRTA_BASE, RANK>();
     }
     if constexpr (ShardShapeDynamic) {
-        shard_shape_array = runtime_array_sequence_wrapper<RTA_BASE + RANK * TensorShapeDynamic, RANK>();
+        shard_shape_array = runtime_array_sequence_wrapper<CRTA_BASE + RANK * TensorShapeDynamic, RANK>();
     }
     if constexpr (BankCoordsDynamic) {
         bank_coord_array = runtime_array_sequence_wrapper<
-            RTA_BASE + RANK * TensorShapeDynamic + RANK * ShardShapeDynamic,
+            CRTA_BASE + RANK * TensorShapeDynamic + RANK * ShardShapeDynamic,
             NUM_BANKS>();
     }
 

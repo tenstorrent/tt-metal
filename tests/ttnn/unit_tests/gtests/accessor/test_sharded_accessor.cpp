@@ -25,6 +25,9 @@ constexpr auto get_ct_arg();
 template <typename T>
 constexpr T get_arg_val(size_t idx);
 
+template <typename T>
+constexpr T get_common_arg_val(size_t idx);
+
 #define noc_index 0
 #define ASSERT(condition, ...)
 #define FORCE_INLINE inline __attribute__((always_inline))

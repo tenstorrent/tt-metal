@@ -94,10 +94,10 @@ namespace sharded_accessor_utils {
 
 enum class ArgConfig : uint8_t {
     CTA = 0,
-    RuntimeTensorShape = 1 << 0,
-    RuntimeShardShape = 1 << 1,
-    RuntimeBankCoords = 1 << 2,
-    RTA = RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
+    TensorShapeCRTA = 1 << 0,
+    ShardShapeCRTA = 1 << 1,
+    BankCoordsCRTA = 1 << 2,
+    CRTA = TensorShapeCRTA | ShardShapeCRTA | BankCoordsCRTA
 };
 
 using ArgsConfig = Flags<ArgConfig>;

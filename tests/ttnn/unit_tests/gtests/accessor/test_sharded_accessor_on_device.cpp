@@ -33,7 +33,6 @@ struct InputOutputBufferParams {
     };
     DistributionSpecParams input_shard_spec;
     DistributionSpecParams output_shard_spec;
-    // CRTAConfig crta_config = CRTAConfig();
     ArgsConfig crta_config = ArgsConfig{};
 };
 
@@ -228,7 +227,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             input_runtime_args.end(),
             input_sharded_accessor_args.runtime_args.cbegin(),
             input_sharded_accessor_args.runtime_args.cend());
-        SetRuntimeArgs(program, reader_kernel_id, grid, input_runtime_args);
+        SetCommonRuntimeArgs(program, reader_kernel_id, input_runtime_args);
 
         // Set up runtime args for writer kernel
         std::vector<uint32_t> output_runtime_args = {
@@ -238,7 +237,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             output_runtime_args.end(),
             output_sharded_accessor_args.runtime_args.cbegin(),
             output_sharded_accessor_args.runtime_args.cend());
-        SetRuntimeArgs(program, writer_kernel_id, grid, output_runtime_args);
+        SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
 
         // Launch program
         auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();

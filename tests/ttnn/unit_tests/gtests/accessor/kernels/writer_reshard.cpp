@@ -6,25 +6,25 @@
 #include "accessor/sharded_accessor.h"
 
 void kernel_main() {
-    const uint32_t bank_base_address = get_arg_val<uint32_t>(0);
+    const uint32_t bank_base_address = get_common_arg_val<uint32_t>(0);
 
     // The compile-time args are set up like this to highlight how you can use compile_time_args_skip
     // Recommended usage is to place the sequential compile-time args for distribution spec at the end
     constexpr uint32_t rank = get_compile_time_arg_val(0);
     constexpr uint32_t num_banks = get_compile_time_arg_val(1);
     constexpr uint32_t base_idx_cta = 2;
-    constexpr uint32_t base_idx_rta = 1;
+    constexpr uint32_t base_idx_rcta = 1;
 
     using output_dspec = distribution_spec_t<base_idx_cta, rank, num_banks>;
     constexpr uint32_t new_base_idx_cta = base_idx_cta + compile_time_args_skip<output_dspec>;
-    constexpr uint32_t new_base_idx_rta = base_idx_rta + runtime_args_skip<output_dspec>;
+    constexpr uint32_t new_base_idx_rcta = base_idx_rcta + runtime_args_skip<output_dspec>;
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(new_base_idx_cta);
     // TODO: Expose generic interface to get page size for cb operand
     // - get_tile_size(cb_id) only works for tile layout
     constexpr uint32_t page_size = get_compile_time_arg_val(new_base_idx_cta + 1);
 
-    auto sharded_accessor = ShardedAccessor<output_dspec, page_size, base_idx_rta>(bank_base_address);
+    auto sharded_accessor = ShardedAccessor<output_dspec, page_size, base_idx_rcta>(bank_base_address);
 
     constexpr uint32_t one_tile = 1;
     for (size_t i = 0; i < sharded_accessor.get_dspec().get_tensor_volume(); ++i) {
