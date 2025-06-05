@@ -22,8 +22,6 @@ constexpr uint32_t page_size = get_compile_time_arg_val(2);
 constexpr uint32_t row_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(4);
 constexpr uint32_t max_packet_size = get_compile_time_arg_val(5);
-constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(6) == 1;
-constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(7);
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -44,13 +42,13 @@ void kernel_main() {
 
 #ifdef SHARDED
     typedef ShardedInfo<
+        get_compile_time_arg_val(6),
+        get_compile_time_arg_val(7),
         get_compile_time_arg_val(8),
         get_compile_time_arg_val(9),
         get_compile_time_arg_val(10),
         get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12),
-        get_compile_time_arg_val(13),
-        get_compile_time_arg_val(14)>
+        get_compile_time_arg_val(12)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =
@@ -59,8 +57,7 @@ void kernel_main() {
         .bank_base_address = tensor_address0, .shard_array = mapping_table};
 #else
     // interleaved addrgen
-    const auto tensor0_addrgen = get_interleaved_addr_gen<is_dram, src_stick_size_is_pow2>(
-        tensor_address0, row_size, src_log_base_2_of_page_size);
+    const auto tensor0_addrgen = get_interleaved_addr_gen<is_dram, row_size>(tensor_address0);
 #endif
 
     uint32_t row_id = row_id_start;

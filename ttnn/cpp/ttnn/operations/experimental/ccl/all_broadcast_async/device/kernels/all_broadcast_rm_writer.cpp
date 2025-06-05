@@ -30,8 +30,6 @@ constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(8);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(9);
 constexpr bool dynamic_alternate = get_compile_time_arg_val(10);
-constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(11) == 1;
-constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(12);
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
@@ -48,7 +46,7 @@ void kernel_main() {
     size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
-    const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
+    const address_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t row_id_start = get_arg_val<uint32_t>(arg_idx++);
     uint32_t row_id_end = get_arg_val<uint32_t>(arg_idx++);
     bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
@@ -60,13 +58,13 @@ void kernel_main() {
 
 #ifdef SHARDED
     typedef ShardedInfo<
+        get_compile_time_arg_val(11),
+        get_compile_time_arg_val(12),
         get_compile_time_arg_val(13),
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
-        get_compile_time_arg_val(17),
-        get_compile_time_arg_val(18),
-        get_compile_time_arg_val(19)>
+        get_compile_time_arg_val(17)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =
@@ -77,8 +75,7 @@ void kernel_main() {
     auto fabric_connection = FabricConnectionManager::build_from_args(fab_idx);
 #else
     constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    const auto tensor0_addrgen = get_interleaved_addr_gen<is_dram, src_stick_size_is_pow2>(
-        tensor_address0, row_size, src_log_base_2_of_page_size);
+    const auto tensor0_addrgen = get_interleaved_addr_gen<is_dram, row_size>(tensor_address0);
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
 #endif
@@ -96,9 +93,9 @@ void kernel_main() {
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
     pkt_hdr_forward->to_chip_multicast(
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
     pkt_hdr_backward->to_chip_multicast(
@@ -167,7 +164,8 @@ void kernel_main() {
 
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
-        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
+        volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
+        noc_semaphore_wait(sem_ptr, out_ready_sem_wait_value);
     }
 
     // 4. global semaphore reset

@@ -32,7 +32,6 @@
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/math.hpp"
 
-bool is_power_of_two_start_32(uint32_t value) { return value >= 32 && (value & (value - 1)) == 0; }
 using namespace tt::constants;
 
 namespace ttnn {
@@ -95,8 +94,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     if (input_tensor.get_logical_shape().size() == 4) {
         num_rows *= input_tensor.get_logical_shape()[0];
     }
-    bool src_stick_size_is_power_of_two = is_power_of_two_start_32(row_size);
-    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(row_size) : 0;
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : 4096;
@@ -153,9 +150,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             num_width_shards > 1 ? buffer_page_size : page_size,  // page_size
             row_size,
             num_packets_per_row,  // num_packets_per_row
-            max_packet_size,      // max_packet_size
-            src_stick_size_is_power_of_two,
-            src_log2_stick_size};
+            max_packet_size       // max_packet_size
+        };
     }
 
     std::vector<uint32_t> writer_compile_args = {
@@ -184,8 +180,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             num_targets_forward,   // num_targets_forward_direction
             num_targets_backward,  // num_targets_backward_direction
             dynamic_alternate,     // alternate
-            src_stick_size_is_power_of_two,
-            src_log2_stick_size};
+        };
     }
     std::map<string, string> kernel_defines;
     if (sharded) {
