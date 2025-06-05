@@ -3103,18 +3103,18 @@ def test_conv2d_model_fruit(
         # UNet
         # kernel 3x3
         (1, 1280, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64, 1, True, ttnn.MathFidelity.HiFi4, False, False, False, 1, 1, False, False),
-        (1, 1280, 1280, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS, 256, 1, True, ttnn.MathFidelity.HiFi4, True, False, False, 1, 1, False, False),
+        (1, 1280, 1280, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS, 256, 1, True, ttnn.MathFidelity.HiFi4, True, False, False, 1, 1, True, True),
         (1, 1280, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS,  32, 1, True, ttnn.MathFidelity.HiFi4, False, False, False, 1, 1, False, False),
-        (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS, 512, 1, True, ttnn.MathFidelity.HiFi4, True, False, False, 1, 1, False, False),
-        (1, 1920, 640, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS,  256, 1, True, ttnn.MathFidelity.HiFi4, True, False, False, 1, 1, False, False),
-        (1, 2560, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS, 256, 1, True, ttnn.MathFidelity.HiFi4, True, False, False, 1, 1, False, False),
+        (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS, 512, 1, True, ttnn.MathFidelity.HiFi4, True, False, False, 1, 1, True, True),
+        (1, 1920, 640, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS,  256, 1, True, ttnn.MathFidelity.HiFi4, True, False, False, 1, 1, True, True),
+        (1, 2560, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS, 256, 1, True, ttnn.MathFidelity.HiFi4, True, False, False, 1, 1, True, True),
         (1, 320, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS,   128, 1, True, ttnn.MathFidelity.HiFi4, False, False, False, 1, 1, False, False),
         (1, 320, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi4, False, False, False, 1, 1, True, False),
         (1, 640, 1280, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi4, False, False, False, 1, 1, True, False),
         (1, 640, 640, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi4, False, False, False, 2, 2, False, False),
         (1, 640, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi4, False, False, False, 1, 1, False, False),
         (1, 640, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi4, False, False, False, 2, 1, False, False),
-        (1, 960, 640, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS,   256, 1, True, ttnn.MathFidelity.HiFi4, True, False, False, 1, 1, False, False),
+        (1, 960, 640, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS,   256, 1, True, ttnn.MathFidelity.HiFi4, True, False, False, 1, 1, True, True),
         (1, 960, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi4, False, False, False, 6, 1, False, False),
 
         # stride 2x2

@@ -15,7 +15,7 @@ from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
-is_6U_RING = os.environ.get("6U_RING", "0") == "1"
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
 
 
@@ -88,7 +88,7 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6U_RING else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,

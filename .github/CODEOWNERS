@@ -46,6 +46,7 @@ tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
 tt_metal/hw/firmware/ @abhullar-tt @jbaumanTT @pgkeller @nathan-TT
 tt_metal/hw/toolchain/ @jbaumanTT @pgkeller @nathan-TT
+tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @pgkeller @nathan-TT
 tt_metal/impl/allocator/ @abhullar-tt @tt-aho
 tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT
 tt_metal/impl/context/ @tt-dma @jbaumanTT @aliuTT
@@ -207,7 +208,7 @@ models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT
 models/demos/wormhole @uaydonat
 models/demos/t3000 @uaydonat
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
-models/demos/llama3_subdevices @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt @mtairum
+models/demos/llama3_subdevices @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @uaydonat
 models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
