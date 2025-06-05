@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
@@ -56,9 +57,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
     }
 
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
+    const std::size_t edm_buffer_size = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+                                        sizeof(tt::tt_fabric::PacketHeader);
     const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
     TT_ASSERT(device_sequence.size() == program_sequence.size());
 
