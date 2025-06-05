@@ -301,7 +301,7 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 ####################################################################################################################
 CPMAddPackage(
     NAME tt-logger
-    GITHUB_REPOSITORY blozano-tt/tt-logger
+    GITHUB_REPOSITORY tenstorrent/tt-logger
     VERSION 1.0.6
     OPTIONS
         "TT_LOGGER_INSTALL ON"
