@@ -122,6 +122,7 @@ TEST_P(MeshBufferAllocationTests, Allocation) {
     EXPECT_EQ(shard_view->aligned_size_per_bank(), shard_view->aligned_size() / shard_view->num_cores().value());
 }
 
+// clang-format off
 INSTANTIATE_TEST_SUITE_P(
     BufferDistributionSpec,
     MeshBufferAllocationTests,
@@ -139,23 +140,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .buffer_type = BufferType::L1,
             },
             MeshBufferAllocationExpected{
-                .cores =
-                    {{0, 0},
-                     {1, 0},
-                     {2, 0},
-                     {3, 0},
-                     {0, 1},
-                     {1, 1},
-                     {2, 1},
-                     {3, 1},
-                     {0, 2},
-                     {1, 2},
-                     {2, 2},
-                     {3, 2},
-                     {0, 3},
-                     {1, 3},
-                     {2, 3},
-                     {3, 3}},
+                .cores = {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}, {2, 1}, {3, 1}, {0, 2}, {1, 2}, {2, 2}, {3, 2}, {0, 3}, {1, 3}, {2, 3}, {3, 3}},
                 .num_cores = 16,
                 .num_dev_pages = 10 * 16,  // Shard shape is 10 pages
                 .aligned_size = 2048 * 160,
@@ -175,23 +160,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .buffer_type = BufferType::L1,
             },
             MeshBufferAllocationExpected{
-                .cores =
-                    {{0, 0},
-                     {0, 1},
-                     {0, 2},
-                     {0, 3},
-                     {1, 0},
-                     {1, 1},
-                     {1, 2},
-                     {1, 3},
-                     {2, 0},
-                     {2, 1},
-                     {2, 2},
-                     {2, 3},
-                     {3, 0},
-                     {3, 1},
-                     {3, 2},
-                     {3, 3}},
+                .cores = {{0, 0}, {0, 1}, {0, 2}, {0, 3}, {1, 0}, {1, 1}, {1, 2}, {1, 3}, {2, 0}, {2, 1}, {2, 2}, {2, 3}, {3, 0}, {3, 1}, {3, 2}, {3, 3}},
                 .num_cores = 16,
                 .num_dev_pages = 384 * 16,  // Shard shape is 384 pages
                 .aligned_size = 256 * 6144,
@@ -240,6 +209,7 @@ INSTANTIATE_TEST_SUITE_P(
             },
         })  // Values
 );
+// clang-format on
 
 class MeshBufferReadWriteTests : public GenericMeshDeviceFixture,
                                  public ::testing::WithParamInterface<std::tuple<bool, bool, BufferReadWriteParams>> {};
