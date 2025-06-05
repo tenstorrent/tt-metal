@@ -666,12 +666,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     cb_indices.act_cb_row_major_bfloat16 = cb_indices.get_next_cb_index();
     tt::tt_metal::create_cb(
-        cb_indices.act_cb_row_major_bfloat16, program, all_cores, act_tile_size, act_block_num_tiles_split, act_df);
+        cb_indices.act_cb_row_major_bfloat16, program, all_cores, act_tile_size, 2 * act_block_w_ntiles, act_df);
     log_debug(
         LogOp,
         "Act Row Major CB: {}, npages: {}, pagesize: {}",
         cb_indices.act_cb_row_major_bfloat16,
-        act_block_num_tiles_split,
+        2 * act_block_w_ntiles,
         act_tile_size);
 
     auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
