@@ -6,11 +6,9 @@
 #include "inspector_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
+#include "jit_build/jit_build_options.hpp"
 #include "program.hpp"
 #include <tt-metalium/logger.hpp>
-#include <chrono>
-#include <iomanip>
-#include <ctime>
 
 namespace tt::tt_metal {
 

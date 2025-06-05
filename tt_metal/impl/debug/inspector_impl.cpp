@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "inspector_impl.hpp"
+#include <iomanip>
+#include <chrono>
+#include <ctime>
 
 namespace tt::tt_metal::inspector {
 
