@@ -129,7 +129,7 @@ jobs:
         id: format
         run: |
           FAILED_WORKFLOWS='${{ needs.analyze-data.outputs.failed_workflows }}'
-          FORMATTED_WORKFLOWS=$(echo "$FAILED_WORKFLOWS" | jq -r '.[] | "• \(.name)\n    PR: <https://github.com/${{ github.repository }}/pull/\(.pr|sub("#"; ""))|\(.pr)>\n    Author: <https://github.com/\(.author)|\(.author)>\n    Bad SHA: <https://github.com/${{ github.repository }}/commit/\(.badSha)|\(.badSha)>\n    Good SHA: <https://github.com/${{ github.repository }}/commit/\(.goodSha)|\(.goodSha)>\n    Run: <https://github.com/${{ github.repository }}/actions/runs/\(.runId)|View Run>"')
+          FORMATTED_WORKFLOWS=$(echo "$FAILED_WORKFLOWS" | jq -r '.[] | "• \(.name) | PR: <https://github.com/${{ github.repository }}/pull/\(.pr|sub("#"; ""))|\(.pr)> | Author: <https://github.com/\(.author)|\(.author)> | Bad: <https://github.com/${{ github.repository }}/commit/\(.badSha)|\(.badSha)> | Good: <https://github.com/${{ github.repository }}/commit/\(.goodSha)|\(.goodSha)> | <https://github.com/${{ github.repository }}/actions/runs/\(.runId)|View Run>"')
           echo "formatted_workflows<<EOF" >> $GITHUB_OUTPUT
           echo "$FORMATTED_WORKFLOWS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
