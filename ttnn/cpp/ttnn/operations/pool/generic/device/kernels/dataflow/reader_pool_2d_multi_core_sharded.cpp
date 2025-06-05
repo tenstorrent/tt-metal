@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
+#include "reader_pool2d_sharded_common.hpp"
 
 #define ENABLE_DEBUG_PRINT 0
 
@@ -11,23 +12,6 @@
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #endif
-
-#define ALWI inline __attribute__((always_inline))
-
-// Fill an L1 buffer with the given val
-// WARNING: Use with caution as there's no memory protection. Make sure size is within limits
-ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = true) {
-    // simplest impl:
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
-    uint32_t value = val | (val << 16);
-    if (ptr[0] != value || unconditionally) {
-        for (uint32_t i = 0; i < n / 2; ++i) {
-            ptr[i] = (value);
-        }
-    }
-
-    return true;
-}
 
 template <uint32_t cb_id, uint32_t clear_value_cb_id>
 FORCE_INLINE void clear_out_tiles() {
@@ -162,8 +146,15 @@ void kernel_main() {
                 scalar_end = config_ptr[3 * scalar_index + 2];
                 scalar_index++;
             }
-            if (counter < scalar_end && (counter == scalar_start || counter == scalar_start + 1 ||
-                                         counter == scalar_start + 2 || counter == scalar_start + 3)) {
+            // We want to fill the scalar CB at most only the fisrt 2 times since the number of pages is 2, only for the
+            // intervals [x, y) where y >= x + 3 exactly 2 times and when y < x + 3 only once. When split reader is
+            // enabled counter takes even or odd values only depennding on the reader id so if the scalar start is even
+            // and counter is even it will fullfill the first half of the condition counter == scalar_start || counter
+            // == scalar_start + 2. When reader is even and scalar_start is odd or vice versa we will fullfill the
+            // second half of the condition counter == scalar_start + 1 || counter == scalar_start + 3.
+            if (counter < scalar_end &&
+                (counter == scalar_start || counter == scalar_start + 1 ||
+                 (split_reader && (counter == scalar_start + 2 || counter == scalar_start + 3)))) {
                 fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value, false);
             }
 
