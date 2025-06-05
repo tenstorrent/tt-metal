@@ -46,6 +46,9 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     uint32_t retrain_force_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_FORCE);
     for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device->id(), eth_core)) {
+            continue;
+        }
         // Only force a retrain on odd-numbered eth cores
         if (eth_core.y % 2) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
@@ -57,6 +60,9 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     std::this_thread::sleep_for(std::chrono::seconds(5));
     vector<string> expected_strings;
     for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device->id(), eth_core)) {
+            continue;
+        }
         CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
         expected_strings.push_back(fmt::format(
             "\tDevice {} Ethernet Core {} retraining events: {}",
