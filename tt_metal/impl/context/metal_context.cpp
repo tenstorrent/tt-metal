@@ -8,6 +8,7 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/debug/inspector_impl.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/debug/debug_helpers.hpp"
@@ -45,7 +46,7 @@ void MetalContext::initialize(
     fw_compile_hash_ = fw_compile_hash;
 
     // Initialize inspector
-    Inspector::initialize();
+    inspector_data_ = Inspector::initialize();
 
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);

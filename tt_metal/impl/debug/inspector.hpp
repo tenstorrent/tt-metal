@@ -4,15 +4,20 @@
 
 #pragma once
 
+#include <memory>
 #include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
+
+namespace inspector {
+class Data;
+}
 
 class Inspector {
 public:
     static bool is_enabled();
 
-    static void initialize();
+    static std::unique_ptr<inspector::Data> initialize();
 
     static void program_created(
         const detail::ProgramImpl* program) noexcept;

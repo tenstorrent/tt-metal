@@ -12,6 +12,11 @@
 
 #include "impl/program/program_impl.hpp"
 
+namespace tt::tt_metal {
+    class Inspector;
+    class MetalContext;
+}
+
 #define TT_INSPECTOR_THROW(...) \
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_initialization_is_important()) { \
         TT_THROW(__VA_ARGS__); \
@@ -24,10 +29,6 @@
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_warn_on_write_exceptions()) { \
         tt::log_warning(tt::LogInspector, __VA_ARGS__); \
     }
-
-namespace tt::tt_metal {
-    class Inspector;
-}
 
 namespace tt::tt_metal::inspector {
 
@@ -74,22 +75,14 @@ public:
 
 class Data {
 private:
-    inspector::Logger logger;
-
     Data();
-    Data(const Data&) = delete;
-    Data& operator=(const Data&) = delete;
 
-    // This is a singleton class
-    static Data& instance() {
-        static Data instance;
-        return instance;
-    }
-
+    inspector::Logger logger;
     std::mutex programs_mutex;
     std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
 
     friend class tt::tt_metal::Inspector;
+    friend class tt::tt_metal::MetalContext;
 };
 
 }  // namespace tt::tt_metal::inspector

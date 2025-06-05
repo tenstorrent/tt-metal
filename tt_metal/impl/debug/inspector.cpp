@@ -8,20 +8,27 @@
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "program.hpp"
+#include <memory>
 #include <tt-metalium/logger.hpp>
 
 namespace tt::tt_metal {
+
+static inspector::Data* get_inspector_data() {
+    return tt::tt_metal::MetalContext::instance().get_inspector_data();
+}
 
 bool Inspector::is_enabled() {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_enabled();
 }
 
-void Inspector::initialize() {
+std::unique_ptr<inspector::Data> Inspector::initialize() {
     try {
-        auto& data = inspector::Data::instance();
+        auto* data = new inspector::Data();
+
+        return std::unique_ptr<inspector::Data>(data);
     }
     catch (const std::exception& e) {
-        TT_INSPECTOR_THROW("Failed to initialize Inspector: {}", e.what());
+        TT_INSPECTOR_LOG("Failed to initialize Inspector: {}", e.what());
         throw;
     }
 }
@@ -32,12 +39,12 @@ void Inspector::program_created(
         return;
     }
     try {
-        auto& data = inspector::Data::instance();
-        std::lock_guard<std::mutex> lock(data.programs_mutex);
-        auto& program_data = data.programs_data[program->get_id()];
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->programs_mutex);
+        auto& program_data = data->programs_data[program->get_id()];
         program_data.program=program->weak_from_this();
         program_data.program_id=program->get_id();
-        data.logger.log_program_created(program_data);
+        data->logger.log_program_created(program_data);
     }
     catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program created: {}", e.what());
@@ -50,11 +57,11 @@ void Inspector::program_destroyed(
         return;
     }
     try {
-        auto& data = inspector::Data::instance();
-        std::lock_guard<std::mutex> lock(data.programs_mutex);
-        auto& program_data = data.programs_data[program->get_id()];
-        data.logger.log_program_destroyed(program_data);
-        data.programs_data.erase(program->get_id());
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->programs_mutex);
+        auto& program_data = data->programs_data[program->get_id()];
+        data->logger.log_program_destroyed(program_data);
+        data->programs_data.erase(program->get_id());
     }
     catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program destroyed: {}", e.what());
@@ -69,11 +76,11 @@ void Inspector::program_compile_started(
         return;
     }
     try {
-        auto& data = inspector::Data::instance();
-        std::lock_guard<std::mutex> lock(data.programs_mutex);
-        auto& program_data = data.programs_data[program->get_id()];
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->programs_mutex);
+        auto& program_data = data->programs_data[program->get_id()];
         program_data.compile_started_timestamp = std::chrono::high_resolution_clock::now();
-        data.logger.log_program_compile_started(program_data);
+        data->logger.log_program_compile_started(program_data);
     }
     catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program destroyed: {}", e.what());
@@ -88,10 +95,10 @@ void Inspector::program_compile_already_exists(
         return;
     }
     try {
-        auto& data = inspector::Data::instance();
-        std::lock_guard<std::mutex> lock(data.programs_mutex);
-        auto& program_data = data.programs_data[program->get_id()];
-        data.logger.log_program_compile_already_exists(program_data);
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->programs_mutex);
+        auto& program_data = data->programs_data[program->get_id()];
+        data->logger.log_program_compile_already_exists(program_data);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program compile already exists: {}", e.what());
     }
@@ -106,16 +113,16 @@ void Inspector::program_kernel_compile_finished(
         return;
     }
     try {
-        auto& data = inspector::Data::instance();
-        std::lock_guard<std::mutex> lock(data.programs_mutex);
-        auto& program_data = data.programs_data[program->get_id()];
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->programs_mutex);
+        auto& program_data = data->programs_data[program->get_id()];
         auto& kernel_data = program_data.kernels[kernel->get_watcher_kernel_id()];
         kernel_data.kernel = kernel;
         kernel_data.watcher_kernel_id = kernel->get_watcher_kernel_id();
         kernel_data.name = kernel->name();
         kernel_data.path = build_options.path;
         kernel_data.source = kernel->kernel_source().source_;
-        data.logger.log_program_kernel_compile_finished(program_data, kernel_data);
+        data->logger.log_program_kernel_compile_finished(program_data, kernel_data);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program kernel compile finished: {}", e.what());
     }
@@ -129,11 +136,11 @@ void Inspector::program_compile_finished(
         return;
     }
     try {
-        auto& data = inspector::Data::instance();
-        std::lock_guard<std::mutex> lock(data.programs_mutex);
-        auto& program_data = data.programs_data[program->get_id()];
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->programs_mutex);
+        auto& program_data = data->programs_data[program->get_id()];
         program_data.compile_finished_timestamp = std::chrono::high_resolution_clock::now();
-        data.logger.log_program_compile_finished(program_data);
+        data->logger.log_program_compile_finished(program_data);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program compile finished: {}", e.what());
     }
@@ -147,11 +154,11 @@ void Inspector::program_set_binary_status(
         return;
     }
     try {
-        auto& data = inspector::Data::instance();
-        std::lock_guard<std::mutex> lock(data.programs_mutex);
-        auto& program_data = data.programs_data[program->get_id()];
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->programs_mutex);
+        auto& program_data = data->programs_data[program->get_id()];
         program_data.binary_status_per_device[device_id] = status;
-        data.logger.log_program_binary_status_change(program_data, device_id, status);
+        data->logger.log_program_binary_status_change(program_data, device_id, status);
     }
     catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program binary status change: {}", e.what());
