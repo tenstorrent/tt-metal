@@ -29,6 +29,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/buffer_page_mapping.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/types/xy_pair.h>
@@ -161,19 +162,6 @@ struct ShardedBufferConfig {
 };
 
 bool is_sharded(const TensorMemoryLayout& layout);
-
-struct BufferPageMapping {
-    std::vector<CoreCoord> all_cores_;
-    std::vector<std::vector<uint32_t>> core_host_page_indices_;
-    std::vector<uint32_t> dev_page_to_core_mapping_;
-
-    // some dev pages don't have mapping to host (in case of padding)
-    std::vector<std::optional<uint32_t>> dev_page_to_host_page_mapping_;
-    std::vector<uint32_t> host_page_to_dev_page_mapping_;
-    std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
-    std::vector<uint32_t> host_page_to_local_shard_page_mapping_;
-    std::vector<std::array<uint32_t, 2>> core_shard_shape_;
-};
 
 struct BufferRegion {
     DeviceAddr offset = 0;

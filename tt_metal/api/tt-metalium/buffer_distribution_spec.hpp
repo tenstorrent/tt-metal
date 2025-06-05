@@ -8,6 +8,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distribution_spec.hpp>
 #include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/buffer_page_mapping.hpp>
 
 namespace tt::tt_metal {
 
@@ -28,16 +29,13 @@ public:
     size_t num_cores() const { return cores_.size(); }
     const std::vector<CoreCoord>& get_cores() const { return cores_; }
 
-    const std::vector<std::vector<std::optional<uint32_t>>>& get_page_mapping() const { return page_mapping_; }
+    BufferPageMapping compute_page_mapping() const;
 
 private:
-    void compute_page_mapping();
-
     tt::tt_metal::Shape tensor_shape_in_pages_;
     tt::tt_metal::Shape shard_shape_in_pages_;
     ShardOrientation shard_orientation_;
 
-    std::vector<std::vector<std::optional<uint32_t>>> page_mapping_;
     std::vector<CoreCoord> cores_;
 };
 
