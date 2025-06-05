@@ -234,6 +234,9 @@ public:
     virtual void revoke_and_shrink() = 0;
     [[nodiscard]] virtual bool is_revoked() = 0;
 
+    //--- Message snooping -----------------------------------------------
+    virtual std::size_t snoop_incoming_msg_size(Rank source, Tag tag) const = 0;
+
     virtual ~DistributedContext() = default;
 };
 }  // namespace tt::tt_metal::distributed::multihost

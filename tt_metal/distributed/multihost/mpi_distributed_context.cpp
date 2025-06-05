@@ -529,6 +529,16 @@ bool MPIContext::is_revoked() {
 #endif
 }
 
+std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
+    // Probe for an incoming message from 'source' with 'tag'
+    // Return the size of the message in bytes
+    int size_bytes = 0;
+    MPI_Status status;
+    MPI_CHECK(MPI_Probe(*source, *tag, comm_, &status));
+    MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &size_bytes));
+    return static_cast<std::size_t>(size_bytes);
+}
+
 MPIContext::~MPIContext() {
     if (was_mpi_finalized()) {
         return;  // MPI_Finalize() already called
