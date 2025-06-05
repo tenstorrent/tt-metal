@@ -282,14 +282,44 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
                 buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index] = core_index;
                 if (shard_page_x < buffer_page_mapping.core_shard_shape_[core_index][0] and
                     shard_page_y < buffer_page_mapping.core_shard_shape_[core_index][1]) {
+                    TT_FATAL(
+                        core_index < core_host_page_indices.size(),
+                        "core_index: {}, core_host_page_indices.size(): {}",
+                        core_index,
+                        core_host_page_indices.size());
+                    TT_FATAL(
+                        valid_shard_page < core_host_page_indices[core_index].size(),
+                        "valid_shard_page: {}, core_host_page_indices[core_index].size(): {}",
+                        valid_shard_page,
+                        core_host_page_indices[core_index].size());
                     std::optional<uint32_t> host_page_optional = core_host_page_indices[core_index][valid_shard_page];
                     if (!host_page_optional) {
                         continue;
                     }
                     uint32_t host_page = *host_page_optional;
+                    TT_FATAL(
+                        host_page < buffer.num_pages(),
+                        "host_page: {}, buffer.num_pages(): {}",
+                        host_page,
+                        buffer.num_pages());
                     buffer_page_mapping.dev_page_to_host_page_mapping_[dev_page_index] = host_page;
+                    TT_FATAL(
+                        core_index < buffer_page_mapping.core_host_page_indices_.size(),
+                        "core_index: {}, buffer_page_mapping.core_host_page_indices_.size(): {}",
+                        core_index,
+                        buffer_page_mapping.core_host_page_indices_.size());
                     buffer_page_mapping.core_host_page_indices_[core_index].push_back(host_page);
+                    TT_FATAL(
+                        host_page < buffer_page_mapping.host_page_to_local_shard_page_mapping_.size(),
+                        "host_page: {}, buffer_page_mapping.host_page_to_local_shard_page_mapping_.size(): {}",
+                        host_page,
+                        buffer_page_mapping.host_page_to_local_shard_page_mapping_.size());
                     buffer_page_mapping.host_page_to_local_shard_page_mapping_[host_page] = shard_page_id;
+                    TT_FATAL(
+                        host_page < buffer_page_mapping.host_page_to_dev_page_mapping_.size(),
+                        "host_page: {}, buffer_page_mapping.host_page_to_dev_page_mapping_.size(): {}",
+                        host_page,
+                        buffer_page_mapping.host_page_to_dev_page_mapping_.size());
                     buffer_page_mapping.host_page_to_dev_page_mapping_[host_page] = dev_page_index;
                     valid_shard_page++;
                 }
@@ -613,7 +643,9 @@ DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) c
 
 ShardSpecBuffer Buffer::shard_spec() const {
     TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
-    TT_FATAL(shard_parameters_.has_value(), "Buffer is sharded, but no shard parameters specified");
+    if (!shard_parameters_.has_value()) {
+        TT_FATAL(shard_parameters_.has_value(), "Buffer is sharded, but no shard parameters specified");
+    }
     return this->shard_parameters_.value();
 }
 

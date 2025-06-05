@@ -301,12 +301,17 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
     const BufferDispatchConstants& buf_dispatch_constants,
     const BufferRegion& region) {
     ShardedBufferWriteDispatchParams dispatch_params;
-    dispatch_params.width_split =
-        buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape_in_pages[1];
+    if (buffer.is_nd_sharded()) {
+        dispatch_params.width_split = true;
+        dispatch_params.max_pages_per_shard = buffer.buffer_distribution_spec()->num_dev_pages_per_core();
+    } else {
+        dispatch_params.width_split =
+            buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape_in_pages[1];
+        dispatch_params.max_pages_per_shard = buffer.shard_spec().num_pages();
+    }
     dispatch_params.buffer_page_mapping = (dispatch_params.width_split) ? buffer.get_buffer_page_mapping() : nullptr;
     dispatch_params.total_pages_to_write = region.size / buffer.page_size();
     dispatch_params.total_pages_written = 0;
-    dispatch_params.max_pages_per_shard = buffer.shard_spec().num_pages();
     dispatch_params.page_size_to_write = buffer.aligned_page_size();
     dispatch_params.dst_page_index = region.offset / buffer.page_size();
     dispatch_params.starting_dst_host_page_index = region.offset / buffer.page_size();
@@ -599,8 +604,14 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
 
     const bool is_core_end_host_page_last_page_in_shard = core_end_host_page_it == core_host_pages.rbegin();
     if (is_core_end_host_page_last_page_in_shard) {
-        const uint32_t num_dev_pages_in_shard =
-            buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
+        uint32_t num_dev_pages_in_shard;
+        if (buffer.is_nd_sharded()) {
+            num_dev_pages_in_shard =
+                buffer_page_mapping->core_shard_shape_[core_id][0] * buffer_page_mapping->core_shard_shape_[core_id][1];
+        } else {
+            num_dev_pages_in_shard =
+                buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
+        }
         num_dev_pages_to_process =
             num_dev_pages_in_shard - buffer_page_mapping->host_page_to_local_shard_page_mapping_[start_host_page];
     } else {
@@ -792,6 +803,16 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     // Note that the src_page_index is the device page idx, not the host page idx
     // Since we read core by core we are reading the device pages sequentially
     ShardedBufferReadDispatchParams dispatch_params;
+
+    if (buffer.is_nd_sharded()) {
+        dispatch_params.width_split = true;
+        dispatch_params.max_pages_per_shard = buffer.buffer_distribution_spec()->num_dev_pages_per_core();
+    } else {
+        dispatch_params.width_split =
+            buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape_in_pages[1];
+        dispatch_params.max_pages_per_shard = buffer.shard_spec().num_pages();
+    }
+
     dispatch_params.cq_id = cq_id;
     dispatch_params.device = buffer.device();
     dispatch_params.padded_page_size = buffer.aligned_page_size();
@@ -799,12 +820,9 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     dispatch_params.src_page_index = region.offset / buffer.page_size();
     dispatch_params.starting_src_host_page_index = region.offset / buffer.page_size();
     dispatch_params.unpadded_dst_offset = 0;
-    dispatch_params.width_split =
-        buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape_in_pages[1];
     dispatch_params.buffer_page_mapping = (dispatch_params.width_split) ? buffer.get_buffer_page_mapping() : nullptr;
     dispatch_params.total_pages_to_read = region.size / buffer.page_size();
     dispatch_params.total_pages_read = 0;
-    dispatch_params.max_pages_per_shard = buffer.shard_spec().num_pages();
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
     return dispatch_params;
 }
