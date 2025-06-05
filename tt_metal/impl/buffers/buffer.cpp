@@ -244,8 +244,9 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
         const auto& buffer_distribution_spec = buffer.buffer_distribution_spec().value();
         core_host_page_indices = buffer_distribution_spec.get_page_mapping();
         auto nd_shard_shape = buffer_distribution_spec.get_shard_shape_in_pages();
+        auto num_shards_per_core = buffer_distribution_spec.num_shards_per_core();
         std::array<uint32_t, 2> flattened_shard_shape(
-            {nd_shard_shape.volume() / nd_shard_shape[-1], nd_shard_shape[-1]});
+            {nd_shard_shape.volume() / nd_shard_shape[-1] * num_shards_per_core, nd_shard_shape[-1]});
         shard_shape = std::vector<std::array<uint32_t, 2>>(num_cores, flattened_shard_shape);
         shape_in_pages = flattened_shard_shape;
     } else {
