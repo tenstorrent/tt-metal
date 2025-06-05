@@ -1101,7 +1101,6 @@ void persistent_fabric_teardown_sequence(
 
 void setup_test_with_persistent_fabric(
     const std::vector<IDevice*>& devices,
-    std::vector<Program>& programs,
     std::optional<SubdeviceInfo>& subdevice_managers,
     std::optional<std::vector<Program>>& fabric_programs,
     std::vector<Program*>& fabric_program_ptrs,
@@ -1179,8 +1178,7 @@ int TestLineFabricEntrypoint(
     std::optional<std::vector<Program>> fabric_programs;
     std::vector<Program*> fabric_program_ptrs;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
-    setup_test_with_persistent_fabric(
-        devices, programs, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric);
+    setup_test_with_persistent_fabric(devices, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric);
 
     auto launch_workers = [&](std::vector<Program>& _programs) -> bool {
         bool success = false;
@@ -1421,8 +1419,11 @@ inline bool TestMultiInputReaderKernel(
     std::optional<std::vector<Program>> fabric_programs;
     std::vector<Program*> fabric_program_ptrs;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
-    setup_test_with_persistent_fabric(
-        devices, programs, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric);
+    if (test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK) {
+        setup_test_with_persistent_fabric(
+            devices, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric);
+        TT_FATAL(subdevice_managers.has_value(), "Subdevice managers must be set if fabric is enabled");
+    }
 
     std::vector<Tensor> input0_tensors_device;
     std::vector<Tensor> input1_tensors_device;
@@ -1441,7 +1442,6 @@ inline bool TestMultiInputReaderKernel(
         output1_tensors_device.push_back(
             output_tensor1.to_device(devices.at(i), output_tensor1_mem_config, ttnn::DefaultQueueId));
     }
-    TT_FATAL(subdevice_managers.has_value(), "Subdevice managers must be set if fabric is enabled");
     auto launch_ccl_command_interpreter_workers = [&](std::vector<Program>& _programs) {
         return RunLocalTestWithMultiInputReaders(
             devices,
@@ -1483,8 +1483,10 @@ inline bool TestMultiInputReaderKernel(
     // Due to race between host and device some packets are in flight by the time host sends shutdown signals so
     // some get shutdown in between any packets in the pipeline. This can only be fixed by having a "drainer" op to
     // make sure it receives all writes before exiting
-    persistent_fabric_teardown_sequence(
-        devices, subdevice_managers, line_fabric.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    if (test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK) {
+        persistent_fabric_teardown_sequence(
+            devices, subdevice_managers, line_fabric.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    }
 
     log_info(tt::LogTest, "Finished");
     for (auto d : devices) {
@@ -2398,13 +2400,11 @@ void Run1DFabricPacketSendTest(
     std::optional<std::vector<Program>> fabric_programs = std::nullopt;
     size_t packet_header_size_bytes = 0;
     if (!use_device_init_fabric) {
-        std::vector<Program> dummy_worker_programs;
         std::vector<Program*> fabric_program_ptrs;
         TT_FATAL(
             fabrics_under_test_devices.size() == 1, "Expected 1 fabric under test when device init fabric is not used");
         setup_test_with_persistent_fabric(
             fabrics_under_test_devices[0],
-            dummy_worker_programs,
             subdevice_managers,
             fabric_programs,
             fabric_program_ptrs,

@@ -153,7 +153,6 @@ inline void RunPersistent1dFabricLatencyTest(
         std::vector<Program> dummy_worker_programs;
         setup_test_with_persistent_fabric(
             devices,
-            dummy_worker_programs,
             subdevice_managers,
             fabric_programs,
             fabric_program_ptrs,

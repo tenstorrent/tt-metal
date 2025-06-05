@@ -102,7 +102,6 @@ void build_and_enqueue(const std::vector<IDevice*>& devices, std::vector<Program
 
 void setup_test_with_persistent_fabric(
     const std::vector<IDevice*>& devices,
-    std::vector<Program>& programs,
     std::optional<SubdeviceInfo>& subdevice_managers,
     std::optional<std::vector<Program>>& fabric_programs,
     std::vector<Program*>& fabric_program_ptrs,
