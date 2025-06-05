@@ -304,13 +304,14 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
     if (buffer.is_nd_sharded()) {
         dispatch_params.width_split = true;
         dispatch_params.max_pages_per_shard = buffer.buffer_distribution_spec()->num_dev_pages_per_core();
+        dispatch_params.total_pages_to_write = dispatch_params.max_pages_per_shard * *buffer.num_cores();
     } else {
         dispatch_params.width_split =
             buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape_in_pages[1];
         dispatch_params.max_pages_per_shard = buffer.shard_spec().num_pages();
+        dispatch_params.total_pages_to_write = region.size / buffer.page_size();
     }
     dispatch_params.buffer_page_mapping = (dispatch_params.width_split) ? buffer.get_buffer_page_mapping() : nullptr;
-    dispatch_params.total_pages_to_write = region.size / buffer.page_size();
     dispatch_params.total_pages_written = 0;
     dispatch_params.page_size_to_write = buffer.aligned_page_size();
     dispatch_params.dst_page_index = region.offset / buffer.page_size();
@@ -648,7 +649,9 @@ void write_sharded_buffer_to_core(
     uint32_t num_pages = 0;
     uint32_t remaining_pages_in_shard = dispatch_params.max_pages_per_shard;
     uint32_t curr_page_idx_in_shard = 0;
-    if (dispatch_params.width_split) {
+    if (buffer.is_nd_sharded()) {
+        num_pages = dispatch_params.buffer_page_mapping->core_host_page_indices_[core_id].size();
+    } else if (dispatch_params.width_split) {
         const uint32_t ending_dst_host_page_index = dispatch_params.starting_dst_host_page_index +
                                                     dispatch_params.total_pages_written +
                                                     dispatch_params.total_pages_to_write;
@@ -948,7 +951,9 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     uint32_t host_page = 0;
     uint32_t address = buffer.address();
 
-    if (dispatch_params.width_split) {
+    if (buffer.is_nd_sharded()) {
+        pages_per_txn = dispatch_params.buffer_page_mapping->core_host_page_indices_[core_id].size();
+    } else if (dispatch_params.width_split) {
         const uint32_t ending_src_host_page_index = dispatch_params.starting_src_host_page_index +
                                                     dispatch_params.total_pages_read +
                                                     dispatch_params.total_pages_to_read;

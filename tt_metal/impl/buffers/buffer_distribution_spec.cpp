@@ -190,8 +190,6 @@ BufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
     };
     CMAKE_UNIQUE_NAMESPACE::iterate_over_shards(params, 0, 0, {1, 1});
 
-    // log_error("Computed page mapping: {}", page_mapping);
-
     return page_mapping;
 }
 
