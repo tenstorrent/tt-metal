@@ -142,9 +142,6 @@ void py_module(py::module& module) {
     auto m_sliding_window = module.def_submodule("sliding_window", "sliding_window operations");
     sliding_window::py_bind_sliding_window(m_sliding_window);
 
-    auto m_test = module.def_submodule("test", "test operations");
-    test::bind_test_hang_operation(m_test);
-
     auto m_conv2d = module.def_submodule("conv", "Convolution operations");
     conv::py_module(m_conv2d);
 
