@@ -184,7 +184,6 @@ private:
     NOCAddrFunc noc_ucast_addr_x_func_;
     NOCAddrFunc noc_ucast_addr_y_func_;
     NOCAddrFunc noc_local_addr_func_;
-    StackSizeFunc stack_size_func_;
     EthFwArgAddrFunc eth_fw_arg_addr_func_;
 
 public:
@@ -286,8 +285,6 @@ public:
     uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }
 
     uint32_t valid_reg_addr(uint32_t addr) const { return valid_reg_addr_func_(addr); }
-
-    uint32_t get_stack_size(uint32_t type) const { return stack_size_func_(type); }
 
     const std::vector<uint32_t>& get_noc_x_id_translate_table() const { return noc_x_id_translate_table_; }
     const std::vector<uint32_t>& get_noc_y_id_translate_table() const { return noc_y_id_translate_table_; }
