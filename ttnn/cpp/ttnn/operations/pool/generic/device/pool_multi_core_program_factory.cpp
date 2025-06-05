@@ -46,7 +46,8 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
     bool first_scalar = true;
     uint32_t last_pool_area = 0;
 
-    if (config.ceil_mode && (config.ceil_w > 0 || config.ceil_h > 0)) {
+    if ((config.ceil_mode && (config.ceil_w > 0 || config.ceil_h > 0)) ||
+        (!config.count_include_pad && (config.pad_h > 0 || config.pad_w > 0))) {
         for (uint32_t i = 0; i < config.out_nhw_per_core; i++) {
             // Compute starting and ending indices of the pooling window
             int h_start = output_stick_x * config.stride_h - config.pad_h;
@@ -58,24 +59,37 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
                 w_start + static_cast<int>(config.kernel_w),
                 static_cast<int>(config.in_w + config.pad_w + config.ceil_w));
 
-            // Initial pool area
-            int pool_area = (h_end - h_start) * (w_end - w_start);
+            int valid_h_start = (h_start > 0) ? h_start : 0;
+            int valid_w_start = (w_start > 0) ? w_start : 0;
+            int valid_h_end = std::min(h_end, static_cast<int>(config.in_h));
+            int valid_w_end = std::min(w_end, static_cast<int>(config.in_w));
 
-            // Calculate ceil induced padding overflow beyond input dimensions
-            int pad_h_over = std::max(h_end - static_cast<int>(config.in_h) - static_cast<int>(config.pad_h), 0);
-            int pad_w_over = std::max(w_end - static_cast<int>(config.in_w) - static_cast<int>(config.pad_w), 0);
+            int effective_h = valid_h_end - valid_h_start;
+            int effective_w = valid_w_end - valid_w_start;
 
-            // Adjust pool area to exclude padded overflow
-            pool_area -= pad_h_over * config.kernel_w;
-            pool_area -= pad_w_over * config.kernel_h;
+            int pool_area = 0;
+            if (config.count_include_pad) {
+                // Initial pool area
+                pool_area = (h_end - h_start) * (w_end - w_start);
 
-            // Re-add intersection if both directions overflowed
-            if (pad_h_over > 0 && pad_w_over > 0) {
-                pool_area += pad_h_over * pad_w_over;
+                // Calculate ceil induced padding overflow beyond input dimensions
+                int pad_h_over = std::max(h_end - static_cast<int>(config.in_h) - static_cast<int>(config.pad_h), 0);
+                int pad_w_over = std::max(w_end - static_cast<int>(config.in_w) - static_cast<int>(config.pad_w), 0);
+
+                // Adjust pool area to exclude padded overflow
+                pool_area -= pad_h_over * config.kernel_w;
+                pool_area -= pad_w_over * config.kernel_h;
+
+                // Re-add intersection if both directions overflowed
+                if (pad_h_over > 0 && pad_w_over > 0) {
+                    pool_area += pad_h_over * pad_w_over;
+                }
+
+                // Avoid division by zero
+                pool_area = pool_area > 1 ? pool_area : 1;
+            } else {
+                pool_area = (effective_h > 0 && effective_w > 0) ? effective_h * effective_w : 0;
             }
-
-            // Avoid division by zero
-            pool_area = pool_area > 1 ? pool_area : 1;
             float value = pool_area > 0 ? 1.f / static_cast<float>(pool_area) : 0.f;
 
             // Add new scalar if padding config changes
@@ -98,7 +112,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
         TT_FATAL(
             false,
             "Avg pool scalars config should be calulated only for ceil_mode == true and "
-            "(ceil_pad_h > 0 || ceil_pad_w > 0)");
+            "(ceil_pad_h > 0 || ceil_pad_w > 0) or count_include_pad == false and (pad_h > 0 || pad_w > 0)");
     }
     scalars.back().end = config.out_nhw_per_core;
     return scalars;
@@ -224,6 +238,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
     bool ceil_mode,
+    bool count_include_pad,
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t num_shards_c,
@@ -437,8 +452,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t bf16_one_u32 = *reinterpret_cast<const uint32_t*>(&one);
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
-    const bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || ceil_mode == false ||
-                                     (ceil_pad_h == 0 && ceil_pad_w == 0) || divisor_override.has_value();
+    bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
+                               ((ceil_mode == false || (ceil_pad_h == 0 && ceil_pad_w == 0)) &&
+                                (count_include_pad == true || (pad_h == 0 && pad_w == 0)));
 
     CBHandle config_cb;
     tt::tt_metal::DeviceStorage scalar_config_storage;
@@ -458,6 +474,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             .ceil_mode = ceil_mode,
             .ceil_h = ceil_pad_h,
             .ceil_w = ceil_pad_w,
+            .count_include_pad = count_include_pad,
             .pad_h = pad_h / 2,  // pad_h is the total padding, so divide by 2 for each side
             .pad_w = pad_w / 2,  // pad_w is the total padding, so divide by 2 for each side
             .out_nhw_per_core = out_nhw_per_core};
@@ -645,6 +662,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
     const auto& out_mem_config = op_attr.memory_config_;
+    bool count_include_pad = op_attr.count_include_pad_;
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
 
     tt::tt_metal::Program program{};
@@ -707,6 +725,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         ceil_pad_h,
         ceil_pad_w,
         ceil_mode,
+        count_include_pad,
         dilation_h,
         dilation_w,
         num_shards_c,
