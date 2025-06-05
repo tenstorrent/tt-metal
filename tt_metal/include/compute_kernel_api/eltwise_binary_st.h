@@ -8,6 +8,7 @@
 #include "llk_math_binary_api.h"
 #include "llk_unpack_AB_api.h"
 #include "llk_unpack_A_api.h"
+#include "llk_pack_api.h"
 
 namespace ckernel {
 
@@ -30,9 +31,9 @@ ALWI void binary_op_init_common_st(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     UNPACK((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     UNPACK((llk_math_hw_configure_disaggregated(icb0, icb1)));
 
-    UPACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
-    UPACK((llk_pack_init(ocb)));
-    UPACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
+    UNPACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
+    UNPACK((llk_pack_init(ocb)));
+    UNPACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
 }
 
 // clang-format off
