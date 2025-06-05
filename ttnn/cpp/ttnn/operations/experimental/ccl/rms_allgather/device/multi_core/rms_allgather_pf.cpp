@@ -238,6 +238,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         storage_core_noc_y.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).y);
 
         log_debug(
+            tt::LogOp,
             "Storage core: ({}, {}), physical coords: ({}, {})",
             core.x,
             core.y,
@@ -1066,6 +1067,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             current_worker_num_segments_to_write_back += 1;
 
             log_debug(
+                tt::LogOp,
                 "New segment for worker core {}, Worker core offset: {}, Storage core offset: {}, Num tiles to "
                 "write "
                 "back: {}",

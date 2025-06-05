@@ -132,7 +132,11 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     src_device->id(),
                     edm_builders_forward_direction[src_device->id()].size());
                 log_debug(
-                    "src_device {}, dest_device {}, is_dateline {}", src_device->id(), dest_device->id(), dateline);
+                    tt::LogOp,
+                    "src_device {}, dest_device {}, is_dateline {}",
+                    src_device->id(),
+                    dest_device->id(),
+                    dateline);
                 edm_builders_forward_direction[src_device->id()].push_back(
                     tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                         src_device,
@@ -242,7 +246,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 if (enable_core_placement_opt) {
                     if (edm_fwd.my_noc_x < edm_bwd.my_noc_x) {
                         log_info(
-                            tt::LogTest,
+                            tt::LogOp,
                             "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
                             edm_fwd.my_chip_id,
                             edm_fwd.my_noc_x,
@@ -264,7 +268,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         }
                     } else if (edm_fwd.my_noc_x > edm_bwd.my_noc_x) {
                         log_info(
-                            tt::LogTest,
+                            tt::LogOp,
                             "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
                             edm_fwd.my_chip_id,
                             edm_fwd.my_noc_x,

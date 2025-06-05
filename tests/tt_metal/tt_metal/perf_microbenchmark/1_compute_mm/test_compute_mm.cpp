@@ -1057,6 +1057,7 @@ tt_metal::Program create_program_single_core(
     log_debug(tt::LogTest, "interm_CB_size: {}", out_CB_tiles * 4096);
     log_debug(tt::LogTest, "out_CB_size: {}", out_CB_size);
     log_debug(
+        tt::LogTest,
         "total_CB_size: {}",
         in0_CB_tiles * single_tile_size + in1_CB_tiles * single_tile_size + out_CB_tiles * 4096 + out_CB_size);
 

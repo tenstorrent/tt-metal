@@ -466,6 +466,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         }
 
         log_debug(
+            tt::LogOp,
             "Core {},{}: C_in=[{},{}), C_out=[{},{}), T_out=[{},{}), H_out=[{},{}), W_out=[{},{}), "
             "ReductionGroup={}, C_in_idx={}, HasWork={}, IsReducer={}",
             core.x,
@@ -547,6 +548,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
                 reducer_core_ids[group_id] % grid_size.x, reducer_core_ids[group_id] / grid_size.x};
 
             log_debug(
+                tt::LogOp,
                 "Reduction Group {}: {} cores [{}], Reducer: ({},{})",
                 group_id,
                 group.size(),
@@ -600,6 +602,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
                                 std::to_string(worker_core_physical_ys[reduction_group_id][i]) + ")";
         }
         log_debug(
+            tt::LogOp,
             "Core ({},{}): IsReducer={}, ReductionGroup={}, ReducerCore=({},{}), Workers=[{}]",
             core.x,
             core.y,

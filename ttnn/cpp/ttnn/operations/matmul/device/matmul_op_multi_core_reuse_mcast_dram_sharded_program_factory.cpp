@@ -141,6 +141,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     }
 
     log_debug(
+        tt::LogOp,
         "per_core_M: {}, per_core_N_compute: {}, per_core_N_in1_sender: {}",
         per_core_M,
         per_core_N_compute,
@@ -523,7 +524,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
             interm0_CB_size / interm0_single_tile_size,
             interm0_CB_size);
     } else {
-        log_debug(LogOp, "inplace interm and outout cb");
+        log_debug(tt::LogOp, "inplace interm and outout cb");
         // share buffer
         std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
@@ -535,7 +536,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, output_cb_config);
     log_debug(
-        LogOp,
+        tt::LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
         output_cb_index,
         output_single_tile_size,
@@ -737,6 +738,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
                 }
 
                 log_debug(
+                    tt::LogOp,
                     "curr worker core: {}, send back: {} tiles to storage core: {}, coord: {}",
                     i,
                     per_core_N_reshard_1,
@@ -756,6 +758,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 
                 if (per_core_N_reshard_2 != 0 and (curr_storage_core_idx + 1) < num_cores_written_back) {
                     log_debug(
+                        tt::LogOp,
                         "curr worker core: {}, send back: {} tiles to storage core: {}, coord: {}",
                         i,
                         per_core_N_reshard_2,
@@ -785,6 +788,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
                 worker_core_stride = per_core_N_storage - storage_core_stride;
 
                 log_debug(
+                    tt::LogOp,
                     "curr worker core: {}, send back: {} tiles to storage core: {}, coord: {}",
                     curr_worker_core,
                     worker_core_stride,
@@ -818,6 +822,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
                     uint32_t current_worker_write_back_tiles = current_worker_stride_total - worker_core_stride;
 
                     log_debug(
+                        tt::LogOp,
                         "curr worker core: {}, send back: {} tiles to storage core: {}, coord: {}",
                         curr_worker_core,
                         current_worker_write_back_tiles,

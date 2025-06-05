@@ -67,6 +67,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         ttnn::split_blocks_for_tilize(grid_size, num_blocks);
 
     log_debug(
+        tt::LogOp,
         "ncores: {}, nblocks_per_core: {}, nblocks_per_core_cliff: {}",
         ncores,
         nblocks_per_core,
@@ -258,6 +259,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     uint32_t work_per_core = (total_input_work + num_cores_total - 1) / num_cores_total;
 
     log_debug(
+        tt::LogOp,
         "total_input_work: {}, num_cores_total: {}, work_per_core: {}",
         total_input_work,
         num_cores_total,
@@ -276,6 +278,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, hal::get_dram_alignment());
 
     log_debug(
+        tt::LogOp,
         "stick_nbytes: {}, aligned_stick_nbytes: {}, dram_alignment: {}",
         stick_nbytes,
         aligned_stick_nbytes,

@@ -293,6 +293,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     const uint32_t num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
 
     log_debug(
+        tt::LogOp,
         "num_sticks_per_core = {}, num_sticks_per_core_read = {}, num_read_per_barrier = {}",
         num_sticks_per_core,
         num_sticks_per_core_read,
@@ -329,6 +330,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         uint32_t num_sticks_this_core = std::min(num_sticks_per_core, max_num_sticks_this_core + 1);
 
         log_debug(
+            tt::LogOp,
             "Start ID: {}, Start ID per dim : {} , Size till end : {} Num Sticks: {} for Core: {}",
             start_id,
             id_per_dim,

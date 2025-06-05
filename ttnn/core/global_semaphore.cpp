@@ -43,10 +43,11 @@ MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
     });
 
     if (!all_same) {
-        log_debug(tt::LogAlways, "chkpt 1, attempts: {}", attempts);
+        log_debug(tt::LogTTNN, "chkpt 1, attempts: {}", attempts);
         tt::tt_metal::DeviceAddr target_addr = get_global_semaphore_address(global_semaphores.front());
         for (auto i = 1; i < global_semaphores.size(); i++) {
             log_debug(
+                tt::LogTTNN,
                 "chkpt 1.1, i: {}, global_semaphores[i]->address(): {}",
                 i,
                 get_global_semaphore_address(global_semaphores[i]));
@@ -60,18 +61,18 @@ MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
                 }
             }
         };
-        log_debug(tt::LogAlways, "chkpt 2, target_addr: {}", target_addr);
+        log_debug(tt::LogTTNN, "chkpt 2, target_addr: {}", target_addr);
         for (auto i = 0; i < global_semaphores.size(); i++) {
             auto* device = devices[i];
             auto& global_semaphore = multi_device_global_semaphore.global_semaphores[i];
             size_t attempt = 0;
             std::vector<GlobalSemaphore> garbage;
-            log_debug(tt::LogAlways, "global_semaphore->address(): {}", get_global_semaphore_address(global_semaphore));
+            log_debug(tt::LogTTNN, "global_semaphore->address(): {}", get_global_semaphore_address(global_semaphore));
             while (get_global_semaphore_address(global_semaphore) != target_addr) {
                 auto sem = create_global_semaphore(device, cores, initial_value, buffer_type);
 
                 if (i == 0) {
-                    log_debug(tt::LogAlways, "chkpt 3, sem->address(): {}", get_global_semaphore_address(sem));
+                    log_debug(tt::LogTTNN, "chkpt 3, sem->address(): {}", get_global_semaphore_address(sem));
                 }
 
                 if (get_global_semaphore_address(sem) == target_addr) {

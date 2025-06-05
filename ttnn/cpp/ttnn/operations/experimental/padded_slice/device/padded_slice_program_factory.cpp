@@ -121,6 +121,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
 
     for (int i = 0; i < num_dims; i++) {
         log_debug(
+            tt::LogOp,
             "i = {}, num_output_sticks_per_dim: {}, num_input_sticks_per_dim: {}, accumulated_total_per_dim: {}",
             i,
             num_output_sticks_per_dim[i],
@@ -166,6 +167,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
         num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
     }
     log_debug(
+        tt::LogOp,
         "num_stick_per_core: {}, num_stick_per_core_read: {}, num_read_per_barrier: {}",
         num_sticks_per_core,
         num_sticks_per_core_read,
