@@ -1342,14 +1342,14 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
             .dst_acked_valid_cmd = 0,
         };
         for (const auto &chip_id : non_mmio_devices) {
-            for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
+            for (const auto& eth_core : this->get_active_ethernet_cores(chip_id, false)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for non-mmio devices
                 write_core((void*)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
             }
         }
         for (const auto &chip_id : mmio_devices) {
-            for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
+            for (const auto& eth_core : this->get_active_ethernet_cores(chip_id, false)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for mmio devices
                 write_core((void*)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
@@ -1362,14 +1362,14 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
             .dst_acked_valid_cmd = 0,
         };
         for (const auto &chip_id : mmio_devices) {
-            for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
+            for (const auto& eth_core : this->get_active_ethernet_cores(chip_id, false)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for mmio devices
                 write_core((void*)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
             }
         }
         for (const auto &chip_id : non_mmio_devices) {
-            for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
+            for (const auto& eth_core : this->get_active_ethernet_cores(chip_id, false)) {
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for non-mmio devices
                 write_core((void*)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_);
