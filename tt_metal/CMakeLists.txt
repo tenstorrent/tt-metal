@@ -4,25 +4,6 @@ if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_link_options(--coverage)
 endif()
 
-link_libraries(tt-logger::tt-logger)
-
-# Control compile time logging
-if(NOT DEFINED TT_METAL_ENABLE_LOGGING)
-    if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        set(_default_enable_logging OFF)
-    else()
-        set(_default_enable_logging ON)
-    endif()
-endif()
-option(
-    TT_METAL_ENABLE_LOGGING
-    "Enables inclusion of log_trace and log_debug into the binary."
-    ${_default_enable_logging}
-)
-if(TT_METAL_ENABLE_LOGGING)
-    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
-endif()
-
 add_library(tt_metal)
 add_library(TT::Metalium ALIAS tt_metal)
 add_library(Metalium::Metal ALIAS tt_metal) # For backwards compatibility
@@ -352,6 +333,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         Reflect::Reflect
         TT::STL
+        tt-logger::tt-logger
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs

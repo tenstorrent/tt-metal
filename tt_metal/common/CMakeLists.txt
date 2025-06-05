@@ -44,4 +44,5 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         yaml-cpp::yaml-cpp
         Boost::asio
+        tt-logger::tt-logger
 )
