@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,9 +101,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 std::vector<Tensor> all_broadcast_async(
     const Tensor& input_tensor,
@@ -124,8 +122,6 @@ std::vector<Tensor> all_broadcast_async(
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

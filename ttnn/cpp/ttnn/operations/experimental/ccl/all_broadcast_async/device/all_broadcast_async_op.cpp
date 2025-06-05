@@ -162,11 +162,8 @@ tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std:
         input_memory_config);
 }
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
-namespace {
 std::vector<Tensor> all_broadcast_async_impl(
     const Tensor& input_tensor,
     const GlobalSemaphore& multi_device_global_semaphore,
@@ -243,7 +240,6 @@ std::vector<Tensor> all_broadcast_async_impl(
         {},
         optional_output_tensors);
 }
-}  // namespace
 
 std::vector<Tensor> all_broadcast_async(
     const Tensor& input_tensor,
@@ -284,8 +280,6 @@ std::vector<Tensor> all_broadcast_async(
         sub_device_id);
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn
