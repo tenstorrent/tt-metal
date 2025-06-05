@@ -8,7 +8,6 @@
 
 namespace ckernel {
 
-#if 0 
 // clang-format off
 /**
  * Copies a single tile from the DST register buffer at a specified index to a
@@ -45,8 +44,6 @@ template <bool out_of_order_output = false>
 ALWI void pack_tile_st(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
     UNPACK((llk_pack<out_of_order_output, false, DST_ACCUM_MODE>(ifrom_dst, icb, output_tile_index)));
 }
-
-#endif
 
 // clang-format off
 /**

@@ -35,6 +35,7 @@ void MAIN {
 	// Wait for enough space to be available in the output circular buffer
         cb_reserve_back_st(cb_out0, per_core_block_size);
 
+        UNPACK(DPRINT << "2" << ENDL());
 
         tile_regs_acquire_st();
         
@@ -46,15 +47,19 @@ void MAIN {
 
         tile_regs_commit_st();
 
+
         tile_regs_wait_st();
+
 
         // Pack all the output tiles from destination register out to 
 	// the output circular buffer that resides in L1 memory	
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            pack_tile(i, cb_out0);
+            pack_tile_st(i, cb_out0);
         }
 
+
         tile_regs_release_st();
+
 
 	// Update the write pointer and counts for the output circular buffer. 
         cb_push_back_st(cb_out0, per_core_block_size);
@@ -62,7 +67,10 @@ void MAIN {
 	// Pop out the used input tiles
         cb_pop_front(cb_in0, per_core_block_size);
         cb_pop_front(cb_in1, per_core_block_size);
-	
     }
+
+    UNPACK(DPRINT << "UE" << ENDL());
+    PACK(DPRINT << "PE" << ENDL());
+    MATH(DPRINT << "ME" << ENDL());
 }
 }  // namespace NAMESPACE
