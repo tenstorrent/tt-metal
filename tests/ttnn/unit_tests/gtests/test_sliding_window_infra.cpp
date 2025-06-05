@@ -71,7 +71,6 @@ INSTANTIATE_TEST_SUITE_P(
         .snap_to_tile = false,
         .is_bilinear = false,
         .is_transpose = false,
-        .ceil_mode = false,
-        .is_avg_pool = false}));
+        .ceil_mode = false}));
 
 }  // namespace ttnn::operations::sliding_window::test
