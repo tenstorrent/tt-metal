@@ -37,7 +37,7 @@ class TtConv:
         width_shard=False,
         act_blocks=False,
         enable_act_double_buffer=True,
-        enable_split_reader=False,
+        enable_split_reader=True,
         reshard_if_not_optimal=True,
         batch_size=1,
         conv_math_fidelity=None,
@@ -77,17 +77,17 @@ class TtConv:
             weights_dtype=ttnn.bfloat16,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            act_block_w_div=1,
-            transpose_shards=False,
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_split_reader=self.enable_split_reader,
-            enable_subblock_padding=False,
+            enable_subblock_padding=True,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
         )
 
+        if self.input_params[4] == 3:
+            conv_config.act_block_h_override = 64
         if self.deallocate_activation:
             conv_config.deallocate_activation = self.deallocate_activation
 
@@ -145,7 +145,7 @@ class TtConv:
             conv_config=self.conv_config,
             compute_config=self.compute_config,
             groups=self.groups,
-            memory_config=ttnn.L1_MEMORY_CONFIG if self.change_shard == True else None,
+            # memory_config=ttnn.L1_MEMORY_CONFIG if self.change_shard == True else None,
             return_weights_and_bias=True,
             return_output_dim=True,
         )
@@ -312,7 +312,7 @@ class TtSPPF:
             device,
             parameters["cv2"],
             input_params=input_params[1],
-            change_shard=True,
+            # change_shard=True,
             deallocate_activation=True,
             conv_math_fidelity=ttnn.MathFidelity.HiFi2,
         )
@@ -384,7 +384,7 @@ class TtMaxSigmoidAttnBlock:
                 self.parameters["ec"],
                 input_params=None,
                 block_shard=self.block_shard,
-                change_shard=True,
+                # change_shard=True,
                 deallocate_activation=self.deallocate_activation,
             )
             if c1 != ec
@@ -397,7 +397,7 @@ class TtMaxSigmoidAttnBlock:
             self.parameters["proj_conv"],
             input_params=input_params,
             block_shard=self.block_shard,
-            change_shard=True,
+            # change_shard=True,
             deallocate_activation=self.deallocate_activation,
             is_act_false=True,
         )
@@ -490,7 +490,7 @@ class TtC2fAttn:
             self.device,
             self.parameters["cv2"],
             input_params=input_params[1],
-            change_shard=True,
+            # change_shard=True,
             deallocate_activation=self.deallocate_activation,
             conv_math_fidelity=ttnn.MathFidelity.HiFi2,
         )
@@ -538,7 +538,7 @@ class TtC2fAttn:
                 y[i] = ttnn.sharded_to_interleaved(y[i], ttnn.L1_MEMORY_CONFIG)
         y.append(self.attn(y[-1], guide)[0])
         y[-1] = ttnn.to_layout(y[-1], layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.concat(y, 3)  # Decrease in Fps if we use shard concat
+        x = concat(y, 3, True)  # Decrease in Fps if we use shard concat
         for i in range(len(y)):
             ttnn.deallocate(y[i])
 
@@ -625,7 +625,7 @@ class TtImagePoolingAttn:
             )
             for (x, pool) in zip(x, self.im_pools)
         ]
-        x = ttnn.concat(x, dim=1)
+        x = concat(x, dim=1, use_sharded_concat=False)
         q = ttnn.clone(text)
         for index, module in enumerate(self.query):
             if module == ttnn.linear:
@@ -865,7 +865,7 @@ class TtWorldDetect:
             for module in self.cv3[i]:
                 cv3, _, _ = module(cv3)
 
-            x[i] = ttnn.concat((cv_2, self.cv4[i](cv3, text)), -1)
+            x[i] = concat((cv_2, self.cv4[i](cv3, text)), -1, False)
 
         # Inference path
         shape = x[0].shape
@@ -876,7 +876,7 @@ class TtWorldDetect:
             i = ttnn.reshape(i, (shape[0], -1, self.no), memory_config=ttnn.L1_MEMORY_CONFIG)
             xi.append(i)
 
-        x_cat = ttnn.concat(xi, 1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x_cat = concat(xi, 1, False)
         x_cat = ttnn.permute(x_cat, (0, 2, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         box = ttnn.slice(x_cat, [0, 0, 0], [1, 64, x_cat.shape[2]], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -885,7 +885,7 @@ class TtWorldDetect:
         dbox = ttnn_decode_bboxes(self.device, dfl, anchors)
         dbox = dbox * strides
 
-        return [ttnn.concat((dbox, ttnn.sigmoid(cls)), dim=1), x]
+        return [concat((dbox, ttnn.sigmoid(cls)), dim=1, use_sharded_concat=False), x]
 
 
 class TtWorldModel:
@@ -1000,6 +1000,7 @@ class TtWorldModel:
                 device,
                 parameters["model"][7],
                 input_params=[3, 2, 1, 512, 256],
+                block_shard=True
                 # deallocate_activation=True,
             ),
             TtC2f(
@@ -1139,8 +1140,10 @@ class TtWorldModel:
                     x = m(x, dim=-1)
                 elif m == ttnn.upsample:
                     if index == 10:
+                        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
                         x = ttnn.reshape(x, (1, 20, 20, 512))
                     else:
+                        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
                         x = ttnn.reshape(x, (1, 40, 40, 256))
                     x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
 

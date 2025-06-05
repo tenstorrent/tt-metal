@@ -147,7 +147,7 @@ def to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT):
     return x
 
 
-def sharded_concat(input_tensors, num_cores=56, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
+def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
     shard_grid = get_core_grid_from_num_cores(num_cores=num_cores)
     in_shard_width = input_tensors[0].shape[-1]
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
@@ -179,7 +179,7 @@ def concat(tensors, dim=-1, use_sharded_concat=True):
         processed_tensors = [
             ttnn.to_dtype(to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT), ttnn.bfloat16) for tensor in tensors
         ]
-        return sharded_concat(processed_tensors)
+        return sharded_concat(processed_tensors, dim=dim)
     else:
         return ttnn.concat([*tensors], dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
 
