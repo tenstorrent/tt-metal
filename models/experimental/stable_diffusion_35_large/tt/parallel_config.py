@@ -18,8 +18,8 @@ class DiTParallelConfig(NamedTuple):
     cfg_parallel: ParallelConfig
     tensor_parallel: ParallelConfig
     sequence_parallel: ParallelConfig
-    # ring_parallel: ParallelConfig
-    # ulysses_parallel: ParallelConfig
+    ring_parallel: ParallelConfig
+    ulysses_parallel: ParallelConfig
     topology: ttnn.Topology
 
 
@@ -29,8 +29,8 @@ def create_dit_parallel_config(
     tensor_parallel: ParallelConfig,
     topology: ttnn.Topology,
     sequence_parallel: ParallelConfig,
-    # ring_parallel: ParallelConfig,
-    # ulysses_parallel: ParallelConfig
+    ring_parallel: ParallelConfig,
+    ulysses_parallel: ParallelConfig,
 ) -> DiTParallelConfig:
     # validate cfg config
     assert cfg_parallel.factor in [1, 2]
@@ -63,13 +63,23 @@ def create_dit_parallel_config(
         == cfg_parallel.mesh_shape[1 - tensor_parallel.mesh_axis] // sequence_parallel.factor
     )
 
-    # TODO: Be very careful with validation here.
+    # validate ring config
+    assert ring_parallel.mesh_axis in [0, 1]
+    assert ring_parallel.mesh_shape == sequence_parallel.mesh_shape
+    assert ring_parallel.mesh_axis == sequence_parallel.mesh_axis
+    assert ring_parallel.factor == sequence_parallel.factor
+
+    # validate ulysses config
+    assert ulysses_parallel.mesh_axis in [0, 1]
+    assert ulysses_parallel.mesh_shape == tensor_parallel.mesh_shape
+    assert ulysses_parallel.mesh_axis == tensor_parallel.mesh_axis
+    assert ulysses_parallel.factor == tensor_parallel.factor
 
     return DiTParallelConfig(
         cfg_parallel=cfg_parallel,
         tensor_parallel=tensor_parallel,
         sequence_parallel=sequence_parallel,
-        # ring_parallel=ring_parallel,
-        # ulysses_parallel=ulysses_parallel,
+        ring_parallel=ring_parallel,
+        ulysses_parallel=ulysses_parallel,
         topology=topology,
     )

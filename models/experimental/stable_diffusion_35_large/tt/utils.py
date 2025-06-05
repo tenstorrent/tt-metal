@@ -18,7 +18,7 @@ def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
     return ccl_semaphore_handles
 
 
-def initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, topology):
+def initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology):
     cfg_parallel = ParallelConfig(
         mesh_shape=(mesh_shape[0], mesh_shape[1] // cfg_factor), factor=cfg_factor, mesh_axis=1
     )
@@ -32,11 +32,23 @@ def initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, 
         factor=tp_factor,
         mesh_axis=1,
     )
+    ring_parallel = ParallelConfig(
+        mesh_shape=(cfg_parallel.mesh_shape[0] // rp_factor, cfg_parallel.mesh_shape[1] // up_factor),
+        factor=rp_factor,
+        mesh_axis=0,
+    )
+    ulysses_parallel = ParallelConfig(
+        mesh_shape=(cfg_parallel.mesh_shape[0] // rp_factor, cfg_parallel.mesh_shape[1] // up_factor),
+        factor=up_factor,
+        mesh_axis=1,
+    )
     return create_dit_parallel_config(
         mesh_shape=mesh_shape,
         cfg_parallel=cfg_parallel,
         sequence_parallel=sequence_parallel,
         tensor_parallel=tensor_parallel,
+        ring_parallel=ring_parallel,
+        ulysses_parallel=ulysses_parallel,
         topology=topology,
     )
 

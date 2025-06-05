@@ -191,6 +191,9 @@ def sd_joint_attention(
     N: int,
     L: int,
     ag_global_semaphore,
+    ring_attention_semaphore_handles,
+    persistent_buffers,
+    worker_sub_device_id,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
     """
     spatial: N ⊗ S1 ⊗ (H * E1)
@@ -209,10 +212,12 @@ def sd_joint_attention(
         deallocate=deallocate,
     )
 
+    full_grid = device.compute_with_storage_grid_size()
+    sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=sdpa_worker_grid,
         q_chunk_size=128,
-        k_chunk_size=1024,
+        k_chunk_size=128,
         exp_approx_mode=False,  # NOTE: False is more correct
     )
 
@@ -258,44 +263,44 @@ def sd_joint_attention(
         deallocate=deallocate,
     )
 
-    if parallel_config.sequence_parallel.factor > 1:
-        q = ttnn.experimental.all_gather_async(
+    if parallel_config.ring_parallel.factor > 1:
+        spatial, prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q,
-            dim=2,
-            cluster_axis=parallel_config.sequence_parallel.mesh_axis,
-            mesh_device=device,
-            topology=parallel_config.topology,
-            multi_device_global_semaphore=ag_global_semaphore,
-        )
-        k = ttnn.experimental.all_gather_async(
             k,
-            dim=2,
-            cluster_axis=parallel_config.sequence_parallel.mesh_axis,
-            mesh_device=device,
-            topology=parallel_config.topology,
-            multi_device_global_semaphore=ag_global_semaphore,
-        )
-        v = ttnn.experimental.all_gather_async(
             v,
+            q2,
+            k2,
+            v2,
+            persistent_intermediate_buffer_k=persistent_buffers[0],
+            persistent_intermediate_buffer_v=persistent_buffers[1],
+            persistent_output_buffer_k=persistent_buffers[2],
+            persistent_output_buffer_v=persistent_buffers[3],
+            joint_strategy="rear",
+            logical_n=N,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
             dim=2,
-            cluster_axis=parallel_config.sequence_parallel.mesh_axis,
+            multi_device_global_semaphore=ring_attention_semaphore_handles,
+            num_links=1,
+            cluster_axis=parallel_config.ring_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_config.topology,
-            multi_device_global_semaphore=ag_global_semaphore,
+            subdevice_id=worker_sub_device_id,
+            ccl_core_grid_offset=(0, sdpa_worker_grid[1]),
         )
-
-    # TODO: Check that unpadded text seqlen is logical shape of joint tensors.
-    spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
-        q,
-        k,
-        v,
-        q2,
-        k2,
-        v2,
-        joint_strategy="rear",
-        program_config=program_config,
-        compute_kernel_config=compute_kernel_config,
-    )
+    else:
+        # TODO: Check that unpadded text seqlen is logical shape of joint tensors.
+        spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            q2,
+            k2,
+            v2,
+            joint_strategy="rear",
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
 
     spatial = ttnn.transformer.concatenate_heads(
         spatial,
@@ -304,19 +309,19 @@ def sd_joint_attention(
         prompt,
     )
 
-    if parallel_config.sequence_parallel.factor > 1:
-        # Slice out the sequence parallel piece that is actually ours
-        spatial = sd_linear(spatial, parameters.spatial.sharding_proj, transpose_a=True)
-        spatial = ttnn.transpose(spatial, dim1=-2, dim2=-1)
+    # if parallel_config.sequence_parallel.factor > 1:
+    #     # Slice out the sequence parallel piece that is actually ours
+    #     spatial = sd_linear(spatial, parameters.spatial.sharding_proj, transpose_a=True)
+    #     spatial = ttnn.transpose(spatial, dim1=-2, dim2=-1)
 
     spatial = ttnn.unsqueeze(spatial, 1)
     prompt = ttnn.unsqueeze(prompt, 1)
 
-    if parallel_config.tensor_parallel.factor > 1:
+    if parallel_config.ulysses_parallel.factor > 1:
         spatial = ttnn.experimental.all_gather_async(
             spatial,
             dim=3,
-            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            cluster_axis=parallel_config.ulysses_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_config.topology,
             multi_device_global_semaphore=ag_global_semaphore,
@@ -324,7 +329,7 @@ def sd_joint_attention(
         prompt = unpadded_all_gather_async(
             prompt,
             dim=3,
-            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            cluster_axis=parallel_config.ulysses_parallel.mesh_axis,
             mesh_device=device,
             topology=parallel_config.topology,
             multi_device_global_semaphore=ag_global_semaphore,
