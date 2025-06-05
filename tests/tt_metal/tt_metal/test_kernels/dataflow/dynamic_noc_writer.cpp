@@ -95,7 +95,7 @@ void kernel_main() {
         // Test mcast
         if (mcast) {
             // write mcast
-            noc_async_write_multicast_one_packet(
+            noc_async_write_multicast<page_size>(
                 l1_read_addr,
                 noc == noc_index ? mcast_addr_self_noc : mcast_addr_other_noc,
                 page_size,

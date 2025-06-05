@@ -83,7 +83,7 @@ void kernel_main() {
         // Test mcast
         if (mcast) {
             // write mcast
-            noc_async_write_multicast_one_packet(
+            noc_async_write_multicast<page_size>(
                 l1_read_addr, mcast_addr_self_noc, page_size, num_dests - 1, false, noc);
             noc_async_write_multicast(l1_read_addr, mcast_addr_self_noc, page_size, num_dests - 1, false, noc);
             noc_async_write_multicast_loopback_src(l1_read_addr, mcast_addr_self_noc, page_size, num_dests, false, noc);
