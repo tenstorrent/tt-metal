@@ -33,8 +33,8 @@
 #define MEM_L1_SIZE (1536 * 1024)
 
 #define MEM_ETH_BASE 0x0
-// Top 64K is reserved for syseng
-#define MEM_ETH_SIZE (512 * 1024 - 64 * 1024)
+// Top 64K is reserved for syseng but host reads/writes from that region
+#define MEM_ETH_SIZE (512 * 1024)
 
 #define MEM_DRAM_SIZE (4177920 * 1024U)
 
@@ -226,6 +226,9 @@
 #define MEM_AERISC_BANK_TO_NOC_SCRATCH \
     (MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_SUBORDINATE_ERISC_LOCAL_SIZE)
 #define MEM_AERISC_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
+
+#define AERISC_RESET_PC (MEM_LOCAL_BASE | 0x14000)
+#define SUBORDINATE_AERISC_RESET_PC (MEM_LOCAL_BASE | 0x14008)
 
 /////////////
 // Padding/alignment restriction needed in linker scripts for erisc
