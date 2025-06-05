@@ -229,6 +229,14 @@ FORCE_INLINE void cq_noc_async_write_init_state(
 template <enum CQNocInlineFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
 FORCE_INLINE void cq_noc_inline_dw_write_with_state(
     uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF, uint8_t noc = noc_index) {
+#if defined(ARCH_BLACKHOLE)
+    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
+    volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
+    *inline_l1_src_addr_ptr = val;
+    cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_REG_CMD_BUF>(
+        inline_l1_src_addr, dst_addr, 4);
+#else
     if constexpr (wait) {
         WAYPOINT("NISW");
         while (!noc_cmd_buf_ready(noc, NCRISC_WR_REG_CMD_BUF));
@@ -261,14 +269,22 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc, NCRISC_WR_REG_CMD_BUF);
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
+#endif
 }
 
 // TODO: noc_inline_dw_write currently hardcodes most of these parameters, which we copied here
 // If needed, add templates for setting these
-// TODO: uplift for BH to not do inline write
 template <enum CQNocInlineFlags flags>
 FORCE_INLINE void cq_noc_inline_dw_write_init_state(
     uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF, uint8_t noc = noc_index) {
+#if defined(ARCH_BLACKHOLE)
+    // On Blackhole inline writes are disabled so use cq_noc_async_write_init_state with inline write cmd buf
+    // See comment in `noc_inline_dw_write` for more details
+    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
+    volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
+    cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, NCRISC_WR_REG_CMD_BUF>(0, dst_addr, 0);
+#else
     WAYPOINT("NIIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc, NCRISC_WR_REG_CMD_BUF)) {
@@ -289,6 +305,7 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_CTRL, noc_cmd_field);
 
     cq_noc_inline_dw_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send>(dst_addr, val, be);
+#endif
 }
 
 template <uint32_t sem_id>
