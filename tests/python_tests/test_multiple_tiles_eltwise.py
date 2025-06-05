@@ -14,7 +14,6 @@ from helpers.format_arg_mapping import (
     DestAccumulation,
     MathFidelity,
     MathOperation,
-    TileCount,
     format_dict,
 )
 from helpers.format_config import DataFormat
@@ -98,13 +97,13 @@ all_params = generate_params(
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
-    tile_cnt=[TileCount.One, TileCount.Two, TileCount.Three],
 )
 param_ids = generate_param_ids(all_params)
 
 
+@pytest.mark.parametrize("tile_cnt", range(1, 4))
 @pytest.mark.parametrize(
-    "testname, formats, dest_acc, mathop, math_fidelity, tile_cnt",
+    "testname, formats, dest_acc, mathop, math_fidelity",
     clean_params(all_params),
     ids=param_ids,
 )
@@ -113,8 +112,8 @@ def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
-    pack_start_address = 0x1A000 + 2 * 4096 * tile_cnt.value
-    pack_addresses = [pack_start_address + 0x1000 * i for i in range(tile_cnt.value)]
+    pack_start_address = 0x1A000 + 2 * 4096 * tile_cnt
+    pack_addresses = [pack_start_address + 0x1000 * i for i in range(tile_cnt)]
     pack_addresses_formatted = format_kernel_list(pack_addresses, as_hex=True)
 
     src_A, src_B = generate_stimuli(

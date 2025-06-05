@@ -14,7 +14,7 @@ from ttexalens.tt_exalens_lib import (
     write_words_to_device,
 )
 
-from .format_arg_mapping import Mailbox, TileCount
+from .format_arg_mapping import Mailbox
 from .format_config import DataFormat, FormatConfig
 from .pack import pack_bfp8_b, pack_bfp16, pack_fp16, pack_fp32, pack_int32
 from .unpack import unpack_bfp8_b, unpack_bfp16, unpack_fp16, unpack_fp32, unpack_int32
@@ -69,16 +69,16 @@ def write_stimuli_to_l1(
     stimuli_A_format,
     stimuli_B_format,
     core_loc="0,0",
-    tile_cnt=TileCount.One,
+    tile_cnt=1,
 ):
 
     BUFFER_SIZE = 4096
     TILE_SIZE = 1024
 
     buffer_A_address = 0x1A000
-    buffer_B_address = 0x1A000 + BUFFER_SIZE * tile_cnt.value
+    buffer_B_address = 0x1A000 + BUFFER_SIZE * tile_cnt
 
-    for i in range(tile_cnt.value):
+    for i in range(tile_cnt):
 
         start_index = TILE_SIZE * i
         end_index = start_index + TILE_SIZE
