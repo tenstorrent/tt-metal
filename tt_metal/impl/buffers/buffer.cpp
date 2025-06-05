@@ -555,10 +555,15 @@ DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     uint32_t offset;
     if (is_sharded(this->buffer_layout())) {
-        // TODO: Revist for ND sharding
-        auto shard_spec = this->shard_spec();
-        // TODO: This logic assumes only one shard per core
-        uint32_t pages_offset_within_bank = page_index % shard_spec.num_pages();
+        size_t num_pages_per_shard = 0;
+        if (is_nd_sharded()) {
+            const auto& distribution_spec = *buffer_distribution_spec_;
+            num_pages_per_shard = distribution_spec.num_dev_pages_per_core();
+        } else {
+            auto shard_spec = this->shard_spec();
+            num_pages_per_shard = shard_spec.num_pages();
+        }
+        uint32_t pages_offset_within_bank = page_index % num_pages_per_shard;
         offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
     } else {
         uint32_t pages_offset_within_bank = page_index / num_banks;
@@ -581,10 +586,16 @@ DeviceAddr Buffer::aligned_size_per_bank() const {
 }
 
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
-    // TODO: Revist for ND sharding
     TT_FATAL(is_sharded(this->buffer_layout()), "Buffer not sharded");
-    auto shard_spec = this->shard_spec();
-    uint32_t pages_offset_within_bank = page_index % shard_spec.num_pages();
+    size_t num_pages_per_shard = 0;
+    if (is_nd_sharded()) {
+        const auto& distribution_spec = *buffer_distribution_spec_;
+        num_pages_per_shard = distribution_spec.num_dev_pages_per_core();
+    } else {
+        auto shard_spec = this->shard_spec();
+        num_pages_per_shard = shard_spec.num_pages();
+    }
+    uint32_t pages_offset_within_bank = page_index % num_pages_per_shard;
     auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
