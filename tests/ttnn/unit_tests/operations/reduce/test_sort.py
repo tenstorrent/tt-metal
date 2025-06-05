@@ -164,8 +164,8 @@ def test_sort_l1_memory_tensor(shape, dim, descending, device):
     [
         ([64, 64], -1, True),
         ([1, 1, 32, 64], -1, False),
-        ([1, 96], -1, True),
-        ([1, 1, 32, 96 * TILE_WIDTH], -1, False),
+        ([32, 128], -1, True),
+        ([1, 1, 32, 128 * TILE_WIDTH], -1, False),
         ([1, 1, 32, 256 * TILE_WIDTH], -1, False),
     ],
 )
@@ -193,6 +193,8 @@ def test_sort_program_cache(shape, dim, descending, device):
 
         assert_with_pcc(torch_sort_values, ttnn_sort_values_torch)
         ttnn.synchronize_device(device)
-
     cache_entries = device.num_program_cache_entries()
-    assert cache_entries > 0, "Program cache should have entries after multiple runs of the sort operation."
+    device.disable_and_clear_program_cache()
+    assert cache_entries == 1, "Expected only one program cache entry for sort operation, but found {}".format(
+        cache_entries
+    )
