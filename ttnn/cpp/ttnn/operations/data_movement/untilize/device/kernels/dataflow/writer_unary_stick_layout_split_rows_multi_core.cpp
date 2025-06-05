@@ -58,7 +58,7 @@ void kernel_main() {
 
         // Process each row of elements in the input block
         for (uint32_t j = 0; j < tile_height; ++j) {
-            uint32_t current_l1_read_addr = base_l1_read_addr += j * num_cols_per_input_block * output_element_size;
+            uint32_t current_l1_read_addr = base_l1_read_addr + j * num_cols_per_input_block * output_element_size;
             uint32_t num_rows_already_processed = block_height_index * tile_height + j;
 
             // For width or block sharding, the input tensor may have more/less shards width wise compared
