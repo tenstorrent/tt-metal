@@ -37,30 +37,25 @@ def test_large_softmax(device, batch_size, h, w, dim):
 
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.softmax(input_tensor, dim=dim)
-    print("hi")
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    print("hi")
     output_tensor = ttnn.from_device(output_tensor)
-    print("hi")
     output_tensor = ttnn.to_torch(output_tensor)
-    print("hi before assert")
-
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
 @pytest.mark.parametrize(
     "input_vector",
     [
-        # [100.0, 101.0],
-        # [100.0, 1000.0],
-        # [-100.0, -99.0],
-        # [-100.0, -101.0],
+        [100.0, 101.0],
+        [100.0, 1000.0],
+        [-100.0, -99.0],
+        [-100.0, -101.0],
         [-1000.0, -100.0],
-        # [-100, -108, -99, -100, -101, -98],
+        [-100, -108, -99, -100, -101, -98],
     ],
 )
-@pytest.mark.parametrize("math_approx", [True])
-@pytest.mark.parametrize("fp32_acc_en", [True])
+@pytest.mark.parametrize("math_approx", [True, False])
+@pytest.mark.parametrize("fp32_acc_en", [True, False])
 def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_en):
     torch.manual_seed(0)
 
@@ -81,14 +76,9 @@ def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_e
         )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    # input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, -float("inf"))
     output_tensor = ttnn.softmax(input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
     output_tensor = ttnn.to_torch(output_tensor)
-    torch.set_printoptions(profile="full")
-    with open("tensor_output.txt", "w") as f:
-        print(output_tensor, file=f)
-    with open("torch_tensor_output.txt", "w") as f:
-        print(torch_output_tensor, file=f)
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
@@ -136,21 +126,16 @@ def run_softmax_stable_with_program_cache(
         )
     output_tensor = ttnn.to_torch(output_tensor)
 
-    torch.set_printoptions(profile="full")
-    with open("tensor_output.txt", "w") as f:
-        print(output_tensor, file=f)
-    with open("torch_tensor_output.txt", "w") as f:
-        print(torch_output_tensor, file=f)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [32])
-@pytest.mark.parametrize("skip_scale_mask", [False])
-@pytest.mark.parametrize("math_approx", [False])
-@pytest.mark.parametrize("fp32_acc_en", [True])
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("batch_size", [1, 8])
+@pytest.mark.parametrize("h", [32, 128])
+@pytest.mark.parametrize("w", [1024, 1500])
+@pytest.mark.parametrize("skip_scale_mask", [True, False])
+@pytest.mark.parametrize("math_approx", [True, False])
+@pytest.mark.parametrize("fp32_acc_en", [True, False])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_softmax_stable_with_program_cache(
     device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype, use_program_cache
 ):
@@ -269,15 +254,14 @@ def test_softmax_sharded_stable_with_program_cache(
     assert device.num_program_cache_entries() == 1
 
 
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [32])
-@pytest.mark.parametrize("dim", [-1])
+@pytest.mark.parametrize("batch_size", [1, 16])
+@pytest.mark.parametrize("h", [32, 64])
+@pytest.mark.parametrize("w", [32, 64])
+@pytest.mark.parametrize("dim", [-1, -2, -3])
 def test_softmax(device, batch_size, h, w, dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
-    print(torch_input_tensor)
     torch_output_tensor = F.softmax(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
@@ -288,14 +272,7 @@ def test_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    print("hi before assert")
-    torch.set_printoptions(profile="full")
-    with open("tensor_output.txt", "w") as f:
-        print(output_tensor, file=f)
-    with open("torch_tensor_output.txt", "w") as f:
-        print(torch_output_tensor, file=f)
-    for i in range(0, w):
-        assert_with_pcc(torch_output_tensor[:, :, i], output_tensor[:, :, i], 0.997)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
 def test_softmax_with_3D(device):
@@ -374,7 +351,6 @@ def test_5d_softmax(device, input_shape, dim):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
     torch_output_tensor = torch.softmax(torch_input_tensor, dim)
-    print(torch_output_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -385,7 +361,7 @@ def test_5d_softmax(device, input_shape, dim):
 
 
 @pytest.mark.parametrize("input_shape", [(16, 7, 7)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("dlayout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dim", [-1])
 @pytest.mark.parametrize("numeric_stable", [True])
@@ -393,13 +369,13 @@ def test_5d_softmax(device, input_shape, dim):
     "fill_value",
     [
         -338953138925153547590470800371487866880.00000,  # 7E,7M
-        # -337623910929368631717566993311207522304.00000,  # 7E,6M
-        # -329648542954659136480144150949525454848.00000,  # 7E,4M
-        # -297747071055821155530452781502797185024.00000,  # 7E,2M
-        # -255211775190703847597530955573826158592.00000,  # 7E,1M
-        # -170141183460469231731687303715884105728.00000,  # 7E,0M
-        # -84738284731288386897617700092871966720.00000,  # 6E,7M
-        # -42535295865117307932921825928971026432.00000,  # 6E,0M
+        -337623910929368631717566993311207522304.00000,  # 7E,6M
+        -329648542954659136480144150949525454848.00000,  # 7E,4M
+        -297747071055821155530452781502797185024.00000,  # 7E,2M
+        -255211775190703847597530955573826158592.00000,  # 7E,1M
+        -170141183460469231731687303715884105728.00000,  # 7E,0M
+        -84738284731288386897617700092871966720.00000,  # 6E,7M
+        -42535295865117307932921825928971026432.00000,  # 6E,0M
     ],
 )
 def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_stable, fill_value):
