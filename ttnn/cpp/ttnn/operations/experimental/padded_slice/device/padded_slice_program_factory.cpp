@@ -14,6 +14,7 @@
 #include "ttnn/operations/math.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <ranges>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
@@ -578,8 +579,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
         uint32_t addr_offset = 2;
         reader_kernel_args[addr_offset++] = input_start_id;
         reader_kernel_args[addr_offset++] = num_tiles_this_core;
-
-        reader_kernel_args.insert(reader_kernel_args.end(), start_index_per_dim.begin(), start_index_per_dim.end());
+        auto reversed_start_index = std::ranges::reverse_view(start_index_per_dim);
+        reader_kernel_args.insert(reader_kernel_args.end(), reversed_start_index.begin(), reversed_start_index.end());
 
         std::vector<uint32_t> compute_kernel_args = {
             num_tiles_this_core,  // number of tiles to read
