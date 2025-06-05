@@ -6,7 +6,6 @@
 // See: https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28
 
 const core = require('@actions/core');
-const github = require('@actions/github');
 const fs = require('fs');
 
 // Constants
@@ -16,38 +15,6 @@ const SUCCESS_RATE_DECIMAL_PLACES = 2;
 const SUCCESS_EMOJI = '✅';
 const FAILURE_EMOJI = '❌';
 const EMPTY_VALUE = '—';
-
-/**
- * Fetches PR information associated with a commit.
- *
- * @param {object} github - Octokit client instance
- * @param {object} context - GitHub Actions context
- * @param {string} commitSha - Full SHA of the commit to look up
- * @returns {Promise<object>} Object containing:
- *   - prNumber: Markdown link to the PR (e.g., [#123](url))
- *   - prTitle: Title of the PR or EMPTY_VALUE if not found
- *   - prAuthor: GitHub username of the PR author or 'unknown'
- */
-async function fetchPRInfo(github, context, commitSha) {
-  try {
-    const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-      owner: context.repo.owner,
-      repo: context.repo.repo,
-      commit_sha: commitSha,
-    });
-    if (prs.length > 0) {
-      const pr = prs[0];
-      return {
-        prNumber: `[#${pr.number}](https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${pr.number})`,
-        prTitle: pr.title || EMPTY_VALUE,
-        prAuthor: pr.user?.login || 'unknown'
-      };
-    }
-  } catch (e) {
-    core.warning(`Could not fetch PR for commit ${commitSha}: ${e.message}`);
-  }
-  return { prNumber: EMPTY_VALUE, prTitle: EMPTY_VALUE, prAuthor: EMPTY_VALUE };
-}
 
 /**
  * Calculates statistics for a set of workflow runs.
@@ -183,11 +150,10 @@ function findGoodBadCommits(scheduledMainRuns, context) {
  * Gets information about the last run on main branch.
  *
  * @param {Array<object>} mainBranchRuns - Array of runs on main branch, sorted by date (newest first)
- * @param {object} github - Octokit client instance
  * @param {object} context - GitHub Actions context
- * @returns {Promise<object>} Object containing run information
+ * @returns {object} Object containing run information
  */
-async function getLastRunInfo(mainBranchRuns, github, context) {
+function getLastRunInfo(mainBranchRuns, context) {
   const lastMainRun = mainBranchRuns[0];
   if (!lastMainRun) {
     return {
@@ -201,19 +167,18 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
     };
   }
 
-  const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha);
   const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch');
   const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns, context);
 
-  const prTitleWithAuthor = prInfo.prTitle !== EMPTY_VALUE ?
-    `${prInfo.prTitle} - @${prInfo.prAuthor}` :
+  const prTitleWithAuthor = lastMainRun.pr_title ?
+    `${lastMainRun.pr_title} - @${lastMainRun.pr_author}` :
     EMPTY_VALUE;
 
   return {
     status: lastMainRun.conclusion === 'success' ? SUCCESS_EMOJI : FAILURE_EMOJI,
     sha: `[\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${lastMainRun.head_sha})`,
     run: `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (#${lastMainRun.run_attempt})` : ''}`,
-    pr: prInfo.prNumber,
+    pr: lastMainRun.pr_number || EMPTY_VALUE,
     title: prTitleWithAuthor,
     lastGoodSha,
     earliestBadSha: lastMainRun.conclusion !== 'success' ? earliestBadSha : EMPTY_VALUE
@@ -223,12 +188,11 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
 /**
  * Generates summary tables for push and scheduled workflows.
  * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
- * @param {object} github - Octokit client instance
  * @param {object} context - GitHub Actions context
  * @param {Array<object>} workflowConfigs - Array of workflow config objects
- * @returns {Promise<string>} Markdown table for all workflows
+ * @returns {string} Markdown table for all workflows
  */
-async function generateSummaryBox(grouped, github, context, workflowConfigs) {
+function generateSummaryBox(grouped, context, workflowConfigs) {
   const rows = [];
 
   // Process workflows in the order they appear in the config
@@ -248,7 +212,7 @@ async function generateSummaryBox(grouped, github, context, workflowConfigs) {
     for (const [name, runs] of matchingWorkflows) {
       const stats = getWorkflowStats(runs);
       const workflowLink = getWorkflowLink(context, runs[0]?.path);
-      const runInfo = await getLastRunInfo(runs, github, context);
+      const runInfo = getLastRunInfo(runs, context);
 
       const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
       rows.push(row);
@@ -265,12 +229,11 @@ async function generateSummaryBox(grouped, github, context, workflowConfigs) {
 /**
  * Builds the complete markdown report.
  * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
- * @param {object} github - Octokit client instance
  * @param {object} context - GitHub Actions context
  * @param {Array<object>} workflowConfigs - Array of workflow config objects
- * @returns {Promise<string>} Complete markdown report
+ * @returns {string} Complete markdown report
  */
-async function buildReport(grouped, github, context, workflowConfigs) {
+function buildReport(grouped, context, workflowConfigs) {
   const days = parseFloat(core.getInput('days') || DEFAULT_LOOKBACK_DAYS);
   const timestamp = new Date().toISOString();
 
@@ -283,7 +246,7 @@ async function buildReport(grouped, github, context, workflowConfigs) {
 
   return [
     `# Workflow Summary (Last ${timeRange}) - Generated at ${timestamp}\n`,
-    await generateSummaryBox(grouped, github, context, workflowConfigs),
+    generateSummaryBox(grouped, context, workflowConfigs),
     '\n## Column Descriptions\n',
     'A unique run represents a single workflow execution, which may have multiple retry attempts. For example, if a workflow fails and is retried twice, this counts as one unique run with three attempts (initial run + two retries).\n',
     '\n### Success Rate Calculations\n',
@@ -349,12 +312,11 @@ async function run() {
       if (sortedRuns[0]?.conclusion !== 'success') {
         const lastRun = sortedRuns[0];
         const { lastGoodSha, earliestBadSha } = findGoodBadCommits(sortedRuns, github.context);
-        const prInfo = await fetchPRInfo(github, github.context, lastRun.head_sha);
 
         failedWorkflows.push({
           name,
-          pr: prInfo.prNumber,
-          author: prInfo.prAuthor,
+          pr: lastRun.pr_number || EMPTY_VALUE,
+          author: lastRun.pr_author || EMPTY_VALUE,
           badSha: earliestBadSha,
           goodSha: lastGoodSha
         });
@@ -366,11 +328,8 @@ async function run() {
       `${wf.name} (PR: ${wf.pr}, Author: ${wf.author}, Bad: ${wf.badSha}, Good: ${wf.goodSha})`
     ).join('\n');
 
-    // Create authenticated Octokit client for PR info
-    const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
-
     // Generate report
-    const report = await buildReport(grouped, octokit, github.context, workflowConfigs);
+    const report = buildReport(grouped, github.context, workflowConfigs);
 
     // Set outputs
     core.setOutput('failed_workflows', failedWorkflowsStr);

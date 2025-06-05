@@ -146,6 +146,51 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     this.context = context;
   }
 
+  /**
+   * Fetches PR information for a commit
+   * @param {string} commitSha - The commit SHA to look up
+   * @returns {Promise<object>} PR information or null if not found
+   */
+  async fetchPRInfo(commitSha) {
+    try {
+      const { data: prs } = await this.github.rest.repos.listPullRequestsAssociatedWithCommit({
+        owner: this.context.repo.owner,
+        repo: this.context.repo.repo,
+        commit_sha: commitSha,
+      });
+
+      if (prs.length > 0) {
+        const pr = prs[0];
+        return {
+          pr_number: `[#${pr.number}](https://github.com/${this.context.repo.owner}/${this.context.repo.repo}/pull/${pr.number})`,
+          pr_title: pr.title || null,
+          pr_author: pr.user?.login || null
+        };
+      }
+    } catch (error) {
+      core.warning(`Could not fetch PR for commit ${commitSha}: ${error.message}`);
+    }
+    return null;
+  }
+
+  /**
+   * Enriches a run with PR information
+   * @param {object} run - The workflow run to enrich
+   * @returns {Promise<object>} The enriched run
+   */
+  async enrichRunWithPRInfo(run) {
+    const prInfo = await this.fetchPRInfo(run.head_sha);
+    if (prInfo) {
+      return {
+        ...run,
+        pr_number: prInfo.pr_number,
+        pr_title: prInfo.pr_title,
+        pr_author: prInfo.pr_author
+      };
+    }
+    return run;
+  }
+
   async fetchAllWorkflowRuns(days, sinceDate, oldestCachedDate) {
     const allRuns = [];
     const cutoffDate = this.getCutoffDate(days);
@@ -292,12 +337,21 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
       }
     }
 
+    // Enrich runs with PR information
+    core.info('[Fetch] Enriching runs with PR information...');
+    const enrichedRuns = [];
+    for (const run of allRuns) {
+      const enrichedRun = await this.enrichRunWithPRInfo(run);
+      enrichedRuns.push(enrichedRun);
+    }
+    core.info(`[Fetch] Enriched ${enrichedRuns.length} runs with PR information`);
+
     const duration = Date.now() - startTime;
-    core.info(`[Fetch] Completed: Collected ${allRuns.length} runs in ${duration}ms (${apiCallCount} API calls)`);
+    core.info(`[Fetch] Completed: Collected ${enrichedRuns.length} runs in ${duration}ms (${apiCallCount} API calls)`);
 
     // Return the complete dataset for filtering in the main function
     return {
-      completeRuns: allRuns,
+      completeRuns: enrichedRuns,
       dateRange: dateRange
     };
   }
