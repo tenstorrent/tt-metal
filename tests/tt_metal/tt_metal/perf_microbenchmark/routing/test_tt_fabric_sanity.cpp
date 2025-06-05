@@ -172,7 +172,7 @@ struct test_board_t {
         tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
 
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
-        control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+        control_plane = &tt::tt_metal::MetalContext::instance().get_control_plane();
         control_plane->write_routing_tables_to_all_chips();
 
         if (num_chips_to_use != available_chip_ids.size()) {

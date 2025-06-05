@@ -302,15 +302,8 @@ public:
         return this->tunnels_from_mmio_device.at(mmio_chip_id);
     }
 
-    tt::tt_fabric::ControlPlane* get_control_plane();
-
-    void set_custom_control_plane_mesh_graph(
-        const std::string& mesh_graph_desc_file,
-        const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
-
-    void set_default_control_plane_mesh_graph();
-
-    void initialize_fabric_config(tt_metal::FabricConfig fabric_config);
+    // Configures ethernet cores for fabric routers depending on whether fabric is enabled
+    void configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig fabric_config);
 
     // Returns whether we are running on Galaxy.
     bool is_galaxy_cluster() const;
@@ -319,8 +312,6 @@ public:
     BoardType get_board_type(chip_id_t chip_id) const;
 
     ClusterType get_cluster_type() const;
-
-    tt_metal::FabricConfig get_fabric_config() const;
 
     bool is_base_routing_fw_enabled() const;
 
@@ -370,8 +361,6 @@ private:
     // This should be removed when we handle retraining or dropped links in control plane properly
     void disable_ethernet_cores_with_retrain();
 
-    // Initialize control plane, which has mapping of physical device id to MeshGraph config
-    void initialize_control_plane();
 
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
@@ -411,10 +400,6 @@ private:
 
     // Releases all reserved ethernet cores for fabric routers
     void release_ethernet_cores_for_fabric_routers();
-
-    tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
-
-    std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
 
     // Tunnels setup in cluster
     std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};
