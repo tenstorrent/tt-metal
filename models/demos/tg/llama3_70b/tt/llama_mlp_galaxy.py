@@ -5,7 +5,6 @@
 from typing import List
 
 import ttnn
-from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh
 from models.demos.tg.llama3_70b.tt.llama_common import tt_all_reduce, tt_composite_sharded_all_reduce
 
 
@@ -76,7 +75,9 @@ class TtLlamaMLP_galaxy:
             device=self.mesh_device,
             # memory_config=self.w1_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(reversed(self.cluster_shape)), dims=(3, 2)
+            ),
             cache_file_name=self.cache_path / w1_cache_str,
         )
 
@@ -87,7 +88,9 @@ class TtLlamaMLP_galaxy:
             device=self.mesh_device,
             # memory_config=self.mlp_config["W1_MEM_CONFIG"](self.mesh_device, self.cluster_shape),  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(reversed(self.cluster_shape)), dims=(3, 2)
+            ),
             cache_file_name=self.cache_path / w3_cache_str,
         )
 
@@ -98,7 +101,9 @@ class TtLlamaMLP_galaxy:
             device=self.mesh_device,
             # memory_config=self.mlp_config["W2_MEM_CONFIG"](self.mesh_device),  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(3, 2), cluster_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(reversed(self.cluster_shape)), dims=(2, 3)
+            ),
             cache_file_name=self.cache_path / w2_cache_str,
         )
 

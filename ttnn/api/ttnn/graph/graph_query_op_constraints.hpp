@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -81,6 +82,12 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
         auto transform_arg = [device](auto&& arg) {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
                 return create_device_tensor(arg, device);
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
+                std::vector<Tensor> result(arg.size());
+                std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
+                    return create_device_tensor(item, device);
+                });
+                return result;
             } else {
                 return std::forward<decltype(arg)>(arg);
             }

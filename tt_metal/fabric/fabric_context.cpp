@@ -19,8 +19,8 @@ namespace tt::tt_fabric {
 std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
     std::unordered_map<MeshId, bool> wrap_around_mesh;
 
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto mesh_ids = control_plane->get_user_physical_mesh_ids();
+    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
     for (const auto& mesh_id : mesh_ids) {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
             // skip wrapping around mesh for TG since the corner chips connected to the gateway will be
@@ -32,7 +32,7 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
         const uint32_t corner_chip_id = 0;
         uint32_t corner_chip_connections = 0;
         for (const auto& direction : FabricContext::routing_directions) {
-            if (!control_plane->get_intra_chip_neighbors(FabricNodeId(mesh_id, corner_chip_id), direction).empty()) {
+            if (!control_plane.get_intra_chip_neighbors(FabricNodeId(mesh_id, corner_chip_id), direction).empty()) {
                 corner_chip_connections++;
             }
         }

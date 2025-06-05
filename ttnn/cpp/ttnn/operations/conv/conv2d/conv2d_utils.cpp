@@ -1054,12 +1054,14 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         uint32_t output_size_per_core_in_bytes = per_core_out_matrix_width_ntiles * per_core_out_matrix_height_ntiles *
                                                  tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
 
-        uint32_t act_block_num_bytes = act_block_num_tiles * input_tile_size;
         uint32_t tilized_act_block_num_bytes = act_block_num_tiles * output_tile_size;
 
         uint32_t weight_block_w_ntiles = per_core_out_matrix_width_ntiles;
         uint32_t weight_block_num_tiles =
             weight_block_w_ntiles * act_block_w_ntiles;  // act_block_w_ntiles == weight_block_h_ntiles
+        if (conv_config.enable_weights_double_buffer) {
+            weight_block_num_tiles *= 2;
+        }
         uint32_t weight_block_num_bytes = weight_block_num_tiles * weights_tile_size;
 
         uint32_t bias_block_num_bytes = per_core_out_matrix_width_ntiles * bias_tile_size;
@@ -1079,6 +1081,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         // ACT CB
         uint32_t act_cb_size = tilized_act_block_num_bytes;
+        if (conv_config.enable_act_double_buffer) {
+            act_cb_size *= 2;
+        }
         tt::log_debug(tt::LogOp, "Act CB Size: {}", act_cb_size);
 
         // WEIGHTS CB
@@ -1094,7 +1099,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         tt::log_debug(tt::LogOp, "L1 CB Size: {}", l1_scratchpad_cb_size);
 
         // ACT ROW MAJOR CB
-        uint32_t row_major_act_cb_size = act_block_num_bytes;
+        uint32_t row_major_act_cb_size = act_block_w_ntiles * input_tile_size * 2;
         tt::log_debug(tt::LogOp, "Act row major CB Size: {}", row_major_act_cb_size);
 
         // MATMUL PARTIALs CB

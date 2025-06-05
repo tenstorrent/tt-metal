@@ -22,7 +22,7 @@ private:
     struct span {
         // Note: the offset of the data for a span in data_ is generated on the
         // fly by processing spans in order
-        address_t addr;    // byte address in device memory
+        address_t addr;  // byte address in device memory
         size_t len;
         bool operator==(const span& other) const { return addr == other.addr && len == other.len; }
     };
@@ -39,8 +39,8 @@ public:
 
 public:
     // These can be large objects, so ban copying ...
-    memory(memory const&) = delete;
-    memory& operator=(memory const&) = delete;
+    memory(const memory&) = delete;
+    memory& operator=(const memory&) = delete;
     // ... but permit moving.
     memory(memory&&) = default;
     memory& operator=(memory&&) = default;
@@ -49,7 +49,7 @@ public:
     const std::vector<word_t>& data() const { return this->data_; }
 
     bool operator==(const memory& other) const;
-    Loading get_loading() const {return loading_;}
+    Loading get_loading() const { return loading_; }
 
     uint32_t get_text_size() const { return this->text_size_; }
     uint32_t get_packed_size() const { return data_.size() * sizeof(word_t); }
@@ -62,11 +62,15 @@ public:
 
 public:
     // Process spans in arg mem to fill data in *this (eg, from device)
-    void fill_from_mem_template(const memory& mem_template, const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
+    void fill_from_mem_template(
+        const memory& mem_template,
+        const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
 
     // Iterate over spans_ to act on data_ (eg., to device)
-    void process_spans(const std::function<void (std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const;
-    void process_spans(const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
+    void process_spans(
+        const std::function<void(std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const;
+    void process_spans(
+        const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
     void update_spans(std::function<void(uint64_t& addr)>& callback);
 };
 

@@ -22,8 +22,6 @@ namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes();
 
-size_t get_tt_fabric_packet_header_size_bytes();
-
 // Used to get the run-time args for estabilishing connection with the fabric router.
 // The API appends the connection specific run-time args to the set of exisiting
 // run-time args for the worker programs, which allows the workers to conveniently

@@ -272,9 +272,9 @@ inline void RunPersistent1dFabricLatencyTest(
         // reserve CB
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(
-                packet_header_cb_size_in_headers * tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
+                packet_header_cb_size_in_headers * sizeof(tt::tt_fabric::PacketHeader),
                 {{packet_header_cb_index, cb_df}})
-                .set_page_size(packet_header_cb_index, tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+                .set_page_size(packet_header_cb_index, sizeof(tt::tt_fabric::PacketHeader));
         CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
 
         if (!use_device_init_fabric) {

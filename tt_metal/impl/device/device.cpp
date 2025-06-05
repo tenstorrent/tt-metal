@@ -147,7 +147,7 @@ std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord e
 }
 
 std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config() !=
+    if (tt::tt_metal::MetalContext::instance().get_fabric_config() !=
         tt::tt_metal::FabricConfig::DISABLED) {
         return tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_routers_between_src_and_dest(
             this->id_, connected_chip_id);
@@ -474,28 +474,30 @@ void Device::reset_cores() {
     ZoneScoped;
 
     const auto& hal = MetalContext::instance().hal();
-    auto erisc_app_still_running = [&](CoreCoord virtual_core) {
-        // Check if the kernel/erisc_app is still running on a ethernet core with context switching enabled
-        // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
-        // app FW Only applicable to WORMHOLE ethernet cores today, but could in theory extend to other cores, remove
-        // assert if so
-        TT_ASSERT(
-            (this->arch() == ARCH::WORMHOLE_B0) and
-                (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id())),
-            "Invalid core type for context switch check");
-        auto core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-        std::uint32_t launch_erisc_addr = hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
-        auto data =
-            tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
-        return (data[0] != 0);
-    };
-
     auto get_active_erisc_launch_flag_addr = [&]() {
         auto core_type_idx =
             MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
         std::uint32_t launch_erisc_addr =
             tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
         return launch_erisc_addr;
+    };
+
+    auto erisc_app_still_running = [&](CoreCoord virtual_core) {
+        // Check if the kernel/erisc_app is still running on a ethernet core with context switching enabled
+        // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
+        // app FW Only applicable to WORMHOLE ethernet cores today, but could in theory extend to other cores, remove
+        // assert if so
+        if (this->arch() != ARCH::WORMHOLE_B0) {
+            return false;
+        }
+        TT_ASSERT(
+            tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, this->id()),
+            "Invalid core {} for context switch check",
+            virtual_core.str());
+        std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
+        auto data =
+            tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
+        return (data[0] != 0);
     };
 
     // Send exit_erisc_kernel to the launch message

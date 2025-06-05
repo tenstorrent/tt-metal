@@ -22,7 +22,7 @@
 #include "data_types.hpp"
 #include "hal.hpp"
 #include "jit_build/build.hpp"
-#include "jit_build_options.hpp"
+#include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
 #include "logger.hpp"
 #include <tt_stl/span.hpp>
