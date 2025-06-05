@@ -97,7 +97,7 @@ def generate_params(
     approx_mode: Optional[List[str]] = None,
     mathop: Optional[List[str]] = None,
     math_fidelity: Optional[List[int]] = None,
-    tile_cnt: Optional[List[int]] = None,
+    tile_cnt: Optional[int] = None,
     reduce_dim: Optional[List[str]] = None,
     pool_type: Optional[List[str]] = None,
 ) -> List[tuple]:
@@ -171,7 +171,7 @@ def generate_params(
         for approx in (approx_mode if approx_mode is not None else [None])
         for math in (mathop if mathop is not None else [None])
         for fidelity in (math_fidelity if math_fidelity is not None else [None])
-        for num_tiles in (tile_cnt if tile_cnt is not None else [None])
+        for num_tiles in [tile_cnt]
         for dim in (reduce_dim if reduce_dim is not None else [None])
         for pool in (pool_type if pool_type is not None else [None])
     ]
@@ -222,7 +222,7 @@ def generate_param_ids(included_params, all_params: List[tuple]) -> List[str]:
 
     Example:
     >>> all_params = [
-    ...     ("multiple_tiles_eltwise_test", FormatConfig(DataFormat.Float16, DataFormat.Float16, DataFormat.Float16, DataFormat.Float16, DataFormat.Float16), DestAccumulation.No, ApproximationMode.Yes, MathOperation.Elwadd, TileCount.One, MathFidelity.HiFi4, ReduceDimension.Column, ReducePoolArgs.Max),
+    ...     ("multiple_tiles_eltwise_test", FormatConfig(DataFormat.Float16, DataFormat.Float16, DataFormat.Float16, DataFormat.Float16, DataFormat.Float16), DestAccumulation.No, ApproximationMode.Yes, MathOperation.Elwadd, 1, MathFidelity.HiFi4, ReduceDimension.Column, ReducePoolArgs.Max),
     ...     ("reduce_test", FormatConfig(DataFormat.Float32, DataFormat.Float32, DataFormat.Float32, DataFormat.Float32, DataFormat.Float32), DestAccumulation.No, None, MathOperation.Elwmul, None, None, ReduceDimension.Column, ReducePollArgs.Avg)
     ... ]
     >>> generate_param_ids(all_params)
@@ -275,7 +275,7 @@ def generate_param_ids(included_params, all_params: List[tuple]) -> List[str]:
         if params[3]:
             result.append(f"math_fidelity={params[3].name}")
         if params[4]:
-            result.append(f"tile_cnt={params[4].value}")
+            result.append(f"tile_cnt={params[4]}")
         if params[5]:
             result.append(f"reduce_dim={params[5].name}")
         if params[6]:

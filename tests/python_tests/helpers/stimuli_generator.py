@@ -3,7 +3,7 @@
 
 import torch
 
-from .format_arg_mapping import TileCount, format_dict
+from .format_arg_mapping import format_dict
 from .format_config import DataFormat
 
 
@@ -51,7 +51,7 @@ def generate_random_face_ab(
 def generate_stimuli(
     stimuli_format_A=DataFormat.Float16_b,
     stimuli_format_B=DataFormat.Float16_b,
-    tile_cnt=TileCount.One,
+    tile_cnt=1,
     const_face=False,
     const_value_A=1,
     const_value_B=1,
@@ -60,7 +60,7 @@ def generate_stimuli(
     srcA = []
     srcB = []
 
-    for _ in range(4 * tile_cnt.value):
+    for _ in range(4 * tile_cnt):
         face_a, face_b = generate_random_face_ab(
             stimuli_format_A, stimuli_format_B, const_face, const_value_A, const_value_B
         )

@@ -9,7 +9,6 @@ from .format_arg_mapping import (
     MathFidelity,
     MathOperation,
     ReduceDimension,
-    TileCount,
     math_dict,
     pack_dst_dict,
     pack_src_dict,
@@ -69,8 +68,7 @@ def generate_make_command(
         else:  # multiple tiles handles mathop as int. we don't access value but return ENUM directly which is position in the class + 1
 
             make_cmd += f"mathop={mathop.value} "
-
-            kern_cnt = str(test_config.get("kern_cnt", TileCount.One).value)
+            kern_cnt = str(test_config.get("kern_cnt", 1))
             pack_addr_cnt = str(test_config.get("pack_addr_cnt"))
             pack_addrs = test_config.get("pack_addrs")
 

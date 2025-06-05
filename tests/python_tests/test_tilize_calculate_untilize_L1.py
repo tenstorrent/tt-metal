@@ -14,7 +14,6 @@ from helpers.format_arg_mapping import (
     DestAccumulation,
     MathFidelity,
     MathOperation,
-    TileCount,
     format_dict,
 )
 from helpers.format_config import DataFormat
@@ -98,7 +97,7 @@ all_params = generate_params(
     dest_acc=[DestAccumulation.No],
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     math_fidelity=[MathFidelity.HiFi4],
-    tile_cnt=[TileCount.One],
+    tile_cnt=1,
 )
 param_ids = generate_param_ids(all_params)
 
