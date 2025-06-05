@@ -6,8 +6,8 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace ttnn::operations::test {
+namespace ttnn::operations::experimental::test {
 namespace py = pybind11;
 
 void bind_test_hang_operation(py::module& module);
-}  // namespace ttnn::operations::test
+}  // namespace ttnn::operations::experimental::test
