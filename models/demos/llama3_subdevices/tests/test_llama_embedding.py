@@ -16,7 +16,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_subdevices.tt.llama_common import HostEmbedding
 
-is_6U_RING = os.environ.get("6U_RING", "0") == "1"
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 @torch.no_grad()
@@ -40,7 +40,7 @@ is_6U_RING = os.environ.get("6U_RING", "0") == "1"
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6U_RING else ttnn.FabricConfig.FABRIC_1D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
 def test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
