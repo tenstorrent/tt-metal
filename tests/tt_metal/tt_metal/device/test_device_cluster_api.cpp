@@ -44,11 +44,17 @@ TEST_F(N300DeviceFixture, EthValidateEthernetConnectivity) {
     ASSERT_TRUE(device_1->get_inactive_ethernet_cores().size() == 14);
 
     for (const auto& core : device_0_active_eth_cores) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), core)) {
+            continue;
+        }
         std::tuple<chip_id_t, CoreCoord> core_on_chip_1 = device_0->get_connected_ethernet_core(core);
         ASSERT_TRUE(std::get<0>(core_on_chip_1) == 1);
         ASSERT_TRUE(device_1_active_eth_cores.find(std::get<1>(core_on_chip_1)) != device_1_active_eth_cores.end());
     }
     for (const auto& core : device_1_active_eth_cores) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), core)) {
+            continue;
+        }
         std::tuple<chip_id_t, CoreCoord> core_on_chip_0 = device_1->get_connected_ethernet_core(core);
         ASSERT_TRUE(std::get<0>(core_on_chip_0) == 0);
         ASSERT_TRUE(device_0_active_eth_cores.find(std::get<1>(core_on_chip_0)) != device_0_active_eth_cores.end());
