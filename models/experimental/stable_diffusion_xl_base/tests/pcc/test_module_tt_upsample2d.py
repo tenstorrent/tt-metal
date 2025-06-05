@@ -17,7 +17,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-@pytest.mark.parametrize("input_shape, up_block_id, pcc", [((1, 1280, 32, 32), 0, 0.999), ((1, 640, 64, 64), 1, 0.998)])
+@pytest.mark.parametrize("input_shape, up_block_id, pcc", [((1, 1280, 32, 32), 0, 0.999), ((1, 640, 64, 64), 1, 0.999)])
 @pytest.mark.parametrize("stride", [(1, 1)])
 @pytest.mark.parametrize("padding", [(1, 1)])
 @pytest.mark.parametrize("dilation", [(1, 1)])
