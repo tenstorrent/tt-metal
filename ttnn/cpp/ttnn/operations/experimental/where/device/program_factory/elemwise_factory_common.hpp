@@ -58,8 +58,8 @@ inline void set_eltwise_ternary_runtime_args(
                   num_cores_total, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major)
             : corerange_to_cores(all_device_cores, {}, row_major);
 
-    std::vector<std::vector<uint32_t>> binary_reader_args{cores.size(), std::vector<uint32_t>(7)};
-    std::vector<std::vector<uint32_t>> eltwise_binary_args{cores.size(), std::vector<uint32_t>(2)};
+    std::vector<std::vector<uint32_t>> ternary_reader_args{cores.size(), std::vector<uint32_t>(7)};
+    std::vector<std::vector<uint32_t>> eltwise_ternary_args{cores.size(), std::vector<uint32_t>(2)};
     std::vector<std::vector<uint32_t>> unary_writer_args{cores.size(), std::vector<uint32_t>(3)};
 
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
@@ -97,17 +97,17 @@ inline void set_eltwise_ternary_runtime_args(
             continue;
         }
 
-        binary_reader_args[i] = {
+        ternary_reader_args[i] = {
             a.buffer()->address(), b.buffer()->address(), c.buffer()->address(), num_tiles_per_core, num_tiles_read};
-        eltwise_binary_args[i] = {block_cnt_per_core, block_size_per_core};
+        eltwise_ternary_args[i] = {block_cnt_per_core, block_size_per_core};
         unary_writer_args[i] = {output.buffer()->address(), num_tiles_per_core, num_tiles_read};
 
         if constexpr (!initialize_args) {
             auto& core_reader_args = cached_reader_args.at(core.x).at(core.y);
-            std::ranges::copy(binary_reader_args[i], core_reader_args.data());
+            std::ranges::copy(ternary_reader_args[i], core_reader_args.data());
 
             auto& core_eltwise_args = cached_eltwise_args.at(core.x).at(core.y);
-            std::ranges::copy(eltwise_binary_args[i], core_eltwise_args.data());
+            std::ranges::copy(eltwise_ternary_args[i], core_eltwise_args.data());
 
             auto& core_writer_args = cached_writer_args.at(core.x).at(core.y);
             std::ranges::copy(unary_writer_args[i], core_writer_args.data());
@@ -117,8 +117,8 @@ inline void set_eltwise_ternary_runtime_args(
     }
 
     if constexpr (initialize_args) {
-        SetRuntimeArgs(program, reader_kernel_id, cores, binary_reader_args);
-        SetRuntimeArgs(program, eltwise_ternary_kernel_id, cores, eltwise_binary_args);
+        SetRuntimeArgs(program, reader_kernel_id, cores, ternary_reader_args);
+        SetRuntimeArgs(program, eltwise_ternary_kernel_id, cores, eltwise_ternary_args);
         SetRuntimeArgs(program, writer_kernel_id, cores, unary_writer_args);
     }
 }
