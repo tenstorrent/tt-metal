@@ -29,9 +29,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
     run_test_row_major_rotary_embedding_llama,
 )
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import (
-    run_embeddings_tests,
-)
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import run_embeddings_tests
 
 
 @pytest.mark.parametrize(
@@ -470,11 +468,6 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
     run_test_row_major_rotary_embedding_llama(
         mesh_device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
     )
-
-
-import pytest
-import ttnn
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import run_embeddings_tests
 
 
 @pytest.mark.parametrize("batch_size", (1,))
