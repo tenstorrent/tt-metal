@@ -158,6 +158,7 @@ should be on the device. Height, width and block sharding schemes are supported.
 <li><p><strong>stride</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em>) – the (h, w) stride of the kernel window.</p></li>
 <li><p><strong>padding</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em>) – the (h, w) padding of the input tensor.</p></li>
 <li><p><strong>dilation</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em>) – the (h, w) dilation of the kernel window.</p></li>
+<li><p><strong>ceil_mode</strong> (<em>bool</em>) – whether to use ceil mode for the output shape. Defaults to <cite>False</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
@@ -166,7 +167,6 @@ should be on the device. Height, width and block sharding schemes are supported.
 <ul class="simple">
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration for the output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>applied_shard_scheme</strong> (<em>ttnn.TensorMemoryLayout</em><em>, </em><em>optional</em>) – the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to <cite>None</cite>, which should be used with pre-sharded input tensors.</p></li>
-<li><p><strong>ceil_mode</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to use ceil mode for the output shape. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>in_place</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to perform the halo operation in place. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – the queue id to use for the operation. Defaults to <cite>0</cite>.</p></li>
 </ul>
@@ -205,9 +205,9 @@ should be on the device. Height, width and block sharding schemes are supported.
 <span class="go">                    stride=[stride_h, stride_w],</span>
 <span class="go">                    padding=[pad_h, pad_w],</span>
 <span class="go">                    dilation=[dilation_h, dilation_w],</span>
+<span class="go">                    ceil_mode=False,</span>
 <span class="go">                    memory_config=None,</span>
 <span class="go">                    applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,</span>
-<span class="go">                    ceil_mode=False,</span>
 <span class="go">                    in_place_halo=False,</span>
 <span class="go">                )</span>
 </pre></div>
