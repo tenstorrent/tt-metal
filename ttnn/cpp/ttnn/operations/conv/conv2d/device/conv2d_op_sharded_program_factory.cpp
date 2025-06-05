@@ -44,6 +44,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
+    bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding);
 
@@ -1816,6 +1817,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             output,
             compute_kernel_config.value(),
             enable_act_double_buffer,
+            enable_weights_double_buffer,
             enable_split_reader,
             enable_subblock_padding);
     }

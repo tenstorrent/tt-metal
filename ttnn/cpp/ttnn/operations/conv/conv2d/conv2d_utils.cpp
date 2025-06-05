@@ -1060,6 +1060,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         uint32_t weight_block_w_ntiles = per_core_out_matrix_width_ntiles;
         uint32_t weight_block_num_tiles =
             weight_block_w_ntiles * act_block_w_ntiles;  // act_block_w_ntiles == weight_block_h_ntiles
+        if (conv_config.enable_weights_double_buffer) {
+            weight_block_num_tiles *= 2;
+        }
         uint32_t weight_block_num_bytes = weight_block_num_tiles * weights_tile_size;
 
         uint32_t bias_block_num_bytes = per_core_out_matrix_width_ntiles * bias_tile_size;
@@ -1079,6 +1082,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         // ACT CB
         uint32_t act_cb_size = tilized_act_block_num_bytes;
+        if (conv_config.enable_act_double_buffer) {
+            act_cb_size *= 2;
+        }
         tt::log_debug(tt::LogOp, "Act CB Size: {}", act_cb_size);
 
         // WEIGHTS CB

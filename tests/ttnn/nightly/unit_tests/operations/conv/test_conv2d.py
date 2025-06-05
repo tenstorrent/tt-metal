@@ -794,6 +794,14 @@ def test_conv_dram(
     "output_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
+@pytest.mark.parametrize(
+    "enable_act_double_buffer",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "enable_weights_double_buffer",
+    [True, False],
+)
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 @pytest.mark.parametrize("tilized_input", [True, False], ids=["tilized", "row_major"])
 def test_conv_ws(
@@ -816,6 +824,8 @@ def test_conv_ws(
     output_dtype,
     auto_shard,
     tilized_input,
+    enable_act_double_buffer,
+    enable_weights_double_buffer,
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
@@ -872,7 +882,8 @@ def test_conv_ws(
         weights_dtype=weights_dtype,
         shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED if not auto_shard else None,
         deallocate_activation=deallocate_activation,
-        enable_act_double_buffer=False,
+        enable_act_double_buffer=enable_act_double_buffer,
+        enable_weights_double_buffer=enable_weights_double_buffer,
         enable_split_reader=False,
         enable_subblock_padding=False,
         reshard_if_not_optimal=True,
