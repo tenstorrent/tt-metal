@@ -133,5 +133,5 @@ jobs:
           payload: |
             {
               "channel": "${{ secrets.SLACK_METAL_INFRA_PIPELINE_CHANNEL_ID }}",
-              "text": "🚨 Failed Workflows Report\n\nRepository: ${{ github.repository }}\nBranch: ${{ github.ref_name }}\nTime Period: ${{ github.event.inputs.days || 15 }} days\n\nFailed Workflows:\n${{ needs.analyze-data.outputs.failed_workflows }}"
+              "text": "🚨 Failed Workflows Report\n\nRepository: ${{ github.repository }}\nBranch: ${{ github.ref_name }}\nTime Period: ${{ github.event.inputs.days || 15 }} days\n\nFailed Workflows:\n${{ toJSON(needs.analyze-data.outputs.failed_workflows) }}"
             }
