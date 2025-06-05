@@ -1,5 +1,5 @@
 add_library(ttnn_op_embedding ${LIB_TYPE})
-add_library(TT::NN::Ops::Embedding ALIAS ttnn_op_embedding)
+add_library(TTNN::Ops::Embedding ALIAS ttnn_op_embedding)
 
 target_precompile_headers(ttnn_op_embedding REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_embedding)
@@ -16,7 +16,7 @@ target_link_libraries(
     ttnn_op_embedding
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_embedding LIBRARY COMPONENT tar)

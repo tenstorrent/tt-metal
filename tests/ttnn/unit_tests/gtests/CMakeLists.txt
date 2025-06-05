@@ -5,7 +5,7 @@ function(setup_ttnn_test_target target_name)
         ${target_name}
         PUBLIC
             test_common_libs
-            TT::NN::CPP
+            TTNN::CPP
     )
     target_include_directories(
         ${target_name}
@@ -18,7 +18,7 @@ endfunction()
 # unit_tests_ttnn
 
 add_library(unit_tests_ttnn_smoke OBJECT)
-add_library(TT::NN::Test::Smoke ALIAS unit_tests_ttnn_smoke)
+add_library(TTNN::Test::Smoke ALIAS unit_tests_ttnn_smoke)
 TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_smoke)
 target_sources(
     unit_tests_ttnn_smoke
@@ -41,11 +41,11 @@ target_link_libraries(
     unit_tests_ttnn_smoke
     PRIVATE
         test_common_libs
-        TT::NN::CPP
+        TTNN::CPP
 )
 
 add_library(unit_tests_ttnn_basic OBJECT)
-add_library(TT::NN::Test::Basic ALIAS unit_tests_ttnn_basic)
+add_library(TTNN::Test::Basic ALIAS unit_tests_ttnn_basic)
 TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_basic)
 target_sources(
     unit_tests_ttnn_basic
@@ -63,15 +63,15 @@ target_link_libraries(
     unit_tests_ttnn_basic
     PRIVATE
         test_common_libs
-        TT::NN::CPP
+        TTNN::CPP
 )
 
 add_executable(unit_tests_ttnn)
 target_link_libraries(
     unit_tests_ttnn
     PRIVATE
-        TT::NN::Test::Smoke
-        TT::NN::Test::Basic
+        TTNN::Test::Smoke
+        TTNN::Test::Basic
 )
 
 # unit_tests_ttnn_ccl
@@ -94,7 +94,7 @@ target_link_libraries(
     unit_tests_ttnn_ccl
     PRIVATE
         test_common_libs
-        TT::NN::CPP
+        TTNN::CPP
 )
 
 # unit_tests_ttnn_ccl_ops

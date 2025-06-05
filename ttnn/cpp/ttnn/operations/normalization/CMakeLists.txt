@@ -1,5 +1,5 @@
 add_library(ttnn_op_normalization ${LIB_TYPE})
-add_library(TT::NN::Ops::Normalization ALIAS ttnn_op_normalization)
+add_library(TTNN::Ops::Normalization ALIAS ttnn_op_normalization)
 
 target_precompile_headers(ttnn_op_normalization REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_normalization)
@@ -47,7 +47,7 @@ target_link_libraries(
     ttnn_op_normalization
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(

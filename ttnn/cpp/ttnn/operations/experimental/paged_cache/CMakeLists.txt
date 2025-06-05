@@ -1,5 +1,5 @@
 add_library(ttnn_op_experimental_paged_cache ${LIB_TYPE})
-add_library(TT::NN::Ops::Experimental::PagedCache ALIAS ttnn_op_experimental_paged_cache)
+add_library(TTNN::Ops::Experimental::PagedCache ALIAS ttnn_op_experimental_paged_cache)
 
 target_precompile_headers(ttnn_op_experimental_paged_cache REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_paged_cache)
@@ -19,7 +19,7 @@ target_link_libraries(
     ttnn_op_experimental_paged_cache
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_experimental_paged_cache LIBRARY COMPONENT tar)

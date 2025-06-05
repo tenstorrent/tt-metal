@@ -1,5 +1,5 @@
 add_library(ttnn_op_eltwise_binary ${LIB_TYPE})
-add_library(TT::NN::Ops::Eltwise::Binary ALIAS ttnn_op_eltwise_binary)
+add_library(TTNN::Ops::Eltwise::Binary ALIAS ttnn_op_eltwise_binary)
 
 target_precompile_headers(ttnn_op_eltwise_binary REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary)
@@ -43,7 +43,7 @@ target_link_libraries(
     ttnn_op_eltwise_binary
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(

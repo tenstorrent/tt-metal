@@ -1,5 +1,5 @@
 add_library(ttnn_op_reduction ${LIB_TYPE})
-add_library(TT::NN::Ops::Reduction ALIAS ttnn_op_reduction)
+add_library(TTNN::Ops::Reduction ALIAS ttnn_op_reduction)
 
 target_precompile_headers(ttnn_op_reduction REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_reduction)
@@ -52,7 +52,7 @@ target_link_libraries(
     ttnn_op_reduction
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(
