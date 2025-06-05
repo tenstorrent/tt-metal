@@ -217,8 +217,11 @@ bool Cluster::is_base_routing_fw_enabled() const { return Cluster::is_base_routi
 void Cluster::generate_cluster_descriptor() {
     this->cluster_desc_ = this->driver_->get_cluster_description();
     this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_);
+    if (this->target_type_ == TargetDevice::Simulator) {
+        return;
+    }
 
-    if (this->target_type_ != TargetDevice::Simulator && this->arch_ == tt::ARCH::BLACKHOLE) {
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
         TT_FATAL(
             this->cluster_desc_->get_noc_translation_table_en().at(0),
             "Running Metal on Blackhole requires FW >= 80.18.0.0");
@@ -236,7 +239,7 @@ void Cluster::generate_cluster_descriptor() {
             this->driver_->get_target_device_ids().size() / 4,
             this->driver_->get_target_device_ids().size(),
             total_num_hugepages);
-    } else if (this->target_type_ != TargetDevice::Simulator) {
+    } else {
         // TODO (abhullar): ignore hugepage set up for BH bringup
         TT_FATAL(
             this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->driver_->get_target_device_ids().size(),
