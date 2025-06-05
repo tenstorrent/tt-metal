@@ -227,7 +227,7 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
     // We will send the cmd back in the first X bytes, this makes the logic of reserving/pushing completion queue
     // pages much simpler since we are always sending writing full pages (except for last page)
     uint32_t length = cmd->write_linear_host.length;
-    // DPRINT << "process_write_host_h: " << length << ENDL();
+    DPRINT << "process_write_host_h: " << length << ENDL();
     uint32_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
@@ -1302,7 +1302,11 @@ static inline bool process_cmd_h(
 }
 
 void kernel_main() {
-    // DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
+#if defined(FABRIC_RELAY)
+    DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start (fabric relay)" << ENDL();
+#else
+    DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
+#endif
 
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);
@@ -1345,6 +1349,27 @@ void kernel_main() {
         uint32_t completion_queue_wr_ptr_and_toggle = *get_cq_completion_write_ptr();
         cq_write_interface.completion_fifo_wr_ptr = completion_queue_wr_ptr_and_toggle & 0x7fffffff;
         cq_write_interface.completion_fifo_wr_toggle = completion_queue_wr_ptr_and_toggle >> 31;
+    }
+    // Initialize the relay client for split dispatch
+    if constexpr (!(is_h_variant && is_d_variant)) {
+#if defined(FABRIC_RELAY)
+        relay_client.init<
+            my_noc_index,
+            fabric_mux_x,
+            fabric_mux_y,
+            worker_credits_stream_id,
+            fabric_mux_channel_base_address,
+            fabric_mux_flow_control_address,
+            fabric_mux_connection_handshake_address,
+            fabric_mux_connection_info_address,
+            fabric_mux_buffer_index_address,
+            fabric_worker_flow_control_sem,
+            fabric_worker_teardown_sem,
+            fabric_worker_buffer_index_sem,
+            fabric_mux_status_address,
+            my_fabric_sync_status_addr,
+            NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
+#endif
     }
     bool done = false;
     uint32_t heartbeat = 0;

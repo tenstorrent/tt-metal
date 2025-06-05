@@ -1670,7 +1670,24 @@ void kernel_main_d() {
     uint32_t l1_cache[l1_cache_elements_rounded];
 
     // Cmdbuf allocation is not defined yet for fabric so we can't use stateful APIs on Dispatch D
-#if !defined(FABRIC_RELAY)
+#if defined(FABRIC_RELAY)
+    relay_client.init<
+        my_noc_index,
+        fabric_mux_x,
+        fabric_mux_y,
+        worker_credits_stream_id,
+        fabric_mux_channel_base_address,
+        fabric_mux_flow_control_address,
+        fabric_mux_connection_handshake_address,
+        fabric_mux_connection_info_address,
+        fabric_mux_buffer_index_address,
+        fabric_worker_flow_control_sem,
+        fabric_worker_teardown_sem,
+        fabric_worker_buffer_index_sem,
+        fabric_mux_status_address,
+        my_fabric_sync_status_addr,
+        NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
+#else
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, my_noc_index);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
@@ -1747,7 +1764,11 @@ void kernel_main_hd() {
 }
 
 void kernel_main() {
+#if defined(FABRIC_RELAY)
+    DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start (fabric relay)" << ENDL();
+#else
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+#endif
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
