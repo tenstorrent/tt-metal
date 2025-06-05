@@ -10,6 +10,8 @@ import os
 import ttnn
 import pytest
 
+is_6U_RING = os.environ.get("6U_RING", "0") == "1"
+
 from models.demos.llama3_subdevices.tt.llama_common import (
     PagedAttentionConfig,
 )
@@ -436,7 +438,7 @@ def run_llama3_decode_performance(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6U_RING else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
