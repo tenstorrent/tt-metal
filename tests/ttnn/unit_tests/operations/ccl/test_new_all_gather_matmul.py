@@ -360,7 +360,7 @@ def run_all_gather_impl(
         True,
         False,
     ],
-    ids=["nonfused", "fused"],
+    ids=["separate", "fused"],
 )
 @pytest.mark.parametrize(
     "device_params, use_legacy_allgather, all_gather_topology",

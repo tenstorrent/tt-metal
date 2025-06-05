@@ -352,7 +352,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
-    TT_FATAL(!((topology == ccl::Topology::Linear) && fuse_op));
+    TT_FATAL(
+        !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
     if (topology == ccl::Topology::Ring && ring_index % 2 == 0) {
         std::swap(num_targets_forward, num_targets_backward);
     }
@@ -447,6 +448,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         static_cast<uint32_t>(topology),                   // topology
         tiles_to_write_per_packet,                         // contig_pages_advanced
         1,                                                 // direction
+        fuse_op,                                           // fused op
     };
     auto worker_sender_reader_forward_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -495,6 +497,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         static_cast<uint32_t>(topology),                   // topology
         tiles_to_write_per_packet,                         // contig_pages_advanced
         0,                                                 // direction
+        fuse_op,                                           // fused op
     };
     auto worker_sender_reader_backward_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -567,6 +570,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             ring_size,                          // ring_size
             semaphore.at(1).address(),          // out_ready_semaphore_forward
         };
+        if (fuse_op) {
+            fused_op_signaler_forward->push_all_gather_fused_op_rt_args(reader_forward_rt_args, 1, 0, 1);
+        }
         tt::tt_metal::SetRuntimeArgs(
             program, worker_sender_reader_forward_kernel_id, {sender_worker_cores[1]}, reader_forward_rt_args);
 
@@ -579,6 +585,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             ring_size,                          // ring_size
             semaphore.at(0).address(),          // out_ready_semaphore_backward
         };
+        if (fuse_op) {
+            fused_op_signaler_backward->push_all_gather_fused_op_rt_args(reader_backward_rt_args, 1, 0, 0);
+        }
         tt::tt_metal::SetRuntimeArgs(
             program, worker_sender_reader_backward_kernel_id, {sender_worker_cores[0]}, reader_backward_rt_args);
 

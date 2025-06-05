@@ -166,7 +166,7 @@ void kernel_main() {
     }
 
     // increment locally
-    if (fuse_op) {
+    if (fuse_op && direction == 1) {
         // Synchronize and signal that the local tensor slice is available
         op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
     }

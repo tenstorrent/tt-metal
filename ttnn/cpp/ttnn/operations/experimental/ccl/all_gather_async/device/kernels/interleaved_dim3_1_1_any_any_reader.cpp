@@ -28,6 +28,7 @@ constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(8));
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(9);  // 2
 constexpr bool direction = get_compile_time_arg_val(10);                 // 1 is forward, 0 is backward
+constexpr bool fuse_op = get_compile_time_arg_val(11);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -42,6 +43,11 @@ void kernel_main() {
     uint32_t slice_num_pages = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+
+    OpSignaler op_signaler;
+    if constexpr (fuse_op) {
+        op_signaler = OpSignaler(arg_idx);
+    }
 
     // Push out our local slice
     constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
@@ -118,6 +124,10 @@ void kernel_main() {
         } else {
             sender_chip_id = my_chip_id - slices_received;
             actual_sender_chip_id = (sender_chip_id < 0) ? ring_size + sender_chip_id : sender_chip_id;
+        }
+        if (fuse_op) {
+            // Signal matmul to go
+            op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
         }
 
         // Direction == backward: Should I forward what I got from the left to my right?
