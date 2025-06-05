@@ -16,7 +16,6 @@ class Command;
 
 // Forward decl for light_metal_binary_generated.h
 namespace tt::tt_metal::flatbuffer {
-struct TraceDescriptor;
 struct TraceDescriptorByTraceId;
 }  // namespace tt::tt_metal::flatbuffer
 
