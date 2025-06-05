@@ -58,7 +58,6 @@ void iterate_over_shards(
         size_t core_id = params.shard_id % params.num_cores;
         size_t dst_offset = (params.shard_id / params.num_cores) * params.shard_volume;
         size_t core_offset = core_id * params.num_shards_per_core * params.shard_volume;
-        params.page_mapping->num_pages_per_core_[core_id] += actual_shard_shape_2d[0] * actual_shard_shape_2d[1];
 
         iterate_within_shard(params, 0, src_offset, core_id, core_offset, dst_offset);
 
@@ -163,7 +162,6 @@ BufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
     page_mapping.dev_page_to_host_page_mapping_.resize(dev_pages);
     page_mapping.host_page_to_dev_page_mapping_.resize(host_pages);
     page_mapping.host_page_to_local_shard_page_mapping_.resize(host_pages);
-    page_mapping.num_pages_per_core_.resize(cores_.size());
 
     tt::stl::SmallVector<uint32_t> shard_grid(tensor_shape_in_pages_.rank());
     for (size_t i = 0; i < tensor_shape_in_pages_.rank(); i++) {
