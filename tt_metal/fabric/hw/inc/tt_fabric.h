@@ -592,7 +592,7 @@ struct fvc_inbound_push_state_t {
                 get_noc_addr_helper(dest_addr, remote_buffer_slot_start[remote_wrptr[remote_wrptr_direction]]);
             // Instead of sending the packet size (packet_words_remaining * PACKET_WORD_SIZE_BYTES) which
             // may be less than the full slot, send the full slot.
-            noc_async_write_one_packet(
+            noc_async_write<FABRIC_ROUTER_BUF_SLOT_SIZE>(
                 get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE, noc_index);
             advance_remote_wrptr(1, remote_wrptr_direction);
             advance_out_rdptr<fvc_mode>(1);
@@ -613,7 +613,7 @@ struct fvc_inbound_push_state_t {
         uint32_t addr_h = packet_header->routing.target_offset_h;
         uint32_t command = packet_header->routing.command;
         if (command & ASYNC_WR) {
-            noc_async_write_one_packet(
+            noc_async_write<1>(
                 get_local_buffer_read_addr() + PACKET_HEADER_SIZE_BYTES,
                 get_noc_addr_helper(addr_h, addr_l),
                 packet_size_bytes - PACKET_HEADER_SIZE_BYTES);
@@ -636,7 +636,8 @@ struct fvc_inbound_push_state_t {
         packet_header->routing.route_vector.hop_index = route_value + 1;
         uint64_t buffer_wr_addr =
             get_noc_addr_helper(mcast_router_noc_xy[direction], remote_buffer_slot_start[remote_wrptr[direction]]);
-        noc_async_write_one_packet(get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE);
+        noc_async_write<FABRIC_ROUTER_BUF_SLOT_SIZE>(
+            get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE);
         advance_remote_wrptr(1, direction);
         uint64_t push_addr = get_noc_addr_helper(mcast_router_noc_xy[direction], router_push_addr);
         noc_inline_dw_write<false, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
@@ -763,7 +764,7 @@ struct fvc_inbound_push_state_t {
             get_noc_addr_helper(dest_addr, remote_buffer_slot_start[remote_wrptr[remote_wrptr_direction]]);
         // Instead of sending the packet size (packet_words_remaining * PACKET_WORD_SIZE_BYTES) which
         // may be less than the full slot, send the full slot.
-        noc_async_write_one_packet(
+        noc_async_write<FABRIC_ROUTER_BUF_SLOT_SIZE>(
             get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE, noc_index);
         advance_remote_wrptr(1);
         advance_out_rdptr<fvc_mode>(1);
@@ -780,7 +781,7 @@ struct fvc_inbound_push_state_t {
     FORCE_INLINE void issue_async_write() {
         uint32_t addr_l = packet_header->session.target_offset_l;
         uint32_t addr_h = packet_header->session.target_offset_h;
-        noc_async_write_one_packet(
+        noc_async_write<1>(
             get_local_buffer_read_addr() + PACKET_HEADER_SIZE_BYTES,
             get_noc_addr_helper(addr_h, addr_l),
             packet_size_bytes - PACKET_HEADER_SIZE_BYTES);
@@ -2038,7 +2039,8 @@ struct fvcc_inbound_state_t {
         }
         uint32_t dest_wr_index = wrptr & FVCC_SIZE_MASK;
         noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, msg_buf) + dest_wr_index * sizeof(packet_header_t);
-        noc_async_write_one_packet((uint32_t)(current_packet_header), noc_addr, sizeof(packet_header_t), noc_index);
+        noc_async_write<sizeof(packet_header_t)>(
+            (uint32_t)(current_packet_header), noc_addr, sizeof(packet_header_t), noc_index);
     }
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
@@ -2467,7 +2469,7 @@ inline bool tt_fabric_check_pull_request_slot(uint64_t dest_addr, volatile local
 inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request) {
     uint32_t dest_wr_index = (local_pull_request->wrptr.ptr) & CHAN_REQ_BUF_SIZE_MASK;
     uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, chan_req) + dest_wr_index * sizeof(pull_request_t);
-    noc_async_write_one_packet(
+    noc_async_write<sizeof(pull_request_t)>(
         (uint32_t)(&local_pull_request->pull_request), noc_addr, sizeof(pull_request_t), noc_index);
 
     // compute the address to send write pointer updates to consumer buffer.

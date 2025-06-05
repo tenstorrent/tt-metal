@@ -263,7 +263,7 @@ void process_go_signal_mcast_cmd() {
 
     for (uint32_t i = 0; i < num_unicasts; ++i) {
         uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
-        noc_async_write_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
+        noc_async_write<sizeof(uint32_t)>((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
     }
 
     update_worker_completion_count_on_dispatch_d();
