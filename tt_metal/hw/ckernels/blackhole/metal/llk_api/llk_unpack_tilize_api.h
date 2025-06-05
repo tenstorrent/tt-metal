@@ -116,7 +116,7 @@ inline void llk_unpack_tilizeA_B_hw_configure(
     // unpB -> srcB
     const uint32_t num_faces_b = get_operand_num_faces(unpB_operand_id);
     const uint32_t face_r_dim_b = get_operand_face_r_dim(unpB_operand_id);
-    configure_unpack_AB<false, is_fp32_dest_acc_en, false, false>(
+    configure_unpack_AB<is_fp32_dest_acc_en, false, false, false>(
         unpack_src_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
         unpack_dst_format[unpA_operand_id],

@@ -46,7 +46,7 @@ inline void llk_pack_hw_configure(const llk_pack_params_t* pack_params) {
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_hw_configure_<untilize, is_fp32_dest_acc_en, tilize>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize, tilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -72,7 +72,7 @@ inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
                 .ApplyRelu = (std::uint32_t)relu_type,
                 .Threshold = relu_threshold,
             }}};
-    llk_pack_hw_configure<untilize, is_fp32_dest_acc_en, tilize>(&llk_pack_params);
+    llk_pack_hw_configure<is_fp32_dest_acc_en, untilize, tilize>(&llk_pack_params);
 }
 
 template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
@@ -85,7 +85,7 @@ inline void llk_pack_untilize_hw_configure(
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_hw_configure_<untilize, is_fp32_dest_acc_en, tilize>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize, tilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -112,7 +112,7 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
                 .ApplyRelu = (std::uint32_t)relu_type,
                 .Threshold = relu_threshold,
             }}};
-    llk_pack_untilize_hw_configure<untilize, is_fp32_dest_acc_en, tilize>(&llk_pack_params, face_r_dim, num_faces);
+    llk_pack_untilize_hw_configure<is_fp32_dest_acc_en, untilize, tilize>(&llk_pack_params, face_r_dim, num_faces);
 }
 
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, bool untilize = false>
@@ -126,7 +126,7 @@ inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_reduce_hw_configure_<untilize, type, dim, is_fp32_dest_acc_en>(
+    _llk_pack_reduce_hw_configure_<type, dim, is_fp32_dest_acc_en, untilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -149,7 +149,7 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
     llk_pack_params_t llk_pack_params = {
         .pack_output = pack_output,
         .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold}}};
-    llk_pack_reduce_hw_configure<untilize, type, dim, is_fp32_dest_acc_en>(&llk_pack_params);
+    llk_pack_reduce_hw_configure<type, dim, is_fp32_dest_acc_en, untilize>(&llk_pack_params);
 }
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
@@ -197,7 +197,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-    _llk_pack_<DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(tile_index, pack_tile_addr);
+    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
 }
 
 /*************************************************************************
@@ -279,7 +279,7 @@ inline void llk_matmul_pack(
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-        _llk_pack_<DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(tile_index, pack_tile_addr);
+        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
     }
 }
 
@@ -314,7 +314,7 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_dest_init_<DST_SYNC_MODE, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>(face_r_dim, narrow_tile);
+    _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileFaceLayout::RowMajor>(face_r_dim, narrow_tile);
 }
 
 template <bool mail2math = true, bool mail2pack = true>
@@ -394,7 +394,7 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
                 .Threshold = 0,
             }};
 
-        _llk_pack_hw_configure_<untilize, is_fp32_dest_acc_en>(
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize>(
             pack_src_format[output_id],
             pack_dst_format[output_id],
             tile_size,
