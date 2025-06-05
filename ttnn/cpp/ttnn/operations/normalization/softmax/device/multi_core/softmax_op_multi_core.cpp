@@ -132,7 +132,8 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     uint32_t cb_length = in0_t;
     bool use_large_kernel = false;
-    if ((120 * in0_tile_size) + (120 * im_tile_size) + (120 * im_tile_size) + (120 * im_tile_size) <
+    // Noisy CB estimator, if the cbs used take up 80% of L1 switch to large kernel implementation
+    if ((input_tensor.device()->l1_size_per_core() / 4) * 5 <
         (in0_t * in0_tile_size) + (im4_t * im_tile_size) + (im0_t * im_tile_size) + (im3_t * im_tile_size)) {
         use_large_kernel = true;
         cb_length = 120;
@@ -567,6 +568,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 softmax_kernel_args[3] = block_size;
                 softmax_kernel_args[4] = curr_ht;
                 softmax_kernel_args[5] = mask_padded_data;
+                softmax_kernel_args[6] = fp32_dest_acc_en ? 1 : 0;
 
                 writer_kernel_args[0] = dst_buffer_address;
                 writer_kernel_args[1] = num_tile_rows_per_core * Wt;
