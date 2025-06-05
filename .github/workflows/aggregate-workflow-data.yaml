@@ -125,20 +125,13 @@ jobs:
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Prepare Slack Message
-        id: prepare-slack
-        run: |
-          # Create base message
-          cat > slack-message.json << 'EOF'
-          {
-            "channel": "${{ secrets.SLACK_METAL_INFRA_PIPELINE_CHANNEL_ID }}",
-            "text": "🚨 Failed Workflows Report\n\nRepository: ${{ github.repository }}\nBranch: ${{ github.ref_name }}\nTime Period: ${{ github.event.inputs.days || 15 }} days\n\nFailed Workflows:\n${{ needs.analyze-data.outputs.failed_workflows }}"
-          }
-          EOF
-
       - name: Send Slack Notification
         uses: slackapi/slack-github-action@v2.1.0
         with:
           method: chat.postMessage
           token: ${{ secrets.SLACK_BOT_TOKEN }}
-          payload-file-path: ./slack-message.json
+          payload: |
+            {
+              "channel": "${{ secrets.SLACK_METAL_INFRA_PIPELINE_CHANNEL_ID }}",
+              "text": "🚨 Failed Workflows Report\n\nRepository: ${{ github.repository }}\nBranch: ${{ github.ref_name }}\nTime Period: ${{ github.event.inputs.days || 15 }} days\n\nFailed Workflows:\n${{ needs.analyze-data.outputs.failed_workflows }}"
+            }
