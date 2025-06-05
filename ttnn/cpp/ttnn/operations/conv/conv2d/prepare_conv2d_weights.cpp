@@ -822,8 +822,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         params.has_bias);
 
     // Handle kernel stride folding for weights if enabled
-    if (params.enable_kernel_stride_folding &&
-        (params.stride[0] == original_weights_window_h && params.stride[1] == original_weights_window_w)) {
+    if (params.enable_kernel_stride_folding) {
         // Validate padding is zero for folding
         TT_FATAL(
             params.padding_n4[0] == 0 && params.padding_n4[1] == 0 && params.padding_n4[2] == 0 &&

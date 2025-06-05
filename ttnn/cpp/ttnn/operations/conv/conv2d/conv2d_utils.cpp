@@ -1326,8 +1326,6 @@ ttnn::Tensor fold_tensor(
     std::optional<DataType> dtype,
     bool is_weight_tensor) {
     // Validation checks
-    TT_FATAL(
-        stride[0] == kernel_size[0] && stride[1] == kernel_size[1], "Stride must be equal to kernel size for folding");
     if (is_weight_tensor) {
         TT_FATAL(!tensor.memory_config().is_l1(), "Weight tensor must not be in L1 memory");
     } else {
@@ -1352,7 +1350,13 @@ ttnn::Tensor fold_tensor(
     }
 
     // Core folding operation
-    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1]);
+    if (is_weight_tensor) {
+        auto pad_h = kernel_size[0] % stride[0];
+        auto pad_w = kernel_size[1] % stride[1];
+        tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, 0, pad_h, pad_w);
+    } else {
+        tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1]);
+    }
 
     if (is_weight_tensor) {
         tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({0, 3, 1, 2}));
@@ -1377,13 +1381,16 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     input_width = input_width / stride[1];
     in_channels = in_channels * stride[0] * stride[1];
 
+    auto kernel_h = (kernel_size[0] + kernel_size[0] % stride[0]) / stride[0];
+    auto kernel_w = (kernel_size[1] + kernel_size[1] % stride[1]) / stride[1];
+
     return KernelStrideFoldingResult{
         .input_height = input_height,
         .input_width = input_width,
         .in_channels = in_channels,
         .stride = {1, 1},
-        .kernel_size = {1, 1},
-        .mm_conv = true};
+        .kernel_size = {kernel_h, kernel_w},
+        .mm_conv = (kernel_size[0] == stride[0] && kernel_size[1] == stride[1])};
 }
 
 template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config<IDevice>(

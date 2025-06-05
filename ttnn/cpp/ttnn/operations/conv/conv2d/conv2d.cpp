@@ -431,6 +431,7 @@ Result conv2d_L1(
     // Store the original stride size for weight folding
     auto orig_stride = stride;
     if (conv_config.enable_kernel_stride_folding) {
+        // TODO: Add padding for input tensor if padding is not 0.
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
         input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);

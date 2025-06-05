@@ -231,6 +231,8 @@ def run_conv2d_short_sweep(
         conv_input_shape, dtype=torch_input_dtype if is_forge_suite else torch.bfloat16
     ).float()
 
+    torch_input_tensor_nchw = torch.nn.functional.pad(torch_input_tensor_nchw, (pad_h, pad_h, pad_w, pad_w))
+
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
     torch_weight_tensor = torch.randn(
         conv_weight_shape, dtype=torch_weight_dtype if is_forge_suite else torch.bfloat16
@@ -248,7 +250,7 @@ def run_conv2d_short_sweep(
         torch_weight_tensor,
         bias=torch_bias_tensor.reshape(-1) if has_bias else None,
         stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
+        padding=(0, 0),
         dilation=(dilation_h, dilation_w),
         groups=groups,
     )
@@ -275,7 +277,7 @@ def run_conv2d_short_sweep(
             weights_dtype=weights_dtype,
             output_layout=output_layout,
             preprocess_weights_on_device=True,
-            enable_kernel_stride_folding=enable_kernel_stride_folding,
+            enable_kernel_stride_folding=True,
         )
     else:
         tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
@@ -297,11 +299,11 @@ def run_conv2d_short_sweep(
         bias_tensor=tt_bias_tensor,
         kernel_size=(kernel_height, kernel_width),
         stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
+        padding=(0, 0),
         dilation=(dilation_h, dilation_w),
         batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
+        input_height=input_height + pad_h * 2,
+        input_width=input_width + pad_w * 2,
         groups=groups,
         conv_config=conv_config,
         return_output_dim=True,

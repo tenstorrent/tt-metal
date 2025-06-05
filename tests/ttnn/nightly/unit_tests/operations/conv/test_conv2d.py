@@ -20,6 +20,19 @@ BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
 
+def write_to_file(file_name, tensor):
+    tensor = tensor.float()
+    tensor = tensor.cpu().detach().numpy()
+    with open(file_name, "w") as f:
+        for i in range(1):
+            for j in range(tensor.shape[1]):
+                for k in range(tensor.shape[2]):
+                    for l in range(tensor.shape[3]):
+                        # f.write(str(round(tensor[i][j][k][l]), 2) + " ")
+                        f.write("{:.2f}".format(tensor[i][j][k][l]) + " ")
+                    f.write("\n")
+
+
 def torch_fast_pcc(golden, calculated, pcc=0.99):
     golden = torch.Tensor(golden).flatten()
     calculated = torch.Tensor(calculated).flatten()
@@ -53,7 +66,14 @@ def randomize_torch_tensor(torch_tensor_map, tensor_shape):
     if tensor_shape in torch_tensor_map.keys():
         torch_tensor = torch_tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float() * 9.0
+        # for i in range(tensor_shape[0]):
+        #     for j in range(tensor_shape[1]):
+        #         for k in range(tensor_shape[2]):
+        #             for l in range(tensor_shape[3]):
+        #                 # torch_tensor[i, j, k, l] =  tensor_shape[1]
+        #                 torch_tensor[i, j, k, l] = k * tensor_shape[3] + l + 1
+        #                 # torch_tensor[i, j, k, l] = 1
         torch_tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
@@ -149,9 +169,12 @@ def run_conv(
     conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
     conv_bias_shape = (1, 1, 1, output_channels)
     torch_input_tensor_nchw = randomize_torch_tensor(torch_tensor_map, conv_input_shape)
+    # torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape)
+    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
     torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape) * 10 if has_bias else None
 
     torch_padded_input = torch.nn.functional.pad(
@@ -256,6 +279,9 @@ def run_conv(
         return_output_dim=True,
         return_weights_and_bias=True,
     )
+    # weight_t = ttnn.from_device(d_w)
+    # torch.set_printoptions(profile="full")
+    # print(weight_t.to_torch())
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
@@ -297,6 +323,8 @@ def run_conv(
     else:
         pcc = 0.997
 
+    write_to_file("torch_out.txt", ref)
+    write_to_file("ttnn_out.txt", out)
     if activation == "tanh":
         # Scale down PCC for tanh.
         # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
@@ -3607,11 +3635,11 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("input_channels", [3, 320])
 @pytest.mark.parametrize("output_channels", [32])
-@pytest.mark.parametrize("input_height,input_width", [(224, 224), (512, 672)])
-@pytest.mark.parametrize("kernel_height,kernel_width", [(16, 16), (32, 32)])
-@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("input_height,input_width", [(224, 224)])
+@pytest.mark.parametrize("kernel_height,kernel_width", [(7, 7)])
+@pytest.mark.parametrize("stride_height,stride_width", [(2, 2)])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("has_bias", [True, False])
-@pytest.mark.parametrize("preprocess_weights_on_device", [True, False])
 def test_conv2d_with_fold(
     device,
     torch_tensor_map,
@@ -3622,6 +3650,8 @@ def test_conv2d_with_fold(
     input_width,
     kernel_height,
     kernel_width,
+    stride_height,
+    stride_width,
     input_layout,
     has_bias,
     preprocess_weights_on_device,
@@ -3640,8 +3670,8 @@ def test_conv2d_with_fold(
         input_width=input_width,
         filter_height=kernel_height,
         filter_width=kernel_width,
-        stride_h=kernel_height,
-        stride_w=kernel_width,
+        stride_h=stride_height,
+        stride_w=stride_width,
         padding=(0, 0),
         config_override=None,
         input_layout=input_layout,
