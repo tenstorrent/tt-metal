@@ -1114,9 +1114,10 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
             active_ethernet_cores.insert(eth_core);
         }
         if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-            // channel 15 is used by syseng tools and must always be active
+            // channel 15 is used by syseng tools and must always be active for mmio chips
             constexpr uint32_t syseng_eth_channel = 15;
-            if (logical_active_eth_channels.find(syseng_eth_channel) == logical_active_eth_channels.end()) {
+            if (this->cluster_desc_->is_chip_mmio_capable(chip_id) &&
+                logical_active_eth_channels.find(syseng_eth_channel) == logical_active_eth_channels.end()) {
                 tt::umd::CoreCoord eth_core =
                     soc_desc.get_eth_core_for_channel(syseng_eth_channel, CoordSystem::LOGICAL);
                 active_ethernet_cores.insert(eth_core);
