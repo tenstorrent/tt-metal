@@ -9,7 +9,7 @@ import ttnn
 from models.demos.llama3_subdevices.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
-from models.demos.llama3_subdevices.tt.llama_common import precompute_freqs, PagedAttentionConfig, PageAttention
+from models.demos.llama3_subdevices.tt.llama_common import precompute_freqs, PagedAttentionConfig, PagedAttention
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 from models.utility_functions import (
     comp_pcc,
@@ -126,9 +126,9 @@ def test_llama_attention_inference(
             mesh_shape=model_args.cluster_shape,
         )
 
-        paged_attn = PageAttention(paged_attention_config, model_args)
+        paged_attn = PagedAttention(paged_attention_config, model_args)
 
-        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper)
+        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper, per_device_group=True)
 
     prefetcher_setup = TtLlamaPrefetcherSetup(
         mesh_device,

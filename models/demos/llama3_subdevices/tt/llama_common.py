@@ -32,9 +32,7 @@ class PagedAttention:
         self.page_table_tt = None
 
     def create_page_table(self, device, mesh_mapper=None, per_device_group=False):
-        batch_size = (
-            self.model_args.max_batch_size if not per_device_group else self.model_args.batch_size_per_device_group
-        )
+        batch_size = self.model_args.batch_size_per_device_group if per_device_group else self.model_args.max_batch_size
         permutation = torch.randperm(self.config.max_num_blocks)
         self.reverse_permutation = torch.argsort(permutation)
         assert self.config.max_num_blocks % batch_size == 0, "max_num_blocks must be divisible by max_batch_size"
