@@ -291,8 +291,7 @@ inline void configure_unpack_AB(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
-    uint32_t src_zeroflags_disable = ((uint)unpA_dst_format == (uint)DataFormat::UInt16) || ((uint)unpB_dst_format == (uint)DataFormat::UInt16) ||
-                                     ((uint)unpA_dst_format == (uint)DataFormat::Int32) || ((uint)unpB_dst_format == (uint)DataFormat::Int32);
+    uint32_t src_zeroflags_disable = ((uint)unpA_dst_format == (uint)DataFormat::UInt16) || ((uint)unpB_dst_format == (uint)DataFormat::UInt16);
     if constexpr (disable_src_zero_flag)
     {
         src_zeroflags_disable = true;
