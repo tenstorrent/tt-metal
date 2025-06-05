@@ -449,7 +449,7 @@ def run_llama3_demo(
             iteration_time_ends = time()
             iteration_time = iteration_time_ends - iteration_time_start
             logger.info(
-                f"Iteration : {iteration}, Prefill Iteration : {iteration}, time taken : {iteration_time:.2f} seconds, t/s/u : {1/iteration_time:.2f}"
+                f"Iteration : {iteration}, Prefill Iteration : {iteration}, Iteration Time : {1000*iteration_time:.2f} ms, tok/s/user : {1/iteration_time:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s"
             )
             iteration_time_start = time()
         else:
@@ -473,7 +473,7 @@ def run_llama3_demo(
                 iteration_time_ends = time()
                 iteration_time = iteration_time_ends - iteration_time_start
                 logger.info(
-                    f"Iteration : {iteration-1}, Decode Iteration : {decode_iteration-1}, time taken : {iteration_time:.2f} seconds, t/s/u : {1/iteration_time:.2f}"
+                    f"Iteration : {iteration-1}, Decode Iteration : {decode_iteration-1}, Iteration Time : {1000*iteration_time:.2f} ms, tok/s/user : {1/iteration_time:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s"
                 )
                 iteration_time_start = time()
                 if iteration + 1 > max_generated_tokens:  # EoT tokens
