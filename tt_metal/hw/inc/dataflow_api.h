@@ -463,29 +463,6 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 
 // clang-format off
 /**
- * Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
- * Refer to \a noc_async_read for more details.
- */
-// clang-format on
-FORCE_INLINE
-void noc_async_read_one_packet(
-    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
-    /*
-        Read requests - use static VC
-        Read responses - assigned VCs dynamically
-    */
-    WAYPOINT("RP2W");
-    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RP2D");
-
-    WAYPOINT("NAOW");
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
-    WAYPOINT("NAOD");
-}
-
-// clang-format off
-/**
  * Initiates an asynchronous read from a specified source node located at NOC
  * coordinates (x,y) at a local address (encoded as a uint64_t using \a
  * get_noc_addr function). The destination is in L1 memory on the Tensix core
