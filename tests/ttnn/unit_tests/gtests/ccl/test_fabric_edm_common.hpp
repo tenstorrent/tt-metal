@@ -1408,10 +1408,6 @@ inline bool TestMultiInputReaderKernel(
     }
     Fabric1DFixture test_fixture;
 
-    TT_FATAL(
-        test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK,
-        "Test configuration issue. Set local writeback mode with persistent fabric");
-
     auto view = *(test_fixture.view_);
 
     std::vector<IDevice*> devices;

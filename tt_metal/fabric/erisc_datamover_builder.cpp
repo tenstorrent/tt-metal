@@ -442,7 +442,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
         "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
 
     const std::vector<uint32_t> values = {
-        true,  // connection.persistent_fabric,
         connection.edm_direction,
         edm_noc_xy.to_uint32(),
         connection.edm_buffer_base_addr,

@@ -7,7 +7,6 @@
 #include "dataflow_api.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "tests/ttnn/unit_tests/gtests/ccl/kernels/test_kernels.common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
@@ -69,7 +68,6 @@ void kernel_main() {
 
     // TODO: move to semaphore
     auto edm_buffer_index_sem_id = get_arg_val<uint32_t>(arg_idx++);
-    ASSERT(edm_buffer_index_sem_id < 8);
     auto edm_buffer_index_id = edm_buffer_index_sem_id;
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(writer_send_sem_addr));
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(worker_teardown_sem_addr));
@@ -163,9 +161,5 @@ void kernel_main() {
         noc_semaphore_wait(last_message_semaphore_address, 1);
     }
 
-    bool closed_fabric_connection = terminate_fabric_endpoints_farthest_to_nearest(sender, a_packet_header_addr, arg_idx);
-
-    if (!closed_fabric_connection) {
-        sender.close();
-    }
+    sender.close();
 }
