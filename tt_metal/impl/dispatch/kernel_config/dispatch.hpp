@@ -129,6 +129,8 @@ private:
     dispatch_static_config_t static_config_;
     dispatch_dependent_config_t dependent_config_;
     FDKernelEdmConnectionAttributes edm_connection_attributes_;
+
+    bool is_hd() const { return static_config_.is_h_variant.value() && static_config_.is_d_variant.value(); }
 };
 
 }  // namespace tt_metal
