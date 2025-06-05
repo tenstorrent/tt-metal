@@ -43,7 +43,8 @@ test_id_to_name = {
     19: "Reshard Hardcoded Many Cores",
     20: "Reshard Hardcoded 2 Cores to Many Cores",
     21: "Conv Act with halo 3x3",
-    22: "Conv Halo Gather",
+    22: "Conv Act with halo 3x3 Small",
+    23: "Conv Halo Gather",
 }
 
 # Comments for each test explaining why we get the perf that we do
@@ -123,7 +124,11 @@ test_id_to_comment = {
         similar to what it would be for a similarly configured one from one. Convolution may benefit from \n\
         having multiple cores doing different parts of the convolution at the same time. This would \n\
         result in a larger effective bandwidth.",
-    22: "The performance of this test is similar to how other tests perform based on the number of \n\
+    22: "Convolution has a large number of transactions and a small transaction size. The performance is \n\
+        similar to what it would be for a similarly configured one from one. Convolution may benefit from \n\
+        having multiple cores doing different parts of the convolution at the same time. This would \n\
+        result in a larger effective bandwidth.",
+    23: "The performance of this test is similar to how other tests perform based on the number of \n\
         transactions and the transaction size, but with extra degradation due to needing to read \n\
         parameters from L1.",
 }
@@ -217,6 +222,9 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 150000, "upper": 300000}, "bandwidth": 3},
         },
         22: {
+            "riscv_1": {"latency": {"lower": 1000000, "upper": 1100000}, "bandwidth": 0.3},
+        },
+        23: {
             "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 10},
         },
     },
@@ -303,6 +311,9 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 150000, "upper": 300000}, "bandwidth": 6},
         },
         22: {
+            "riscv_1": {"latency": {"lower": 1000000, "upper": 1100000}, "bandwidth": 0.6},
+        },
+        23: {
             "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 20},
         },
     },

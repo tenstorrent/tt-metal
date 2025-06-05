@@ -25,4 +25,5 @@ Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B fo
 Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
 1. Conv Act with halo 3x3 - A test that reads convolution activation data with a halo of 3x3.
-2. Conv Halo Gather - A test that gathers convolution halo data.
+2. Conv Act with halo 3x3 Small - A test that reads convolution activation data with a halo of 3x3, with a transaction size of 16.
+3. Conv Halo Gather - A test that gathers convolution halo data.

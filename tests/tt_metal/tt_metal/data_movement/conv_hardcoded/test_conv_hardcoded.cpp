@@ -132,13 +132,84 @@ TEST_F(DeviceFixture, TensixDataMovementConvActHalo3x3) {
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementConvHaloGather) {
+TEST_F(DeviceFixture, TensixDataMovementConvActHalo3x3Smaller) {
     if (arch_ != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
 
     // Parameters
     uint32_t test_id = unit_tests::dm::conv_hardcoded::START_ID + 1;
+    NOC noc_id = NOC::NOC_0;
+    std::set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0)), CoreRange(CoreCoord(1, 0))};
+    CoreRangeSet wrapper_dest_core_set(dest_core_set);
+    std::vector<uint32_t> dest_core_compile_args;
+    std::vector<uint32_t> dest_core_runtime_args;
+
+    dest_core_compile_args.push_back(2);                     // dilation_h
+    dest_core_compile_args.push_back(2);                     // dilation_w
+    dest_core_compile_args.push_back(16);                    // conv_act_c_read_bytes
+    dest_core_compile_args.push_back(4);                     // window_outer
+    dest_core_compile_args.push_back(4);                     // window_inner
+    dest_core_compile_args.push_back(256);                   // act_block_h_datums
+    dest_core_compile_args.push_back(8);                     // act_block_num_tiles
+    dest_core_compile_args.push_back(0);                     // 0
+    dest_core_compile_args.push_back(4);                     // weight_size_w
+    dest_core_compile_args.push_back(115);                   // conv_act_size_w_padded
+    dest_core_compile_args.push_back(0);                     // act_block_w_extra_align_bytes
+    dest_core_compile_args.push_back(12);                    // act_num_blocks_h
+    dest_core_compile_args.push_back(0);                     // 0
+    dest_core_compile_args.push_back(0);                     // 0
+    dest_core_compile_args.push_back(0);                     // 0
+    dest_core_compile_args.push_back(0);                     // 0
+    dest_core_compile_args.push_back(0);                     // 0
+    dest_core_compile_args.push_back(0);                     // 0
+    dest_core_compile_args.push_back(0);                     // 0
+    dest_core_compile_args.push_back(0);                     // 0
+    dest_core_compile_args.push_back(256);                   // act_block_h_datums_last_block
+    dest_core_compile_args.push_back(0);                     // act_block_h_datums_second_reader
+    dest_core_compile_args.push_back(0);                     // needs_act_block_zero_out
+    dest_core_compile_args.push_back(3);                     // cb_id_act
+    dest_core_compile_args.push_back(2);                     // cb_id_sharded_act
+    dest_core_compile_args.push_back(7);                     // cb_reader_indices
+    dest_core_compile_args.push_back(1566528);               // packed_reader_indices_ptr
+    dest_core_compile_args.push_back(1482368);               // act_l1_read_addr
+    dest_core_compile_args.push_back(16);                    // coalesced_read_bytes
+    dest_core_compile_args.push_back(98304);                 // l1_write_addr_act
+    dest_core_compile_args.push_back(128);                   // act_block_h_datums_read_curr
+    dest_core_compile_args.push_back(12 * 4 * 128 * 2 * 4);  // num_of_transactions = act_num_blocks_h *
+                                                             //    window_outer *
+                                                             //    act_block_h_datums_read_curr *
+                                                             //    (dilation_w != 1 ? 2*weight_size_w : 2)
+    dest_core_compile_args.push_back(16);                    // transaction_size_bytes = coalesced_read_bytes
+    dest_core_compile_args.push_back(test_id);               // test_id
+
+    dest_core_runtime_args.push_back(0);  // 0
+
+    // Test config
+    unit_tests::dm::conv_hardcoded::ConvConfig test_config = {
+        .test_id = test_id,
+        .dest_core_set = wrapper_dest_core_set,
+        .dest_core_compile_args = dest_core_compile_args,
+        .dest_core_runtime_args = dest_core_runtime_args,
+        .noc_id = noc_id,
+        .kernel_name =
+            "tests/tt_metal/tt_metal/data_movement/conv_hardcoded/kernels/"
+            "reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp",
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
+TEST_F(DeviceFixture, TensixDataMovementConvHaloGather) {
+    if (arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Skipping test for non-BH architecture";
+    }
+
+    // Parameters
+    uint32_t test_id = unit_tests::dm::conv_hardcoded::START_ID + 2;
     NOC noc_id = NOC::NOC_0;
     std::set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0))};
     CoreRangeSet wrapper_dest_core_set(dest_core_set);
