@@ -152,20 +152,27 @@ target_sources(
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_addr_map.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_addrmod.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_debug.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_defs.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_globals.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_gpr_map.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_include.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_instr_params.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_main.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_ops.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_pcbuf.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_sfpi.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_sfpu.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_structs.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_template.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_xmov.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/cmath_common.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/cpack_common.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/cunpack_common.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_abs.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_activations.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_add_int32.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
@@ -186,7 +193,6 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_power.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_quant.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_recip.h
-            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_recip.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_relu.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_rounding_ops.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_shift.h
@@ -203,9 +209,13 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_defs.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_common.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary.h
+            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary_sfpu.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h
+            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpi.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_matmul.h
+            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_reduce.h
+            third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_transpose_dest.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack_common.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_pack_untilize.h
@@ -217,6 +227,7 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_tilize.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_untilize.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_addr_map.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_addrmod.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_debug.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_defs.h
@@ -224,14 +235,19 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_gpr_map.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_include.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_instr_params.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_main.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_ops.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_pcbuf.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_sfpi.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_sfpu.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_structs.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_template.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_xmov.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cmath_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cpack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cunpack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_abs.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_activations.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_add_int32.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
@@ -251,7 +267,6 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_max_int32.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_power.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_quant.h
-            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_recip.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_recip.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_relu.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_reshuffle_rows.h
