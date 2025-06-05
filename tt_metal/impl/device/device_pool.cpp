@@ -239,7 +239,7 @@ void DevicePool::initialize(
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
         // Automatically initialize 1D fabric for dispatch
-        FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+        FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
         if (fabric_config == FabricConfig::DISABLED) {
             tt::tt_metal::detail::InitializeFabricConfig(FabricConfig::FABRIC_1D);
         } else if (fabric_config != FabricConfig::FABRIC_1D) {
