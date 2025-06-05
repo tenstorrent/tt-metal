@@ -48,7 +48,7 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
                 "Found duplicate physical chip id: {}, mesh id: {}",
                 physical_chip_id,
                 mesh_id);
-            physical_coordinates.push_back(PhysicalMeshCoordinate(/*mesh_id=*/mesh_id, /*chip_id=*/physical_chip_id));
+            physical_coordinates.push_back(PhysicalMeshCoordinate(/*mesh_id=*/*mesh_id, /*chip_id=*/physical_chip_id));
         }
         return MeshContainer<PhysicalMeshCoordinate>(mesh_shape, std::move(physical_coordinates));
     }());

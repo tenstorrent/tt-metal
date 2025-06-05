@@ -4,19 +4,24 @@
 
 #pragma once
 
+#include <optional>
+#include <string>
+#include <tuple>
+#include <type_traits>
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <type_traits>
+#include <reflect>
 
 #include "ttnn/decorators.hpp"
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/types.hpp"
 #include "types.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn {
 namespace decorators {
+
+namespace py = pybind11;
 
 template <typename T, typename return_t, typename... args_t>
 constexpr auto resolve_call_method(return_t (*function)(args_t...)) {

@@ -2,6 +2,7 @@ add_library(ttnn_op_embedding ${LIB_TYPE})
 add_library(TT::NN::Ops::Embedding ALIAS ttnn_op_embedding)
 
 target_precompile_headers(ttnn_op_embedding REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_embedding)
 
 target_sources(
     ttnn_op_embedding

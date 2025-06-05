@@ -125,9 +125,9 @@ public:
     void UpdateArgsForFabric(
         const CoreCoord& fabric_router,
         uint32_t outbound_eth_chan,
-        tt::tt_fabric::mesh_id_t src_mesh_id,
+        tt::tt_fabric::MeshId src_mesh_id,
         chip_id_t src_chip_id,
-        tt::tt_fabric::mesh_id_t dst_mesh_id,
+        tt::tt_fabric::MeshId dst_mesh_id,
         chip_id_t dst_chip_id) override;
 
     uint32_t GetDispatchBufferSize() const {

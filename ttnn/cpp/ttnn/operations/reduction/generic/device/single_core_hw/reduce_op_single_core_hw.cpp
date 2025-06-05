@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     tt_metal::IDevice* device = a.device();
 
     tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
