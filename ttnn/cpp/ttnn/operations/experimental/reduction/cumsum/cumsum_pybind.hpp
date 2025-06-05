@@ -10,6 +10,5 @@ namespace ttnn::operations::experimental::reduction::detail {
 namespace py = pybind11;
 
 void bind_cumsum_operation(py::module& module);
-void bind_cumsum_backward_operation(py::module& module);
 
 }  // namespace ttnn::operations::experimental::reduction::detail

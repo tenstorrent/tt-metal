@@ -125,14 +125,4 @@ Tensor CumSumOperation::invoke(
     return ttnn::prim::cumsum(queue_id, adjusted_input_tensor, dim, dtype, optional_output_tensor, flip);
 }
 
-Tensor CumSumBackwardOperation::invoke(
-    QueueId queue_id,
-    const Tensor& input,
-    int64_t dim,
-    std::optional<ttnn::DataType> dtype,
-    std::optional<Tensor> optional_output_tensor,
-    const std::optional<MemoryConfig>& memory_config) {
-    return CumSumOperation::invoke(queue_id, input, dim, dtype, optional_output_tensor, true, memory_config);
-}
-
 }  // namespace ttnn::operations::experimental::reduction

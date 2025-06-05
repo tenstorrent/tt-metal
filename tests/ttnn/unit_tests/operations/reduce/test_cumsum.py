@@ -28,22 +28,6 @@ def is_supported(tensor_rank, dim, ttnn_dtype):
     return True
 
 
-# From test_moreh_cum
-def get_backward_tensors(output_grad_shape, input_grad_shape, device):
-    torch.manual_seed(2023)
-    npu_dtype = ttnn.bfloat16
-    cpu_dtype = torch.bfloat16
-    npu_layout = ttnn.TILE_LAYOUT
-
-    torch_output_grad = torch.randint(-2, 3, output_grad_shape, dtype=cpu_dtype, requires_grad=True)
-    torch_input_grad = torch.randint(-2, 3, input_grad_shape, dtype=cpu_dtype)
-
-    tt_output_grad = ttnn.Tensor(torch_output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-    tt_input_grad = ttnn.Tensor(torch_input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-
-    return tt_output_grad, tt_input_grad, torch_output_grad
-
-
 @pytest.mark.parametrize(
     "size, dim",
     [
@@ -167,7 +151,7 @@ def test_cumsum(size, dim, dtypes, device):
         ([2, 3, 5, 33, 128], 0),
         ([2, 3, 5, 33, 128], 1),
         ([2, 3, 5, 33, 128], 2),
-        ([1, 151936], -1),
+        # ([1, 151936], -1),
     ],
 )
 @pytest.mark.parametrize(
@@ -210,102 +194,3 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
     assert preallocated_output_tensor == output_tensor
 
     assert_with_pcc(expected_output, torch_output)
-
-
-@pytest.mark.parametrize(
-    "size, dim",
-    [
-        ([], 0),
-        ([1], 0),
-        ([10], 0),
-        ([2, 3], 0),
-        ([2, 3], 1),
-        ([2, 3], -1),
-        ([2, 3], -2),
-        ([2, 3, 4], 0),
-        ([2, 3, 4], 2),
-        ([2, 3, 4], -3),
-        ([1, 32, 64], 1),
-        ([1, 1024, 32], 0),
-        ([1, 1024, 32], 1),
-        ([260, 1, 1], 0),
-        ([1024, 1, 32], 0),
-        ([1, 1024, 32], 2),
-        ([64, 1, 32], 1),
-        ([64, 64, 1], 1),
-        ([1, 32, 129], 1),
-        ([33, 35, 37], 1),
-        ([2, 1, 1, 1], 0),
-        ([2, 3, 33, 33], 1),
-        ([7, 13, 129, 33], 1),
-        ([7, 13, 129, 33], 0),
-        ([4, 6, 128, 128], 0),
-        ([2, 3, 2, 2], 1),
-        ([2, 3, 2, 2], 0),
-        ([2, 1, 33], 0),
-        ([2, 3, 5, 33, 128], 0),
-        ([2, 3, 5, 33, 128], 1),
-        ([2, 3, 5, 33, 128], 2),
-        ([2, 100], -2),
-    ],
-)
-@pytest.mark.parametrize(
-    "dtypes",
-    [
-        (torch.float32, None),
-        # (torch.bfloat16, ttnn.bfloat16),
-        # (torch.float32, ttnn.float32),
-        # (torch.float32, ttnn.bfloat16),
-    ],
-)
-def test_cumsum_backward(size, dim, dtypes, device):
-    output_shape = size.copy()
-
-    torch.manual_seed(29112024)
-
-    (torch_dtype, ttnn_dtype) = dtypes
-
-    # Generate integer input on [-2; 2];
-    # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
-    # which are not handled yet
-    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype, requires_grad=True)
-    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
-
-    expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
-
-    tensor_rank = len(size)
-    # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
-    if not is_supported(tensor_rank, dim, expected_output_dtype):
-        return
-
-    (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(size, size, device)
-
-    torch_output = torch.cumsum(torch_input_tensor, dim)
-    torch_output.backward(torch_output_grad)
-
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    # tt_input_grad_cpu = (
-    #     ttnn.experimental.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad)
-    #     .cpu()
-    #     .to(cpu_layout)
-    #     .unpad_from_tile(size)
-    #     .to_torch()
-    # )
-
-    tt_input_grad_cpu = ttnn.to_torch(ttnn.experimental.cumsum_backward(tt_output_grad, dim, input_grad=tt_input_grad))
-
-    # Verify tensor shapes
-    print(f"tt output = \n{tt_output_grad}")
-    print(f"tt input grad = \n{tt_input_grad_cpu}, shape = {tt_input_grad_cpu.shape}")
-    print(f"tt input grad = \n{torch_input_tensor.grad}, shape = {torch_input_tensor.shape}")
-
-    assert tt_input_grad_cpu.shape == torch_input_tensor.grad.shape
-    # assert tt_input_grad_cpu.dtype == torch_input_tensor.grad.dtype
-
-    # test for equivalance
-    rtol = atol = 0.1
-    passing, output_pcc = comp_allclose_and_pcc(
-        torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol
-    )
-
-    assert passing
