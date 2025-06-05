@@ -878,6 +878,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
+    uint32_t tensor_width = a.get_padded_shape()[-1];
+    uint32_t tensor_height = a.volume() / tensor_width;
+
     const auto& tile_shape = a.get_tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -886,9 +889,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
     bool input_is_sharded = a.is_sharded();
     bool output_is_sharded = output.is_sharded();
 
-    uint32_t num_tiles = a.volume() / tile_volume;
-    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / tile_width;
-    uint32_t num_tiles_per_col = num_tiles / num_tiles_per_row;
+    uint32_t num_tiles_per_row = tensor_width / tile_width;
+    uint32_t num_tiles_per_col = tensor_height / tile_height;
 
     auto grid_size = device->compute_with_storage_grid_size();
     auto
@@ -969,7 +971,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
         full_compute_core_range = input_shard_spec.grid;
         cliff_compute_core_range = CoreRangeSet();
 
-        num_input_blocks_across_width = a.get_padded_shape()[-1] / input_shard_width;
+        // Note: Accounting for uneven input shards
+        num_input_blocks_across_width = tt::div_up(tensor_width, input_shard_width);
         num_tiles_per_input_block = input_shard_width / tile_width;
         num_input_blocks_per_full_core = input_shard_height / tile_height;
         num_input_blocks_per_cliff_core = 0;
@@ -1051,15 +1054,16 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        output_num_blocks_across_width = a.get_padded_shape()[-1] / output.shard_spec().value().shape[1];
+        uint32_t output_shard_width = output.shard_spec().value().shape[1];
+        output_num_blocks_across_width = tensor_width / output_shard_width;
     }
-    uint32_t output_stick_size = a.get_padded_shape()[-1] * output.element_size() / output_num_blocks_across_width;
+    uint32_t output_stick_size = tensor_width * output.element_size() / output_num_blocks_across_width;
     bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_stick_size);
     uint32_t output_log_base_2_of_page_size =
         output_stick_size_is_power_of_two ? (std::bit_width(output_stick_size) - 1) : 0;
     uint32_t output_element_size = output.element_size();
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
-    uint32_t num_cols_per_output_block = a.get_padded_shape()[-1] / output_num_blocks_across_width;
+    uint32_t num_cols_per_output_block = tensor_width / output_num_blocks_across_width;
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)output_is_dram,
         (uint32_t)output_cb_index,
@@ -1159,18 +1163,33 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
         // Handle uneven input sharding width wise
         uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
-        bool is_last_input_shard_in_row =
-            input_is_sharded && width_wise_input_block_index == num_input_blocks_across_width - 1;
-        if (is_last_input_shard_in_row) {
-            num_unpadded_cols_per_input_block =
-                num_cols_per_input_block -
-                (tt::round_up(a.get_padded_shape()[-1], a.shard_spec().value().shape[1]) - a.get_padded_shape()[-1]);
+        if (input_is_sharded) {
+            bool is_last_input_shard_in_row = width_wise_input_block_index == num_input_blocks_across_width - 1;
+            if (is_last_input_shard_in_row) {
+                uint32_t input_shard_width = a.shard_spec().value().shape[1];
+                num_unpadded_cols_per_input_block =
+                    num_cols_per_input_block - (tt::round_up(tensor_width, input_shard_width) - tensor_width);
+            }
+        }
+
+        // Handle uneven input sharding height wise
+        uint32_t num_input_blocks_to_process = num_input_blocks_per_full_core;
+        if (input_is_sharded) {
+            uint32_t input_shard_height = a.shard_spec().value().shape[0];
+            uint32_t height_wise_shard_index = i / num_input_blocks_across_width;
+            uint32_t num_shards_height_wise = tt::div_up(tensor_height, input_shard_height);
+            bool is_last_input_shard_in_col = height_wise_shard_index == num_shards_height_wise - 1;
+            if (is_last_input_shard_in_col) {
+                num_input_blocks_to_process =
+                    num_input_blocks_per_full_core -
+                    (tt::round_up(tensor_height, input_shard_height) - tensor_height) / tile_height;
+            }
         }
 
         // Writer run-time args
         std::vector<uint32_t> writer_run_time_args = {
             dst_buffer->address(),
-            num_input_blocks_per_full_core,
+            num_input_blocks_to_process,
             height_wise_input_block_start_index,
             width_wise_input_block_index,
             num_unpadded_cols_per_input_block};
@@ -1208,10 +1227,15 @@ operation::ProgramWithCallbacks untilize_multi_core(
         // will never process an uneven shard (or any shard for that matter)
         uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
 
+        // Handle uneven input sharding height wise
+        // Note: Since cliff core is only applicable to interleaved input, this core
+        // will neven process an uneven shard (or any shard for that matter)
+        uint32_t num_input_blocks_to_process = num_input_blocks_per_cliff_core;
+
         // Writer run-time args
         std::vector<uint32_t> writer_run_time_args = {
             dst_buffer->address(),
-            num_input_blocks_per_cliff_core,
+            num_input_blocks_to_process,
             height_wise_input_block_start_index,
             width_wise_input_block_index,
             num_unpadded_cols_per_input_block};
