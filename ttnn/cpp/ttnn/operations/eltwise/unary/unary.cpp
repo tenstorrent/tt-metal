@@ -13,7 +13,6 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/unary/tanh_accurate/tanh_accurate.hpp"
-#include <typeinfo>
 
 namespace ttnn::operations::unary {
 
@@ -181,15 +180,6 @@ Tensor ExecuteUnaryWithVariantFloatIntParameter<unary_op_type, T>::invoke(
     T parameter,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    std::cout << "In unary.cpp --> param0 : " << std::fixed << std::setprecision(15) << static_cast<T>(parameter)
-              << std::endl;
-    std::cout << "In unary.cpp --> param0 : " << std::fixed << std::setprecision(15)
-              << std::bit_cast<uint32_t>(parameter) << std::endl;
-    std::cout << "In unary.cpp --> param0 : " << std::fixed << std::setprecision(15) << std::bit_cast<float>(parameter)
-              << std::endl;
-    std::cout << "In unary.cpp --> param0 : " << std::fixed << std::setprecision(15) << static_cast<double>(parameter)
-              << std::endl;
-
     return detail::unary_impl(
         queue_id,
         input_tensor,

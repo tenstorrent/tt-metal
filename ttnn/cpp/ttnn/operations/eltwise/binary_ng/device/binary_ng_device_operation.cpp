@@ -493,8 +493,6 @@ BinaryNgDeviceOperation::invoke(
     DataType dtype_a = input_tensor_a.dtype();
     bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
-    std::cout << " Inside ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.cpp :" << scalar
-              << std::endl;
     return {
         operation_attributes_t{
             binary_op_type,

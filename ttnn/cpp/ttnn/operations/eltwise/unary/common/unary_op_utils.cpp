@@ -6,8 +6,6 @@
 
 #include <tt-metalium/assert.hpp>
 #include "ttnn/tensor/types.hpp"
-#include <sstream>
-#include <iomanip>
 
 using namespace tt::tt_metal;
 
@@ -298,20 +296,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
-                // unsigned int uparam0 = static_cast<unsigned int>(param0);
-                // std::stringstream ss;
-                // ss << "0x" << std::hex << uparam0;
-                // std::string hexStr = ss.str();
-                // op_init_and_name = {
-                //     "unary_max_tile_init();", fmt::format("unary_max_int32_tile({}, {});", idst, hexStr)};
-                std::cout << "in utils file --> param0 : " << std::fixed << std::setprecision(15) << param0
-                          << std::endl;
-                std::cout << "in utils file --> param0 : " << (uint)param0 << std::endl;
-                // int32_t scalar = -214748360;
-
                 op_init_and_name = {
                     "unary_max_tile_init();", fmt::format("unary_max_int32_tile({}, {}u);", idst, (uint)param0)};
-
             } else {
                 op_init_and_name = {
                     "unary_max_tile_init();",
