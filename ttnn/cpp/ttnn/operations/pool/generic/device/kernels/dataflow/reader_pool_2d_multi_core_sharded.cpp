@@ -48,7 +48,7 @@ FORCE_INLINE void clear_out_tiles(uint64_t write_addr, uint64_t clear_value_addr
         noc_async_read(clear_value_addr, write_addr, tile_size);
         write_addr += tile_size;
     }
-    noc_async_write_barrier();
+    noc_async_read_barrier();
 }
 
 /**

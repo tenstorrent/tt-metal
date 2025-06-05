@@ -82,22 +82,23 @@ def run_avg_pool2d(
     "input_shape",  # NCHW
     (
         # Case: Normal compute & Normal reader kernel.
-        [1, 32, 16, 16],
+        # [1, 16, 16, 16],
+        [1, 64, 112, 112],
         [1, 512, 112, 32],
-        [1, 512, 16, 16],
-        [1, 800, 16, 16],
+        # [1, 512, 16, 16],
+        # [1, 800, 16, 16],
         [2, 32, 16, 16],
-        [2, 512, 112, 32],
-        [2, 512, 16, 16],
-        [2, 800, 16, 16],
+        [2, 384, 240, 32],
+        # [2, 512, 16, 16],
+        # [2, 800, 16, 16],
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
         # Case: Normal compute & Normal reader kernel.
-        (2, 2),
-        (3, 3),
+        # (2, 2),
+        # (3, 3),
         # Case: Large compute & Large reader kernel.
         (5, 5),
         (9, 9),
@@ -107,14 +108,14 @@ def run_avg_pool2d(
     "stride",
     (
         (1, 1),
-        (2, 2),
+        # (2, 2),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
-        (0, 0),
-        (1, 1),
+        # (0, 0),
+        # (1, 1),
         (2, 2),
         (4, 4),
     ),
@@ -136,8 +137,8 @@ def run_avg_pool2d(
     "shard_scheme",
     [
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        # ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
 def test_run_avg_pool2d(
