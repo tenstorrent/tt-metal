@@ -213,26 +213,10 @@ std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> TensorLayou
         return ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
     }
 
-    auto tensor_shape_in_pages = compute_padded_shape(shape);
-    if (tensor_shape_in_pages.rank() >= 1) {
-        tensor_shape_in_pages[-1] = (tensor_shape_in_pages[-1] + page_shape.width() - 1) / page_shape.width();
-    }
-    if (tensor_shape_in_pages.rank() >= 2) {
-        tensor_shape_in_pages[-2] = (tensor_shape_in_pages[-2] + page_shape.height() - 1) / page_shape.height();
-    }
+    auto tensor_shape = compute_padded_shape(shape);
     auto& nd_shard_spec = memory_config_.nd_shard_spec().value();
-    auto shard_shape_in_pages = nd_shard_spec.shard_shape;
-    if (shard_shape_in_pages.rank() >= 1) {
-        shard_shape_in_pages[-1] = (shard_shape_in_pages[-1] + page_shape.width() - 1) / page_shape.width();
-    }
-    if (shard_shape_in_pages.rank() >= 2) {
-        shard_shape_in_pages[-2] = (shard_shape_in_pages[-2] + page_shape.height() - 1) / page_shape.height();
-    }
-    return BufferDistributionSpec(
-        std::move(tensor_shape_in_pages),
-        std::move(shard_shape_in_pages),
-        nd_shard_spec.grid,
-        nd_shard_spec.orientation);
+    return BufferDistributionSpec::from_shard_spec(
+        tensor_shape, nd_shard_spec.shard_shape, page_shape, nd_shard_spec.grid, nd_shard_spec.orientation);
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const {

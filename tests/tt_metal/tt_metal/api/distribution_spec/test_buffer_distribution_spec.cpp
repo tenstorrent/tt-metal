@@ -48,21 +48,12 @@ struct BufferReadWriteParams {
     MeshBufferReadWriteExpected expected;
 };
 
-tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::tt_metal::Shape2D& page_shape) {
-    if (shape.rank() >= 1) {
-        shape[-1] = (shape[-1] + page_shape.width() - 1) / page_shape.width();
-    }
-    if (shape.rank() >= 2) {
-        shape[-2] = (shape[-2] + page_shape.height() - 1) / page_shape.height();
-    }
-    return shape;
-}
-
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_mesh_buffer_from_inputs(
     const BufferDistributionSpecInputs& inputs, tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec(
-        convert_shape_to_pages(inputs.physical_tensor_shape, inputs.page_shape),
-        convert_shape_to_pages(inputs.physical_shard_shape, inputs.page_shape),
+    auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
+        inputs.physical_tensor_shape,
+        inputs.physical_shard_shape,
+        inputs.page_shape,
         inputs.grid,
         inputs.shard_orientation);
 

@@ -14,6 +14,13 @@ namespace tt::tt_metal {
 
 class BufferDistributionSpec {
 public:
+    static BufferDistributionSpec from_shard_spec(
+        tt::tt_metal::Shape tensor_shape,
+        tt::tt_metal::Shape shard_shape,
+        tt::tt_metal::Shape2D page_shape,
+        CoreRangeSet core_range_set,
+        ShardOrientation shard_orientation);
+
     BufferDistributionSpec(
         tt::tt_metal::Shape tensor_shape_in_pages,
         tt::tt_metal::Shape shard_shape_in_pages,

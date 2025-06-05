@@ -89,8 +89,29 @@ void iterate_over_shards(
         actual_shard_shape_2d);
 }
 
+tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::tt_metal::Shape2D& page_shape) {
+    if (shape.rank() >= 1) {
+        shape[-1] = (shape[-1] + page_shape.width() - 1) / page_shape.width();
+    }
+    if (shape.rank() >= 2) {
+        shape[-2] = (shape[-2] + page_shape.height() - 1) / page_shape.height();
+    }
+    return shape;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
+BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
+    tt::tt_metal::Shape tensor_shape,
+    tt::tt_metal::Shape shard_shape,
+    tt::tt_metal::Shape2D page_shape,
+    CoreRangeSet core_range_set,
+    ShardOrientation shard_orientation) {
+    auto tensor_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(tensor_shape, page_shape);
+    auto shard_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(shard_shape, page_shape);
+    return BufferDistributionSpec(tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation);
+}
 
 BufferDistributionSpec::BufferDistributionSpec(
     tt::tt_metal::Shape tensor_shape_in_pages,
