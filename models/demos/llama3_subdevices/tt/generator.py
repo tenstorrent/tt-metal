@@ -324,6 +324,7 @@ class Generator:
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
         reset_inputs=True,
+        argmax_on_device=False,
         seq_groups=None,
         finished_requests_ids=None,
     ):
@@ -333,7 +334,7 @@ class Generator:
         # argmax_on_device = torch.all(start_pos[1:] == -1).item() and (
         #     sampling_params is not None and sampling_params.temperature == 0
         # )
-        argmax_on_device = False
+        self.perm_table_tensor = None
         if seq_groups is not None:
             for req in finished_requests_ids:
                 empty_batch_slot = self.seq_groups_to_batch_slot[req]
@@ -346,6 +347,7 @@ class Generator:
                 dtype=torch.long,
                 device=start_pos.device,
             )
+            self.perm_table_tensor = perm_table_tensor
             # Calculate inverse_perm_indices: inverse_perm_indices[current_slot_idx] = new_idx where current_slot_idx should go
             inverse_perm_indices = torch.empty_like(perm_table_tensor)
             inverse_perm_indices[perm_table_tensor] = torch.arange(
@@ -375,9 +377,6 @@ class Generator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
         if read_from_device:
             tt_logits = self.read_decode_output(tt_logits, tokens.shape[0], is_tokens=(argmax_on_device))
-            if seq_groups is not None:
-                # permute the logits back to the original order from tokens
-                tt_logits = tt_logits[perm_table_tensor, :]
 
         return tt_logits
 
@@ -493,6 +492,8 @@ class Generator:
 
     def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=False):
         logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1, is_tokens=is_tokens)
+        if self.perm_table_tensor is not None:
+            logits = logits[self.perm_table_tensor, :]
         return logits
 
     def chat_completion(
