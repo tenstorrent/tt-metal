@@ -361,6 +361,11 @@ async function run() {
       }
     }
 
+    // Format failed workflows as a simple string
+    const failedWorkflowsStr = failedWorkflows.map(wf =>
+      `${wf.name} (PR: ${wf.pr}, Author: ${wf.author}, Bad: ${wf.badSha}, Good: ${wf.goodSha})`
+    ).join('\n');
+
     // Create authenticated Octokit client for PR info
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
 
@@ -368,7 +373,7 @@ async function run() {
     const report = await buildReport(grouped, octokit, github.context, workflowConfigs);
 
     // Set outputs
-    core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
+    core.setOutput('failed_workflows', failedWorkflowsStr);
     core.setOutput('report', report);
 
     await core.summary.addRaw(report).write();

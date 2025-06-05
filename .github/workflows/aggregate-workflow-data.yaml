@@ -133,5 +133,5 @@ jobs:
           payload: |
             {
               "channel": "${{ secrets.SLACK_METAL_INFRA_PIPELINE_CHANNEL_ID }}",
-              "text": "Failed Workflows Report: ${{ toJSON(needs.analyze-data.outputs.failed_workflows) }}"
+              "text": "Failed Workflows Report:\n${{ join(fromJSON(needs.analyze-data.outputs.failed_workflows), '\n') }}"
             }
