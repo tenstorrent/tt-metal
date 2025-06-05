@@ -268,7 +268,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     this->dispatch_core_assignments.clear();
     this->available_dispatch_cores_by_device.clear();
     this->dispatch_core_config_ = dispatch_core_config;
-    for (chip_id_t device_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+    for (chip_id_t device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
         std::list<CoreCoord>& logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
         for (const CoreCoord& logical_dispatch_core :
              tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, dispatch_core_config)) {

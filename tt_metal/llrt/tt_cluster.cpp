@@ -318,7 +318,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
                     break;
                 }
             }
-            TT_ASSERT(desired_logical_id != -1, "Visible device not found in cluster descriptor");
+            TT_FATAL(desired_logical_id != -1, "Visible device not found in cluster descriptor");
             for (auto& chip_id : temp_cluster_desc->get_chips_grouped_by_closest_mmio().at(desired_logical_id)) {
                 chips_set.emplace(chip_id);
             }

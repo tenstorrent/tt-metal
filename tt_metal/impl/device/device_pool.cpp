@@ -253,8 +253,8 @@ void DevicePool::initialize(
     std::vector<chip_id_t> target_mmio_ids;
     for (const auto& device_id : device_ids) {
         TT_FATAL(
-            tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().find(device_id) !=
-                tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().end(),
+            tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().find(device_id) !=
+                tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().end(),
             "Device index {} out of range. There are {} devices available.",
             device_id,
             tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices());
@@ -368,8 +368,8 @@ void DevicePool::initialize_active_devices() const {
 
 void DevicePool::activate_device(chip_id_t id) {
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().find(id) !=
-            tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().end(),
+        tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().find(id) !=
+            tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().end(),
         "Device index {} out of range. There are {} devices available.",
         id,
         tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices());
@@ -597,7 +597,7 @@ DevicePool::DevicePool() {
     log_debug(tt::LogMetal, "DevicePool constructor");
     bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
     std::vector<chip_id_t> all_device_ids;
-    for (chip_id_t device_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+    for (chip_id_t device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
         all_device_ids.emplace_back(device_id);
     }
     std::unordered_set<uint32_t> free_cores = {};

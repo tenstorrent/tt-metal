@@ -23,9 +23,8 @@ protected:
     }
 
     void InitializeDevices() {
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids;
-        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
             ids.push_back(id);
         }
         this->device_ids_to_devices_ = tt::tt_metal::detail::CreateDevices(ids);
