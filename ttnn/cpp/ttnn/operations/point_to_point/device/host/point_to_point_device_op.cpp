@@ -13,22 +13,31 @@ namespace ttnn::operations::point_to_point {
 
 namespace detail {
 
-std::tuple<uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
     const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment) {
     const auto fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const size_t max_packet_size_bytes =
+    const uint32_t max_packet_size_bytes =
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
     const uint32_t aligned_page_size_bytes = tt::round_up(page_size_bytes, alignment);
 
-    // !TODO see what happens if page size is larger than packet size.
-    const uint32_t num_pages_per_packet = max_packet_size_bytes / aligned_page_size_bytes;
+    uint32_t num_page_segments, max_num_pages_per_packet, packet_size_bytes, total_packets;
+    if (aligned_page_size_bytes <= max_packet_size_bytes) {
+        num_page_segments = 1;
+        max_num_pages_per_packet = std::min(max_packet_size_bytes / aligned_page_size_bytes, num_pages);
+        packet_size_bytes = aligned_page_size_bytes * max_num_pages_per_packet;
+        total_packets = tt::div_up(num_pages, max_num_pages_per_packet);
+    } else {
+        max_num_pages_per_packet = 1;
+        num_page_segments = tt::div_up(aligned_page_size_bytes, max_packet_size_bytes);
+        packet_size_bytes = max_packet_size_bytes;
+        total_packets = num_page_segments * num_pages;
+    }
 
-    const uint32_t packet_size_bytes = aligned_page_size_bytes * num_pages_per_packet;
+    std::cout << "packet_size_bytes " << packet_size_bytes << " max_num_pages_per_packet " << max_num_pages_per_packet
+              << " num_page_segments " << num_page_segments << " total_packets " << total_packets << std::endl;
 
-    const uint32_t total_packets = tt::div_up(num_pages, num_pages_per_packet);
-
-    return std::make_tuple(packet_size_bytes, num_pages_per_packet, total_packets);
+    return std::make_tuple(packet_size_bytes, max_num_pages_per_packet, num_page_segments, total_packets);
 }
 }  // namespace detail
 
@@ -84,11 +93,13 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
     const auto final_output_spec = input_tensor.tensor_spec();
 
     const uint32_t input_num_pages = data_movement::get_num_pages(tensor_args.input_tensor);
-    const auto [packet_size_bytes, num_pages_per_packet, total_packets] = detail::compute_aligned_packet_dims(
-        input_tensor.get_dtype(),
-        final_output_spec.compute_page_size_bytes(),
-        input_num_pages,
-        ::hal::get_l1_alignment());
+
+    const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
+        detail::compute_aligned_packet_dims(
+            input_tensor.get_dtype(),
+            final_output_spec.compute_page_size_bytes(),
+            input_num_pages,
+            ::hal::get_l1_alignment());
 
     const uint32_t packet_page_dim =
         packet_size_bytes / tt::datum_size(datatype_to_dataformat_converter(input_tensor.get_dtype()));

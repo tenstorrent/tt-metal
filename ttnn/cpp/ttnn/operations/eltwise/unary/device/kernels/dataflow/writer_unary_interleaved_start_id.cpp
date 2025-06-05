@@ -33,7 +33,7 @@ void kernel_main() {
 #ifdef ROWMAJOR
     const uint32_t page_bytes = get_arg_val<uint32_t>(3);
 #else
-    const uint32_t page_bytes = get_tile_size(cb_id_in0);
+    const uint32_t page_bytes = get_tile_size(cb_id_out);
 #endif
 
     const InterleavedAddrGenFast<dst_is_dram> s = {

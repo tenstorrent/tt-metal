@@ -20,7 +20,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     // figure out packets
     // !TODO see what happens if page size is larger than packet size.
-    const auto [packet_size_bytes, num_pages_per_packet, total_packets] =
+    const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
         compute_aligned_packet_dims(output_tensor.get_dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
 
     // distribute work
@@ -93,7 +93,14 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             intermediate_tensor.buffer()->address(),
             packet_size_bytes,
             output_page_size_bytes,
+            num_page_segments,
             operation_attributes.receiver_semaphore.address()};
+
+        std::cout << "READER RT ARGS " << std::endl;
+        for (auto& x : reader_runtime_args) {
+            std::cout << x << " ";
+        }
+        std::cout << std::endl;
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
