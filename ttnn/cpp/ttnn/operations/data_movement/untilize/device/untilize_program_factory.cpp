@@ -955,10 +955,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Default values are for interleaved input.
     // Cliff core applicable interleaved input only, it is the only core not processing the
     // same number of rows (blocks) as all other cores.
-    uint32_t input_num_blocks_across_width = 1;
-    uint32_t num_tiles_per_block = num_tiles_per_row;
-    uint32_t num_blocks_per_full_core = num_rows_per_full_core;
-    uint32_t num_blocks_per_cliff_core = num_rows_per_cliff_core;
+    uint32_t num_input_blocks_across_width = 1;
+    uint32_t num_tiles_per_input_block = num_tiles_per_row;
+    uint32_t num_input_blocks_per_full_core = num_rows_per_full_core;
+    uint32_t num_input_blocks_per_cliff_core = num_rows_per_cliff_core;
     if (input_is_sharded) {
         ShardSpec input_shard_spec = a.shard_spec().value();
         uint32_t input_shard_height = input_shard_spec.shape[0];
@@ -969,24 +969,24 @@ operation::ProgramWithCallbacks untilize_multi_core(
         full_compute_core_range = input_shard_spec.grid;
         cliff_compute_core_range = CoreRangeSet();
 
-        input_num_blocks_across_width = a.get_padded_shape()[-1] / input_shard_width;
-        num_tiles_per_block = input_shard_width / tile_width;
-        num_blocks_per_full_core = input_shard_height / tile_height;
-        num_blocks_per_cliff_core = 0;
+        num_input_blocks_across_width = a.get_padded_shape()[-1] / input_shard_width;
+        num_tiles_per_input_block = input_shard_width / tile_width;
+        num_input_blocks_per_full_core = input_shard_height / tile_height;
+        num_input_blocks_per_cliff_core = 0;
     }
 
     // Input CB
     uint32_t input_cb_num_tiles;
     if (input_is_sharded) {
         // Have compute core untilize the entire shard at once
-        input_cb_num_tiles = num_tiles_per_block * num_blocks_per_full_core;
+        input_cb_num_tiles = num_tiles_per_input_block * num_input_blocks_per_full_core;
     } else {
-        if (num_blocks_per_full_core == 1) {
+        if (num_input_blocks_per_full_core == 1) {
             // No need to double buffer if the core is only processing a single block
-            input_cb_num_tiles = num_tiles_per_block;
+            input_cb_num_tiles = num_tiles_per_input_block;
         } else {
             // Double buffer if the core is processing 2+ blocks
-            input_cb_num_tiles = num_tiles_per_block * 2;
+            input_cb_num_tiles = num_tiles_per_input_block * 2;
         }
     }
     auto [src0_cb_index, cb_src0] = create_cb(
@@ -1000,12 +1000,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     // Output CB
     uint32_t output_cb_num_tiles;
-    if (num_blocks_per_full_core == 1) {
+    if (num_input_blocks_per_full_core == 1) {
         // No need to double buffer if the core is only processing a single block
-        output_cb_num_tiles = num_tiles_per_block;
+        output_cb_num_tiles = num_tiles_per_input_block;
     } else {
         // Double buffer if the core is processing 2+ blocks
-        output_cb_num_tiles = num_tiles_per_block * 2;
+        output_cb_num_tiles = num_tiles_per_input_block * 2;
     }
     auto [output_cb_index, cb_output] = create_cb(
         tt::CBIndex::c_16,
@@ -1054,23 +1054,24 @@ operation::ProgramWithCallbacks untilize_multi_core(
         output_num_blocks_across_width = a.get_padded_shape()[-1] / output.shard_spec().value().shape[1];
     }
     uint32_t output_stick_size = a.get_padded_shape()[-1] * output.element_size() / output_num_blocks_across_width;
-    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(output_stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(output_stick_size) - 1) : 0;
+    bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_stick_size);
+    uint32_t output_log_base_2_of_page_size =
+        output_stick_size_is_power_of_two ? (std::bit_width(output_stick_size) - 1) : 0;
     uint32_t output_element_size = output.element_size();
-    uint32_t input_num_cols_per_block = num_tiles_per_block * tile_width;
-    uint32_t output_num_cols_per_block = a.get_padded_shape()[-1] / output_num_blocks_across_width;
+    uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
+    uint32_t num_cols_per_output_block = a.get_padded_shape()[-1] / output_num_blocks_across_width;
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)output_is_dram,
         (uint32_t)output_cb_index,
         (uint32_t)output_stick_size,
-        (uint32_t)stick_size_is_power_of_two,
-        (uint32_t)log2_stick_size,
+        (uint32_t)output_stick_size_is_power_of_two,
+        (uint32_t)output_log_base_2_of_page_size,
         (uint32_t)tile_height,
-        (uint32_t)num_tiles_per_block,
+        (uint32_t)num_tiles_per_input_block,
         (uint32_t)output_num_blocks_across_width,
         (uint32_t)output_element_size,
-        (uint32_t)input_num_cols_per_block,
-        (uint32_t)output_num_cols_per_block,
+        (uint32_t)num_cols_per_input_block,
+        (uint32_t)num_cols_per_output_block,
     };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
@@ -1086,7 +1087,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     // Compute kernel
     std::string compute_kernel;
-    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
+    if (num_tiles_per_input_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize ||
+        a.get_dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -1100,8 +1102,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Note: This condition is always true for sharded input
     if (full_compute_core_range.ranges().size() > 0) {
         std::vector<uint32_t> compute_compile_time_args = {
-            (uint32_t)num_blocks_per_full_core,
-            (uint32_t)num_tiles_per_block,
+            (uint32_t)num_input_blocks_per_full_core,
+            (uint32_t)num_tiles_per_input_block,
             (uint32_t)src0_cb_index,
             (uint32_t)output_cb_index};
         KernelHandle untilize_kernel_id = CreateKernel(
@@ -1115,8 +1117,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Note: This condition is always false for sharded input (sharded input will never have a cliff core)
     if (cliff_compute_core_range.ranges().size() > 0) {
         std::vector<uint32_t> compute_compile_time_args_cliff = {
-            (uint32_t)num_blocks_per_cliff_core,
-            (uint32_t)num_tiles_per_block,
+            (uint32_t)num_input_blocks_per_cliff_core,
+            (uint32_t)num_tiles_per_input_block,
             (uint32_t)src0_cb_index,
             (uint32_t)output_cb_index};
         KernelHandle untilize_cliff_kernel_id = CreateKernel(
@@ -1136,9 +1138,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
     std::vector<CoreCoord> full_cores = corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
     for (uint32_t i = 0; i < full_cores.size(); ++i) {
         CoreCoord core = full_cores[i];
+        uint32_t height_wise_input_block_start_index =
+            (i / num_input_blocks_across_width) * num_input_blocks_per_full_core;
+        uint32_t width_wise_input_block_index = i % num_input_blocks_across_width;
 
         // Reader run-time args
-        uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_full_core;
+        uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_per_full_core;
         std::vector<uint32_t> reader_run_time_args;
         if (input_is_sharded) {
             // Sharded input
@@ -1152,15 +1157,23 @@ operation::ProgramWithCallbacks untilize_multi_core(
             };
         }
 
+        // Handle uneven input sharding width wise
+        uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
+        bool is_last_input_shard_in_row =
+            input_is_sharded && width_wise_input_block_index == num_input_blocks_across_width - 1;
+        if (is_last_input_shard_in_row) {
+            num_unpadded_cols_per_input_block =
+                num_cols_per_input_block -
+                (tt::round_up(a.get_padded_shape()[-1], a.shard_spec().value().shape[1]) - a.get_padded_shape()[-1]);
+        }
+
         // Writer run-time args
-        uint32_t height_wise_input_block_start_index = (i / input_num_blocks_across_width) * num_blocks_per_full_core;
-        uint32_t width_wise_input_block_index = i % input_num_blocks_across_width;
         std::vector<uint32_t> writer_run_time_args = {
             dst_buffer->address(),
-            num_blocks_per_full_core,
+            num_input_blocks_per_full_core,
             height_wise_input_block_start_index,
             width_wise_input_block_index,
-        };
+            num_unpadded_cols_per_input_block};
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
         }
@@ -1170,7 +1183,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
 
         // Update index of first tile to read
-        tile_start_index += num_tiles_per_block * num_blocks_per_full_core;
+        tile_start_index += num_tiles_per_input_block * num_input_blocks_per_full_core;
     }
 
     // Run-time args (cliff core)
@@ -1179,24 +1192,29 @@ operation::ProgramWithCallbacks untilize_multi_core(
     if (cliff_cores.size() > 0) {
         // There should only ever be 0 or 1 cliff cores
         CoreCoord cliff_core = cliff_cores[0];
+        uint32_t height_wise_input_block_start_index = full_cores.size() * num_input_blocks_per_full_core;
+        uint32_t width_wise_input_block_index = 0;
 
         // Reader run-time args (always reading interleaved input as cliff core does not exist for sharded input)
-        uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_cliff_core;
+        uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_per_cliff_core;
         std::vector<uint32_t> reader_run_time_args = {
             src0_buffer->address(),
             num_tiles_to_read,
             tile_start_index,
         };
 
+        // Handle uneven input sharding width wise
+        // Note: Since cliff core is only applicable to interleaved input, this core
+        // will never process an uneven shard (or any shard for that matter)
+        uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
+
         // Writer run-time args
-        uint32_t height_wise_input_block_start_index = full_cores.size() * num_blocks_per_full_core;
-        uint32_t width_wise_input_block_index = 0;
         std::vector<uint32_t> writer_run_time_args = {
             dst_buffer->address(),
-            num_blocks_per_cliff_core,
+            num_input_blocks_per_cliff_core,
             height_wise_input_block_start_index,
             width_wise_input_block_index,
-        };
+            num_unpadded_cols_per_input_block};
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
         }
