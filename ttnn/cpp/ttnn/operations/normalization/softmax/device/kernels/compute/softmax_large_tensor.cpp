@@ -15,20 +15,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_int_sum.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
-
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
-#include "debug/dprint_tensix.h"
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "======" << ENDL();
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
+#include "compute_kernel_api.h"
 
 namespace NAMESPACE {
 void apply_fused_scale_mask(
@@ -50,7 +37,7 @@ void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
-    uint32_t blk = get_arg_val<uint32_t>(3);
+    // uint32_t blk = get_arg_val<uint32_t>(3);
     uint32_t start_ht = get_arg_val<uint32_t>(4);
     uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
     uint32_t cb_length_t = get_arg_val<uint32_t>(6);
@@ -74,28 +61,8 @@ void MAIN {
     auto cb_recip = tt::CBIndex::c_16;
     auto cb_prev_max = tt::CBIndex::c_15;
     constexpr auto cb_mask_padded = tt::CBIndex::c_5;
-    constexpr auto cb_mask_padded_bcast = tt::CBIndex::c_13;
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
-    init_sfpu(cb_mask_padded, cb_mask_padded_bcast);
-
-    if (mask_padded_data) {
-        reconfig_data_format_srca(cb_mask_padded);
-        pack_reconfig_data_format(cb_mask_padded_bcast);
-        unary_bcast_init<BroadcastType::ROW>(cb_mask_padded, cb_mask_padded_bcast);
-        tile_regs_acquire();
-        cb_wait_front(cb_mask_padded, 1);
-        UNPACK(tt::compute::common::print_full_tile(cb_mask_padded, 0, true));
-        unary_bcast<BroadcastType::ROW>(cb_mask_padded, 0, 0);
-        tile_regs_wait();
-        tile_regs_commit();
-        cb_reserve_back(cb_mask_padded_bcast, 1);
-        pack_tile(0, cb_mask_padded_bcast);
-        cb_push_back(cb_mask_padded_bcast, 1);
-        tile_regs_release();
-        cb_pop_front(cb_mask_padded, 1);
-        cb_wait_front(cb_mask_padded_bcast, 1);
-        UNPACK(tt::compute::common::print_full_tile(cb_mask_padded_bcast, 0, true));
-    }
+    init_sfpu(cb_mask_padded, cb_mask_padded);
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // comes from the reader
 
@@ -107,7 +74,6 @@ void MAIN {
 
     // First loop is to parse and find the sum
     uint32_t dst0 = 0;
-    uint32_t ht = start_ht;
     uint32_t cb_processed_input;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -137,7 +103,6 @@ void MAIN {
                 pad_input(cb_in0, cb_x, cb_length_t, blk);
                 cb_processed_input = cb_x;
             } else {
-                // DPRINT << "No Pad" << ENDL();
                 // no Pad
                 cb_processed_input = cb_in0;
             }
@@ -156,8 +121,6 @@ void MAIN {
 #endif
 
         /*
-        DPRINT << "in: " << ENDL();
-        UNPACK(tt::compute::common::print_full_tile(cb_in, 0));
          * --------------------------------------------------------
          * --------------------------------------------------------
          * ------------------Calcualte sum of exp values-----------
@@ -167,16 +130,7 @@ void MAIN {
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
 #if FUSED_SCALE_MASK
-            // for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk++) {
-            //     cb_wait_front(cb_in0, cur_blk+1);
-            //     UNPACK(tt::compute::common::print_full_tile(cb_in0, cur_blk, true));
-            // }
             apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
-            // for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk++) {
-            //     DPRINT << "DIVIDE curPass: "<< cur_pass << ENDL();
-            //     cb_wait_front(cb_scale_mask, cur_blk+1);
-            //     UNPACK(tt::compute::common::print_full_tile(cb_scale_mask, cur_blk, true));
-            // }
             apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
             cb_processed_input = cb_x;
 #else
@@ -265,9 +219,9 @@ void MAIN {
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
         }
         cb_pop_front(cb_recip, 1);
-        // cb_pop_front(cb_fused_scale, 1);
     }
-}
+    cb_pop_front(cb_mask_padded, 1);
+}  // MAIN
 
     // for scale+mask+softmax:
     // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
@@ -289,7 +243,6 @@ void apply_fused_scale_mask(
         cb_reserve_back(cb_out, blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             mul_tiles_bcast_scalar(cb_in, cb_fused_scale_mask, cur_dst, 0, cur_dst);
-            // destination register looks good
         }
         tile_regs_wait();
         tile_regs_commit();
@@ -303,7 +256,7 @@ void apply_fused_scale_mask(
 }
 void apply_fused_attn_mask(
     uint32_t cb_in, uint32_t cb_fused_attn_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk, bool do_mask) {
-    auto cb_mask_padded_bcast = tt::CBIndex::c_13;
+    auto cb_mask_padded = tt::CBIndex::c_5;
     reconfig_data_format(cb_in, cb_fused_attn_mask);
     pack_reconfig_data_format(cb_out);
 #ifdef CAUSAL_MASK
@@ -328,10 +281,10 @@ void apply_fused_attn_mask(
 #endif
         if (do_mask && cur_blk == cb_length_t - blk) {
             // add mask to the last register to pad with -inf
-            reconfig_data_format_srca(cb_mask_padded_bcast);
-            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded_bcast);
-            cb_wait_front(cb_mask_padded_bcast, 1);
-            binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded_bcast, 0, blk - 1);
+            reconfig_data_format_srca(cb_mask_padded);
+            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded);
+            cb_wait_front(cb_mask_padded, 1);
+            binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_mask_padded, 0, blk - 1);
         }
         tile_regs_commit();
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
@@ -346,8 +299,8 @@ void apply_fused_attn_mask(
 
 // applys pad to the last pass cb if needed
 void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
-    auto cb_mask_padded_bcast = tt::CBIndex::c_13;
-    reconfig_data_format(cb_in, cb_mask_padded_bcast);
+    auto cb_mask_padded = tt::CBIndex::c_5;
+    reconfig_data_format(cb_in, cb_mask_padded);
     pack_reconfig_data_format(cb_out);
     copy_tile_init(cb_in);  // need to copy from CB to DST to be able to run sfpu math
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
@@ -356,9 +309,9 @@ void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t b
         cb_reserve_back(cb_out, blk);
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             if (cur_dst == blk - 1 && cur_blk == cb_length_t - blk) {
-                add_tiles_init(cb_in, cb_mask_padded_bcast);
-                cb_wait_front(cb_mask_padded_bcast, 1);
-                add_tiles(cb_in, cb_mask_padded_bcast, cur_dst, 0, cur_dst);
+                add_tiles_init(cb_in, cb_mask_padded);
+                cb_wait_front(cb_mask_padded, 1);
+                add_tiles(cb_in, cb_mask_padded, cur_dst, 0, cur_dst);
             } else {
                 copy_tile(cb_in, cur_dst, cur_dst);
             }
@@ -397,7 +350,6 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
 #ifdef NUMERIC_STABLE
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
             sub_tiles_bcast_cols(cb_in, cb_max, cur_dst, 0, cur_dst);
-            // dprint_tensix_dest_reg(cur_dst);
         }
 #else
         for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
@@ -438,9 +390,7 @@ void reduce_cb(
     cb_reserve_back(cb_out, 1);
     for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
         cb_wait_front(cb_in, 1);
-        // dprint_tensix_dest_reg(0);
         reduce_tile<reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, 0, 0, 0);
-        // dprint_tensix_dest_reg(0);
         cb_pop_front(cb_in, 1);
     }
 
