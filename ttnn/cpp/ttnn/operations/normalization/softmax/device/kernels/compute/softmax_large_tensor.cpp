@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
-// SPDX-Lice
+// SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
-// #include <numeric>
 
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
