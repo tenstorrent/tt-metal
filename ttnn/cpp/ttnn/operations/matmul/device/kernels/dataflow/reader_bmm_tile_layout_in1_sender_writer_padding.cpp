@@ -111,16 +111,20 @@ void kernel_main() {
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
 #endif
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(31);
+    constexpr bool fuse_op_all_gather = (bool)get_compile_time_arg_val(31);
+    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(32);
 
     MatmulOpReceiver fused_op_receiver;
-    if constexpr (fuse_op) {
+    OpSignaler op_signaler;
+    if constexpr (fuse_op_all_gather) {
         fused_op_receiver = MatmulOpReceiver(
             false, /* wait_for_op_signal */
             rt_args_idx,
             num_blocks_inner_dim,
             in1_block_h /* tiles_per_block (in the same dimension */
         );
+    } else if constexpr (fuse_op_reduce_scatter) {
+        op_signaler = OpSignaler(rt_args_idx);
     }
 
 // RT and COMPILE TIME ARGS for DRAM sharded weights
@@ -131,8 +135,8 @@ void kernel_main() {
     tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx++);
     tt_l1_ptr uint32_t* current_dram_bank_id = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx++);
 
-    constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(32);
-    constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(33);
+    constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(33);
+    constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(34);
 #endif
 
     constexpr uint32_t cb_id_in1 = 1;
@@ -207,7 +211,7 @@ void kernel_main() {
                 uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
-                    if constexpr (fuse_op) {
+                    if constexpr (fuse_op_all_gather) {
                         fused_op_receiver.update_current_block_start_tile_id(
                             block, in1_tensor_current_inner_dim_block_start_tile_id, in1_tensor_start_tile_id);
                     }
@@ -485,6 +489,11 @@ void kernel_main() {
             in1_tensor_start_tile_id += KtNt;
         }
         out_tensor_start_tile_id += MtNt;
+
+        if (fuse_op_reduce_scatter) {
+            // Signal reduce_scatter to go
+            op_signaler.synchronize_workers_and_signal_op(0);
+        }
     }
 
 #if OUT_SHARDED
