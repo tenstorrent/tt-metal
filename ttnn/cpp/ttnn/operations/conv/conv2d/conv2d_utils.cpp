@@ -1035,7 +1035,6 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
     return packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 }
 
-// Common folding operation for both input and weight tensors
 template <typename T>
 ttnn::Tensor fold_tensor(
     const ttnn::Tensor& tensor,
@@ -1043,16 +1042,9 @@ ttnn::Tensor fold_tensor(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype,
-    bool is_weight_tensor) {
+    std::optional<DataType> dtype) {
     // Validation checks
-    TT_FATAL(
-        stride[0] == kernel_size[0] && stride[1] == kernel_size[1], "Stride must be equal to kernel size for folding");
-    if (is_weight_tensor) {
-        TT_FATAL(!tensor.memory_config().is_l1(), "Weight tensor must not be in L1 memory");
-    } else {
-        TT_FATAL(!tensor.memory_config().is_l1(), "Input tensor must not be in L1 memory for folding");
-    }
+    TT_FATAL(!tensor.memory_config().is_l1(), "Input tensor must not be in L1 memory for folding");
     TT_FATAL(
         padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0,
         "Padding must be 0 for folding");
@@ -1067,16 +1059,8 @@ ttnn::Tensor fold_tensor(
         tensor_on_device = ttnn::to_device(tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
     }
 
-    if (is_weight_tensor) {
-        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({0, 2, 3, 1}));
-    }
-
     // Core folding operation
-    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1]);
-
-    if (is_weight_tensor) {
-        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({0, 3, 1, 2}));
-    }
+    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, 0, 0, 0);
 
     return tensor_on_device;
 }
@@ -1097,13 +1081,16 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     input_width = input_width / stride[1];
     in_channels = in_channels * stride[0] * stride[1];
 
+    auto kernel_h = (kernel_size[0] + kernel_size[0] % stride[0]) / stride[0];
+    auto kernel_w = (kernel_size[1] + kernel_size[1] % stride[1]) / stride[1];
+
     return KernelStrideFoldingResult{
         .input_height = input_height,
         .input_width = input_width,
         .in_channels = in_channels,
         .stride = {1, 1},
-        .kernel_size = {1, 1},
-        .mm_conv = true};
+        .kernel_size = {kernel_h, kernel_w},
+        .mm_conv = (kernel_size[0] == stride[0] && kernel_size[1] == stride[1])};
 }
 
 template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config<IDevice>(
@@ -1183,8 +1170,7 @@ template ttnn::Tensor fold_tensor<IDevice>(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype,
-    bool is_weight_tensor);
+    std::optional<DataType> dtype);
 
 template ttnn::Tensor fold_tensor<MeshDevice>(
     const ttnn::Tensor& tensor,
@@ -1192,8 +1178,7 @@ template ttnn::Tensor fold_tensor<MeshDevice>(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 4> padding_n4,
-    std::optional<DataType> dtype,
-    bool is_weight_tensor);
+    std::optional<DataType> dtype);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
     tt::stl::reflection::operator<<(os, config);
