@@ -162,12 +162,6 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
         tt::watcher_clear_log();
 
-        // Need to reset watcher in case the previous test left it in a bad state
-        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        for (unsigned int id = 0; id < num_devices; id++) {
-            watcher_init(id);
-        }
-
         // Parent class initializes devices and any necessary flags
         DebugToolsFixture::SetUp();
     }
