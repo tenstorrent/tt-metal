@@ -43,11 +43,10 @@ extern uint32_t stackSize;
 extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
 
-constexpr uint32_t PROFILER_PUSH_TIME_OUT = 100000;
+constexpr uint32_t PROFILER_PUSH_TIME_OUT = 1000;
 constexpr uint32_t NOC_PUSH_MARKER_COUNT = 2;
 constexpr int WALL_CLOCK_HIGH_INDEX = 1;
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
-constexpr uint32_t ALL_DATA_SENT = PROFILER_L1_VECTOR_SIZE + 1;
 
 #if !defined(COMPILE_FOR_TRISC)
 extern uint32_t core_flat_id;
@@ -148,8 +147,9 @@ __attribute__((noinline)) void init_profiler(
     profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = 0;
     stackSize = 0;
 
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
     profiler_control_buffer[PROFILER_DONE] = 0;
+    profiler_control_buffer[DEVICE_BUFFER_READ_BITMASK] = 0;
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
 
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
         for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
@@ -213,17 +213,6 @@ inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValu
     }
 }
 
-inline __attribute__((always_inline)) void set_profiler_zone_valid(bool condition) {
-    profiler_control_buffer[PROFILER_DONE] = !condition;
-}
-
-inline __attribute__((always_inline)) void risc_finished_profiling() {
-    for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
-        mark_padding();
-    }
-    profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
-}
-
 template <bool RECORD_ZONE = true>
 __attribute__((noinline)) void finish_profiler() {
     if constexpr (RECORD_ZONE) {
@@ -234,9 +223,17 @@ __attribute__((noinline)) void finish_profiler() {
         mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
     }
-    risc_finished_profiling();
-    profiler_control_buffer[PROFILER_DONE] = 1;
+
+    for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
+        mark_padding();
+    }
+
+    profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
+    profiler_control_buffer[DEVICE_BUFFER_READ_BITMASK] =
+        profiler_control_buffer[DEVICE_BUFFER_READ_BITMASK] & ~(1 << myRiscID);
+
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
+    profiler_control_buffer[PROFILER_DONE] = 1;  // Letting BRISC know their data is ready to be pushed
 #else
 
 // Dispatch core might get to finish
@@ -248,20 +245,21 @@ __attribute__((noinline)) void finish_profiler() {
 
     profiler_data_buffer[myRiscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
 #endif
-    NocDestinationStateSaver noc_state;
 
+    NocDestinationStateSaver noc_state;
     constexpr uint32_t startRisc = myRiscID;
 #if defined(COMPILE_FOR_BRISC)
     // Send all riscs
-    constexpr uint32_t endRisc = PROFILER_RISC_COUNT;
+    constexpr uint32_t endRisc = myRiscID + PROFILER_RISC_COUNT;
 #else
     constexpr uint32_t endRisc = myRiscID + 1;
 #endif
 
-    for (uint32_t riscID = startRisc; riscID < endRisc; riscID++) {
+    for (uint32_t riscID = 0; riscID < 1; riscID++) {
         int hostIndex = riscID;
         int deviceIndex = DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
-        if (profiler_control_buffer[deviceIndex]) {
+        if (profiler_control_buffer[deviceIndex] > 0 &&
+            profiler_control_buffer[deviceIndex] < PROFILER_L1_VECTOR_SIZE) {
             uint32_t currEndIndex = profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
 
             bool do_noc = false;
@@ -291,14 +289,15 @@ __attribute__((noinline)) void finish_profiler() {
 
                 profiler_noc_async_write_posted(
                     reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex]), dram_bank_dst_noc_addr, send_size);
+                profiler_control_buffer[DEVICE_BUFFER_READ_BITMASK] =
+                    profiler_control_buffer[DEVICE_BUFFER_READ_BITMASK] | (1 << riscID);
             }
-            profiler_control_buffer[deviceIndex] = ALL_DATA_SENT;
         }
     }
 
     profiler_noc_async_flush_posted_write();
-#endif
     profiler_control_buffer[PROFILER_DONE] = 0;
+#endif
     wIndex = CUSTOM_MARKERS;
 }
 
@@ -323,10 +322,10 @@ struct scopePush {
 #else
         if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (NOC_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
             // This risc did request a noc push so wait until its data is pushed
-            while (profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] != ALL_DATA_SENT) {
+            while (!((profiler_control_buffer[DEVICE_BUFFER_READ_BITMASK] >> myRiscID) & 0x01)) {
             }
             wIndex = CUSTOM_MARKERS;
-        } else if (profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] == ALL_DATA_SENT) {
+        } else if (((profiler_control_buffer[DEVICE_BUFFER_READ_BITMASK] >> myRiscID) & 0x01)) {
             // This risc did not request a noc push but its data might have been sent so flush the buffer
             wIndex = CUSTOM_MARKERS;
         }

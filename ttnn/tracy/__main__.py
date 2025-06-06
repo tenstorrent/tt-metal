@@ -91,6 +91,13 @@ def main():
         help="Exit the run and do not attempt post processing if the test command fails",
         default=False,
     )
+    parser.add_option(
+        "--experimental-profiler-v2",
+        dest="experimental_profiler_v2",
+        action="store_true",
+        help="Try the run with profiler version 2 which only pushes L1 buffer to DRAM when full",
+        default=False,
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -133,6 +140,9 @@ def main():
 
     if options.sync_host_device:
         os.environ["TT_METAL_PROFILER_SYNC"] = "1"
+
+    if options.experimental_profiler_v2:
+        os.environ["TT_METAL_PROFILER_EXPERIMENTAL"] = "1"
 
     if options.collect_noc_traces:
         os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS"] = "1"
