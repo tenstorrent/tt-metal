@@ -77,7 +77,6 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
 
     ttnn::Shape output_tensor_shape(std::move(out_shape));
     auto tensor_layout = TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::ROW_MAJOR), this->output_mem_config);
-    tt::log_info("Tensor Layout : {}", tensor_layout);
     return {ttnn::TensorSpec(output_tensor_shape, tensor_layout)};
 }
 

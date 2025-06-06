@@ -67,6 +67,7 @@ void kernel_main() {
 #endif
 
     const uint32_t output_end_width_in_input = output_end[1] + output_start_in_input[1];
+    uint32_t row_count = 0;
     while (tiles_read < total_num_tiles) {
         uint32_t width_start_in_input = output_start_in_input[1] + output_coord[1];
         uint32_t width_tile_start_in_input = round_down(width_start_in_input, ckernel::TILE_HEIGHT);
@@ -77,17 +78,22 @@ void kernel_main() {
         if (width_tile_end_in_input > output_end_width_in_input) {
             read_rows_size -= (width_tile_end_in_input - output_end_width_in_input);
         }
-        print_a4("Output Coord", output_coord);
 
-        DPRINT << "Width Start in Input: " << width_start_in_input << ", Width Tile Start in Input: "
-               << width_tile_start_in_input
-               //     << ", Width Tile End in Input: " << width_tile_end_in_input
+#ifdef DEBUG
+        print_a4("Output Coord", output_coord);
+        DPRINT << "Width Start in Input: " << width_start_in_input
+               << ", Width Tile Start in Input: " << width_tile_start_in_input
                << ", Read Start Offset: " << read_start_offset << ", Read Rows Size: " << read_rows_size << ENDL();
+#endif
         cb_wait_front(cb_untilized_id, num_tiles_per_read);
         uint64_t noc_read_addr = get_noc_addr(get_read_ptr(cb_untilized_id));
         noc_read_addr += read_start_offset * block_row_size;
         noc_async_read(noc_read_addr, write_addr, read_rows_size * block_row_size);
-        noc_async_read_barrier();
+        row_count++;
+        if (row_count == 4) {
+            noc_async_read_barrier();
+            row_count = 0;
+        }
         write_addr += read_rows_size * block_row_size;
         cb_pop_front(cb_untilized_id, num_tiles_per_read);
         tiles_read += num_tiles_per_read;

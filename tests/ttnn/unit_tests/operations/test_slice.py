@@ -1087,9 +1087,13 @@ def test_ttnn_slice_whisper(
         [[2, 100, 100, 32], 50, 64],
         [[2, 512, 256, 32], 128, 64],
         [[2, 256, 128, 64], 32, 8],
-        # [[2, 256, 256, 37], 64, 64],
-        # [[2, 8, 8, 32], 2, 4],
-        # [[2, 8, 16, 2], 2, 8],
+        [[2, 67, 35, 64], 14, 8],
+        [[2, 256, 256, 37], 64, 64],
+        [[2, 312, 489, 100], 53, 64],
+        [[2, 255, 255, 63], 37, 64],
+        [[2, 299, 299, 99], 99, 64],
+        [[2, 8, 8, 32], 2, 4],
+        [[2, 8, 16, 2], 2, 8],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -1107,7 +1111,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
     torch.manual_seed(2001)
     torch_input = torch.randint(-10, 10, dims).to(dtype=torch.bfloat16)
     # torch_input = torch.tensor(range(dims[1])).reshape([1, dims[1], 1, 1]).broadcast_to(dims).to(dtype=torch.bfloat16)
-    torch_input = torch.tensor(range(dims[2])).reshape([1, 1, dims[2], 1]).broadcast_to(dims).to(dtype=torch.bfloat16)
+    # torch_input = torch.tensor(range(dims[2])).reshape([1, 1, dims[2], 1]).broadcast_to(dims).to(dtype=torch.bfloat16)
 
     core_range = ttnn.num_cores_to_corerangeset(cores, core_grid, orientation == ttnn.ShardOrientation.ROW_MAJOR)
     num_slices = dims[slice_dim] // slice_size
