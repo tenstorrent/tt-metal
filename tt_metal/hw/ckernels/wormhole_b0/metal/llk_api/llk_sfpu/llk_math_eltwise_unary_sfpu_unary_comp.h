@@ -55,7 +55,7 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_gt_int32(
     uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp_unary_int<APPROXIMATE, SfpuType::unary_gt>, dst_index, vector_mode, param0);
+        ckernel::sfpu::_calculate_comp_unary_int_<APPROXIMATE, SfpuType::unary_gt>, dst_index, vector_mode, param0);
 }
 
 template <bool APPROXIMATE>
@@ -74,7 +74,7 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_lt_int32(
     uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_comp_unary_int<APPROXIMATE, SfpuType::unary_lt>, dst_index, vector_mode, param0);
+        ckernel::sfpu::_calculate_comp_unary_int_<APPROXIMATE, SfpuType::unary_lt>, dst_index, vector_mode, param0);
 }
 
 template <bool APPROXIMATE>
