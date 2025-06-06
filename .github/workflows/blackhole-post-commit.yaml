@@ -101,6 +101,7 @@ jobs:
       runner-label: ${{ inputs.runner-label || 'BH' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      timeout: 25
   sd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml
@@ -141,16 +142,16 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/models-post-commit.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { runner-label: P100 },
-          { runner-label: P150 },
-        ]
+    # strategy:
+    #   fail-fast: false
+    #   matrix:
+    #     test-group: [
+    #       { runner-label: P100 },
+    #       { runner-label: P150 },
+    #     ]
     with:
       arch: blackhole
-      runner-label: ${{ matrix.test-group.runner-label }}
+      runner-label: ${{ inputs.runner-label || 'BH' }}
       timeout: 20
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -160,14 +161,14 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     with:
-      runner-label: BH
+      runner-label: ${{ inputs.runner-label || 'BH' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   ttnn-unit-tests:
     needs: build-artifact
-    if: ${{ inputs.enable-ttnn-unit-tests }}
+    # if: ${{ inputs.enable-ttnn-unit-tests }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
@@ -181,34 +182,56 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { runner-label: P100 },
-          { runner-label: P150 },
-        ]
+    # strategy:
+    #   fail-fast: false
+    #   matrix:
+    #     test-group: [
+    #       { runner-label: P100 },
+    #       { runner-label: P150 },
+    #     ]
     with:
       arch: blackhole
-      runner-label: ${{ matrix.test-group.runner-label }}
+      runner-label: ${{ inputs.runner-label || 'BH' }}
       timeout: 45
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   smoke-tests:
     needs: build-artifact
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [
-          "P100",
-          "P150",
-        ]
+    # strategy:
+    #   fail-fast: false
+    #   matrix:
+    #     platform: [
+    #       "P100",
+    #       "P150",
+    #     ]
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      runner: ${{ matrix.platform }}
+      runner: ${{ inputs.runner-label || 'BH' }}
+
+  fabric-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  t3000-fast-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      extra-tag: ${{ inputs.runner-label || 'BH' }}
+
 #   build-and-test-wheels:
 #     uses: Check all-post-commit yaml for directions
 #     secrets: inherit

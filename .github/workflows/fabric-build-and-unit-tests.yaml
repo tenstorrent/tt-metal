@@ -32,6 +32,7 @@ jobs:
       matrix:
         test-group: [
           {name: fabric unit tests, cmd: ./tests/scripts/run_cpp_fabric_tests.sh },
+          {name: fabric system health tests, cmd: ./build/test/tt_metal/tt_fabric/test_system_health },
         ]
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on: >-
