@@ -167,9 +167,9 @@ KernelHandle FDKernel::configure_kernel_variant(
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (!DPrintServerReadsDispatchCores(device_->id())) {
-        defines["FORCE_DPRINT_OFF"] = "1";
-    }
+    // if (!DPrintServerReadsDispatchCores(device_->id())) {
+    //     defines["FORCE_DPRINT_OFF"] = "1";
+    // }
     defines.insert(defines_in.begin(), defines_in.end());
 
     if (GetCoreType() == CoreType::WORKER) {
