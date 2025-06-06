@@ -141,7 +141,7 @@ class TtLlamaMLP(LightweightModule):
             self.w3,
             w1_out,
             cluster_axis=1,
-            num_links=4 if is_6U_RING else 3,
+            num_links=4 if is_RING_6U else 3,
             RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp

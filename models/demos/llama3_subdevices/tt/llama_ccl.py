@@ -602,7 +602,7 @@ class TT_CCL:
             program_config=program_config,
             memory_config_mm=memory_config,
             global_cb=global_cb,
-            topology=ttnn.Topology.Ring if is_6U_RING else ttnn.Topology.Linear,
+            topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
