@@ -46,6 +46,21 @@ struct ConditionalBuffer {
 template <std::size_t N, typename T>
 struct ConditionalBuffer<false, T, N> {};
 
+template <bool Emable, typename T = void>
+struct ConditionalField {
+    T value;
+    template <typename T_>
+    ConditionalField(T_&& val) : value(std::forward<T_>(val)) {}
+    ConditionalField() = default;
+};
+
+template <typename T>
+struct ConditionalField<false, T> {
+    template <typename T_>
+    ConditionalField(T_&& val) {}  // Ignore value if passed to constructor
+    ConditionalField() = default;
+};
+
 // Trait to detect operator[]
 template <typename, typename = void>
 struct has_subscript_operator : std::false_type {};

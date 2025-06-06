@@ -20,9 +20,10 @@ void kernel_main() {
     constexpr uint32_t cb_id = get_compile_time_arg_val(new_base_idx_cta);
     // TODO: Expose generic interface to get page size for cb operand
     // - get_tile_size(cb_id) only works for tile layout
-    constexpr uint32_t page_size = get_compile_time_arg_val(new_base_idx_cta + 1);
+    // In reaser page size is a common runtime argument
+    uint32_t page_size = get_common_arg_val<uint32_t>(new_base_idx_crta);
 
-    auto sharded_accessor = nd_sharding::ShardedAccessor<input_dspec, page_size>(bank_base_address);
+    auto sharded_accessor = nd_sharding::ShardedAccessor<input_dspec>(bank_base_address, page_size);
     constexpr uint32_t rank = sharded_accessor.get_dspec().get_rank();
     constexpr uint32_t num_banks = sharded_accessor.get_dspec().get_num_banks();
 

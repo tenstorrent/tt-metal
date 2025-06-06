@@ -20,6 +20,7 @@ void kernel_main() {
     constexpr uint32_t cb_id = get_compile_time_arg_val(new_base_idx_cta);
     // TODO: Expose generic interface to get page size for cb operand
     // - get_tile_size(cb_id) only works for tile layout
+    // In writer page size is a compile-time argument
     constexpr uint32_t page_size = get_compile_time_arg_val(new_base_idx_cta + 1);
 
     auto sharded_accessor = nd_sharding::ShardedAccessor<output_dspec, page_size>(bank_base_address);

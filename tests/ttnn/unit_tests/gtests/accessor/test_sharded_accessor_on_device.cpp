@@ -182,7 +182,6 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             input_sharded_accessor_args.compile_time_args.cbegin(),
             input_sharded_accessor_args.compile_time_args.cend());
         input_compile_time_args.push_back(cb_in0_idx);
-        input_compile_time_args.push_back(aligned_page_size);
 
         // Set up compile-time args for writer kernel
         const auto& output_buffer_distribution_spec =
@@ -227,6 +226,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             input_runtime_args.end(),
             input_sharded_accessor_args.runtime_args.cbegin(),
             input_sharded_accessor_args.runtime_args.cend());
+        input_runtime_args.push_back(aligned_page_size);  // Reader has page size as runtime, writer as compile-time arg
         SetCommonRuntimeArgs(program, reader_kernel_id, input_runtime_args);
 
         // Set up runtime args for writer kernel

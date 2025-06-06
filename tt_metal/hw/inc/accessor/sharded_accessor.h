@@ -35,41 +35,54 @@ constexpr size_t runtime_args_skip() {
            (DSpec::fetch_num_banks() * !DSpec::BankCoordsT::is_static);
 }
 
-template <typename DSpec, size_t PageSize>
+template <typename DSpec, size_t PageSize = detail::UNKNOWN>
 struct ShardedAccessor {
-    static constexpr auto page_size = PageSize;
+    static constexpr auto page_size_ct = PageSize;
     static constexpr DSpec static_dspec{};  // Used only if DSpec is static
 
-    const size_t bank_base_address;
-    std::conditional_t<DSpec::is_static, std::monostate, DSpec> dspec_instance;  // Used only if DSpec is not static
     detail::ConditionalBuffer<!DSpec::has_static_rank, uint32_t, MAX_RANK> _page_coord_buffer;
+    detail::ConditionalField<!DSpec::is_static, DSpec> dspec_instance;  // Used only if DSpec is static
+    const size_t bank_base_address;
+    const detail::ConditionalField<PageSize == detail::UNKNOWN, uint32_t> page_size_rt;
 
-    constexpr explicit ShardedAccessor(const DSpec& dspec, const size_t bank_base_address_in) :
-        dspec_instance(dspec), bank_base_address(bank_base_address_in) {}
+    constexpr explicit ShardedAccessor(
+        const DSpec& dspec, const size_t bank_base_address_in, uint32_t page_size_in = 0) :
+        dspec_instance(dspec), bank_base_address(bank_base_address_in), page_size_rt(page_size_in) {}
 
-    constexpr explicit ShardedAccessor(DSpec&& dspec, const size_t bank_base_address_in) :
-        dspec_instance(std::move(dspec)), bank_base_address(bank_base_address_in) {}
+    constexpr explicit ShardedAccessor(DSpec&& dspec, const size_t bank_base_address_in, uint32_t page_size_in = 0) :
+        dspec_instance(std::move(dspec)), bank_base_address(bank_base_address_in), page_size_rt(page_size_in) {}
 
     template <
         typename DSpec_ = DSpec,
         std::enable_if_t<(DSpec_::is_static or DSpec_::ArgumentsLocation::CRTA_BASE == static_cast<size_t>(-1)), int> =
             0>
-    ShardedAccessor(const size_t bank_base_address_in = 0) : bank_base_address(bank_base_address_in) {}
+    ShardedAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
+        bank_base_address(bank_base_address_in), page_size_rt(page_size_in) {}
 
     template <
         typename DSpec_ = DSpec,
         std::enable_if_t<
             (!DSpec_::is_static and DSpec_::ArgumentsLocation::CRTA_BASE != static_cast<size_t>(-1)),
             int> = 0>
-    constexpr explicit ShardedAccessor(const size_t bank_base_address_in) :
-        bank_base_address(bank_base_address_in), dspec_instance(detail::build_dspec_from_args<DSpec>()) {}
+    constexpr explicit ShardedAccessor(const size_t bank_base_address_in, uint32_t page_size_in = 0) :
+        dspec_instance(detail::build_dspec_from_args<DSpec>()),
+        bank_base_address(bank_base_address_in),
+        page_size_rt(page_size_in) {}
 
     // Helper to get the appropriate DSpec instance
     constexpr auto& get_dspec() const {
         if constexpr (DSpec::is_static) {
             return static_dspec;
         } else {
-            return dspec_instance;
+            return dspec_instance.value;
+        }
+    }
+
+    constexpr auto get_page_size() const {
+        if constexpr (page_size_ct != detail::UNKNOWN) {
+            return page_size_ct;
+        } else {
+            return page_size_rt.value;
         }
     }
 
@@ -81,17 +94,17 @@ struct ShardedAccessor {
         return NOC_XY_ADDR(
             DYNAMIC_NOC_X(noc, (packed_xy_coords[bank_id] >> 16) & 0xFFFF),
             DYNAMIC_NOC_Y(noc, packed_xy_coords[bank_id] & 0xFFFF),
-            bank_base_address + bank_offset * page_size);
+            bank_base_address + bank_offset * get_page_size());
     }
 
     FORCE_INLINE
     void noc_async_read_page(const uint32_t id, const uint32_t dest_addr, uint8_t noc = noc_index) const {
-        noc_async_read(get_noc_addr(id, noc), dest_addr, page_size, noc);
+        noc_async_read(get_noc_addr(id, noc), dest_addr, get_page_size(), noc);
     }
 
     FORCE_INLINE
     void noc_async_write_page(const uint32_t id, const uint32_t src_addr, uint8_t noc = noc_index) const {
-        noc_async_write(src_addr, get_noc_addr(id, noc), page_size, noc);
+        noc_async_write(src_addr, get_noc_addr(id, noc), get_page_size(), noc);
     }
 
     // Helpers
