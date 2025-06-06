@@ -1,3 +1,30 @@
+# All to All Core Data Movement Tests
+
+This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions between Tensix cores.
+
+## Test Flow
+
+L1 space is allocated on all Tensix cores involved in the data movement test. Based on a given number of reservable pages, they are designated as either master pages or receiver pages.
+
+For example, if 64 pages of space are declared reservable and the master grid size is 2x2, then the page allocation is calculated as follows:
+- Number of reservable pages: 64
+- Number of master cores: 4 (2x2 grid)
+num_sender_pages = num_reservable_pages / (1 + num_master_cores) = 64 / (1 + 4) = 12.8, rounded down to 12
+num_receiver_pages = num_rservable_pages * num_master_cores = 48
+16 pages are reserved for each master core and 48 pages are reserved for each receiver core.
+
+## Test Parameters
+| Parameter                 | Data Type             | Description |
+| ------------------------- | --------------------- | ----------- |
+[insert contents into table]
+
+## Test Cases
+[insert preceding description]
+
+1. **All to All Multicast 2x2 Packet Sizes**:
+
+---
+
 # One to all Core Data Movement Tests
 
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions between Tensix cores.
@@ -39,24 +66,3 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 7. One to All Multicast Linked 2x2 Packet Sizes: Tests one to all linked multicast on a 2x2 grid.
 8. One to All Multicast Linked 5x5 Packet Sizes: Tests one to all linked multicast on a 5x5 grid.
 9. One to All Multicast Linked 11x10 Packet Sizes: Tests one to all linked multicast on a 11x10 grid.
-
-
----
-
-
-# All to All Core Data Movement Tests
-
-[insert description]
-
-## Test Flow
-[insert description]
-
-## Test Parameters
-| Parameter                 | Data Type             | Description |
-| ------------------------- | --------------------- | ----------- |
-[insert contents into table]
-
-## Test Cases
-[insert preceding description]
-
-1. **All to All Multicast 2x2 Packet Sizes**:

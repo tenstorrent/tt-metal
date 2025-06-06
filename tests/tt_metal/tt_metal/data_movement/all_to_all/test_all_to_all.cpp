@@ -30,8 +30,8 @@ struct AllToAllConfig {
     CoreCoord sub_grid_size = CoreCoord();
 
     /* Transaction size configurations */
-    uint32_t num_of_transactions = 1;
-    uint32_t pages_per_transaction = 1;
+    uint32_t num_of_transactions_per_master = 1;
+    uint32_t pages_reservable_per_transaction = 1;
     uint32_t bytes_per_page = 32;
 
     /* Write configurations */
@@ -84,8 +84,6 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         sub_logical_start_coord.y + test_config.sub_grid_size.y - 1);
 
     CoreRangeSet sub_logical_core_set({CoreRange(sub_logical_start_coord, sub_logical_end_coord)});
-    sub_logical_core_set =
-        sub_logical_core_set.subtract(mst_logical_core_set);  // Remove master cores from the subordinate core set
     uint32_t num_subordinates = sub_logical_core_set.num_cores();
 
     // Subordinate Worker Coordinates
@@ -101,23 +99,27 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
 
     // Determine pages per transaction for the master and subordinate cores
 
-    const size_t pages_per_transaction_per_master = test_config.pages_per_transaction / num_masters;
-    const size_t bytes_per_transaction_per_master = pages_per_transaction_per_master * test_config.bytes_per_page;
-    const size_t total_size_bytes_per_master = bytes_per_transaction_per_master * test_config.num_of_transactions;
-    if (pages_per_transaction_per_master == 0) {
+    const size_t pages_sent_per_transaction_per_master =
+        test_config.pages_reservable_per_transaction / (num_masters + 1);
+    if (pages_sent_per_transaction_per_master == 0) {
+        log_warning("Pages sent per transaction per master is 0. Skipping the current set of configurations.");
         return 1;
     }
+    const size_t bytes_sent_per_transaction_per_master =
+        pages_sent_per_transaction_per_master * test_config.bytes_per_page;
+    const size_t total_size_bytes_per_master =
+        bytes_sent_per_transaction_per_master * test_config.num_of_transactions_per_master;
 
-    const size_t pages_per_transaction = pages_per_transaction_per_master * num_masters;
-    const size_t bytes_per_transaction = pages_per_transaction * test_config.bytes_per_page;
-    const size_t total_size_bytes = bytes_per_transaction * test_config.num_of_transactions;
+    const size_t pages_received_per_transaction = pages_sent_per_transaction_per_master * num_masters;
+    const size_t bytes_received_per_transaction = pages_received_per_transaction * test_config.bytes_per_page;
+    const size_t total_size_bytes_received =
+        bytes_received_per_transaction * test_config.num_of_transactions_per_master;
 
     // Obtain L1 Address for Storing Data
 
     L1AddressInfo core_l1_info = tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, {0, 0});
-    uint32_t l1_base_address = core_l1_info.base_address;
-
-    // TO-DO: Make adjustments for LOOPBACK COMPATIBILITY
+    uint32_t mst_l1_base_address = core_l1_info.base_address;
+    uint32_t sub_l1_base_address = mst_l1_base_address + total_size_bytes_per_master;
 
     // Possible To-Do: Implement checks to see that the needed space is available in all master and subordinate cores
 
@@ -129,11 +131,12 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         //     0: Test ID
         (uint32_t)test_config.test_id,  // test_id
         // 1 - 2: L1 Addresses
-        (uint32_t)l1_base_address,
+        (uint32_t)mst_l1_base_address,
+        (uint32_t)sub_l1_base_address,
         (uint32_t)total_size_bytes_per_master,  // subordinate L1 address offset
         // 3 - 4: Transaction parameters
-        (uint32_t)test_config.num_of_transactions,   // num_of_transactions
-        (uint32_t)bytes_per_transaction_per_master,  // transaction_size_bytes
+        (uint32_t)test_config.num_of_transactions_per_master,  // num_of_transactions
+        (uint32_t)bytes_sent_per_transaction_per_master,       // transaction_size_bytes
         //     5: Subordinate count
         (uint32_t)num_subordinates,  // num_subordinates
     };
@@ -181,7 +184,7 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
     packed_input.reserve(total_size_bytes_per_master / sizeof(uint32_t));
 
     std::vector<uint32_t> packed_golden;
-    packed_golden.reserve(total_size_bytes / sizeof(uint32_t));
+    packed_golden.reserve(total_size_bytes_received / sizeof(uint32_t));
 
     // Generate random input data for each master core
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
@@ -200,7 +203,7 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
             true  // Slide is false to ensure consistent increments
         );*/
 
-        tt_metal::detail::WriteToDeviceL1(device, mst_logical_core, l1_base_address, packed_input);
+        tt_metal::detail::WriteToDeviceL1(device, mst_logical_core, mst_l1_base_address, packed_input);
         MetalContext::instance().get_cluster().l1_barrier(device->id());
 
         packed_golden.insert(packed_golden.end(), packed_input.begin(), packed_input.end());
@@ -210,12 +213,13 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
     detail::LaunchProgram(device, program);
 
     std::vector<uint32_t> packed_output;
-    packed_output.reserve(total_size_bytes / sizeof(uint32_t));
+    packed_output.reserve(total_size_bytes_received / sizeof(uint32_t));
 
     bool pcc = false;
 
     for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
-        tt_metal::detail::ReadFromDeviceL1(device, sub_logical_core, l1_base_address, total_size_bytes, packed_output);
+        tt_metal::detail::ReadFromDeviceL1(
+            device, sub_logical_core, sub_l1_base_address, total_size_bytes_received, packed_output);
 
         // Results comparison
         pcc = is_close_packed_vectors<bfloat16, uint32_t>(
@@ -237,18 +241,6 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
 /* =============================================================  /
 /  ========== TEST CASES FOR ALL-TO-ALL DATA MOVEMENT ==========  /
 /  ============================================================= */
-
-std::tuple<uint32_t, uint32_t> obtain_all_to_all_physical_constraints(tt::ARCH arch, CoreCoord& mst_grid_size) {
-    // Physical Constraints
-    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch);
-
-    uint32_t num_master_cores = mst_grid_size.x * mst_grid_size.y;
-
-    max_transmittable_bytes = max_transmittable_bytes * num_master_cores / (num_master_cores + 1);
-    max_transmittable_pages = max_transmittable_pages * num_master_cores / (num_master_cores + 1);
-
-    return {bytes_per_page, max_transmittable_pages};
 
     /*
 
@@ -278,20 +270,21 @@ std::tuple<uint32_t, uint32_t> obtain_all_to_all_physical_constraints(tt::ARCH a
 
         NOC noc_id = NOC::NOC_0;
 
-        // Physical Constraints
-        auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_);
+        auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
+            tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
         /* Running the Test */
 
-        uint32_t max_transactions = 256;
-        uint32_t max_pages_per_transaction = 4096;  // Pages to be stored by each subordinate core
+        uint32_t max_transactions_per_master = 256;
+        uint32_t max_reservable_pages_per_transaction = 4096;
 
-        for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
-            for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
-                 pages_per_transaction *= 2) {
+        for (uint32_t num_of_transactions_per_master = 1; num_of_transactions_per_master <= max_transactions_per_master;
+             num_of_transactions_per_master *= 4) {
+            for (uint32_t pages_reservable_per_transaction = 1;
+                 pages_reservable_per_transaction <= max_reservable_pages_per_transaction;
+                 pages_reservable_per_transaction *= 2) {
                 // Check if the total data size is within the limits
-                if (num_of_transactions * pages_per_transaction > max_transmittable_pages) {
+                if (num_of_transactions_per_master * pages_reservable_per_transaction > max_reservable_pages) {
                     continue;
                 }
 
@@ -305,8 +298,8 @@ std::tuple<uint32_t, uint32_t> obtain_all_to_all_physical_constraints(tt::ARCH a
                     .mst_grid_size = mst_grid_size,
                     .sub_grid_size = sub_grid_size,
 
-                    .num_of_transactions = num_of_transactions,
-                    .pages_per_transaction = pages_per_transaction,
+                    .num_of_transactions_per_master = num_of_transactions_per_master,
+                    .pages_reservable_per_transaction = pages_reservable_per_transaction,
                     .bytes_per_page = bytes_per_page,
 
                     .l1_data_format = DataFormat::Float16_b,
@@ -335,13 +328,12 @@ std::tuple<uint32_t, uint32_t> obtain_all_to_all_physical_constraints(tt::ARCH a
         NOC noc_id = NOC::NOC_0;
 
         // Physical Constraints
-        auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_);
-
+        auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
+            tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
         /* Running the Test */
 
-        uint32_t num_of_transactions = 1;
-        uint32_t pages_per_transaction = max_transmittable_pages / num_of_transactions;
+        uint32_t num_of_transactions_per_master = 1;
+        uint32_t pages_reservable_per_transaction = max_reservable_pages / num_of_transactions_per_master;
 
         // Test config
         unit_tests::dm::all_to_all::AllToAllConfig test_config = {
@@ -353,8 +345,8 @@ std::tuple<uint32_t, uint32_t> obtain_all_to_all_physical_constraints(tt::ARCH a
             .mst_grid_size = mst_grid_size,
             .sub_grid_size = sub_grid_size,
 
-            .num_of_transactions = num_of_transactions,
-            .pages_per_transaction = pages_per_transaction,
+            .num_of_transactions_per_master = num_of_transactions_per_master,
+            .pages_reservable_per_transaction = pages_reservable_per_transaction,
             .bytes_per_page = bytes_per_page,
 
             .l1_data_format = DataFormat::Float16_b,
@@ -397,7 +389,7 @@ std::tuple<uint32_t, uint32_t> obtain_all_to_all_physical_constraints(tt::ARCH a
         /* Parameters */
 
         CoreCoord mst_start_coord = {0, 0};
-        CoreCoord sub_start_coord = {4, 4};
+        CoreCoord sub_start_coord = {0, 0};
 
         CoreCoord mst_grid_size = {4, 4};
         CoreCoord sub_grid_size = {1, 1};
@@ -443,7 +435,7 @@ std::tuple<uint32_t, uint32_t> obtain_all_to_all_physical_constraints(tt::ARCH a
         /* Parameters */
 
         CoreCoord mst_start_coord = {0, 0};
-        CoreCoord sub_start_coord = {4, 4};
+        CoreCoord sub_start_coord = {0, 0};
 
         CoreCoord mst_grid_size = {1, 1};
         CoreCoord sub_grid_size = {4, 4};
@@ -466,7 +458,7 @@ std::tuple<uint32_t, uint32_t> obtain_all_to_all_physical_constraints(tt::ARCH a
         /* Parameters */
 
         CoreCoord mst_start_coord = {0, 0};
-        CoreCoord sub_start_coord = {4, 4};
+        CoreCoord sub_start_coord = {0, 0};
 
         CoreCoord mst_grid_size = {2, 2};
         CoreCoord sub_grid_size = {2, 2};

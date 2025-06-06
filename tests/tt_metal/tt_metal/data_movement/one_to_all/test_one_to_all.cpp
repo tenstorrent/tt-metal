@@ -552,7 +552,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllDirectedIdeal) {
 
     // Parameters
     /*
-        L1 Capacity: 1.5 MB (I think, might be wrong)
+        L1 Capacity: 1.5 MB
         - Max transaction size
             = 4 * 32 pages
             = 128 pages * 32 (or 64) bytes/page
@@ -610,7 +610,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
 
     // Parameters
     /*
-        L1 Capacity: 1.5 MB (I think, might be wrong)
+        L1 Capacity: 1.5 MB
         - Max transaction size
             = 4 * 32 pages
             = 128 pages * 32 (or 64) bytes/page

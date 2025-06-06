@@ -9,18 +9,19 @@
 void kernel_main() {
     // Compile-time arguments
     const uint32_t test_id = get_compile_time_arg_val(0);
-    const uint32_t l1_base_address = get_compile_time_arg_val(1);
-    const uint32_t total_size_bytes_per_master = get_compile_time_arg_val(2);
-    const uint32_t num_of_transactions = get_compile_time_arg_val(3);
-    const uint32_t bytes_per_transaction_per_master = get_compile_time_arg_val(4);
-    const uint32_t num_subordinates = get_compile_time_arg_val(5);
+    const uint32_t mst_l1_base_address = get_compile_time_arg_val(1);
+    const uint32_t sub_l1_base_address = get_compile_time_arg_val(2);
+    const uint32_t total_size_bytes_per_master = get_compile_time_arg_val(3);
+    const uint32_t num_of_transactions = get_compile_time_arg_val(4);
+    const uint32_t bytes_per_transaction_per_master = get_compile_time_arg_val(5);
+    const uint32_t num_subordinates = get_compile_time_arg_val(6);
 
     // Runtime arguments
     const uint32_t master_index = get_arg_val<uint32_t>(0);
 
     // Derivative values
-    uint32_t master_l1_local_address = l1_base_address;
-    uint32_t subordinate_l1_local_address = l1_base_address + (master_index * total_size_bytes_per_master);
+    uint32_t master_l1_local_address = mst_l1_base_address;
+    uint32_t subordinate_l1_local_address = sub_l1_base_address + (master_index * total_size_bytes_per_master);
 
     uint32_t subordinate_x_coord;
     uint32_t subordinate_y_coord;
