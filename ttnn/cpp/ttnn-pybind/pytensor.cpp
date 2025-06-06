@@ -464,14 +464,7 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
         }
     };
 
-    auto copy_if_borrowed = [](const HostBuffer& buffer) {
-        if (buffer.is_borrowed()) {
-            return buffer.deep_copy();
-        }
-        return buffer;
-    };
-
-    return copy_if_borrowed(convert_to_logical(std::visit(
+    return convert_to_logical(std::visit(
         tt::stl::overloaded{
             [](const HostStorage& storage) { return storage.buffer; },
             [](const MultiDeviceHostStorage& storage) {
@@ -484,7 +477,7 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
                     tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
             },
         },
-        tt_tensor.get_storage())));
+        tt_tensor.get_storage()));
 }
 
 py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool padded_output = false) {
