@@ -120,7 +120,7 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
     return ConstraintQueryResponse{
         ExecutionStatus::Success,
         {cb_peak_size_per_core, l1_buffers_peak_per_core, l1_output_buffer_per_core},
-        output.get_tensor_spec()};
+        output.tensor_spec()};
 }
 
 }  // namespace ttnn::graph
