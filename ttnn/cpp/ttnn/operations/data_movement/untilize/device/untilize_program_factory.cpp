@@ -931,6 +931,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
         }
     }
 
+    // TODO: This memory calculation is a) outdated/inaccurate and needs to be fixed and b) needs
+    // to be moved up a few layers as the available memory may be different upon a program cache hit
+
     // Determine how much L1 space we can use for input and output CBs,
     // ensuring that we don't intrude into other L1 storage space
     uint32_t max_l1_size =
@@ -1161,7 +1164,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             };
         }
 
-        // Handle uneven input sharding width wise
+        // Handle uneven input sharding width wise (writer run-time arg)
         uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
         if (input_is_sharded) {
             bool is_last_input_shard_in_row = width_wise_input_block_index == num_input_blocks_across_width - 1;
@@ -1172,7 +1175,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             }
         }
 
-        // Handle uneven input sharding height wise
+        // Handle uneven input sharding height wise (writer run-time arg)
         uint32_t num_input_blocks_to_process = num_input_blocks_per_full_core;
         if (input_is_sharded) {
             uint32_t input_shard_height = a.shard_spec().value().shape[0];
@@ -1222,14 +1225,14 @@ operation::ProgramWithCallbacks untilize_multi_core(
             tile_start_index,
         };
 
-        // Handle uneven input sharding width wise
+        // Handle uneven input sharding width wise (writer run-time arg)
         // Note: Since cliff core is only applicable to interleaved input, this core
         // will never process an uneven shard (or any shard for that matter)
         uint32_t num_unpadded_cols_per_input_block = num_cols_per_input_block;
 
-        // Handle uneven input sharding height wise
+        // Handle uneven input sharding height wise (writer run-time arg)
         // Note: Since cliff core is only applicable to interleaved input, this core
-        // will neven process an uneven shard (or any shard for that matter)
+        // will never process an uneven shard (or any shard for that matter)
         uint32_t num_input_blocks_to_process = num_input_blocks_per_cliff_core;
 
         // Writer run-time args

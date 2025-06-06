@@ -44,7 +44,6 @@ void kernel_main() {
     const auto s = get_interleaved_addr_gen<dst_is_dram, output_stick_size_is_power_of_two>(
         dst_addr, output_stick_size, output_log_base_2_of_page_size);
 #endif
-    // TODO: (GR) num_cols_per_input_block = num_tiles_per_input_block * tile_width
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
         cb_wait_front(cb_id_out0, num_tiles_per_input_block);
@@ -53,7 +52,7 @@ void kernel_main() {
         // If the input is unevenly sharded width wise and we are processing a block in the
         // last shard width wise, we will not be writing the entire row of elements as the
         // last x elements will be garbage. Tracking the base address of the row allows us to
-        // easily increment the current read addr to the next row of elements.
+        // easily increment the current_read_addr to the next row of elements.
         uint32_t base_l1_read_addr = get_read_ptr(cb_id_out0);
 
         // Process each row of elements in the input block
@@ -62,8 +61,8 @@ void kernel_main() {
             uint32_t num_rows_already_processed = block_height_index * tile_height + j;
 
             // For width or block sharding, the input tensor may have more/less shards width wise compared
-            // to the output tensor. In the less case different sections of the row-major row in the input block
-            // may map to different output blocks. In both cases, we may be writing to the middle of an output page.
+            // to the output tensor. In the less case, different sequences of the row in the input block
+            // may map to different output shards. In both cases, we may be writing to the middle of an output page.
             uint32_t num_input_cols_processed = 0;
             while (num_input_cols_processed < num_unpadded_cols_per_input_block) {
                 // Index of the column that we are going to start writing elements to (relative to the entire tensor)
@@ -75,14 +74,14 @@ void kernel_main() {
                 uint32_t output_page_id =
                     num_rows_already_processed * num_output_blocks_across_width + output_page_id_within_row;
 
-                // Offset within page we're writing to
+                // Memory offset within page we're writing to
                 uint32_t num_cols_already_processed_in_output_block = write_col_index % num_cols_per_output_block;
                 uint32_t output_offset_within_page_in_bytes =
                     num_cols_already_processed_in_output_block * output_element_size;
 
                 // How many elements to write from the input block to the output block.
                 // Min of the number of remaining unprocessed columns in the input block
-                // and the number of remaining unprocessed columns in the output block.
+                // and the number of remaining unprocessed columns in the current output block.
                 uint32_t num_cols_to_write = std::min(
                     num_unpadded_cols_per_input_block - num_input_cols_processed,
                     num_cols_per_output_block - num_cols_already_processed_in_output_block);
