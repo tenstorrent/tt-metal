@@ -55,6 +55,20 @@ jobs:
       - name: Run unit regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
+          # Health check loop
+          for i in {1..10}; do
+            echo "Health check attempt $i"
+            if tt-smi -r 0,1,2,3 && ./build/test/tt_metal/tt_fabric/test_system_health; then
+              echo "Health checks passed"
+              break
+            fi
+            if [ $i -eq 10 ]; then
+              echo "Health checks failed after 10 attempts"
+              exit 1
+            fi
+            echo "Health checks failed, retrying..."
+            sleep 5
+          done
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
           ${{ matrix.test-group.cmd }}
