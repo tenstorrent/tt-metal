@@ -12,9 +12,7 @@
 
 #include <string>
 
-namespace {
-
-std::string get_string_lowercase(tt::ARCH arch) {
+inline std::string get_string_lowercase(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::GRAYSKULL: return "grayskull"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole_b0"; break;
@@ -22,8 +20,6 @@ std::string get_string_lowercase(tt::ARCH arch) {
         case tt::ARCH::Invalid: return "invalid"; break;
         default: return "invalid"; break;
     }
-}
-
 }
 
 namespace tt {
