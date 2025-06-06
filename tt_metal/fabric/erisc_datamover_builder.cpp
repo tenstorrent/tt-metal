@@ -61,7 +61,8 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
         this->is_receiver_channel_serviced_.fill(true);
     } else if (arch == tt::ARCH::BLACKHOLE) {
         this->is_sender_channel_serviced_.fill(risc_id == 0);
-        this->is_receiver_channel_serviced_.fill(risc_id == 1);
+        // TODO: set this to be risc_id == 1 when we want to split sender/receiver on the two eriscs
+        this->is_receiver_channel_serviced_.fill(risc_id == 0);
         this->enable_context_switch_ = false;
         this->enable_interrupts_ = false;
     } else {
@@ -348,7 +349,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->remote_receiver_channels_num_buffers[i] = this->receiver_channels_num_buffers[i];
     }
 
-    uint32_t buffer_addr = buffer_region_start;
+    uint32_t buffer_addr = this->buffer_region_start;
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         this->sender_channels_base_address[i] = buffer_addr;
         buffer_addr += this->sender_channels_size_bytes[i];

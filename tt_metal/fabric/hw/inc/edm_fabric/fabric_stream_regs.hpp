@@ -14,10 +14,22 @@ using StreamId = tt::tt_fabric::NamedType<uint32_t, struct StreamIdType>;
 // This will be an atomic register read to the register
 template <uint32_t stream_id>
 FORCE_INLINE int32_t get_ptr_val() {
+#ifdef ARCH_WORMHOLE
     return NOC_STREAM_READ_REG(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+#else
+    return (
+        NOC_STREAM_READ_REG(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX) &
+        ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1));
+#endif
 }
 FORCE_INLINE int32_t get_ptr_val(uint8_t stream_id) {
+#ifdef ARCH_WORMHOLE
     return NOC_STREAM_READ_REG(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+#else
+    return (
+        NOC_STREAM_READ_REG(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX) &
+        ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1));
+#endif
 }
 
 // Writing to this register will leverage the built-in stream hardware which will automatically perform an atomic
