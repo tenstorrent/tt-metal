@@ -20,10 +20,8 @@ def tensor_map():
         # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
         # Wide reduction cases channels > 8 * 32
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
-        [2, 384, 56, 56],
+        [2, 32, 16, 16],
         [1, 512, 112, 32],
-        [1, 64, 112, 112],
-        [1, 16, 10, 10],
     ),
 )
 @pytest.mark.parametrize(
@@ -33,17 +31,13 @@ def tensor_map():
         # Large reductions go to large kernels
         # Reductions which are large and wide at the same time
         # go to large kernels
-        # (3, 3),
-        (5, 5),
+        (3, 3),
         (9, 9),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
-    (
-        (1, 1),
-        (2, 2),
-    ),
+    ((2, 2),),
 )
 @pytest.mark.parametrize(
     "padding",
@@ -74,13 +68,13 @@ def tensor_map():
     "shard_scheme",
     [
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
 @pytest.mark.parametrize(
     "use_program_cache",
-    [False],
+    [True, False],
 )
 def test_avg_pool2d_post_commit(
     device,
