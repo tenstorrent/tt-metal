@@ -37,6 +37,10 @@ def select_torch_dtype(ttnn_dtype):
 )
 def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, device):
     torch.manual_seed(22052025)
+
+    # https://github.com/tenstorrent/tt-metal/issues/23205
+    device.disable_and_clear_program_cache()
+
     for _ in range(2):
         torch_dtype = select_torch_dtype(input_dtype)
         ##
