@@ -3597,6 +3597,7 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 @pytest.mark.parametrize("kernel_height,kernel_width", [(16, 16), (32, 32)])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("has_bias", [True, False])
+@pytest.mark.parametrize("preprocess_weights_on_device", [True, False])
 def test_conv2d_with_fold(
     device,
     torch_tensor_map,
@@ -3609,6 +3610,7 @@ def test_conv2d_with_fold(
     kernel_width,
     input_layout,
     has_bias,
+    preprocess_weights_on_device,
 ):
     run_conv(
         device=device,
@@ -3631,4 +3633,5 @@ def test_conv2d_with_fold(
         input_layout=input_layout,
         has_bias=has_bias,
         enable_kernel_stride_folding=True,
+        preprocess_weights_on_device=preprocess_weights_on_device,
     )
