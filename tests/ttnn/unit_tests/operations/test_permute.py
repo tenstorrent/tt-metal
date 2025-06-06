@@ -238,7 +238,7 @@ def test_permute_5d_blocked(device, shape, perm, memory_config, dtype):
     tt_output = ttnn.permute(tt_input, perm)
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.995)
+    assert_with_pcc(torch_output, tt_output, 0.997)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
