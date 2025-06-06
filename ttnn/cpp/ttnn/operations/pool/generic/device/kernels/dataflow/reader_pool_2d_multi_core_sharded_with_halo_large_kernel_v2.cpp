@@ -151,8 +151,12 @@ void kernel_main() {
     // ensure initialization is done before proceeding
     if constexpr (reader_id == 0) {
         cb_push_back(sync_cb_id1, 1);
+        if constexpr (split_reader) {
+            cb_wait_front(sync_cb_id2, 2);
+        }
     } else {
         cb_push_back(sync_cb_id2, 1);
+        cb_wait_front(sync_cb_id1, 2);
     }
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
