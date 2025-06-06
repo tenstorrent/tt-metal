@@ -2151,7 +2151,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         input_mesh_tensor,
         dim,
-        multi_device_global_semaphore,
+        {multi_device_global_semaphore},
         num_links,
         operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology::Linear,
@@ -2221,7 +2221,7 @@ void run_ring_all_gather_with_persistent_fabric(
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         input_mesh_tensor,
         dim,
-        multi_device_global_semaphore,
+        {multi_device_global_semaphore},
         num_links,
         operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         topology,

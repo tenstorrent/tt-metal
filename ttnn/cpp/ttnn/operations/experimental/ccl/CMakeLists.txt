@@ -34,6 +34,18 @@ target_sources(
         all_gather_concat_heads_fused/all_gather_concat.cpp
         all_gather_concat_heads_fused/device/all_gather_concat_op.cpp
         all_gather_concat_heads_fused/device/all_gather_concat_program.cpp
+        all_gather_matmul_async/all_gather_matmul_async.cpp
+        all_gather_matmul_async/device/all_gather_matmul_async_op.cpp
+        all_gather_matmul_async/device/multi_core/all_gather_matmul_async_op_multi_core.cpp
+        matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp
+        matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.cpp
+        matmul_reduce_scatter_async/device/multi_core/matmul_reduce_scatter_async_op_multi_core.cpp
+        reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
+        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
+        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
+        all_broadcast_async/all_broadcast_async.cpp
+        all_broadcast_async/device/all_broadcast_async_op.cpp
+        all_broadcast_async/device/all_broadcast_async_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

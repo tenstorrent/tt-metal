@@ -78,47 +78,6 @@ static int baseline_validate_test_environment(const WriteThroughputStabilityTest
     return 0;
 }
 
-static void dispatch_1d_fabric_on_mesh(
-    const std::vector<Fabric1DPacketSendTestSpec>& test_specs,
-    TestParams& test_params,
-    int argc,
-    char** argv,
-    size_t arg_idx) {
-    size_t num_rows = std::stoi(argv[arg_idx++]);
-    size_t num_cols = std::stoi(argv[arg_idx++]);
-    size_t first_link_offset = std::stoi(argv[arg_idx++]);
-    TT_FATAL(arg_idx == argc, "Missing args");
-
-    test_params.params.num_fabric_rows = num_rows;
-    test_params.params.num_fabric_cols = num_cols;
-    test_params.params.first_link_offset = first_link_offset;
-    TT_FATAL(first_link_offset == 0, "first_link_offset must be 0. Higher offset not tested yet");
-
-    TT_FATAL(
-        num_rows > 0 ^ num_cols > 0,
-        "Either num_rows or num_cols (but not both) must be greater than 0 when running 1D fabric on mesh BW test");
-
-    if (test_params.params.fabric_mode == FabricTestMode::Linear) {
-        Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_specs, test_params.params);
-    } else if (test_params.params.fabric_mode == FabricTestMode::FullRing) {
-        Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_specs, test_params.params);
-    } else {
-        TT_THROW(
-            "Invalid fabric mode when using device init fabric in 1D fabric on mesh BW test: {}",
-            test_params.params.fabric_mode);
-    }
-}
-
-static void dispatch_single_line_bw_test(
-    const std::vector<Fabric1DPacketSendTestSpec>& test_specs,
-    TestParams& test_params,
-    int argc,
-    char** argv,
-    size_t arg_idx) {
-    TT_FATAL(arg_idx == argc, "Missing args");
-    Run1DFabricPacketSendTest(test_specs, test_params.params);
-}
-
 static int run_single_test(TestParams& test_params, const std::string& test_mode) {
     auto chip_send_type = test_params.fabric_unicast ? tt::tt_fabric::CHIP_UNICAST : tt::tt_fabric::CHIP_MULTICAST;
     auto [noc_send_type, flush] = get_noc_send_type(test_params.message_noc_type);

@@ -221,7 +221,6 @@ models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/t3000/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
-models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/whisper @skhorasganiTT @uaydonat
 models/demos/grayskull @uaydonat
@@ -248,6 +247,7 @@ models/experimental/yolov8s_world @tenstorrent/cse-developer-ttnn
 models/experimental/yolov10 @tenstorrent/cse-developer-ttnn
 models/demos/yolov9c @tenstorrent/cse-developer-ttnn
 models/demos/yolov8x @tenstorrent/cse-developer-ttnn
+models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
