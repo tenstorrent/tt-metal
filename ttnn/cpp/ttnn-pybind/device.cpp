@@ -33,10 +33,6 @@ namespace py = pybind11;
 using namespace tt::tt_metal;
 
 namespace {
-void DumpMeshDeviceProfiler(distributed::MeshDevice* device) {
-    ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
-    tt::tt_metal::DumpMeshDeviceProfileResults(*device, ProfilerDumpState::NORMAL, prof_metadata);
-}
 
 void ttnn_device(py::module& module) {
     module.def(
@@ -507,7 +503,10 @@ void device_module(py::module& m_device) {
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
         "DumpDeviceProfiler",
-        [](MeshDevice* device) { DumpMeshDeviceProfiler(device); },
+        [](MeshDevice* device) {
+            ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
+            tt::tt_metal::DumpMeshDeviceProfileResults(*device, ProfilerDumpState::NORMAL, prof_metadata);
+        },
         py::arg("device"),
         R"doc(
         Dump device side profiling data.
