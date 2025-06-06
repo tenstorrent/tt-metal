@@ -28,7 +28,7 @@ is_ubuntu_like() {
 }
 
 if ! is_ubuntu_like; then
-    echo "Error: Only Ubuntu and Ubuntu-based distributions are supported"
+    echo "Error: Only Ubuntu and Ubuntu-based distributions are currently supported"
     exit 1
 fi
 
