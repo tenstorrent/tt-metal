@@ -7,6 +7,7 @@
 #include "ops/cross_entropy_bw/cross_entropy_bw.hpp"
 #include "ops/cross_entropy_fw/cross_entropy_fw.hpp"
 #include "ops/profiler_no_op/profiler_no_op.hpp"
+#include "ops/reduce_row_test/reduce_row_test_op.hpp"
 #include "ops/rmsnorm_fw/rmsnorm_fw.hpp"
 
 namespace ttml::metal {
@@ -24,5 +25,9 @@ constexpr auto cross_entropy_bw = ttnn::register_operation<
 
 constexpr auto profiler_no_op =
     ttnn::register_operation<"ttml::metal::profiler_no_op", ttml::metal::ops::profiler_no_op::ProfilerNoopOperation>();
+
+constexpr auto reduce_row_test_op = ttnn::register_operation<
+    "ttml::metal::reduce_row_test_op",
+    ttml::metal::ops::reduce_row_test_op::ReduceRowTestOperation>();
 
 }  // namespace ttml::metal
