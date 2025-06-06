@@ -41,7 +41,7 @@ protected:
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (num_devices == 2) {
             std::vector<chip_id_t> ids;
-            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
                 ids.push_back(id);
             }
 
@@ -72,7 +72,7 @@ protected:
         const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
         if (this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices == 2 && num_pci_devices == 1) {
             std::vector<chip_id_t> ids;
-            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
                 ids.push_back(id);
             }
 
