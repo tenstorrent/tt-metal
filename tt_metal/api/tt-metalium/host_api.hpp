@@ -938,13 +938,13 @@ void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDes
  *
  * | Argument      | Description                                           | Type                     | Valid Range               | Required |
  * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
- * | mesh_device   | The mesh device containing the devices to be profiled | MeshDevice*              |                           | Yes      |
+ * | mesh_device   | The mesh device containing the devices to be profiled | MeshDevice&              |                           | Yes      |
  * | state         | The dump state to use for this profiler dump          | ProfilerDumpState        |                           | No       |
  * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
  * */
 // clang-format on
 void DumpMeshDeviceProfileResults(
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     ProfilerDumpState state = ProfilerDumpState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
