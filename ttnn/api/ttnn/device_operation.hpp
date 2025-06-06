@@ -458,10 +458,12 @@ void create_and_cache_mesh_workload(
                 tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
             } else {
                 // Slow path - iterate over coordinates and merge them into a range set one by one.
+#ifdef COMPILATION_SEGFAULT_DESIRED_GCC_12
                 log_warning(
                     tt::LogOp,
                     "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch "
                     "performance.");
+#endif
                 for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args)) {
                     tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
                 }
