@@ -2341,15 +2341,6 @@ inline void override_program_gather_in0(
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
     auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
 
-    if (!global_cb.has_value()) {
-        TT_FATAL(
-            input_tensors.size() + optional_input_tensors.size() == 3,
-            "Total number of input tensors (required ({}) + optional ({})) must be 3",
-            input_tensors.size(),
-            optional_input_tensors.size());
-        TT_FATAL(output_tensors.size() == 1, "Number of output tensors ({}) must be 1", output_tensors.size());
-    }
-
     auto src_buffer_a = input_tensors[0].buffer();
     auto src_buffer_b = input_tensors[1].buffer();
     auto dst_buffer = output_tensors[0].buffer();
