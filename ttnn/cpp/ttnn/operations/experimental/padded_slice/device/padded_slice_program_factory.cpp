@@ -586,6 +586,9 @@ get_padded_slice_runtime_args_tile_sharded_output(
         std::ranges::reverse(reversed_start_index);
         auto reversed_tile_start_index = reversed_start_index;
         reversed_tile_start_index[0] /= TILE_WIDTH;
+        reversed_tile_start_index[1] =
+            tt::round_down(reversed_tile_start_index[1] + output_tensor_start[2], TILE_HEIGHT) -
+            tt::round_down(output_tensor_start[-2], TILE_HEIGHT);
         reversed_tile_start_index[1] /= TILE_HEIGHT;
         std::vector<uint32_t> reversed_output_start_in_input(num_dims);
         std::vector<uint32_t> reversed_output_end(num_dims);
