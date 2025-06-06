@@ -37,12 +37,13 @@ parameters = {
             "std",
             "var",
         ],
+        "dtype": [torch.bfloat16, torch.float32],
     }
     for rank in range(5)
 }
 
 
-def run_reduction(device, tensor_shape, dim, keepdim, op) -> list:
+def run_reduction(device, tensor_shape, dim, keepdim, op, dtype) -> list:
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -52,7 +53,7 @@ def run_reduction(device, tensor_shape, dim, keepdim, op) -> list:
     """
     rank = len(tensor_shape)
 
-    torch_tensor = torch.randn(*tensor_shape) if rank > 0 else torch.randn(())
+    torch_tensor = torch.randn(*tensor_shape, dtype=dtype) if rank > 0 else torch.randn((), dtype=dtype)
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
     torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
@@ -107,14 +108,17 @@ def test_reduction(
     dim,
     keepdim,
     op,
+    dtype,
 ):
-    run_reduction(
+    result, msg = run_reduction(
         device,
         tensor_shape,
         dim,
         keepdim,
         op,
+        dtype,
     )
+    assert result, msg
 
 
 def run(
@@ -122,6 +126,7 @@ def run(
     dim,
     keepdim,
     op,
+    dtype,
     *,
     device,
 ) -> list:
@@ -131,4 +136,5 @@ def run(
         dim,
         keepdim,
         op,
+        dtype,
     )

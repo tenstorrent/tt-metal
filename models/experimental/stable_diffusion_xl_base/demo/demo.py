@@ -15,6 +15,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 import os
+import gc
 
 
 # Copied from sdxl pipeline
@@ -104,8 +105,9 @@ def run_tt_iteration(
 
 @torch.no_grad()
 def run_demo_inference(
-    ttnn_device, is_ci_env, prompts, num_inference_steps, classifier_free_guidance, vae_on_device, start_from
+    ttnn_device, is_ci_env, prompts, num_inference_steps, classifier_free_guidance, vae_on_device, evaluation_range
 ):
+    start_from, _ = evaluation_range
     torch.manual_seed(0)
 
     if isinstance(prompts, str):
@@ -469,7 +471,12 @@ def run_demo_inference(
             image.save(f"output/output{iter + start_from}.png")
             logger.info(f"Image saved to output/output{iter + start_from}.png")
 
-        ttnn.deallocate(latents)
+        if vae_on_device:
+            ttnn.deallocate(latents)
+        else:
+            del latents
+            gc.collect()
+
         latents = latents_clone.clone()
         latents = ttnn.from_torch(
             latents,
@@ -515,8 +522,8 @@ def test_demo(
     num_inference_steps,
     classifier_free_guidance,
     vae_on_device,
-    start_from,
+    evaluation_range,
 ):
     return run_demo_inference(
-        device, is_ci_env, prompt, num_inference_steps, classifier_free_guidance, vae_on_device, start_from
+        device, is_ci_env, prompt, num_inference_steps, classifier_free_guidance, vae_on_device, evaluation_range
     )
