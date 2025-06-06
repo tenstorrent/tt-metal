@@ -179,7 +179,7 @@ TEST_F(MeshTensorTestT3K, AggregateAsTensor) {
             std::vector<Tensor> shards_to_aggregate = {device_tensors1[0], device_tensors1[0]};
             aggregate_as_tensor(shards_to_aggregate, AllGatherTensor{});
         }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("Found a tensor shard at duplicate coordiante")));
+        ThrowsMessage<std::runtime_error>(HasSubstr("Found a tensor shard at duplicate coordinate")));
 
     // Aggregate every second shard into a new mesh tensor.
     auto partial_tensor = aggregate_as_tensor(
