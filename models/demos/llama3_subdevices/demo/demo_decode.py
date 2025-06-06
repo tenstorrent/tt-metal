@@ -37,7 +37,7 @@ TSU_PERF_DROP_LIMIT_COUNT = 20
 TSU_THRESHOLDS = {
     "4U": {1: {"min": 540, "max": 565}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 625, "max": 655}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+    "6U": {1: {"min": 625, "max": 655}, 10: {"min": 230, "max": 250}, 80: {"min": 53, "max": 58}},
 }
 
 
