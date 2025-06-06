@@ -149,6 +149,50 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
     }
 }
 
+class NDShardingPerfTests : public ttnn::TTNNFixtureWithDevice {};
+
+TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+
+    Shape tensor_shape{16, 1024, 1024};
+    Shape shard_shape_nd{16, 160, 160};
+    Shape2D shard_shape_2d{2368, 160};
+
+    size_t volume = tensor_shape.volume();
+    std::vector<uint16_t> data(volume);
+    for (size_t i = 0; i < volume; i++) {
+        data[i] = static_cast<uint16_t>(i);
+    }
+
+    double batch_nd_sharding_time_ns = [&]() {
+        MemoryConfig memory_config{BufferType::L1, NdShardSpec{shard_shape_nd, cores}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        auto tensor = Tensor::from_vector(data, tensor_spec);
+
+        auto start = std::chrono::high_resolution_clock::now();
+        auto device_tensor = tensor.to_device(device_, memory_config);
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+        return duration.count();
+    }();
+
+    double block_2d_sharding_time_ns = [&]() {
+        MemoryConfig memory_config{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, ShardSpec{cores, shard_shape_2d}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        auto tensor = Tensor::from_vector(data, tensor_spec);
+
+        auto start = std::chrono::high_resolution_clock::now();
+        auto device_tensor = tensor.to_device(device_, memory_config);
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+        return duration.count();
+    }();
+
+    EXPECT_TRUE(batch_nd_sharding_time_ns < block_2d_sharding_time_ns * 2);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     TensorShardingTests,
     NDShardingTests,
