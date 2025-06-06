@@ -917,10 +917,6 @@ std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(
                 // Intra-mesh routing
                 next_chan_id = this->intra_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_chip_id];
             }
-            if (next_chan_id == eth_chan_magic_values::INVALID_DIRECTION) {
-                // The complete route b/w src and dst not found, probably some eth cores are reserved along the path
-                return std::nullopt;
-            }
             if (src_chan_id != next_chan_id) {
                 continue;
             }
