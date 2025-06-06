@@ -21,6 +21,7 @@ FORCE_INLINE void read_dilated_channels(
     const uint32_t act_l1_read_addr,
     const uint32_t reader_channel_idx,
     const uint32_t conv_act_c_bytes,
+    const uint32_t coalesced_read_bytes,
     const uint32_t stride_h_bytes,
     const uint32_t stride_w_bytes) {
     uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_bytes);
@@ -30,7 +31,7 @@ FORCE_INLINE void read_dilated_channels(
 #pragma GCC unroll weight_size_w
         for (uint32_t inner = 0; inner < window_width; inner++) {
             // Read the partial depth.
-            noc_async_read_one_packet_with_state<true>(act_l1_read_addr_row_offset, l1_write_addr_act);
+            noc_async_read_with_state<1, true>(act_l1_read_addr_row_offset, l1_write_addr_act, coalesced_read_bytes);
             // Increment by full depth to go to the next pixel
             l1_write_addr_act += conv_act_c_bytes;
             act_l1_read_addr_row_offset += stride_w_bytes;
@@ -52,7 +53,7 @@ void read_channels(
     uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
 #pragma GCC unroll unroll_factor
     for (uint32_t inner = 0; inner < WINDOW_INNER; inner++) {
-        noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
+        noc_async_read_with_state<1, true>(act_l1_read_addr_plus_offset, l1_write_addr_act, coalesced_read_bytes);
         l1_write_addr_act += coalesced_read_bytes;
         // +2 is hard-coded, TODO: generalize
         act_l1_read_addr_plus_offset += stride_h_bytes;
@@ -182,6 +183,7 @@ void kernel_main() {
                     act_l1_read_addr,
                     two_reader_indices & 0xffff,
                     conv_act_c_read_bytes,
+                    coalesced_read_bytes,
                     stride_h_bytes,
                     stride_w_bytes);
                 read_dilated_channels<weight_size_h, weight_size_w>(
@@ -189,6 +191,7 @@ void kernel_main() {
                     act_l1_read_addr,
                     two_reader_indices >> 16,
                     conv_act_c_read_bytes,
+                    coalesced_read_bytes,
                     stride_h_bytes,
                     stride_w_bytes);
             }

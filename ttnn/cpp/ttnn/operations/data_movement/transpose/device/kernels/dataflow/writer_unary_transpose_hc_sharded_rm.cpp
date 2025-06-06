@@ -49,7 +49,7 @@ void kernel_main() {
                 noc_async_read_set_state<stick_size_bytes>(noc_read_addr, stick_size_bytes);
 
                 for (uint32_t i = 0; i < num_sticks_per_shard_core; ++i) {
-                    noc_async_read_one_packet_with_state(noc_read_addr, l1_write_addr);
+                    noc_async_read_with_state<stick_size_bytes>(noc_read_addr, l1_write_addr, stick_size_bytes);
                     noc_read_addr += read_stick_stride;
                     l1_write_addr += stick_size_bytes;
                 }

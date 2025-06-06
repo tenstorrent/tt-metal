@@ -20,7 +20,7 @@ FORCE_INLINE void generate_mm_scaler(const uint32_t cb_id, const uint32_t scaler
     // TODO: src addr does not need to be rewritten. Update/add api for this
     noc_async_read_set_state<MEM_ZEROS_SIZE>(zeros_noc_addr, MEM_ZEROS_SIZE);
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
+        noc_async_read_with_state<MEM_ZEROS_SIZE>(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
         write_addr += MEM_ZEROS_SIZE;
     }
     noc_async_read_barrier();

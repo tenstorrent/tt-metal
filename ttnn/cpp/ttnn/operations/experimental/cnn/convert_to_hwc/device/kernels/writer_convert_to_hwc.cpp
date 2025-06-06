@@ -11,7 +11,7 @@ template <uint32_t StickSize, uint32_t PaddedStickSize, uint32_t NumSticks>
 FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_addr) {
     noc_async_read_set_state<StickSize>(get_noc_addr(l1_read_addr), StickSize);
     for (uint32_t row = 0; row < NumSticks; row++) {
-        noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+        noc_async_read_with_state<StickSize, true>(l1_read_addr, l1_write_addr, StickSize);
         l1_read_addr += PaddedStickSize;
         l1_write_addr += StickSize;
     }
@@ -32,7 +32,7 @@ FORCE_INLINE void copy_segment_from_dram(
 
     noc_async_read_set_state<1>(noc_read_addr, copy_size);
     for (uint32_t j = 0; j < NumSticks; ++j) {
-        noc_async_read_one_packet_with_state<true>(noc_read_addr, l1_write_addr);
+        noc_async_read_with_state<1, true>(noc_read_addr, l1_write_addr, copy_size);
         l1_write_addr += WriteStrideBytes;
         noc_read_addr += ReadStrideBytes;
     }

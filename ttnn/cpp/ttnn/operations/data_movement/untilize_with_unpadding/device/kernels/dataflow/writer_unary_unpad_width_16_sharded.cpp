@@ -32,11 +32,13 @@ void kernel_main() {
         uint64_t noc_l1_read_addr = get_noc_addr(get_read_ptr(cb_id_untilize_out));
 
         for (uint32_t j = 0; j < 8; j++) {
-            noc_async_read_one_packet_with_state<true>(noc_l1_read_addr, l1_write_addr);
+            noc_async_read_with_state<quarter_tile_size_in_bytes, true>(
+                noc_l1_read_addr, l1_write_addr, quarter_tile_size_in_bytes);
             noc_l1_read_addr += 2 * quarter_tile_size_in_bytes;
             l1_write_addr += quarter_tile_size_in_bytes;
 
-            noc_async_read_one_packet_with_state<true>(noc_l1_read_addr, l1_write_addr);
+            noc_async_read_with_state<quarter_tile_size_in_bytes, true>(
+                noc_l1_read_addr, l1_write_addr, quarter_tile_size_in_bytes);
             noc_l1_read_addr += 2 * quarter_tile_size_in_bytes;
             l1_write_addr += quarter_tile_size_in_bytes;
         }
@@ -48,11 +50,13 @@ void kernel_main() {
     cb_wait_front(cb_id_untilize_out, remaining_tiles);
     uint64_t noc_l1_read_addr = get_noc_addr(get_read_ptr(cb_id_untilize_out));
     for (uint32_t i = 0; i < remaining_tiles; i++) {
-        noc_async_read_one_packet_with_state<true>(noc_l1_read_addr, l1_write_addr);
+        noc_async_read_with_state<quarter_tile_size_in_bytes, true>(
+            noc_l1_read_addr, l1_write_addr, quarter_tile_size_in_bytes);
         noc_l1_read_addr += 2 * quarter_tile_size_in_bytes;
         l1_write_addr += quarter_tile_size_in_bytes;
 
-        noc_async_read_one_packet_with_state<true>(noc_l1_read_addr, l1_write_addr);
+        noc_async_read_with_state<quarter_tile_size_in_bytes, true>(
+            noc_l1_read_addr, l1_write_addr, quarter_tile_size_in_bytes);
         noc_l1_read_addr += 2 * quarter_tile_size_in_bytes;
         l1_write_addr += quarter_tile_size_in_bytes;
     }

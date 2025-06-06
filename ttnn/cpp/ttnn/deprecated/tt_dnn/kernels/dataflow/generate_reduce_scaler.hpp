@@ -20,7 +20,7 @@ FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t sc
     // TODO: src addr does not need to be rewritten. Update/add api for this
     noc_async_read_set_state<MEM_ZEROS_SIZE>(zeros_noc_addr, MEM_ZEROS_SIZE);
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
+        noc_async_read_with_state<MEM_ZEROS_SIZE>(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
         write_addr += MEM_ZEROS_SIZE;
     }
     noc_async_read_barrier();
@@ -53,7 +53,7 @@ FORCE_INLINE void wh_generate_reduce_scaler(const uint32_t cb_id, const uint32_t
         uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
         noc_async_read_set_state<MEM_ZEROS_SIZE>(zeros_noc_addr, MEM_ZEROS_SIZE);
         for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-            noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
+            noc_async_read_with_state<MEM_ZEROS_SIZE>(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
             write_addr += MEM_ZEROS_SIZE;
         }
         noc_async_read_barrier();
@@ -64,9 +64,9 @@ FORCE_INLINE void wh_generate_reduce_scaler(const uint32_t cb_id, const uint32_t
             ptr[j] = scaler;
         }
         noc_async_read_set_state<32>(target_address, 32);
-        noc_async_read_one_packet_with_state(target_address, write_addr_base + (1 << 9));
-        noc_async_read_one_packet_with_state(target_address, write_addr_base + (2 << 9));
-        noc_async_read_one_packet_with_state(target_address, write_addr_base + (3 << 9));
+        noc_async_read_with_state<32>(target_address, write_addr_base + (1 << 9), 32);
+        noc_async_read_with_state<32>(target_address, write_addr_base + (2 << 9), 32);
+        noc_async_read_with_state<32>(target_address, write_addr_base + (3 << 9), 32);
         noc_async_read_barrier();
     }
     cb_push_back(cb_id, 1);

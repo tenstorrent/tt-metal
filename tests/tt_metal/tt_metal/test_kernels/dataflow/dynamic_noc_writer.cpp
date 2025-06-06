@@ -54,8 +54,8 @@ void kernel_main() {
     noc_async_read_set_state<page_size>(addr_self_noc, page_size, noc_index);
     noc_async_read_set_state<page_size>(addr_other_noc, page_size, 1 - noc_index);
     for (uint32_t i = 0; i < iteration; i++) {
-        noc_async_read_one_packet_with_state(l1_read_addr, l1_read_addr, noc_index);
-        noc_async_read_one_packet_with_state(l1_read_addr, l1_read_addr, 1 - noc_index);
+        noc_async_read_with_state<page_size>(l1_read_addr, l1_read_addr, page_size, noc_index);
+        noc_async_read_with_state<page_size>(l1_read_addr, l1_read_addr, page_size, 1 - noc_index);
     }
 
     // Test stateful write one packet API

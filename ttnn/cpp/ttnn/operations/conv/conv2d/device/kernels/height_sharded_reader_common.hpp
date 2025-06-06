@@ -19,7 +19,7 @@ FORCE_INLINE void zero_out_tiles() {
 
     noc_async_read_set_state<MEM_ZEROS_SIZE>(zeros_noc_addr, MEM_ZEROS_SIZE);
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
+        noc_async_read_with_state<MEM_ZEROS_SIZE>(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
         write_addr += MEM_ZEROS_SIZE;
     }
     noc_async_write_barrier();
@@ -46,16 +46,19 @@ FORCE_INLINE void read_sticks(
 
         if constexpr (dilation_w == 1) {
             uint32_t act_l1_offset = reader_offset + (reader_idx_1 * conv_act_c_read_bytes);
-            noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+            noc_async_read_with_state<coalesced_read_bytes, true>(
+                act_l1_offset, l1_write_addr_act, coalesced_read_bytes);
             l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
 
             act_l1_offset = reader_offset + (reader_idx_2 * conv_act_c_read_bytes);
-            noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+            noc_async_read_with_state<coalesced_read_bytes, true>(
+                act_l1_offset, l1_write_addr_act, coalesced_read_bytes);
             l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
         } else {
             uint32_t act_l1_offset = reader_offset + (reader_idx_1 * conv_act_c_read_bytes);
             for (uint32_t inner = 0; inner < weight_size_w; inner++) {
-                noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+                noc_async_read_with_state<coalesced_read_bytes, true>(
+                    act_l1_offset, l1_write_addr_act, coalesced_read_bytes);
                 l1_write_addr_act += conv_act_c_read_bytes;
                 act_l1_offset += stride_w_bytes;
             }
@@ -63,7 +66,8 @@ FORCE_INLINE void read_sticks(
 
             act_l1_offset = reader_offset + (reader_idx_2 * conv_act_c_read_bytes);
             for (uint32_t inner = 0; inner < weight_size_w; inner++) {
-                noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+                noc_async_read_with_state<coalesced_read_bytes, true>(
+                    act_l1_offset, l1_write_addr_act, coalesced_read_bytes);
                 l1_write_addr_act += conv_act_c_read_bytes;
                 act_l1_offset += stride_w_bytes;
             }

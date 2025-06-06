@@ -482,8 +482,7 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
  */
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
-inline void noc_async_read(
-    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
+inline void noc_async_read(uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -550,96 +549,83 @@ FORCE_INLINE void noc_async_read_set_state(uint64_t src_noc_addr, uint32_t size,
     WAYPOINT("NAUD");
 }
 
-// TODO: write docs
-// this issues only a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
-template <bool inc_num_issued = true>
-FORCE_INLINE void noc_async_read_one_packet_with_state(
-    std::uint32_t src_noc_addr, std::uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
-    /*
-        Read requests - use static VC
-        Read responses - assigned VCs dynamically
-    */
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_noc_addr), 0, -1);
-    if constexpr (inc_num_issued) {
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
-        }
-    }
-
-    WAYPOINT("RP4W");
-    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RP4D");
-
-    WAYPOINT("NATW");
-
-    // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, src_noc_addr, dst_local_l1_addr);
-
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_noc_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-
-    if constexpr (inc_num_issued) {
-        if constexpr (noc_mode == DM_DEDICATED_NOC) {
-            noc_reads_num_issued[noc] += 1;
-        }
-    }
-
-    WAYPOINT("NATD");
-}
-
-// TODO: write docs
-template <bool inc_num_issued = true>
+// clang-format off
+/**
+ * Initiates an asynchronous read from a specified source node located at NOC
+ * coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function) and sets the state for the read operation. This function
+ * must be preceded by a call to \a noc_async_read_with_state. This function
+ * is used to issue the actual read request after the state has been set up.
+ * \a noc_async_read can be used instead if the state preservation is not
+ * needed. Also, see \a noc_async_read_barrier.
+ *
+ * Return value: None
+ *
+ * | Argument                          | Description                                        | Data type | Valid range         | required |
+ * |-----------------------------------|----------------------------------------------------|-----------|-------------------- |----------|
+ * | src_local_l1_addr                 | Address in local L1 memory on source core          | uint32_t  | 0..1MB              | True     |
+ * | dst_local_l1_addr                 | Address in local L1 memory on destination core     | uint32_t  | 0..1MB              | True     |
+ * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB              | True     |
+ * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1              | False    |
+ * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number | False    |
+ * | inc_num_issued (template argument)| Whether issued read counter should be increment    | uint32_t  | Any uint32_t number | False    |
+ */
+// clang-format on
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1, bool inc_num_issued = true>
 FORCE_INLINE void noc_async_read_with_state(
-    std::uint32_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
+    uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE, src_noc_addr, size, -1);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_local_l1_addr), size, -1);
 
     WAYPOINT("NAVW");
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc, src_noc_addr, dst_local_l1_addr, size);
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc, src_local_l1_addr, dst_local_l1_addr, size);
 
-    while (size > NOC_MAX_BURST_SIZE) {
-        if constexpr (inc_num_issued) {
-            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-                inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    if constexpr (max_page_size > NOC_MAX_BURST_SIZE) {
+        while (size > NOC_MAX_BURST_SIZE) {
+            if constexpr (inc_num_issued) {
+                if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                    inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+                }
             }
-        }
-        WAYPOINT("RP6W");
-        while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-        WAYPOINT("RP6D");
+            WAYPOINT("RP6W");
+            while (!noc_cmd_buf_ready(noc, read_cmd_buf));
+            WAYPOINT("RP6D");
 
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_noc_addr);
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-        size -= NOC_MAX_BURST_SIZE;
-        src_noc_addr += NOC_MAX_BURST_SIZE;
-        dst_local_l1_addr += NOC_MAX_BURST_SIZE;
-        if constexpr (inc_num_issued) {
-            if constexpr (noc_mode == DM_DEDICATED_NOC) {
-                noc_reads_num_issued[noc] += 1;
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+            size -= NOC_MAX_BURST_SIZE;
+            src_local_l1_addr += NOC_MAX_BURST_SIZE;
+            dst_local_l1_addr += NOC_MAX_BURST_SIZE;
+            if constexpr (inc_num_issued) {
+                if constexpr (noc_mode == DM_DEDICATED_NOC) {
+                    noc_reads_num_issued[noc] += 1;
+                }
             }
         }
     }
 
+    // left-over packet
     if constexpr (inc_num_issued) {
         if constexpr (noc_mode == DM_DYNAMIC_NOC) {
             inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
         }
     }
-    // left-over packet
     WAYPOINT("RP7W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
     WAYPOINT("RP7D");
 
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_noc_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
+    if constexpr (max_page_size > NOC_MAX_BURST_SIZE) {
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
+    }
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (inc_num_issued) {
         if constexpr (noc_mode == DM_DEDICATED_NOC) {

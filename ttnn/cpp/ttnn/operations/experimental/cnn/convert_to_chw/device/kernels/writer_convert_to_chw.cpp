@@ -32,7 +32,7 @@ void kernel_main() {
             uint64_t l1_read_addr = l1_read_addr_tile;
             for (uint32_t j = 0; j < C; j++) {
                 const uint32_t l1_write_addr = base_l1_write_addr + (j * channel_size) + (tile_index * STICK_SIZE);
-                noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+                noc_async_read_with_state<STICK_SIZE, true>(l1_read_addr, l1_write_addr, STICK_SIZE);
                 l1_read_addr += STICK_SIZE;
             }
             tile_index++;
@@ -46,7 +46,7 @@ void kernel_main() {
         uint64_t l1_read_addr = get_noc_addr(get_read_ptr(cb_in_transpose));
         for (uint32_t j = 0; j < C; j++) {
             const uint32_t l1_write_addr = base_l1_write_addr + (j * channel_size) + (tile_index * STICK_SIZE);
-            noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+            noc_async_read_with_state<STICK_SIZE, true>(l1_read_addr, l1_write_addr, STICK_SIZE);
             l1_read_addr += STICK_SIZE;
         }
         tile_index++;

@@ -25,7 +25,8 @@ void kernel_main() {
 
         for (uint32_t stick_idx = 0; stick_idx < input_num_sticks; stick_idx++) {
             for (uint32_t page_idx = 0; page_idx < input_num_pages_per_stick; page_idx++) {
-                noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr + page_size * page_idx);
+                noc_async_read_with_state<page_size, true>(
+                    l1_read_addr, l1_write_addr + page_size * page_idx, page_size);
                 l1_read_addr += page_size;
             }
             l1_write_addr += output_stride;
