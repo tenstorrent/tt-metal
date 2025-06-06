@@ -42,6 +42,7 @@ show_help() {
     echo "  --enable-coverage                Instrument the binaries for code coverage."
     echo "  --enable-distributed             Enable distributed compute support (OpenMPI)."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
+    echo "  --operation-timeout-seconds      Set the operation timeout in seconds for ttnn, (use it to troubleshoot hangs with graph capture)"
 }
 
 clean() {
@@ -124,6 +125,7 @@ configure-only
 enable-coverage
 enable-distributed
 without-python-bindings
+operation-timeout-seconds:
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -183,6 +185,8 @@ while true; do
             configure_only="ON";;
         --without-python-bindings)
             with_python_bindings="OFF";;
+        --operation-timeout-seconds)
+            operation_timeout_seconds="$2";shift;;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -377,6 +381,10 @@ if [ "$enable_distributed" = "ON" ]; then
     cmake_args+=("-DENABLE_DISTRIBUTED=ON")
 else
     cmake_args+=("-DENABLE_DISTRIBUTED=OFF")
+fi
+
+if [ ! -z "$operation_timeout_seconds" ]; then
+    cmake_args+=("-DTTNN_OPERATION_TIMEOUT_SECONDS=$operation_timeout_seconds")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother
