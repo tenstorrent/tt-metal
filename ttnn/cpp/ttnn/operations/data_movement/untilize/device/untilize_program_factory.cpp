@@ -737,7 +737,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_spec_identical(
+operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 

@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks Untilize::create_program(
         input_tensor_a.shard_spec() == output_tensor.shard_spec()) {
         // Optimized special case implementation for when both input and output are sharded, have identical
         // memory layouts (i.e. height->height, width->width, block->block), and have identical shard specs
-        return detail::untilize_multi_core_input_and_output_shard_spec_identical(
+        return detail::untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
 
