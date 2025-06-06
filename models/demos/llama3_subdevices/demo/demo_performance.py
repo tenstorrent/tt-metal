@@ -32,7 +32,7 @@ def run_llama3_decode_performance(
     batch_size,
     num_batches,
     paged_attention,
-    paged_attention_config,
+    page_params,
     benchmark_token_range,
     warmup_iters,
     inner_iters,
@@ -109,11 +109,19 @@ def run_llama3_decode_performance(
     page_table_tt = None
 
     if paged_attention:
-        paged_attn = PagedAttention(paged_attention_config, model_args)
+        paged_attn = PagedAttention(page_params, model_args)
 
-        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape)
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, -2) if batch_size > 1 else (None, None),
+            mesh_shape=model_args.cluster_shape,
+        )
 
-        page_table = paged_attn.create_page_table(mesh_device, mesh_mapper)
+        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper)
+
+        paged_attention_config = PagedAttentionConfig(**page_params)
+
+        logger.info("Page table tensor done")
 
     # Load TTNN Llama3.1 model
     logger.info("Loading weights to device...")
@@ -153,22 +161,6 @@ def run_llama3_decode_performance(
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
     logger.info("Starting decode...")
-
-    # Shard the page table for TG decode
-    if paged_attention and model_args.is_galaxy and batch_size > 1:
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, -2) if batch_size > 1 else (None, None),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )
-
-        logger.info("Page table tensor done")
 
     # Initial positions
     decoding_pos = [bench_start] * batch_size
@@ -473,7 +465,7 @@ def test_llama_decode_performance(
         batch_size=batch_size,
         num_batches=repeat_batches,
         paged_attention=paged_attention,
-        paged_attention_config=paged_attention_config,
+        page_params=page_params,
         benchmark_token_range=benchmark_token_range,
         warmup_iters=warmup_iters,
         inner_iters=inner_iters,

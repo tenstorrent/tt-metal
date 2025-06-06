@@ -121,11 +121,6 @@ def test_llama_model_inference(
 
     # Prepare page table for paged attention
     if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
             dims=(None, None),
@@ -135,6 +130,8 @@ def test_llama_model_inference(
         paged_attn = PagedAttention(paged_attention_config, model_args)
 
         page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper, per_device_group=True)
+
+        paged_attention_config = PagedAttentionConfig(**page_params)
 
     # Load TTNN model
     tt_model = TtTransformer(

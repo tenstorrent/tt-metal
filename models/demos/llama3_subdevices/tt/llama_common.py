@@ -18,27 +18,31 @@ class HostEmbedding(torch.nn.Module):
 
 # Default configuration for Paged Attention
 class PagedAttentionConfig:
-    def __init__(self, block_size=32, max_num_blocks=1024):
-        self.block_size = block_size
-        self.max_num_blocks = max_num_blocks
+    def __init__(self, page_block_size=32, page_max_num_blocks=1024):
+        self.page_block_size = page_block_size
+        self.page_max_num_blocks = page_max_num_blocks
 
 
 # Helper class for Page Attention, uses above PagedAttentionConfig
 class PagedAttention:
-    def __init__(self, config, model_args):
-        self.config = config
+    def __init__(self, page_params, model_args):
+        assert "page_block_size" in page_params, "Missing page_block_size key in page_params dict"
+        assert "page_max_num_blocks" in page_params, "Missing page_max_num_blocks key in page_params dict"
+        self.page_block_size = page_params["page_block_size"]
+        self.page_max_num_blocks = page_params["page_max_num_blocks"]
         self.model_args = model_args
         self.reverse_permutation = None
+        self.page_table_pt = None
         self.page_table_tt = None
 
     def create_page_table(self, device, mesh_mapper=None, per_device_group=False):
         batch_size = self.model_args.batch_size_per_device_group if per_device_group else self.model_args.max_batch_size
-        permutation = torch.randperm(self.config.max_num_blocks)
+        permutation = torch.randperm(self.page_max_num_blocks)
         self.reverse_permutation = torch.argsort(permutation)
-        assert self.config.max_num_blocks % batch_size == 0, "max_num_blocks must be divisible by max_batch_size"
-        page_table = self.reverse_permutation.reshape(batch_size, self.config.max_num_blocks // batch_size)
+        assert self.page_max_num_blocks % batch_size == 0, "max_num_blocks must be divisible by max_batch_size"
+        self.page_table_pt = self.reverse_permutation.reshape(batch_size, self.page_max_num_blocks // batch_size)
         self.page_table_tt = ttnn.from_torch(
-            page_table,
+            self.page_table_pt,
             device=device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
