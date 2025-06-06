@@ -81,13 +81,6 @@ struct AllBroadcastAsync {
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
-// All Gather Variants
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links,
-    size_t num_workers_per_link,
-    bool persistent_fabric_mode,
-    IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const Tensor& input_tensor,
     IDevice* target_device,
