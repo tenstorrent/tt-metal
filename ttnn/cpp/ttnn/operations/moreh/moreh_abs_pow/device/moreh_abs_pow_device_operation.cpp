@@ -51,8 +51,8 @@ MorehAbsPowOperation::spec_return_value_t MorehAbsPowOperation::compute_output_s
     }
     const auto& input = tensor_args.input;
     return TensorSpec(
-        input.get_logical_shape(),
-        TensorLayout(input.get_dtype(), PageConfig(input.get_layout()), operation_attributes.memory_config));
+        input.logical_shape(),
+        TensorLayout(input.dtype(), PageConfig(input.layout()), operation_attributes.memory_config));
 }
 
 MorehAbsPowOperation::tensor_return_value_t MorehAbsPowOperation::create_output_tensors(

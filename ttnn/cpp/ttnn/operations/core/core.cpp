@@ -22,7 +22,7 @@ ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
         return transform(tensor, [&](const Tensor& device_tensor) { return unsqueeze_to_4D(device_tensor); });
     }
 
-    const auto rank = tensor.get_logical_shape().rank();
+    const auto rank = tensor.logical_shape().rank();
     if (rank == 4) {
         return tensor;
     }
@@ -30,11 +30,11 @@ ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
         TT_THROW("Tensor rank is greater than 4");
     }
 
-    return ttnn::reshape(tensor, tensor.get_logical_shape().to_rank(4), tensor.get_padded_shape().to_rank(4));
+    return ttnn::reshape(tensor, tensor.logical_shape().to_rank(4), tensor.padded_shape().to_rank(4));
 }
 
 ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
-    if (tensor.get_logical_shape().rank() != 4) {
+    if (tensor.logical_shape().rank() != 4) {
         TT_THROW("Tensor has to be of rank 4!");
     }
     if (rank < 1 or rank > 4) {
@@ -44,7 +44,7 @@ ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
     if (rank == 4) {
         return tensor;
     }
-    return ttnn::reshape(tensor, tensor.get_logical_shape().to_rank(rank), tensor.get_padded_shape().to_rank(rank));
+    return ttnn::reshape(tensor, tensor.logical_shape().to_rank(rank), tensor.padded_shape().to_rank(rank));
 }
 
 ttnn::Tensor to_device(

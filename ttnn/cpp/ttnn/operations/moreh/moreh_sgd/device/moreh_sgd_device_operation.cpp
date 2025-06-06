@@ -47,8 +47,8 @@ void MorehSgdOperation::validate_on_program_cache_hit(
 
 MorehSgdOperation::spec_return_value_t MorehSgdOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto input_tensor_shape = tensor_args.param_in.get_logical_shape();
-    auto dtype = tensor_args.param_in.get_dtype();
+    auto input_tensor_shape = tensor_args.param_in.logical_shape();
+    auto dtype = tensor_args.param_in.dtype();
     Layout layout{Layout::TILE};
 
     std::vector<std::optional<TensorSpec>> ret;

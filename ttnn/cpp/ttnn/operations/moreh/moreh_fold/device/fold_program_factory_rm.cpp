@@ -21,8 +21,8 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     auto dilation = operation_attributes.dilation;
     auto padding = operation_attributes.padding;
     auto stride = operation_attributes.stride;
-    auto output_shape = output.get_logical_shape();
-    auto output_shape_rank = output.get_logical_shape().rank();
+    auto output_shape = output.logical_shape();
+    auto output_shape_rank = output.logical_shape().rank();
 
     std::vector<uint32_t> ls;
     for (uint32_t i = 0; i < 2; ++i) {
@@ -50,7 +50,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     Program program{};
     IDevice* device = input.device();
 
-    uint32_t num_units = output.get_logical_volume() / output.get_logical_shape()[-1];
+    uint32_t num_units = output.logical_volume() / output.logical_shape()[-1];
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -61,11 +61,11 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     uint32_t unit_size = input.element_size();
-    uint32_t input_cb_page_size = unit_size * input.get_logical_shape()[-1];
-    uint32_t output_cb_page_size = unit_size * output.get_logical_shape()[-1];
+    uint32_t input_cb_page_size = unit_size * input.logical_shape()[-1];
+    uint32_t output_cb_page_size = unit_size * output.logical_shape()[-1];
 
     uint32_t aligned_input_cb_page_size = round_up_to_mul32(input_cb_page_size);
     uint32_t aligned_output_cb_page_size = round_up_to_mul32(output_cb_page_size);
@@ -89,7 +89,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
 
-    switch (input.get_dtype()) {
+    switch (input.dtype()) {
         case DataType::BFLOAT16: reader_defines["DTYPE_BFLOAT16"] = "1"; break;
         case DataType::FLOAT32: reader_defines["DTYPE_FLOAT32"] = "1"; break;
         default: break;

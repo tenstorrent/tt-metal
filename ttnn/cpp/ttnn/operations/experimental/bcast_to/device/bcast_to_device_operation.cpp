@@ -32,7 +32,7 @@ BcastToOperation::program_factory_t BcastToOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
-    switch (input.get_layout()) {
+    switch (input.layout()) {
         case Layout::TILE: return BcastToTileFactory{};
         default: TT_THROW("BcastTo: Unsupported input layout");
     }
@@ -45,9 +45,9 @@ void validate(
     const auto& output = tensor_args.output;
 
     TT_FATAL(
-        input.get_layout() == Layout::TILE,
+        input.layout() == Layout::TILE,
         "bcast_to: Invalid tensor memory layout {}. Input tensor layout must be TILE.",
-        input.get_layout());
+        input.layout());
     TT_FATAL(
         tensor_args.input.storage_type() == StorageType::DEVICE,
         "bcast_to: Invalid storage_type {}. Input tensor need to be on device",
@@ -68,14 +68,14 @@ void validate(
             output->get_logical_shape(),
             operation_attributes.output_shape);
         TT_FATAL(
-            input.get_layout() == output->get_layout(),
+            input.layout() == output->get_layout(),
             "bcast_to: Input {} and output {} must have same layout",
-            input.get_layout(),
+            input.layout(),
             output->get_layout());
         TT_FATAL(
-            input.get_dtype() == output->get_dtype(),
+            input.dtype() == output->get_dtype(),
             "bcast_to: Input {} and output {} must have same dtype",
-            input.get_dtype(),
+            input.dtype(),
             output->get_dtype());
     }
 }
@@ -98,8 +98,8 @@ BcastToOperation::spec_return_value_t BcastToOperation::compute_output_specs(
     return TensorSpec(
         Shape{operation_attributes.output_shape},
         tt::tt_metal::TensorLayout(
-            tensor_args.input.get_dtype(),
-            tt::tt_metal::PageConfig(tensor_args.input.get_layout()),
+            tensor_args.input.dtype(),
+            tt::tt_metal::PageConfig(tensor_args.input.layout()),
             operation_attributes.memory_config));
 };
 
@@ -119,8 +119,8 @@ std::tuple<BcastToOperation::operation_attributes_t, BcastToOperation::tensor_ar
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     auto subtile_broadcast_type = get_subtile_broadcast_type(
-        input.get_logical_shape()[-2],
-        input.get_logical_shape()[-1],
+        input.logical_shape()[-2],
+        input.logical_shape()[-1],
         output_shape[output_shape.size() - 2],
         output_shape[output_shape.size() - 1]);
     tt::log_debug(tt::LogOp, "get_subtile_broadcast_type: {}\n", subtile_broadcast_type);

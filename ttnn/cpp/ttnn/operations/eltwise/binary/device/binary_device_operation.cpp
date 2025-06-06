@@ -62,7 +62,7 @@ namespace utils {
 BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     ZoneScopedN("BinaryDeviceOperation::select_program_factory");
-    const auto input_shape_a = tensor_args.input_tensor_a.get_logical_shape();
+    const auto input_shape_a = tensor_args.input_tensor_a.logical_shape();
 
     if (operation_attributes.scalar.has_value()) {
         return BroadcastHeightAndWidthMultiCore{};
@@ -78,7 +78,7 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
 
     if (height_a == height_b and width_a == width_b) {
         BinaryOpType op = operation_attributes.binary_op_type;
-        DataType dtype1 = tensor_args.input_tensor_a.get_dtype();
+        DataType dtype1 = tensor_args.input_tensor_a.dtype();
         DataType dtype2 = tensor_args.input_tensor_b->get_dtype();
         bool sfpu_op_check = utils::is_binary_sfpu_op(op, dtype1, dtype2);
         if(sfpu_op_check){
@@ -121,7 +121,7 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
 
     BinaryDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Input to eltwise binary must be tilized");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input to eltwise binary must be tilized");
 
     bool tensor_b_sharded = false;
 
@@ -178,7 +178,7 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& output_tensor = tensor_args.output_tensor;
 
-    const auto& input_shape_a = input_tensor_a.get_logical_shape();
+    const auto& input_shape_a = input_tensor_a.logical_shape();
 
     auto batch_size_0_a = input_shape_a.rank() >= 4 ? input_shape_a[-4] : 1;
     auto batch_size_1_a = input_shape_a.rank() >= 3 ? input_shape_a[-3] : 1;
@@ -291,9 +291,9 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
 
     auto program_factory = select_program_factory(attributes, tensor_args);
     TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.get_storage()),
+        std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
         "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.get_storage()));
+        tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
 
     if (input_tensor_b.has_value()) {
         TT_ASSERT(
@@ -331,7 +331,7 @@ operation::OpPerformanceModelGeneral<BinaryDeviceOperation::tensor_return_value_
 
     uint32_t total_bytes = 0;
     std::vector<Tensor> input_tensors = {input_tensor_a};
-    total_bytes += input_tensor_a.volume() * input_tensor_a.element_size();
+    total_bytes += input_tensor_a.padded_volume() * input_tensor_a.element_size();
     if (input_tensor_b.has_value()) {
         input_tensors.push_back(*input_tensor_b);
         total_bytes += input_tensor_b->volume() * input_tensor_b->element_size();
@@ -367,7 +367,7 @@ BinaryDeviceOperation::invoke(
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
-            output_dtype.value() == optional_output_tensor.value().get_dtype(),
+            output_dtype.value() == optional_output_tensor.value().dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
     CoreRangeSet worker_grid;
@@ -417,7 +417,7 @@ BinaryDeviceOperation::invoke(
             std::move(input_tensor_a_activation),
             std::nullopt,
             memory_config.value_or(optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : input_tensor_a_arg.memory_config()),
-            output_dtype.value_or(input_tensor_a_arg.get_dtype()),
+            output_dtype.value_or(input_tensor_a_arg.dtype()),
             std::move(worker_grid),
             std::nullopt},
         tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor}};
@@ -435,7 +435,7 @@ BinaryDeviceOperation::invoke(
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     if (output_dtype.has_value() && optional_output_tensor.has_value()) {
         TT_FATAL(
-            output_dtype.value() == optional_output_tensor.value().get_dtype(),
+            output_dtype.value() == optional_output_tensor.value().dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
 
@@ -448,7 +448,7 @@ BinaryDeviceOperation::invoke(
             std::move(input_tensor_a_activation),
             scalar,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
-            output_dtype.value_or(input_tensor_a_arg.get_dtype()),
+            output_dtype.value_or(input_tensor_a_arg.dtype()),
             std::move(worker_grid),
             std::nullopt},
         tensor_args_t{input_tensor_a_arg, std::nullopt, optional_output_tensor}};

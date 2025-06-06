@@ -166,7 +166,7 @@ const ttnn::Shape& Tensor::get_logical_shape() const { return logical_shape(); }
 
 const ttnn::Shape& Tensor::get_padded_shape() const { return padded_shape(); }
 
-const Storage& Tensor::get_storage() const { return this->tensor_attributes->get_storage(); }
+const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
 
 Storage& Tensor::get_storage() { return this->tensor_attributes->get_storage(); }
 
@@ -296,7 +296,7 @@ Tensor Tensor::from_vector(
 template <>
 std::vector<float> Tensor::to_vector<float>(ttnn::QueueId cq_id) const {
     Tensor cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
-    switch (cpu_tensor.get_dtype()) {
+    switch (cpu_tensor.dtype()) {
         case DataType::BFLOAT16: {
             auto buffer = host_buffer::get_as<bfloat16>(cpu_tensor);
             std::vector<float> physical_data;
@@ -313,11 +313,11 @@ std::vector<float> Tensor::to_vector<float>(ttnn::QueueId cq_id) const {
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
-            const auto& tile = cpu_tensor.get_tensor_spec().tile();
+            const auto& tile = cpu_tensor.tensor_spec().tile();
             auto buffer = host_buffer::get_as<uint32_t>(cpu_tensor);
             auto packed_data = std::vector<uint32_t>(buffer.begin(), buffer.end());
             std::vector<float> unpacked_data =
-                cpu_tensor.get_tensor_spec().data_type() == DataType::BFLOAT8_B
+                cpu_tensor.tensor_spec().data_type() == DataType::BFLOAT8_B
                     ? unpack_bfp8_tiles_into_float_vec(
                           packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
                     : unpack_bfp4_tiles_into_float_vec(
@@ -326,7 +326,7 @@ std::vector<float> Tensor::to_vector<float>(ttnn::QueueId cq_id) const {
             return tensor_impl::decode_tensor_data(std::move(unpacked_data), cpu_tensor.tensor_spec());
         }
         default: {
-            TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.get_dtype());
+            TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.dtype());
         }
     }
 }
@@ -519,7 +519,7 @@ bool Tensor::is_allocated() const {
             [](const HostStorage&) { return true; },
             [](const MultiDeviceHostStorage&) { return true; },
         },
-        this->get_storage());
+        this->storage());
     return output;
 }
 
@@ -530,7 +530,7 @@ StorageType Tensor::storage_type() const {
             [](const DeviceStorage&) { return StorageType::DEVICE; },
             [](const MultiDeviceHostStorage&) { return StorageType::MULTI_DEVICE_HOST; },
         },
-        this->get_storage());
+        this->storage());
 }
 
 ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->get_padded_shape())); }
@@ -662,8 +662,8 @@ void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::opti
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
     }
 
-    TT_ASSERT(dst.get_dtype() == src.get_dtype());
-    TT_ASSERT(dst.get_layout() == src.get_layout());
+    TT_ASSERT(dst.dtype() == src.dtype());
+    TT_ASSERT(dst.layout() == src.layout());
 
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
         auto dst_buffer = host_buffer::get_host_buffer(dst);
@@ -678,8 +678,8 @@ void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::opti
 
 void memcpy(
     distributed::MeshCommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
-    TT_ASSERT(dst.get_dtype() == src.get_dtype());
-    TT_ASSERT(dst.get_layout() == src.get_layout());
+    TT_ASSERT(dst.dtype() == src.dtype());
+    TT_ASSERT(dst.layout() == src.layout());
 
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
         auto dst_buffer = host_buffer::get_host_buffer(dst);
@@ -728,15 +728,15 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
         host_tensor.storage_type() == StorageType::HOST or host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
         "write_tensor only supports host_tensor to device_tensor data transfer");
 
-    auto& device_storage = std::get<DeviceStorage>(device_tensor.get_storage());
+    auto& device_storage = std::get<DeviceStorage>(device_tensor.storage());
     if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
         tensor_impl::copy_to_mesh_tensor_wrapper(host_tensor, device_tensor, cq_id);
         return;
     }
 
-    TT_FATAL(host_tensor.get_logical_shape() == device_tensor.get_logical_shape(), "Error");
-    TT_FATAL(host_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
-    TT_FATAL(host_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(), "Error");
+    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Error");
+    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Error");
+    TT_FATAL(host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(), "Error");
     std::visit(
         tt::stl::overloaded{
             [cq_id, &host_tensor, &device_tensor](const DeviceStorage& device_storage) {
@@ -755,7 +755,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                         },
                         [](auto&&) -> const void* { TT_THROW("Unreachable"); },
                     },
-                    host_tensor.get_storage());
+                    host_tensor.storage());
                 if (auto mesh_device = device_tensor.mesh_device()) {
                     tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
                 } else {
@@ -763,7 +763,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                 }
             },
             [](auto&& s) { TT_THROW("Unreachable"); }},
-        device_tensor.get_storage());
+        device_tensor.storage());
 }
 
 Tensor set_tensor_id(const Tensor& tensor) {
@@ -775,7 +775,7 @@ Tensor set_tensor_id(const Tensor& tensor) {
     return output;
 };
 
-const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
+const Storage& Tensor::get_storage() const { return this->tensor_attributes->get_storage(); }
 Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
 
 const ttnn::Shape& Tensor::logical_shape() const { return this->tensor_attributes->get_tensor_spec().logical_shape(); }
@@ -794,7 +794,7 @@ const DeviceStorage& Tensor::device_storage() const {
     auto storage_type = this->storage_type();
     TT_FATAL(
         storage_type == tt::tt_metal::StorageType::DEVICE, "Expected Tensor with DeviceStorage, got {}", storage_type);
-    return std::get<DeviceStorage>(this->get_storage());
+    return std::get<DeviceStorage>(this->storage());
 }
 
 distributed::MeshDevice* Tensor::mesh_device() const {

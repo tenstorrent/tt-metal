@@ -24,7 +24,7 @@ void validate_fold(
     uint32_t stride_w) {
     const Tensor& input_tensor = input_tensors.at(0);
 
-    const auto input_shape = input_tensor.get_padded_shape();
+    const auto input_shape = input_tensor.padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
     TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
@@ -35,8 +35,7 @@ void validate_fold(
 
         auto shard_shape = input_tensor.shard_spec().value().shape;
         TT_FATAL(shard_shape[0] % (input_shape[2] * stride_h * stride_w) == 0, "Error");
-        TT_FATAL(
-            input_tensor.get_layout() == Layout::ROW_MAJOR, "Fold: Expect sharded input tensor in row-major layout.");
+        TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Fold: Expect sharded input tensor in row-major layout.");
         TT_FATAL(
             (input_shape[-1] * input_tensor.element_size()) % 16 == 0,
             "Fold: Expect input tensor's pages to be multiples of 16 bytes.");
@@ -65,7 +64,7 @@ void Fold::validate_on_program_cache_hit(const operation_attributes_t& op_attr, 
 Fold::spec_return_value_t Fold::compute_output_specs(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_tensor = tensors.input_tensor;
-    const ttnn::Shape input_shape = input_tensor.get_logical_shape();
+    const ttnn::Shape input_shape = input_tensor.logical_shape();
     // we concatenate (stride_h sticks in H-dim) * (stride_w in W-dim) into 1 stick along C-dim
     ttnn::Shape output_shape(
         {1,
@@ -82,13 +81,13 @@ Fold::spec_return_value_t Fold::compute_output_specs(
         return {TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), mem_config))};
+                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config))};
     } else if (op_attr.is_dram_interleaved) {
         ttnn::Shape output_logical_shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]});
         return {TensorSpec(
             output_logical_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(),
+                input_tensor.dtype(),
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
                 input_tensor.memory_config()))};
     }
@@ -96,7 +95,7 @@ Fold::spec_return_value_t Fold::compute_output_specs(
     return {TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            input_tensor.get_dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), input_tensor.memory_config()))};
+            input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), input_tensor.memory_config()))};
 }
 
 Fold::tensor_return_value_t Fold::create_output_tensors(

@@ -117,7 +117,7 @@ Result conv_transpose2d(
             out_channels,
             output_height,
             output_width,
-            weight_tensor.get_logical_shape()[3],
+            weight_tensor.logical_shape()[3],
             full_input_height,
             full_input_width,
             compute_grid_size,

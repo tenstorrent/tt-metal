@@ -43,7 +43,7 @@ void FastReduceNCDeviceOperation::validate_with_output_tensors(
     check_tensor(output, "FastReduceNC", "output", {DataType::BFLOAT16, DataType::BFLOAT8_B});
 
     // validate input dim
-    const auto input_rank = input.get_logical_shape().rank();
+    const auto input_rank = input.logical_shape().rank();
     TT_FATAL(
         (this->dim >= 0 && this->dim <= tt::tt_metal::MAX_NUM_DIMENSIONS - 2),
         "dim must be between 0 and {}.",
@@ -58,14 +58,14 @@ std::vector<ttnn::TensorSpec> FastReduceNCDeviceOperation::compute_output_specs(
     }
 
     const auto& input = input_tensors.at(0);
-    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape = input.padded_shape();
     const auto input_rank = input_shape.rank();
 
     // keepdim=true
     auto output_shape = input_shape;
     // last 2-dim
     output_shape[this->dim] = 1;
-    return {TensorSpec(output_shape, TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+    return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 std::vector<Tensor> FastReduceNCDeviceOperation::create_output_tensors(

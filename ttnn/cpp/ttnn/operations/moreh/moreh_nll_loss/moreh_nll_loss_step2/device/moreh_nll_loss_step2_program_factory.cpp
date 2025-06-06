@@ -25,13 +25,13 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_shape = input.get_padded_shape();
+    auto input_shape = input.padded_shape();
 
     auto N = input_shape[0];
 
     // copy 32 Btyes per core
     uint32_t units_to_divide = N / tt::constants::TILE_HEIGHT;
-    const auto input_shape_without_padding = input.get_logical_shape();
+    const auto input_shape_without_padding = input.logical_shape();
     const auto origin_N = input_shape_without_padding[0];
     const auto origin_C = input_shape_without_padding[1];
 
@@ -51,7 +51,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
@@ -201,10 +201,10 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     // split work
-    auto input_shape = input.get_padded_shape();
+    auto input_shape = input.padded_shape();
     auto N = input_shape[0];
 
-    const auto input_shape_without_padding = input.get_logical_shape();
+    const auto input_shape_without_padding = input.logical_shape();
     const auto origin_N = input_shape_without_padding[0];
     const auto origin_C = input_shape_without_padding[1];
     const auto origin_W = input_shape_without_padding[2];
@@ -228,7 +228,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
@@ -380,8 +380,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_shape = input.get_padded_shape();
-    auto target_shape = target.get_padded_shape();
+    auto input_shape = input.padded_shape();
+    auto target_shape = target.padded_shape();
     auto N = input_shape[0];
     auto channel_size = input_shape[1];
 
@@ -391,7 +391,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     auto Wt = W / tt::constants::TILE_WIDTH;
     auto num_inner_tile = target.volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
-    const auto input_shape_without_padding = input.get_logical_shape();
+    const auto input_shape_without_padding = input.logical_shape();
     const auto origin_N = input_shape_without_padding[0];
     const auto origin_C = input_shape_without_padding[1];
 
@@ -414,7 +414,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
@@ -574,7 +574,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t MorehNllLossStep2Dev
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     // split work
-    auto input_shape = input.get_padded_shape();
+    auto input_shape = input.padded_shape();
     auto rank = input_shape.rank();
 
     if (rank == 2) {

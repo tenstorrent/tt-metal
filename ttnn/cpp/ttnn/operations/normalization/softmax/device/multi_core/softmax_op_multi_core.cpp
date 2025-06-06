@@ -45,13 +45,13 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     DeviceComputeKernelConfig compute_kernel_config,
     bool numeric_stable) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const auto shape = input_tensor.get_padded_shape();
-    uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
+    const auto shape = input_tensor.padded_shape();
+    uint32_t W = shape[-1], H = (input_tensor.padded_volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H * W;
 
     bool mask_padded_data = false;
     uint32_t num_datum_padded = 0;
-    const auto& shape_unpadded = input_tensor.get_logical_shape();
+    const auto& shape_unpadded = input_tensor.logical_shape();
     uint32_t W_unpadded = shape_unpadded[-1];
     if (W > W_unpadded) {
         mask_padded_data = true;
@@ -63,7 +63,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     uint32_t mask_H = H;
     if (mask.has_value()) {
-        mask_H = mask.value().get_padded_shape()[2];
+        mask_H = mask.value().padded_shape()[2];
     }
     uint32_t mask_Ht = mask_H / TILE_HEIGHT;
 
@@ -72,7 +72,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     // This should allocate input_tensor DRAM buffer on the device
     auto* device = input_tensor.device();
 
-    tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t in0_tile_size = tt::tt_metal::detail::TileSize(in0_cb_data_format);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -81,11 +81,11 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_cb_data_format);
 
-    tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t out0_tile_size = tt::tt_metal::detail::TileSize(out0_cb_data_format);
 
     tt::DataFormat mask_cb_data_format = mask.has_value()
-                                             ? tt::tt_metal::datatype_to_dataformat_converter(mask.value().get_dtype())
+                                             ? tt::tt_metal::datatype_to_dataformat_converter(mask.value().dtype())
                                              : tt::DataFormat::Float16_b;
     uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_cb_data_format);
 
@@ -104,7 +104,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
 
-    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
+    uint32_t num_tiles = input_tensor.padded_volume() / TILE_HW;
 
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
@@ -184,7 +184,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
     if (causal_mask) {
         uint32_t num_tiles_causal_mask =
-            mask.value().get_padded_shape()[-1] * mask.value().get_padded_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+            mask.value().padded_shape()[-1] * mask.value().padded_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
         reader_compile_time_args.push_back(num_tiles_causal_mask);
     }
 
@@ -408,7 +408,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             auto dst_buffer_address =
                 output_tensors.size() == 1 ? output_tensors.at(0).buffer()->address() : src_buffer_address;
 
-            const auto shape = input_tensors.at(0).get_padded_shape();
+            const auto shape = input_tensors.at(0).padded_shape();
             uint32_t W = shape[-1], H = (input_tensors.at(0).volume() / (shape[0] * shape[-1])), NC = shape[0];
             uint32_t HW = H * W;
 
@@ -417,7 +417,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
             bool mask_padded_data = false;
             uint32_t num_datum_padded = 0;
-            const auto& shape_unpadded = input_tensors.at(0).get_logical_shape();
+            const auto& shape_unpadded = input_tensors.at(0).logical_shape();
             uint32_t W_unpadded = shape_unpadded[-1];
             if (W > W_unpadded) {
                 mask_padded_data = true;
@@ -611,12 +611,12 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     auto* device = input_tensor.device();
 
     // convert data format
-    tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat mask_cb_data_format = mask.has_value()
                                              ? tt::tt_metal::datatype_to_dataformat_converter(mask->get_dtype())
@@ -636,7 +636,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
 
     // tensor shape
     const auto shard_orient = input_tensor.shard_spec().value().orientation;
-    const auto shape = input_tensor.get_padded_shape();
+    const auto shape = input_tensor.padded_shape();
     uint32_t M = shape[2] * shape[0];
     uint32_t K = shape[3] * shape[1];
     uint32_t Mt = M / TILE_WIDTH;
@@ -665,7 +665,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
     // num tiles
-    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
+    uint32_t num_tiles = input_tensor.padded_volume() / TILE_HW;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -872,7 +872,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     uint32_t num_tiles_in_attn_mask = 0;
     uint32_t num_tiles_of_attn_mask_needed_per_core = 0;
     if (hw_dims_only_causal_mask) {
-        num_tiles_in_attn_mask = mask.value().get_padded_shape()[-1] * mask.value().get_padded_shape()[-2] / TILE_HW;
+        num_tiles_in_attn_mask = mask.value().padded_shape()[-1] * mask.value().padded_shape()[-2] / TILE_HW;
         num_tiles_of_attn_mask_needed_per_core = block_ht * block_wt;
     }
     uint32_t num_cores_per_batch_index = 0;

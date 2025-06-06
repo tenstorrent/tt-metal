@@ -18,7 +18,7 @@ void MorehNllLossStep1DeviceOperation::validate_inputs(
 
     TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_FATAL(target_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
-    TT_FATAL((target_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
+    TT_FATAL((target_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
 
     if (weight_tensor.has_value()) {
         TT_FATAL(
@@ -26,7 +26,7 @@ void MorehNllLossStep1DeviceOperation::validate_inputs(
         TT_FATAL(
             weight_tensor.value().buffer() != nullptr,
             "Operands to nll_loss need to be allocated in buffers on device!");
-        TT_FATAL(weight_tensor.value().get_dtype() == DataType::BFLOAT16, "weigth tensor dtype must be bfloat16");
+        TT_FATAL(weight_tensor.value().dtype() == DataType::BFLOAT16, "weigth tensor dtype must be bfloat16");
     }
 }
 
@@ -44,7 +44,7 @@ MorehNllLossStep1DeviceOperation::spec_return_value_t MorehNllLossStep1DeviceOpe
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& target_tensor = tensor_args.target_tensor;
     return TensorSpec(
-        target_tensor.get_logical_shape(),
+        target_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
 }

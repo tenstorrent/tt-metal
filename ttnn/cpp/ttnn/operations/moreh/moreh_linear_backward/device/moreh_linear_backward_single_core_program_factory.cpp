@@ -21,7 +21,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
 
     auto& output_grad = tensor_args.output_grad;
 
-    const auto& output_grad_shape_wo_padding = output_grad.get_logical_shape();
+    const auto& output_grad_shape_wo_padding = output_grad.logical_shape();
 
     auto bias_grad_memory_config = operation_attributes.bias_grad_memory_config;
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -33,7 +33,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     const uint32_t mask_w =
         do_mask_w ? output_grad_shape_wo_padding[-1] % constants::TILE_WIDTH : constants::TILE_WIDTH;
 
-    const auto& output_grad_shape = output_grad.get_padded_shape();
+    const auto& output_grad_shape = output_grad.padded_shape();
     uint32_t batch_num = output_grad.volume() / output_grad_shape[-2] / output_grad_shape[-1];
     uint32_t Ht = output_grad_shape[-2] / constants::TILE_HEIGHT;
     uint32_t Wt = output_grad_shape[-1] / constants::TILE_WIDTH;
@@ -62,7 +62,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
+    auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
 
     CreateCircularBuffer(
         program,

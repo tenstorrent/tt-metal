@@ -48,7 +48,7 @@ MorehBiasAddBackwardOperation::spec_return_value_t MorehBiasAddBackwardOperation
         return tensor_args.bias_grad->get_tensor_spec();
     }
     TT_FATAL(tensor_args.bias.has_value(), "bias tensor should not be std::nullopt");
-    auto dtype = tensor_args.bias.value().get_dtype();
+    auto dtype = tensor_args.bias.value().dtype();
     return TensorSpec(
         tensor_args.bias->get_logical_shape(),
         TensorLayout(dtype, PageConfig(Layout::TILE), operation_attributes.bias_grad_memory_config));

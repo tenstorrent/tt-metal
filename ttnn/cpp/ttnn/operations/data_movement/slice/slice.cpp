@@ -27,9 +27,9 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<float>& pad_value) {
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     uint32_t input_rank = input_shape.rank();
-    auto input_layout = input_tensor.get_layout();
+    auto input_layout = input_tensor.layout();
 
     if (input_rank == 0) {
         return input_tensor;
@@ -53,7 +53,7 @@ ttnn::Tensor SliceOperation::invoke(
         }
     }
 
-    const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
+    const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
 
     auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                             : memory_config_arg.value_or(input_tensor.memory_config());
@@ -106,14 +106,14 @@ ttnn::Tensor SliceOperation::invoke(
 
     Tensor input = input_tensor;
     rm_only =
-        (input_tensor.get_layout() == Layout::TILE &&
+        (input_tensor.layout() == Layout::TILE &&
          (!no_step || one_dimensional || input_tensor.is_sharded() || !handled_tile_alignment));
     if (rm_only) {
         if (!no_step) {
-            TT_FATAL(input.get_dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
+            TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
         }
         TT_FATAL(
-            input.get_dtype() != DataType::UINT16,
+            input.dtype() != DataType::UINT16,
             "This slice requires an implicit Tile->RM conversion and that is not currently supported for uint16");
         input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config, (IDevice*)nullptr);
         if (one_dimensional) {
@@ -243,13 +243,13 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value) {
     TT_FATAL(
-        output_tensor_start.get_logical_shape().rank() == 1,
+        output_tensor_start.logical_shape().rank() == 1,
         "The start tensor for slicing must be in 1D shape, but got {}D",
-        output_tensor_start.get_logical_shape().rank());
+        output_tensor_start.logical_shape().rank());
     TT_FATAL(
-        output_tensor_end.get_logical_shape().rank() == 1,
+        output_tensor_end.logical_shape().rank() == 1,
         "The end tensor for slicing must be in 1D shape, but got {}D",
-        output_tensor_end.get_logical_shape().rank());
+        output_tensor_end.logical_shape().rank());
 
     // convert the Tensor to Vector
     std::vector<T> output_tensor_start_vector = output_tensor_start.to_vector<T>();

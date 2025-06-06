@@ -61,7 +61,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     const uint32_t im2_t = 1;  // log(x)
     const uint32_t im3_t = 1;  // exp(log(x) * decimal)
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(total_norm.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(total_norm.dtype());
 
     CreateCircularBuffer(
         program,

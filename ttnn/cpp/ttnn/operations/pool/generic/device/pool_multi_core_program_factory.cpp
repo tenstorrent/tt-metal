@@ -236,11 +236,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     tt::tt_metal::DeviceStorage reader_indices_storage = reader_indices.device_storage();
     tt::tt_metal::Buffer* dst_dram_buffer = output.buffer();
 
-    const auto input_shape = input.get_padded_shape();
-    const auto output_shape = output.get_padded_shape();
+    const auto input_shape = input.padded_shape();
+    const auto output_shape = output.padded_shape();
 
-    tt::DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
-    tt::DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
     const uint32_t in_nbytes = datum_size(in_df);
     const uint32_t out_nbytes = datum_size(out_df);
 
@@ -248,7 +248,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t out_nbytes_c = output_shape[3] / num_shards_c * out_nbytes;  // row of output (channels)
 
     constexpr tt::DataFormat indices_df =
-        tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.get_dtype());
+        tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.dtype());
     const uint32_t indices_nbytes = datum_size(indices_df);
 
     const uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
@@ -465,7 +465,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             avg_pool_config, input.memory_config().memory_layout(), in_n, num_shards_c, ncores);
 
         const std::array<uint32_t, 2> shard_shape =
-            std::array<uint32_t, 2>({1, static_cast<uint32_t>(config_tensor.get_logical_shape()[-1])});
+            std::array<uint32_t, 2>({1, static_cast<uint32_t>(config_tensor.logical_shape()[-1])});
         const tt::tt_metal::ShardOrientation config_tensor_shard_orientation = input.shard_spec().value().orientation;
         const tt::tt_metal::ShardSpec config_shard_spec(
             input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);

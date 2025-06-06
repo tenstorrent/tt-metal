@@ -100,7 +100,7 @@ MorehArangeOperation::invoke(
             end,
             step,
             untilize_out,
-            dtype.value_or(any.get_dtype()),
+            dtype.value_or(any.dtype()),
             memory_config.value_or(any.memory_config()),
         },
         tensor_args_t{

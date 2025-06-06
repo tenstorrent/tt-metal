@@ -186,7 +186,7 @@ struct OpPerformanceModelGeneral {
                 }
             }
         } else if constexpr (std::is_same_v<OutputTensors, Tensor>) {
-            this->outputs_bytes.push_back(output_tensors.volume() * output_tensors.element_size());
+            this->outputs_bytes.push_back(output_tensors.padded_volume() * output_tensors.element_size());
         } else {
             for (const auto& ot : output_tensors) {
                 if (!ot.has_value()) {

@@ -67,8 +67,8 @@ void MorehAdamWDeviceOperation::validate_on_program_cache_hit(
 
 MorehAdamWDeviceOperation::spec_return_value_t MorehAdamWDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_shape = tensor_args.param_in.get_logical_shape();
-    auto dtype = tensor_args.param_in.get_dtype();
+    auto output_shape = tensor_args.param_in.logical_shape();
+    auto dtype = tensor_args.param_in.dtype();
     auto memory_config = operation_attributes.memory_config;
 
     std::vector<std::optional<TensorSpec>> result;

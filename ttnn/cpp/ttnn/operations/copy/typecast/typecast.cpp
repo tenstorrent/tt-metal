@@ -19,7 +19,7 @@ inline Tensor typecast_impl(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    DataType input_dtype = input_tensor.get_dtype();
+    DataType input_dtype = input_tensor.dtype();
     bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
@@ -51,11 +51,11 @@ Tensor Typecast::invoke(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
-            output_dtype == optional_output_tensor.value().get_dtype(),
+            output_dtype == optional_output_tensor.value().dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
 
-    DataType input_dtype = input.get_dtype();
+    DataType input_dtype = input.dtype();
     return detail::typecast_impl(
         queue_id, input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids);
 }
@@ -69,10 +69,10 @@ Tensor Typecast::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    TT_FATAL(tt_input_dtype == input_tensor.get_dtype(), "input dtype and input tensor's dtype provided should match");
+    TT_FATAL(tt_input_dtype == input_tensor.dtype(), "input dtype and input tensor's dtype provided should match");
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
-            tt_output_dtype == optional_output_tensor.value().get_dtype(),
+            tt_output_dtype == optional_output_tensor.value().dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
     return detail::typecast_impl(

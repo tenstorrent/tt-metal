@@ -38,7 +38,7 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
         const auto& tensor = input_tensors[i];
         // Check that all tensors are on the same device
         TT_FATAL(tensor.device() == input_tensors[0].device(), "All tensors must be on the same device");
-        TT_FATAL(tensor.get_layout() == Layout::TILE, "All tensors must be tilized");
+        TT_FATAL(tensor.layout() == Layout::TILE, "All tensors must be tilized");
         TT_FATAL(
             tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
             "Input tensors must be width sharded");
@@ -52,7 +52,7 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
             tensor.buffer()->shard_spec().shape()[1],
             num_receivers_per_sender);
 
-        tt::DataFormat tensor_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
+        tt::DataFormat tensor_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
         TT_FATAL(
             tensor_data_format == tt::DataFormat::Bfp4_b || tensor_data_format == tt::DataFormat::Bfp8_b ||
                 tensor_data_format == tt::DataFormat::Float16_b,
@@ -62,13 +62,13 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(
         tensor_addrs.device() == input_tensors[0].device(),
         "tensors_addrs must be on the same device as the input tensors");
-    TT_FATAL(tensor_addrs.get_layout() == Layout::ROW_MAJOR, "Tensor containing addresses must be row major");
+    TT_FATAL(tensor_addrs.layout() == Layout::ROW_MAJOR, "Tensor containing addresses must be row major");
     TT_FATAL(
         tensor_addrs.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Tensor containing addresses must be height sharded");
     TT_FATAL(tensor_addrs.memory_config().buffer_type() == BufferType::L1, "Tensor containing addresses must be in L1");
 
-    tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.get_dtype());
+    tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.dtype());
     TT_FATAL(tensor_addrs_data_format == tt::DataFormat::UInt32, "Tensor containing addresses must be of type UInt32");
 }
 // TODO: Remove output tensor entirely (if possible)
@@ -76,7 +76,7 @@ std::vector<ttnn::TensorSpec> DramPrefetcher::compute_output_specs(const std::ve
     return {TensorSpec(
         ttnn::Shape{32, 32},
         tt::tt_metal::TensorLayout(
-            input_tensors[0].get_dtype(), tt::tt_metal::PageConfig(input_tensors[0].get_layout()), MemoryConfig{}))};
+            input_tensors[0].dtype(), tt::tt_metal::PageConfig(input_tensors[0].layout()), MemoryConfig{}))};
 }
 tt::tt_metal::operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
