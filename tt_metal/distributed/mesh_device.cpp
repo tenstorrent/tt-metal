@@ -335,8 +335,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     for (auto device : submesh->get_devices()) {
         dynamic_cast<Device*>(device)->set_mesh_device(submesh);
     }
-    if (program_cache_->is_enabled()) {
-        submesh->enable_program_cache();
+    if (!program_cache_->is_enabled()) {
+        submesh->disable_and_clear_program_cache();
     }
 
     submeshes_.push_back(submesh);

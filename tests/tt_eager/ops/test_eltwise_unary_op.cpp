@@ -279,6 +279,8 @@ void test_program_cache() {
         run_test<UnaryOpType::SQRT>(device, ttnn::Shape({1, 1, 384, 4096}), 0.0f, 1.0f, 1e-1f, 1e-5f);
     };
 
+    // Since we are going to validate cache entries, we need to clear the cache
+    device->disable_and_clear_program_cache();
     device->enable_program_cache();
     run_tests();
 
