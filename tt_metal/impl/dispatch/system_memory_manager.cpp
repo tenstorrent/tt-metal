@@ -145,6 +145,7 @@ uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
     cq_to_event_locks[cq_id].lock();
     uint32_t next_event = ++this->cq_to_event[cq_id];  // Event ids start at 1
     cq_to_event_locks[cq_id].unlock();
+
     return next_event;
 }
 
@@ -167,7 +168,7 @@ void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const ui
         "completed event is {}",
         event_id,
         this->cq_to_last_completed_event[cq_id]);
-        
+
     cq_to_event_locks[cq_id].lock();
     this->cq_to_last_completed_event[cq_id] = event_id;
     cq_to_event_locks[cq_id].unlock();

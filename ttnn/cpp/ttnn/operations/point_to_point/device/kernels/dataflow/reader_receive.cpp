@@ -29,15 +29,13 @@ void kernel_main() {
 
     cb_reserve_back(packet_cb_id, 1);
     const uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
-    cb_push_back(packet_cb_id, 1);
 
     noc_semaphore_wait(semaphore_ptr, 1);
 
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
     uint32_t packet_idx = page_idx_start / max_pages_per_packet;
 
-    for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end;
-         ++page_idx, ++packet_page_idx) {
+    for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
         cb_reserve_back(receiver_cb_id, 1);
         const uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id);
 
@@ -49,7 +47,7 @@ void kernel_main() {
 
                 ++packet_idx;
                 packet_page_idx = 0;
-                curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx);
+                curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx - 1);
             }
 
             const uint32_t page_offset = page_segment_idx * packet_size_bytes;
@@ -57,10 +55,13 @@ void kernel_main() {
             const uint32_t transfer_size_bytes = std::min(page_size_bytes - page_offset, packet_size_bytes);
             const uint32_t packet_l1_page_addr = packet_l1_addr + packet_page_idx * aligned_page_size_bytes;
 
-            tt_memmove<true, false, true, 0>(dest_addr, packet_l1_page_addr, transfer_size_bytes);
+            tt_memmove<false, false, false, 0>(dest_addr, packet_l1_page_addr, transfer_size_bytes);
+
+            ++packet_page_idx;
         }
         cb_push_back(receiver_cb_id, 1);
     }
+    cb_push_back(packet_cb_id, 1);
 
     // clean up semaphore in case it is reused
     noc_semaphore_set(semaphore_ptr, 0);

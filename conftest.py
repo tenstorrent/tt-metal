@@ -378,6 +378,7 @@ def set_fabric(fabric_config):
         ttnn.set_fabric_config(fabric_config)
 
 
+
 @pytest.fixture(scope="function")
 def mesh_device(request, silicon_arch_name, device_params):
     """
@@ -434,8 +435,8 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     ttnn.close_mesh_device(mesh_device)
     # !TODO figure out why this line triggers hangs for subsequent tests
-    # reset_fabric(fabric_config)
     del mesh_device
+    reset_fabric(fabric_config)
 
 
 @pytest.fixture(scope="function")

@@ -283,3 +283,25 @@ def get_updated_device_params(device_params):
     dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
     new_device_params["dispatch_core_config"] = dispatch_core_config
     return new_device_params
+
+
+# Reset fabric config to DISABLED if not None, and do nothing otherwise
+# Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
+# This is to ensure that we don't propagate the instability to the rest of CI
+def reset_fabric(fabric_config):
+    import ttnn
+
+    if fabric_config:
+        print("FABRIC RESETTING")
+        ttnn.initialize_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+# Set fabric config to passed in value
+# Do nothing if not set
+# Must be called before creating the mesh device
+def set_fabric(fabric_config):
+    import ttnn
+
+    # If fabric_config is not None, set it to fabric_config
+    if fabric_config:
+        ttnn.initialize_fabric_config(fabric_config)
