@@ -4,65 +4,45 @@ This test suite implements tests that measure the functionality and performance 
 
 ## Test Flow
 
-L1 space is allocated on all Tensix cores involved in the data movement test. Based on a given number of reservable pages, they are designated as either master pages or receiver pages.
+L1 space is allocated on all Tensix cores involved in the data movement test. Based on a given number of reservable pages, subsets of these pages are designated as either sender pages or receiver pages.
 
-For example, if 64 pages of space are declared reservable and the master grid size is 2x2, then the page allocation is calculated as follows:
-- Number of reservable pages: 64
-- Number of master cores: 4 (2x2 grid)
-num_sender_pages = num_reservable_pages / (1 + num_master_cores) = 64 / (1 + 4) = 12.8, rounded down to 12
-num_receiver_pages = num_rservable_pages * num_master_cores = 48
-16 pages are reserved for each master core and 48 pages are reserved for each receiver core.
+The subsets are determined as follows:
+- num_sender_pages = num_reservable_pages / (1 + num_master_cores)
+- num_receiver_pages = num_sender_pages * num_master_cores
 
-## Test Parameters
-| Parameter                 | Data Type             | Description |
-| ------------------------- | --------------------- | ----------- |
-[insert contents into table]
+The starting address of the receiver space in L1 immediately follows the final address allocated for the sender space.
 
-## Test Cases
-[insert preceding description]
+Each master core contains a portion of the entire data that is to be received by each subordinate core.
+Each master core issues a NOC asynchronous (unicast) write to each receiver core, writing its portion of data to its corresponding portion of receiver pages on each subordinate core.
+By the end of the test, every subordinate core should have received the same data from every master core.
 
-1. **All to All Multicast 2x2 Packet Sizes**:
+Test attributes such as pages per transaction and number of transactions per master core, and latency measures such as kernel and pre-determined scope cycles are recorded by the profiler.
 
----
-
-# One to all Core Data Movement Tests
-
-This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions between Tensix cores.
-
-## Test Flow
-Sharded L1 buffers are created on all Tensix cores: one sender and multiple receiver cores getting the same data. Data is written into the L1 buffer on the sender core. The sender kernel issues NOC transactions to transfer this data into the L1 buffer on the receiver core. Once data is transferred, the sender kernel signals to the receiver kernel that it is done by incrementing a semaphore. Receiver kernel waits on/polls this semaphore and completes its execution when it is incremented.
-
-Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
+A pcc check is performed by cross-checking the data of all the master cores pieced-together against the data received by each subordinate core. This ensures that the data integrity is maintained throughout the data movement process.
 
 Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
 
 ## Test Parameters
-| Parameter                 | Data Type             | Description |
-| ------------------------- | --------------------- | ----------- |
-| test_id                   | uint32_t              | Test id for signifying different test cases. Can be used for grouping different tests. |
-| num_of_transactions       | uint32_t              | Number of noc transactions/calls that will be issued. |
-| transaction_size_pages    | uint32_t              | Size of the issued noc transactions in pages. |
-| page_size_bytes           | uint32_t              | Size of a page in bytes. Arbitrary value with a minimum of flit size per architecture. |
-| l1_data_format            | DataFormat            | Data format data that will be moved. |
-| master_core_coord         | CoreCoord             | Logical coordinates for the sender core. |
-| grid_size                 | CoreCoord             | Grid size of the receiver cores, with origin at 0-0 |
-| virtual_channel           | N/A                   | (1) Option to specify unicast VC for each transaction, (2) Option for a sub-test that uses a separate VC for each transaction (TODO)|
-| noc_id                    | N/A                   | Specify which NOC to use for the test |
-| posted                    | N/A                   | Posted flag. Determines if write is posted or non-posted (TODO) |
-| loopback                  | bool                  | Whether to include the sender core in the receiver core list. |
-| is_multicast              | bool                  | Whether to do a multicast rather than sending to each core individually. |
-| is_linked                 | bool                  | Whether multicast is linked. |
+| Parameter                         | Data Type             | Description                                                               |
+| --------------------------------- | --------------------- | ------------------------------------------------------------------------- |
+| test_id                           | uint32_t              | Test ID for identifying different test cases.                             |
+| mst_logical_start_coord           | CoreCoord             | Logical starting coordinates for the master core range.                   |
+| sub_logical_start_coord           | CoreCoord             | Logical starting coordinates for the subordinate core range.              |
+| mst_grid_size                     | CoreCoord             | Grid size of the master core range.                                       |
+| sub_grid_size                     | CoreCoord             | Grid size of the subordinate core range.                                  |
+| num_of_transactions_per_master    | uint32_t              | Number of transactions issued per master core.                            |
+| pages_reservable_per_transaction  | uint32_t              | Number of reservable pages per transaction in L1.                         |
+| bytes_per_page                    | uint32_t              | Size of each page in bytes.                                               |
+| l1_data_format                    | DataFormat            | Data format used for L1 data movement.                                    |
+| noc_id                            | NOC                   | Specifies which NOC to use for the test.                                  |
 
 ## Test Cases
-Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
-Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
+Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size. Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
-1. One to All 2x2 Packet Sizes: Tests one to all on a 2x2 grid.
-2. One to All 4x4 Packet Sizes: Tests one to all on a 4x4 grid.
-3. One to All 10x10 Packet Sizes: Tests one to all on a 10x10 grid.
-4. One to All Multicast 2x2 Packet Sizes: Tests one to all multicast on a 2x2 grid.
-5. One to All Multicast 5x5 Packet Sizes: Tests one to all multicast on a 5x5 grid.
-6. One to All Multicast 11x10 Packet Sizes: Tests one to all multicast on a 11x10 grid.
-7. One to All Multicast Linked 2x2 Packet Sizes: Tests one to all linked multicast on a 2x2 grid.
-8. One to All Multicast Linked 5x5 Packet Sizes: Tests one to all linked multicast on a 5x5 grid.
-9. One to All Multicast Linked 11x10 Packet Sizes: Tests one to all linked multicast on a 11x10 grid.
+1. **All to All Packet Sizes:** Tests all to all on a NxN to NxN grid.
+a. **2x2 Packet Sizes**
+2. **All to All Directed Ideal:** Tests the most optimal data movement setup between two ranges of cores.
+a. **2x2 to 1x1**
+b. **4x4 to 1x1**
+c. **1x1 to 2x2**
+d. **1x1 to 4x4**
