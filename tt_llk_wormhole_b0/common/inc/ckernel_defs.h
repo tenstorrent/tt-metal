@@ -201,14 +201,17 @@ constexpr static bool IS_A_FORMAT(uint format)
 
 constexpr static std::uint32_t SCALE_DATUM_SIZE(uint format, uint datum_count)
 {
-    switch (format & 0xF)
+    switch (static_cast<DataFormat>(format & 0xF))
     {
-        case ((uint8_t)DataFormat::Int32):
-        case ((uint8_t)DataFormat::Float32):
-            return (datum_count << 2);
-        case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Float16_b):
-            return (datum_count << 1);
+        case DataFormat::Int32:
+        case DataFormat::Float32:
+            return datum_count << 2;
+
+        case DataFormat::Float16:
+        case DataFormat::Float16_b:
+        case DataFormat::UInt16:
+            return datum_count << 1;
+
         default:
             return datum_count;
     };
