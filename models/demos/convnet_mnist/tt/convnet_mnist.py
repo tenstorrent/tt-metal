@@ -22,7 +22,6 @@ def convnet_mnist(
         weights_dtype=ttnn.bfloat16,
         activation="",
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        transpose_shards=False,
         reshard_if_not_optimal=True,
         deallocate_activation=True,
         reallocate_halo_output=True,

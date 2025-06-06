@@ -78,7 +78,7 @@ def run_conv(
     config_override,
     dilation_h=1,
     dilation_w=1,
-    transpose_shards=True,  # https://github.com/tenstorrent/tt-metal/issues/17897
+    transpose_shards=False,
     fp32_accum=False,
     packer_l1_acc=False,
     input_layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -754,7 +754,6 @@ def test_conv_dram(
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=False,
-        transpose_shards=True,
         run_twice=False,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
