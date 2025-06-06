@@ -57,6 +57,8 @@
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt-metalium/device_pool.hpp>
+#include "impl/context/metal_context.hpp"
+#include "tt-metalium/allocator.hpp"
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -136,11 +138,21 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_sync_enabled()) {
         return;
     }
+
     auto device_id = device->id();
     auto core = device->worker_core_from_logical_core(logical_core);
 
+    const auto& hal = MetalContext::instance().hal();
+
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     auto phys_core = soc_desc.translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+    profiler_msg_t* profiler_msg =
+        hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+    uint32_t addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    uint64_t control_l1_addr =
+        reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::L1_HOST_SYNC_ADDRESS]);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
+        &addr, tt_cxy_pair(device_id, core), control_l1_addr);
 
     deviceHostTimePair.emplace(device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
     smallestHostime.emplace(device_id, 0);
@@ -180,8 +192,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     const int64_t hostStartTime = TracyGetCpuTime();
     std::vector<int64_t> writeTimes(sampleCount);
 
-    auto* profiler_msg = reinterpret_cast<profiler_msg_t*>(device->get_dev_addr(core, HalL1MemAddrType::PROFILER));
-    uint64_t control_addr = reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::FW_RESET_L]);
+    uint64_t control_addr =
+        reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::HOST_SYNC_TIMESTAMP]);
     for (int i = 0; i < sampleCount; i++) {
         ZoneScopedC(tracy::Color::Tomato2);
         std::this_thread::sleep_for(std::chrono::milliseconds(millisecond_wait));
@@ -208,7 +220,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     double writeOverhead = (double)writeSum / sampleCount;
 
     constexpr uint32_t briscIndex = 0;
-    uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
 
     std::vector<std::uint32_t> sync_times =
         tt::llrt::read_hex_vec_from_core(device_id, core, addr, (sampleCount + 1) * 2 * sizeof(uint32_t));
@@ -803,7 +814,8 @@ void DumpDeviceProfileResults(
                 }
             }
         }
-        TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
+        // TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler
+        // data");
         auto device_id = device->id();
 
         if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {

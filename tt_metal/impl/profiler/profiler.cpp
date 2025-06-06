@@ -236,6 +236,12 @@ void DeviceProfiler::readRiscProfilerResults(
         if (data_source == ProfilerDataBufferSource::L1) {
             // Just grab the device end index
             bufferEndIndex = control_buffer[riscEndIndex + kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER];
+            TT_ASSERT(
+                bufferEndIndex < kernel_profiler::PROFILER_L1_VECTOR_SIZE,
+                "Bad index on L1 profiler buffer in device {}, core {},{}",
+                device_id,
+                worker_core.x,
+                worker_core.y);
         }
         uint32_t riscType;
         if (CoreType == HalProgrammableCoreType::TENSIX) {
