@@ -33,9 +33,9 @@ ALWI void dummy_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
     MATH((llk_math_hw_configure_disaggregated(icb, icb_scaler)));
 
     PACK((llk_pack_init()));
-    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 #endif
-    PACK((llk_pack_reduce_config_v2<reduce_dim, !at_start, false, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_reduce_config_v2<reduce_dim, DST_ACCUM_MODE, !at_start, false>(ocb)));
 }
 
 namespace NAMESPACE {
