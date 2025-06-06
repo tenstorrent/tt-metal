@@ -330,13 +330,20 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
 
     uint32_t clear_value_cb_id = 32;
-    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT) {
+    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT || is_large_kernel) {
         // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
-        // is needed only if we use more then 16 sticks per tile for reduction.
+        // is needed only if we use more then 16 sticks per tile for reduction
+        // or if we use large kernel size.
         clear_value_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(clear_value_cb_id, program, all_cores, tile_size(in_df), 1, in_df);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", clear_value_cb_id, tile_size(in_df), 1);
     }
+
+    // CBs for NC/BR synchornization
+    int32_t sync_cb_id1 = next_cb_index++;
+    auto sync_cb1 = tt::tt_metal::create_cb(sync_cb_id1, program, all_cores, 2, 2, tt::DataFormat::UInt16);
+    int32_t sync_cb_id2 = next_cb_index++;
+    auto sync_cb2 = tt::tt_metal::create_cb(sync_cb_id2, program, all_cores, 2, 2, tt::DataFormat::UInt16);
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
@@ -411,7 +418,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t max_pool_partials_cb_id = 32;
     if (is_large_kernel) {
         max_pool_partials_cb_id = next_cb_index++;  // max_pool partials
-        const uint32_t max_pool_partials_cb_pagesize = out_cb_pagesize;
+        const uint32_t max_pool_partials_cb_pagesize = in_cb_pagesize;
         const uint32_t max_pool_partials_cb_npages = nblocks;
 
         tt::tt_metal::create_cb(
@@ -508,7 +515,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         clear_value_cb_id,
         (uint32_t)pool_type,
         one_scalar_per_core,
-        config_cb_id};
+        config_cb_id,
+        multi_buffering_factor,
+        sync_cb_id1,
+        sync_cb_id2};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -557,7 +567,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_cb_id,
         max_pool_partials_cb_id,
         in_one_cb_id,
-        one_scalar_per_core};
+        one_scalar_per_core,
+        sync_cb_id1,
+        sync_cb_id2};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
