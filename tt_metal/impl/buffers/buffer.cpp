@@ -88,7 +88,7 @@ void validate_buffer_parameters(
         TT_FATAL(
             size % page_size == 0,
             "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers, "
-            "buffer size should be divisble by the page size "
+            "buffer size should be divisble by the page size ",
             page_size,
             size);
     }
