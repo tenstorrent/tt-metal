@@ -121,12 +121,14 @@
 
 /////////////
 // Stack info
-// Increasing the stack size comes at the expense of less local memory for globals
-#define MEM_BRISC_STACK_MIN_SIZE 1040
-#define MEM_NCRISC_STACK_MIN_SIZE 1040
-#define MEM_TRISC0_STACK_MIN_SIZE 320
-#define MEM_TRISC1_STACK_MIN_SIZE 256
-#define MEM_TRISC2_STACK_MIN_SIZE 720
+// Stack and globals share the same piece of memory, one grows at the
+// expense of the other.
+#define MEM_BRISC_STACK_MIN_SIZE 256
+#define MEM_NCRISC_STACK_MIN_SIZE 256
+#define MEM_TRISC0_STACK_MIN_SIZE 192
+#define MEM_TRISC1_STACK_MIN_SIZE 192
+#define MEM_TRISC2_STACK_MIN_SIZE 256
+#define MEM_IERISC_STACK_MIN_SIZE 128
 
 /////////////
 // IERISC memory map
@@ -145,11 +147,9 @@
 #define MEM_IERISC_MAP_END (MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)
 #define MEM_IERISC_KERNEL_SIZE (24 * 1024)
 #define MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_IERISC_MAP_END
-#define MEM_IERISC_STACK_MIN_SIZE 1024
 
 #define MEM_IERISC_BANK_TO_NOC_SCRATCH (MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_IERISC_LOCAL_SIZE)
 #define MEM_IERISC_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
-
 
 /////////////
 // Padding/alignment restriction needed in linker scripts for erisc
