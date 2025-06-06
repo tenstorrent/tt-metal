@@ -25,7 +25,7 @@ from models.utility_functions import torch_random
             20,
             1280,
             0,
-            0.958,
+            0.959,
         ),
         (
             (1, 1280, 64, 64),
@@ -36,7 +36,7 @@ from models.utility_functions import torch_random
             10,
             640,
             1,
-            0.974,
+            0.986,
         ),
     ],
 )

@@ -137,7 +137,7 @@ class TtUNet2DConditionModel(nn.Module):
             conv_bias_in,
             self.conv1_config.weights_dtype,
             fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
-            and (self.conv1_config.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+            and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
         self.conv2_config = model_config.get_conv_config(conv_path="conv_out")
@@ -152,7 +152,7 @@ class TtUNet2DConditionModel(nn.Module):
             conv_bias_out,
             self.conv2_config.weights_dtype,
             fp32_dest_acc_en=(self.conv2_config.weights_dtype == ttnn.bfloat8_b)
-            and (self.conv2_config.shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+            and (self.conv2_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
         self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)

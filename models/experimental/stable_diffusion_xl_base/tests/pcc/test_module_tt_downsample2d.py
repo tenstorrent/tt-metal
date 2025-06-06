@@ -18,9 +18,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-@pytest.mark.parametrize(
-    "input_shape, down_block_id, pcc", [((1, 320, 128, 128), 0, 0.999), ((1, 640, 64, 64), 1, 0.998)]
-)
+@pytest.mark.parametrize("input_shape, down_block_id", [((1, 320, 128, 128), 0), ((1, 640, 64, 64), 1)])
 @pytest.mark.parametrize("stride", [(2, 2)])
 @pytest.mark.parametrize("padding", [(1, 1)])
 @pytest.mark.parametrize("dilation", [(1, 1)])
@@ -33,7 +31,6 @@ def test_downsample2d(
     stride,
     padding,
     dilation,
-    pcc,
     use_program_cache,
     reset_seeds,
     conv_weights_dtype,
@@ -76,6 +73,5 @@ def test_downsample2d(
     del unet, tt_downsample
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
     logger.info(f"PCC is {pcc_message}")
