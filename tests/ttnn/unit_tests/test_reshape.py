@@ -22,6 +22,8 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize("enable_cache", [True])
 def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
+    # Since we are going to validate cache entries, we need to clear the cache
+    device.disable_and_clear_program_cache()
     if enable_cache:
         device.enable_program_cache()
 
@@ -49,6 +51,7 @@ def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape
 )
 @pytest.mark.parametrize("enable_cache", [True])
 def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
+    device.disable_and_clear_program_cache()
     if enable_cache:
         device.enable_program_cache()
 

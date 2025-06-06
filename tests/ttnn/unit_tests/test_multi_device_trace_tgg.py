@@ -24,8 +24,6 @@ NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
 def test_multi_device_single_trace(mesh_device, shape, enable_multi_cq):
     if mesh_device.get_num_devices() < 64:
         pytest.skip("Test is only valid on TGG")
-    # Trace requires program cache to be enabled
-    mesh_device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
@@ -118,9 +116,6 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_multi_cq):
     torch.manual_seed(0)
     if mesh_device.get_num_devices() < 64:
         pytest.skip("Test is only valid on TGG")
-
-    # Trace requires program cache to be enabled
-    mesh_device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)

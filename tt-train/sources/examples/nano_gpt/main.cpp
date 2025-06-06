@@ -625,7 +625,6 @@ int main(int argc, char **argv) {
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
     auto *device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
 
     struct CachedHostData {
         std::vector<uint32_t> data;

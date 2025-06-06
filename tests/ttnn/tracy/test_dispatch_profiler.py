@@ -12,7 +12,6 @@ import ttnn
 def test_with_ops(device):
     torch.manual_seed(0)
 
-    device.enable_program_cache()
     m = 1024
     k = 1024
     n = 1024
