@@ -38,7 +38,7 @@ volatile tt_reg_ptr uint * mailbox_base[4] = {
 };
 }
 
-uint32_t kernel_launch(uint32_t kernel_base_addr) {
+extern "C" uint32_t kernel_launch() {
     mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
@@ -47,10 +47,8 @@ uint32_t kernel_launch(uint32_t kernel_base_addr) {
     ckernel::wait(KERNEL_RUN_TIME);
 #endif
 #else
-  extern uint32_t __kernel_init_local_l1_base[];
-  extern uint32_t __fw_export_text_end[];
-  do_crt1((
-      uint32_t tt_l1_ptr *)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base - (uint32_t)__fw_export_text_end));
+    extern uint32_t __kernel_data_lma[];
+    do_crt1((uint32_t tt_l1_ptr *)__kernel_data_lma);
 
 #if defined(UCK_CHLKC_UNPACK)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed

@@ -29,7 +29,7 @@ OUTPUT_ARCH(riscv)
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_NCRISC_LOCAL_SIZE
 #define STACK_MIN_SIZE MEM_NCRISC_STACK_MIN_SIZE
-#if defined(TYPE_FIRMWARE) || !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
+#if defined(TYPE_FIRMWARE) || !defined(ARCH_WORMHOLE)
 #define TEXT_START MEM_NCRISC_FIRMWARE_BASE
 #else
 #define TEXT_START MEM_NCRISC_KERNEL_BASE
@@ -99,7 +99,7 @@ PHDRS {
 
 SECTIONS
 {
-#if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(NCRISC_FIRMWARE_KERNEL_SPLIT))
+#if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
   .text TEXT_START :
 #else
   .text __fw_export_text_end :
@@ -143,20 +143,10 @@ SECTIONS
 
 /* Begin the data area.  */
 #if defined(TYPE_FIRMWARE)
-#if defined(COMPILE_FOR_NCRISC)
-  PROVIDE (_Z11kernel_initm =
-#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
-           ABSOLUTE(__fw_export_text_end)
-#else
-           MEM_NCRISC_KERNEL_BASE
-#endif
-           );
-#endif
   PROVIDE(__global_pointer$ = DATA_START + 0x7f0);
   .data DATA_START :
 #define SECTION(NEW, PREV) NEW :
 #else
-  __kernel_init_local_l1_base = ABSOLUTE(.);
   /* Where firmware ended. */
   .data __fw_export_ldm_end : AT(__kernel_data_lma)
 /* We can't rely on the linker's LMA computation because that fails when data is before text.  */
@@ -222,7 +212,7 @@ SECTIONS
   .phdrs 0 (INFO) :
   {
     LONG(TEXT_SIZE
-#if defined(TYPE_KERNEL) && !(defined(COMPILE_FOR_NCRISC) && defined(NCRISC_FIRMWARE_KERNEL_SPLIT))
+#if defined(TYPE_KERNEL) && !(defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
          - (__fw_export_text_end - TEXT_START)
 #endif
          )
