@@ -295,10 +295,6 @@ def run_ring_joint_sdpa(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        # (
-        #     {"worker_l1_size": 1344544, "trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-        #     ttnn.Topology.Ring,
-        # ),
         (
             {"worker_l1_size": 1344544, "trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
             ttnn.Topology.Linear,
@@ -306,7 +302,6 @@ def run_ring_joint_sdpa(
     ],
     indirect=["device_params"],
     ids=[
-        # "ring",
         "line",
     ],
 )
@@ -386,6 +381,7 @@ def test_ring_joint_sdpa(
         up_axis,
         all_gather_topology,
     )
+    ttnn.close_mesh_device(submesh)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
@@ -489,3 +485,4 @@ def test_ring_joint_sdpa_program_cache(
         )
 
     assert submesh.num_program_cache_entries() == 1
+    ttnn.close_mesh_device(submesh)
