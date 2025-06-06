@@ -7,20 +7,17 @@
 
 // L1 to L1 request
 void kernel_main() {
-    uint32_t src_addr = get_compile_time_arg_val(0);
-    uint32_t dst_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
-    constexpr uint32_t transaction_num_pages = get_compile_time_arg_val(3);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t test_id = get_compile_time_arg_val(5);
+    uint32_t l1_local_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
+    constexpr uint32_t transaction_size_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t test_id = get_compile_time_arg_val(3);
 
     uint32_t responder_x_coord = get_arg_val<uint32_t>(0);
     uint32_t responder_y_coord = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t transaction_size_bytes = transaction_num_pages * page_size_bytes;
-
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
+    DeviceTimestampedData("Total bytes transferred", num_of_transactions * transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
 
     {
@@ -31,12 +28,11 @@ void kernel_main() {
              * occupies the lower 32 bits and the NOC XY coordinate occupies the next 12 (unicast) to 24 (multicast)
              * bits. In the get_noc_addr call, we set the local address to 0 to get the base address. Then, we OR it
              * with the local address (src_addr) in each iteration to get the full NOC address. */
-            uint64_t src_noc_addr = src_base_noc_addr | src_addr;
+            uint64_t src_noc_addr = src_base_noc_addr | l1_local_addr;
 
-            noc_async_read(src_noc_addr, dst_addr, transaction_size_bytes);
+            noc_async_read(src_noc_addr, l1_local_addr, transaction_size_bytes);
 
-            src_addr += transaction_size_bytes;
-            dst_addr += transaction_size_bytes;
+            l1_local_addr += transaction_size_bytes;
         }
         noc_async_read_barrier();
     }
