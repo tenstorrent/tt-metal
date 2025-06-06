@@ -30,8 +30,6 @@
 #include <ranges>
 #include <optional>
 
-using namespace tt::constants;
-
 namespace ttnn {
 
 using namespace ccl;
@@ -88,8 +86,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     auto mesh_device = input_tensor[0].mesh_device();
     const bool enable_async_output_tensor = false;
     const bool enable_persistent_fabric_mode = true;
-    bool is_first_chip = ring_index == 0;
-    bool is_last_chip = ring_index == ring_size - 1;
+    const bool is_first_chip = ring_index == 0;
+    const bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
@@ -98,7 +96,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         is_last_chip);
 
     /* All gather fusion */
-    bool fuse_op = fused_op_signaler.has_value();
+    const bool fuse_op = fused_op_signaler.has_value();
 
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward;
@@ -308,19 +306,18 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         }
 
         // Set Sender Reader runtime args
-        uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
-        uint32_t remainder = input_tensor_num_pages % num_links;
-        uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
-        uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
+        const uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
+        const uint32_t remainder = input_tensor_num_pages % num_links;
+        const uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
+        const uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
 
-        TT_ASSERT(!(input_tensor_shape[3] % TILE_WIDTH));
-        TT_ASSERT(!(output_tensor_shape[3] % TILE_WIDTH));
-        uint32_t TILE_WIDTH = 32;
-        uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
-        uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
-        uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
-        uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
-        uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
+        TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
+        TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
+        const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+        const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_WIDTH;
+        const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
+        const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_WIDTH;
+        const uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
 
         std::vector<uint32_t> reader_forward_rt_args = {
             input_tensor_Wt,            // width in tiles of the input shard
@@ -365,8 +362,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         tt::tt_metal::SetRuntimeArgs(
             program, worker_sender_reader_backward_kernel_id, {sender_worker_cores[0]}, reader_backward_rt_args);
 
-        CoreCoord sender_forward_worker_core = mesh_device->worker_core_from_logical_core(sender_worker_cores[1]);
-        CoreCoord sender_backward_worker_core = mesh_device->worker_core_from_logical_core(sender_worker_cores[0]);
+        const CoreCoord sender_forward_worker_core = mesh_device->worker_core_from_logical_core(sender_worker_cores[1]);
+        const CoreCoord sender_backward_worker_core =
+            mesh_device->worker_core_from_logical_core(sender_worker_cores[0]);
 
         // Writer
         std::vector<uint32_t> writer_forward_rt_args = {

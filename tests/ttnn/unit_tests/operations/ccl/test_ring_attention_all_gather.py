@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,8 +11,6 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
-
-from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
@@ -195,7 +193,7 @@ def run_ring_attention_all_gather_impl(
         for j in range(ag_num_inputs):
             tt_ag_out = ttnn.to_torch(
                 tt_ag_out_tensors[j],
-                mesh_composer=ConcatMesh2dToTensor(
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
                     mesh_device,
                     mesh_shape=tuple(mesh_device.shape),
                     dims=output_dims,
@@ -210,16 +208,8 @@ def run_ring_attention_all_gather_impl(
     mesh_device.clear_loaded_sub_device_manager()
 
 
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "num_devices, num_links, ag_output_shape, ag_num_inputs, rp_dim, rp_axis, rp_factor, up_factor, layout, ag_input_dtype",
     [
@@ -286,6 +276,9 @@ def test_ring_attention_all_gather(
     use_program_cache,
     all_gather_topology,
 ):
+    if all_gather_topology == ttnn.Topology.Ring:
+        pytest.skip("Ring topology not supported on T3K - requires 2D torus")
+
     submesh_shape = [0, 0]
     submesh_shape[rp_axis] = rp_factor
     submesh_shape[1 - rp_axis] = up_factor
@@ -311,7 +304,7 @@ def test_ring_attention_all_gather(
         num_iters=num_iters,
     )
 
-    # ttnn.close_mesh_device(submesh_device)
+    ttnn.close_mesh_device(submesh_device)
 
 
 @pytest.mark.parametrize(

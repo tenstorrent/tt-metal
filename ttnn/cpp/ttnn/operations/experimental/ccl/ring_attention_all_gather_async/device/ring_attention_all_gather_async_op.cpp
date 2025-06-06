@@ -13,92 +13,94 @@ namespace ttnn {
 
 void RingAttentionAllGatherAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    // TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
-    // const auto& input_tensor = input_tensors[0];
-    // const auto& layout = input_tensors[0].get_layout();
-    // const auto& dtype = input_tensors[0].get_dtype();
-    // const auto& page_size = input_tensors[0].buffer()->page_size();
-    // TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
+    TT_FATAL(
+        input_tensors.size() > 0, "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
 
-    // TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
-    // TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
-    // TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
-    // TT_FATAL(
-    //     this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
-    //     "Worker cores used by links are parallelizaed over rows");
+    const auto& first_input_tensor = input_tensors[0];
+    const auto& layout = first_input_tensor.get_layout();
+    const auto& dtype = first_input_tensor.get_dtype();
+    const auto& memory_config = first_input_tensor.memory_config();
+    const auto input_shape = first_input_tensor.get_logical_shape();
 
-    // TT_FATAL(
-    //     input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
-    //         input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-    //         input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-    //         input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-    //     "Unsupported memory layout {}.",
-    //     input_tensor.memory_config().memory_layout);
+    // Validate all input tensors
+    for (size_t i = 0; i < input_tensors.size(); ++i) {
+        const auto& input_tensor = input_tensors[i];
 
-    // if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
-    //     TT_FATAL(
-    //         output_tensors.size() <= 2,
-    //         "Error, Number of output tensors should be at most 2 but has {}",
-    //         output_tensors.size());
-    //     const auto& output_tensor = output_tensors.size() == 1 ? output_tensors[0] : output_tensors[1];
+        TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Input tensor {} must be tiled", i);
+        TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor {} must be on device", i);
+        TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor {} must be allocated in buffers on device", i);
 
-    //     TT_FATAL(
-    //         output_tensor.value().storage_type() == StorageType::DEVICE,
-    //         "Operands to all_gather need to be on device!");
-    //     TT_FATAL(
-    //         output_tensor.value().get_layout() == layout,
-    //         "Error, Output tensor layout should be same as input tensor layout but has {}",
-    //         output_tensor.value().get_layout());
-    //     TT_FATAL(
-    //         output_tensor.value().get_dtype() == dtype,
-    //         "Error, Output tensor dtype should be same as input tensor dtype but has {}",
-    //         output_tensor.value().get_dtype());
-    //     TT_FATAL(
-    //         output_tensor.value().get_tensor_spec().page_config() == input_tensor.get_tensor_spec().page_config(),
-    //         "Error, Output tensor page config should be same as input tensor page config but has {}",
-    //         output_tensor.value().get_tensor_spec().page_config());
-    //     TT_FATAL(
-    //         output_tensor.value().memory_config() == this->output_mem_config,
-    //         "Error, Output tensor memory config should be same as output_mem_config but has {}",
-    //         output_tensor.value().memory_config());
+        TT_FATAL(
+            input_tensor.get_dtype() == dtype,
+            "All input tensors must have the same dtype. Input tensor {} has dtype {} but expected {}",
+            i,
+            input_tensor.get_dtype(),
+            dtype);
 
-    //     // check the output tensor size
-    //     auto output_shape = output_tensor.value().get_padded_shape();
-    //     auto input_shape = input_tensor.get_padded_shape();
-    //     TT_FATAL(
-    //         output_shape.size() == input_shape.size(),
-    //         "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
-    //         output_shape.size());
-    //     for (size_t i = 0; i < input_shape.size(); ++i) {
-    //         if (i == this->dim) {
-    //             TT_FATAL(
-    //                 output_shape[i] <= input_shape[i] * this->ring_size,
-    //                 "Error, Output tensor shape at dimension {} should be {} but has {}",
-    //                 i,
-    //                 input_shape[i] * this->ring_size,
-    //                 output_shape[i]);
-    //         } else {
-    //             TT_FATAL(
-    //                 output_shape[i] == input_shape[i],
-    //                 "Error, Output tensor shape at dimension {} should be {} but has {}",
-    //                 i,
-    //                 input_shape[i],
-    //                 output_shape[i]);
-    //         }
-    //     }
+        TT_FATAL(
+            input_tensor.memory_config() == memory_config,
+            "All input tensors must have the same memory config. Input tensor {} has different memory config",
+            i);
 
-    //     // check memory layout
-    //     TT_FATAL(
-    //         output_tensor.value().memory_config().memory_layout == input_tensor.memory_config().memory_layout,
-    //         "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
-    //         output_tensor.value().memory_config().memory_layout);
-    // }
+        TT_FATAL(
+            input_tensor.get_logical_shape() == input_shape,
+            "All input tensors must have the same shape. Input tensor {} has different shape",
+            i);
+    }
+
+    TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
+
+    TT_FATAL(
+        memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Unsupported memory layout {}.",
+        memory_config.memory_layout());
+
+    // Validate output tensors if provided
+    if (output_tensors.size() > 0) {
+        TT_FATAL(
+            output_tensors.size() == input_tensors.size(),
+            "Number of output tensors ({}) must match number of input tensors ({})",
+            output_tensors.size(),
+            input_tensors.size());
+
+        for (size_t i = 0; i < output_tensors.size(); ++i) {
+            if (output_tensors[i].has_value()) {
+                const auto& output_tensor = output_tensors[i].value();
+
+                TT_FATAL(output_tensor.get_layout() == Layout::TILE, "Output tensor {} must be tiled", i);
+                TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor {} must be on device", i);
+
+                TT_FATAL(
+                    output_tensor.get_dtype() == dtype,
+                    "Output tensor {} dtype should match input tensors but has {}",
+                    i,
+                    output_tensor.get_dtype());
+
+                TT_FATAL(
+                    output_tensor.memory_config() == this->output_mem_config,
+                    "Output tensor {} memory config should match output_mem_config",
+                    i);
+
+                // Check output tensor shape
+                auto output_shape = output_tensor.get_logical_shape();
+                auto expected_output_shape = input_shape;
+                expected_output_shape[this->dim] *= this->ring_size;
+
+                TT_FATAL(
+                    output_shape == expected_output_shape,
+                    "Output tensor {} shape mismatch. Expected shape with dimension {} scaled by ring_size {}",
+                    i,
+                    this->dim,
+                    this->ring_size);
+            }
+        }
+    }
 }
 
 std::vector<ttnn::TensorSpec> RingAttentionAllGatherAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_logical_shape();  // TODO: Replace with get_logical_shape()
+    auto shape = input_tensor.get_logical_shape();
     shape[this->dim] *= this->ring_size;
     std::vector<ttnn::TensorSpec> output_specs;
     for (uint32_t i = 0; i < input_tensors.size(); i++) {
@@ -228,9 +230,6 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
     for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
         optional_output_tensors.push_back(persistent_output_buffer[i]);
     }
-
-    CoreCoord grid_size = mesh_device.compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
     return tt::tt_metal::operation::run(
         ttnn::RingAttentionAllGatherAsync{
