@@ -7,13 +7,11 @@ import math
 import torch
 import torch.nn.functional as F
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
     comp_pcc,
 )
 import ttnn
 from loguru import logger
 import pytest
-from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0, skip_for_blackhole
 from .test_scaled_dot_product_attention import fa_rand
 
 
@@ -48,34 +46,6 @@ def torch_sdpa(q, k, v, joint_q, joint_k, joint_v, num_devices):
         lse_list.append(lse)
 
     return out, lse_list
-
-
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", [64, 128], ids=["q64", "q128"])
-@pytest.mark.parametrize("k_chunk_size", [64, 128], ids=["k64", "k128"])
-@pytest.mark.parametrize(
-    "b, nh, seq_len, joint_seq_len, d",
-    [
-        (1, 5, 4096, 333, 64),  # SD3.5 large
-        (1, 5, 1024, 118, 64),
-        (1, 3, 44 * 1024, 118, 128),  # Mochi
-        (1, 2, 8192, 666, 64),
-    ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "worker_l1_size": 1344544,  # This increases space for ring-buffer, required for large kernel binary
-        }
-    ],
-    indirect=True,
-)
-def test_ring_joint_sdpa_stress(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype):
-    if q_chunk_size == 512 and k_chunk_size == 512:
-        pytest.skip("OOM config.")
-    ttnn.device.DisablePersistentKernelCache()
-    run_ring_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype)
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -130,20 +100,6 @@ def run_ring_joint_sdpa(
 
     # Create persistent output buffers
     ag_output_shape = (b, nh, seq_len, d)
-    persistent_intermediate_buffers = [
-        [
-            ttnn.from_torch(
-                torch.zeros(ag_output_shape),
-                device=submesh,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=kv_shard_dims),
-            )
-            for _ in range(2)  # Num inputs K, V
-        ]
-        for _ in range(n_iters)
-    ]
 
     persistent_output_buffers = [
         [
@@ -253,8 +209,6 @@ def run_ring_joint_sdpa(
                 tt_joint_Q,
                 tt_joint_K,
                 tt_joint_V,
-                persistent_intermediate_buffer_k=persistent_intermediate_buffers[i][0],
-                persistent_intermediate_buffer_v=persistent_intermediate_buffers[i][1],
                 persistent_output_buffer_k=persistent_output_buffers[i][0],
                 persistent_output_buffer_v=persistent_output_buffers[i][1],
                 joint_strategy="rear",
@@ -382,7 +336,7 @@ def run_ring_joint_sdpa(
         "1upx8rp",
     ],
 )
-def test_ring_joint_sdpa_perf(
+def test_ring_joint_sdpa(
     mesh_device,
     use_program_cache,
     b,
@@ -415,7 +369,107 @@ def test_ring_joint_sdpa_perf(
     print(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
     print(f"submesh: {submesh.shape}")
 
-    try:
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize(
+    "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
+    [
+        (1, 40, 4096, 333, 64, 64, 128),  # SD3.5
+    ],
+    ids=["sd35"],
+)
+@pytest.mark.parametrize("n_iters, trace_enabled", [(1, False)], ids=["no_trace"])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "line",
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(2, 4)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "rp_axis, rp_factor, up_axis, up_factor",
+    [
+        [0, 2, 1, 4],  # 2x4 RP x UP
+    ],
+    ids=[
+        "2rpx4up",
+    ],
+)
+def test_ring_joint_sdpa_program_cache(
+    mesh_device,
+    use_program_cache,
+    b,
+    nh,
+    seq_len,
+    joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    n_iters,
+    trace_enabled,
+    num_links,
+    rp_axis,
+    rp_factor,
+    up_axis,
+    up_factor,
+    all_gather_topology,
+):
+    if rp_factor == 8 and rp_axis == 1:
+        mesh_device.reshape(ttnn.MeshShape(1, 8))
+
+    mesh_device_shape = list(mesh_device.shape)
+    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+    submesh_shape = [0, 0]
+    submesh_shape[rp_axis] = rp_factor
+    submesh_shape[up_axis] = up_factor
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+
+    print(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    print(f"submesh: {submesh.shape}")
+
+    dummy_tensors = []
+    for i in range(3):
+        dummy_tensors.append(
+            ttnn.from_torch(
+                torch.rand((b, nh, seq_len, d)),
+                device=submesh,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=[None, None]),
+            )
+        )
+
         run_ring_joint_sdpa(
             submesh,
             b,
@@ -433,35 +487,5 @@ def test_ring_joint_sdpa_perf(
             up_axis,
             all_gather_topology,
         )
-    finally:
-        ttnn.close_mesh_device(submesh)
 
-
-# @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-# @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-# @pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
-# @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
-# @pytest.mark.parametrize("b", [1], ids=["b1"])
-# @pytest.mark.parametrize("nh", [1], ids=["nh1"])
-# @pytest.mark.parametrize(
-#     "seq_len, joint_seq_len",
-#     [
-#         (4096, 100),
-#     ],
-# )
-# @pytest.mark.parametrize(
-#     "d",
-#     [128],
-#     ids=[
-#         "d128",
-#     ],
-# )
-# def test_ring_joint_sdpa_program_cache(
-#     device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, use_program_cache
-# ):
-#     dummy_tensors = []
-#     for _ in range(3):
-#         dummy_tensors.append(
-#             ttnn.from_torch(fa_rand(b, nh, seq_len, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-#         )
-#         run_ring_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, dummy_tensors)
+    assert submesh.num_program_cache_entries() == 1

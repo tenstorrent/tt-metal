@@ -98,8 +98,6 @@ struct ExecuteRingJointAttention {
         const ttnn::Tensor& joint_tensor_q,
         const ttnn::Tensor& joint_tensor_k,
         const ttnn::Tensor& joint_tensor_v,
-        ttnn::Tensor& persistent_intermediate_buffer_k,
-        ttnn::Tensor& persistent_intermediate_buffer_v,
         ttnn::Tensor& persistent_output_buffer_k,
         ttnn::Tensor& persistent_output_buffer_v,
         const std::string& joint_strategy,

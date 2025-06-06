@@ -191,8 +191,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
     const ttnn::Tensor& joint_tensor_q,
     const ttnn::Tensor& joint_tensor_k,
     const ttnn::Tensor& joint_tensor_v,
-    ttnn::Tensor& persistent_intermediate_buffer_k,
-    ttnn::Tensor& persistent_intermediate_buffer_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
@@ -251,10 +249,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         joint_tensor_q,
         joint_tensor_k,
         joint_tensor_v,
-        persistent_intermediate_buffer_k,  // AllGather output
-        persistent_intermediate_buffer_v,  // AllGather output
-        persistent_output_buffer_k,        // AllGather output / RingGather input
-        persistent_output_buffer_v,        // AllGather output / RingGather input
+        persistent_output_buffer_k,  // AllGather output / RingGather input
+        persistent_output_buffer_v,  // AllGather output / RingGather input
     };
 
     auto results = tt::tt_metal::operation::run(

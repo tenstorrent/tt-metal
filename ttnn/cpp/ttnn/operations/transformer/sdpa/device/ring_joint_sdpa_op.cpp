@@ -18,7 +18,7 @@ namespace ttnn::operations::transformer {
 
 void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(
-        input_tensors.size() == 10,
+        input_tensors.size() == 8,
         "Must have 6 SDPA input tensors (Q, K, V, joint_Q, joint_K, joint_V) and 4 AllGather input tensors.");
 
     const auto& input_tensor_q = input_tensors.at(0);
@@ -27,10 +27,8 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
     const auto& joint_tensor_q = input_tensors.at(3);
     const auto& joint_tensor_k = input_tensors.at(4);
     const auto& joint_tensor_v = input_tensors.at(5);
-    const auto& persistent_intermediate_buffer_k = input_tensors.at(6);
-    const auto& persistent_intermediate_buffer_v = input_tensors.at(7);
-    const auto& persistent_output_buffer_k = input_tensors.at(8);
-    const auto& persistent_output_buffer_v = input_tensors.at(9);
+    const auto& persistent_output_buffer_k = input_tensors.at(6);
+    const auto& persistent_output_buffer_v = input_tensors.at(7);
 
     const std::vector<Tensor> sdpa_input_tensors = {
         input_tensor_q,
@@ -44,9 +42,7 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         input_tensor_v,
     };
     const std::vector<std::optional<Tensor>> ring_gather_output_tensors = {
-        persistent_intermediate_buffer_k,
         persistent_output_buffer_k,
-        persistent_intermediate_buffer_v,
         persistent_output_buffer_v,
     };
 
@@ -303,10 +299,8 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
     auto& joint_tensor_q = input_tensors.at(3);
     auto& joint_tensor_k = input_tensors.at(4);
     auto& joint_tensor_v = input_tensors.at(5);
-    auto& persistent_intermediate_buffer_k = input_tensors.at(6);
-    auto& persistent_intermediate_buffer_v = input_tensors.at(7);
-    auto& persistent_output_buffer_k = input_tensors.at(8);
-    auto& persistent_output_buffer_v = input_tensors.at(9);
+    auto& persistent_output_buffer_k = input_tensors.at(6);
+    auto& persistent_output_buffer_v = input_tensors.at(7);
     auto& output_tensor = output_tensors.at(0);
     auto& joint_output_tensor = output_tensors.at(1);
     auto& lse_output_tensor = output_tensors.at(2);
@@ -341,7 +335,7 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         this->all_gather_struct.ring_size, device_index, forward_writes_expected, backward_writes_expected);
 
     auto ring_joint_sdpa_program = detail::ring_joint_sdpa(
-        program,  // Can't pass program, must pass allgather's program
+        program,
         input_tensor_q,
         persistent_output_buffer_k,
         persistent_output_buffer_v,
@@ -373,16 +367,12 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         input_tensor_k,
         input_tensor_v,
     };
-    std::vector<Tensor> all_gather_intermediate_tensors = {
-        persistent_intermediate_buffer_k,
-        persistent_intermediate_buffer_v,
-    };
     std::vector<Tensor> all_gather_output_tensors = {
         persistent_output_buffer_k,
         persistent_output_buffer_v,
     };
     auto all_gather_program = ring_attention_all_gather_async_multi_core_with_workers_helper(
-        ring_joint_sdpa_program.program,
+        ring_joint_sdpa_program.program,  // Must pass ring_joint_sdpa's program
         all_gather_input_tensors,
         target_device,
         forward_device,
@@ -412,23 +402,20 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         auto& joint_tensor_q = input_tensors.at(3);
         auto& joint_tensor_k = input_tensors.at(4);
         auto& joint_tensor_v = input_tensors.at(5);
-        auto& persistent_intermediate_buffer_k = input_tensors.at(6);
-        auto& persistent_intermediate_buffer_v = input_tensors.at(7);
-        auto& persistent_output_buffer_k = input_tensors.at(8);
-        auto& persistent_output_buffer_v = input_tensors.at(9);
+        auto& persistent_output_buffer_k = input_tensors.at(6);
+        auto& persistent_output_buffer_v = input_tensors.at(7);
         auto& output_tensor = output_tensors.at(0);
         auto& joint_output_tensor = output_tensors.at(1);
         auto& lse_output_tensor = output_tensors.at(2);
 
+        const RingAttentionAllGatherAsync* all_gather_operation =
+            &(static_cast<const RingJointScaledDotProductAttention*>(operation)->all_gather_struct);
         all_gather_callback.value()(
-            operation,
+            all_gather_operation,
             program,
-            {input_tensor_k, input_tensor_v}, /*input_tensors*/
-            {},                               /*optional_input_tensors*/
-            {persistent_intermediate_buffer_k,
-             persistent_output_buffer_k,
-             persistent_intermediate_buffer_v,
-             persistent_output_buffer_v} /*output_tensors*/
+            {input_tensor_k, input_tensor_v},                        /*input_tensors*/
+            {},                                                      /*optional_input_tensors*/
+            {persistent_output_buffer_k, persistent_output_buffer_v} /*output_tensors*/
         );
 
         ring_attention_callback.value()(
