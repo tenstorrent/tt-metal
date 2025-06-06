@@ -6,7 +6,7 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::binary {
+namespace ttnn::program_descriptors {
 namespace nb = nanobind;
-void py_module(nb::module_& mod);
-}  // namespace ttnn::operations::binary
+void py_module_types(nb::module_& mod);
+}  // namespace ttnn::program_descriptors

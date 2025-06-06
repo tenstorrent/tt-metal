@@ -9,7 +9,6 @@
 #include <optional>
 
 #include <fmt/format.h>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h> // testing
 #include <nanobind/stl/array.h>
@@ -18,7 +17,7 @@
 
 #include <ttnn-nanobind/small_vector_caster.hpp>
 
-#include "cpp/ttnn/decorators.hpp" // testing
+#include "ttnn/decorators.hpp" // testing
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"

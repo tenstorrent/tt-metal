@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "binary_backward_nanobind.hpp"
 
 #include <optional>
 #include <string>
@@ -11,16 +12,15 @@
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
 #include <nanobind/stl/vector.h>
 
-#include "cpp/ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
 #include "ttnn/types.hpp"
-#include "cpp/ttnn/common/constants.hpp"
-
-namespace nb = nanobind;
 
 namespace ttnn::operations::binary_backward {
 
@@ -1335,5 +1335,5 @@ void py_module(nb::module_& mod) {
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 }
 
-} // ttnn::operations::binary_backward 
+}  // namespace ttnn::operations::binary_backward
 
