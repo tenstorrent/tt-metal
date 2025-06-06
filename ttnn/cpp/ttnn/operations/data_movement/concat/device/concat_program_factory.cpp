@@ -720,16 +720,38 @@ tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
     }
 }
 
+// Add this include at the top of your file:
+#include <tt-metalium/distributed.hpp>
+
+// Fixed version of your concat_multi_core function:
+
+struct TensorMetadata {
+    uint32_t src_addr;
+    uint32_t is_dram;          // bool as uint32_t
+    uint32_t page_size;        // for RM layout
+    uint32_t pages_per_block;  // how many pages this tensor contributes per block
+    uint32_t tensor_id;        // for debugging
+};
+
+struct ConcatMetadata {
+    uint32_t num_tensors;
+    uint32_t num_output_pages_per_block;
+    uint32_t dim;
+    uint32_t rm_layout;        // bool as uint32_t
+    TensorMetadata tensors[];  // Variable length array
+};
+
 tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     const std::vector<Tensor>& input_tensors, const uint32_t dim, const Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::IDevice* device = output.device();
+    // FIXED: Cast to MeshDevice pointer to access mesh methods
+    tt_metal::IDevice* raw_device = output.device();
+    auto mesh_device = dynamic_cast<tt_metal::distributed::MeshDevice*>(raw_device);
+    TT_FATAL(mesh_device != nullptr, "Expected MeshDevice but got different device type");
 
     const tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-
     const bool rm_layout = output.get_layout() == Layout::ROW_MAJOR;
-
     constexpr bool rm_orientation = false;
 
     uint32_t num_output_pages;
@@ -743,7 +765,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         single_page_size = tt_metal::detail::TileSize(cb_data_format);
     }
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = raw_device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -766,8 +788,6 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     std::vector<uint32_t> src_addr(num_input_tensors);
     std::vector<bool> is_dram(num_input_tensors);
     std::vector<uint32_t> num_pages_per_block(num_input_tensors);
-    std::vector<uint32_t> page_id_per_tensor(num_input_tensors);
-    // Only used for RM
     std::vector<uint32_t> page_size_per_tensor(num_input_tensors);
 
     uint32_t num_accum_pages = 1;
@@ -826,38 +846,22 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
             num_output_pages_per_block += num_accum_pages * dim_pages;
         }
     }
-    std::vector<uint32_t> common_reader_kernel_args = {0, 0, 0};
-    common_reader_kernel_args.insert(common_reader_kernel_args.end(), src_addr.begin(), src_addr.end());
-    common_reader_kernel_args.insert(common_reader_kernel_args.end(), is_dram.begin(), is_dram.end());
-    common_reader_kernel_args.insert(
-        common_reader_kernel_args.end(), num_pages_per_block.begin(), num_pages_per_block.end());
-    if (rm_layout) {
-        common_reader_kernel_args.insert(
-            common_reader_kernel_args.end(), page_size_per_tensor.begin(), page_size_per_tensor.end());
-    }
 
     // Reader compile-time args
-    // Data is 32 byte aligned
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
         (std::uint32_t)src0_cb_index,
-        (std::uint32_t)num_input_tensors,
+        (std::uint32_t)rm_layout ? 1 : 0,  // Flag to indicate RM layout
     };
 
     std::map<string, string> concat_defines;
-
     if (rm_layout && dim == num_dims - 1) {
         concat_defines["WIDTH_CONCAT"] = "1";
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)src0_cb_index,
-                                                      (std::uint32_t)dst_is_dram,
-                                                      0,
-                                                      0};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram, 0, 0};
 
-    // Tilized reader
+    // Create kernels
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         rm_layout ? "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
@@ -878,40 +882,54 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
     uint32_t g1_num_cores = core_group_1.num_cores();
+
+    // FIXED: MeshBuffer creation with proper API
+    size_t metadata_size = (4 + num_input_tensors * 5) * sizeof(uint32_t);
+    tt_metal::distributed::DeviceLocalBufferConfig buff_config{
+        .page_size = metadata_size, .buffer_type = tt_metal::BufferType::L1};
+    tt_metal::distributed::MeshBufferConfig mesh_config =
+        tt_metal::distributed::ReplicatedBufferConfig{.size = metadata_size};
+
+    // FIXED: Use mesh_device directly (no .get() since it's not a shared_ptr)
+    auto metadata_buffer = tt_metal::distributed::MeshBuffer::create(mesh_config, buff_config, mesh_device);
+
+    // POPULATE METADATA BUFFER
+    std::vector<uint32_t> metadata_data;
+    metadata_data.reserve(4 + num_input_tensors * 5);
+
+    // Header
+    metadata_data.push_back(num_input_tensors);
+    metadata_data.push_back(num_output_pages_per_block);
+    metadata_data.push_back(dim);
+    metadata_data.push_back(rm_layout ? 1 : 0);
+
+    // Tensor metadata
+    for (uint32_t i = 0; i < num_input_tensors; ++i) {
+        auto buffer = input_tensors[i].buffer();
+        metadata_data.push_back(buffer->address());
+        metadata_data.push_back(buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0);
+        metadata_data.push_back(rm_layout ? buffer->page_size() : single_page_size);
+        metadata_data.push_back(num_pages_per_block[i]);
+        metadata_data.push_back(i);
+    }
+
+    // FIXED: Write metadata using proper MeshDevice API
+    // For 1x1 mesh (single device), use coordinate {0, 0}
+    tt_metal::distributed::MeshCoordinate mesh_coord{0, 0};
+    tt_metal::distributed::WriteShard(mesh_device->mesh_command_queue(0), metadata_buffer, metadata_data, mesh_coord);
+
+    // Get buffer address for kernel args
+    uint32_t metadata_buffer_addr = metadata_buffer->address();
+
+    // SIMPLE PER-CORE ARGUMENT SETTING
     for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
-        uint32_t num_pages_per_core = 0;
-        if (i < g1_num_cores) {
-            num_pages_per_core = num_tiles_per_core_group_1;
-        } else {
-            num_pages_per_core = num_tiles_per_core_group_2;
-        }
-        uint32_t block_id = num_pages_written / num_output_pages_per_block;
-        uint32_t id_within_block = num_pages_written % num_output_pages_per_block;
-        uint32_t curr_tensor = 0;
-        uint32_t curr_tensor_id = 0;
-        for (uint32_t j = 0; j < num_input_tensors; j++) {
-            page_id_per_tensor[j] = block_id * num_pages_per_block[j];
-            if (id_within_block == 0) {
-                continue;
-            } else if (id_within_block >= num_pages_per_block[j]) {
-                page_id_per_tensor[j] += num_pages_per_block[j];
-                id_within_block -= num_pages_per_block[j];
-                curr_tensor = j + 1;
-            } else {
-                page_id_per_tensor[j] += id_within_block;
-                curr_tensor = j;
-                curr_tensor_id = id_within_block;
-                id_within_block = 0;
-            }
-        }
+        uint32_t num_pages_per_core = (i < g1_num_cores) ? num_tiles_per_core_group_1 : num_tiles_per_core_group_2;
 
-        std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
-        reader_kernel_args[0] = num_pages_per_core;
-        reader_kernel_args[1] = curr_tensor;
-        reader_kernel_args[2] = curr_tensor_id;
-        reader_kernel_args.insert(reader_kernel_args.end(), page_id_per_tensor.begin(), page_id_per_tensor.end());
+        // SIMPLE READER ARGUMENTS: Just page range and metadata buffer address
+        std::vector<uint32_t> reader_kernel_args = {num_pages_per_core, num_pages_written, metadata_buffer_addr};
 
+        // Writer args (unchanged)
         std::vector<uint32_t> writer_kernel_args;
         if (rm_layout) {
             writer_kernel_args = {
@@ -919,39 +937,47 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         } else {
             writer_kernel_args = {dst_buffer->address(), num_pages_per_core, num_pages_written};
         }
-        tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
+        tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
         num_pages_written += num_pages_per_core;
     }
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cores](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        std::vector<uint32_t> src_addrs(input_tensors.size());
-        for (uint32_t i = 0; i < input_tensors.size(); ++i) {
-            src_addrs[i] = input_tensors[i].buffer()->address();
-        }
+    // FIXED: Capture variables properly and use correct APIs
+    auto override_runtime_args_callback =
+        [metadata_buffer, cores, unary_reader_kernel_id, unary_writer_kernel_id, num_input_tensors, mesh_device](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>&,
+            const std::vector<Tensor>& output_tensors) {
+            // Read current metadata using NEW API
+            std::vector<uint32_t> metadata_data;
+            metadata_data.resize((metadata_buffer->size() + sizeof(uint32_t) - 1) / sizeof(uint32_t));
+            tt_metal::distributed::MeshCoordinate mesh_coord{0, 0};
+            tt_metal::distributed::ReadShard(
+                mesh_device->mesh_command_queue(0), metadata_data, metadata_buffer, mesh_coord);
 
-        auto dst_buffer = output_tensors.at(0).buffer();
-
-        for (const auto& core : cores) {
-            {
-                auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                std::copy(src_addrs.begin(), src_addrs.end(), runtime_args.data() + 3);
+            // Update tensor addresses
+            for (uint32_t i = 0; i < num_input_tensors; ++i) {
+                uint32_t addr_index = 4 + i * 5;
+                if (addr_index < metadata_data.size()) {
+                    metadata_data[addr_index] = input_tensors[i].buffer()->address();
+                }
             }
 
-            {
-                auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
+            // Write back using NEW API
+            tt_metal::distributed::WriteShard(
+                mesh_device->mesh_command_queue(0), metadata_buffer, metadata_data, mesh_coord);
+
+            // Update writer args with new output address
+            auto dst_buffer = output_tensors.at(0).buffer();
+            for (const auto& core : cores) {
+                auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                writer_runtime_args[0] = dst_buffer->address();
             }
-        }
-    };
+        };
 
     return {std::move(program), override_runtime_args_callback};
 }
-
 }  // namespace ttnn::operations::data_movement::detail
