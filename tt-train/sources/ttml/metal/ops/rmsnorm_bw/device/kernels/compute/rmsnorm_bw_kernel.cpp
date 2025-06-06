@@ -1,6 +1,7 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// TODO: Do it in everyfile! (company name has been changed)
 
 #include <compute_kernel_api/cb_api.h>
 // #include <compute_kernel_api/common_globals.h>
@@ -68,6 +69,10 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
     // PACK(DPRINT << "P+++++!" << ENDL());
 }
 
+// 32 x 32
+// 0 2 3 4 ... 15 | 16 17 18 19 ... 31
+
+// ~16: 256 - 271
 namespace NAMESPACE {
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
@@ -76,7 +81,8 @@ constexpr uint32_t block_size =
 constexpr uint32_t mask_w = get_compile_time_arg_val(2);  // Unused atm.
 constexpr uint32_t Wt = get_compile_time_arg_val(3);
 
-// CBs with input data
+// Think about move this to compile args to avoid mess while adjusting indicies
+//  CBs with input data
 constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
 constexpr uint32_t cb_mask_w_idx = tt::CBIndex::c_1;  // Unused atm
 constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_2;
@@ -84,6 +90,7 @@ constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_3;  // Number of activations, i
 constexpr uint32_t cb_rms_a_idx = tt::CBIndex::c_4;
 constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;
 // CBs with output data
+// Create more intermedaite-output CBs that will be used exclusively by the writer. Do not compute anything on them
 constexpr uint32_t cb_dL_da_idx = tt::CBIndex::c_6;
 constexpr uint32_t cb_dL_dgamma_idx = tt::CBIndex::c_7;
 // CBs with intermediate computations
@@ -138,6 +145,7 @@ inline void compute_and_pack_sub(uint32_t cb_a, uint32_t cb_b, uint32_t tile_a, 
     pack_and_push(reg, out_cb);
 }
 
+// make it FORCE_INLINE
 inline void compute_and_pack_div(uint32_t cb_a, uint32_t cb_b, uint32_t tile_a, uint32_t tile_b, uint32_t out_cb) {
     const uint32_t reg_a = 0;
     const uint32_t reg_b = 1;
@@ -194,32 +202,39 @@ inline void compute_scaled_gain_and_gained_dL_dout(uint32_t col) {
     //     none,
     //     none,
     //     false);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
-    UNPACK(DPRINT << "gamma" << ENDL());
-    print_full_tile(cb_gamma_idx, col, true);
-    UNPACK(DPRINT << "rms_a" << ENDL());
-    print_full_tile(cb_rms_a_idx, col, true);
+    // UNPACK(DPRINT << "gamma" << ENDL());
+    // print_full_tile(cb_gamma_idx, col, true);
+    // UNPACK(DPRINT << "rms_a" << ENDL());
+    // print_full_tile(cb_rms_a_idx, col, true);
 
     uint32_t rms_register = 0;
     tile_regs_acquire();
+    // wait_front for rms_a, gamma and dL_out has been called before this function, so we can safely use them.
     unary_bcast_init<BroadcastType::COL>(cb_rms_a_idx, cb_rms_a_idx);
-    unary_bcast<BroadcastType::COL>(cb_rms_a_idx, /* tile idx */ 0, /* reg tile idx */ rms_register);
-    pack_and_push(rms_register, cb_rms_a_idx);
+    // UNPACK(DPRINT << "col: " << col << ENDL());
+    unary_bcast<BroadcastType::COL>(cb_rms_a_idx, /* tile idx */ col, /* reg tile idx */ rms_register);
     cb_pop_front(cb_rms_a_idx, onetile);
-    UNPACK(DPRINT << "rms_a" << ENDL());
-    print_full_tile(cb_rms_a_idx, col, true);
+    pack_and_push(rms_register, cb_rms_a_idx);
+    // UNPACK(DPRINT << "rms_a" << ENDL());
+    // print_full_tile(cb_rms_a_idx, col, true);
 
     // Let's compute scaled_gain, pack it to cb_scaled_gain, and multiply it with dL_out to get gained_dL_dout in FPU.
+    // cb_wait_front(cb_rms_a_idx, onetile);
+    // Why this wait_front is hanging?
     compute_and_pack_div(cb_gamma_idx, cb_rms_a_idx, /* tile_a */ col, /* tile_b */ col, cb_scaled_gain);
-    UNPACK(DPRINT << "scaled_gain" << ENDL());
-    print_full_tile(cb_scaled_gain, 0, true);
+    // UNPACK(DPRINT << "scaled_gain" << ENDL());
+    // print_full_tile(cb_scaled_gain, 0, true);
 
-    UNPACK(DPRINT << "dL_out" << ENDL());
-    print_full_tile(cb_dL_out_idx, col, true);
+    // UNPACK(DPRINT << "dL_out" << ENDL());
+    // print_full_tile(cb_dL_out_idx, col, true);
 
     // We can use tile idx 0 for all cols as we popfront the cb_scaled_gain in each iteration.
     compute_and_pack_mul(cb_scaled_gain, cb_dL_out_idx, /* tile_a */ 0, /* tile_b */ col, cb_gained_dL_dout);
     cb_pop_front(cb_scaled_gain, onetile);
-    print_full_tile(cb_gained_dL_dout, col, true);
+
+    // UNPACK(DPRINT << "cb_gained_dL_dout" << ENDL());
+    // cb_wait_front(cb_gained_dL_dout, 1);
+    // print_full_tile(cb_gained_dL_dout, col, true);
 }
 
 inline void compute_scale(uint32_t col) {
@@ -232,6 +247,13 @@ inline void compute_scale(uint32_t col) {
     const uint32_t scale_register = 0;            // destination register for the reduction
     const uint32_t scale_reduction_register = 1;  // register for the reduction
     tile_regs_acquire();
+    // think if that should be Wt or 1
+    cb_wait_front(cb_gained_dL_dout, Wt);
+    cb_wait_front(cb_input_idx, Wt);
+    // UNPACK(DPRINT << "cb_gained_dL_dout" << ENDL());
+    // print_full_tile(cb_gained_dL_dout, col, true);
+    UNPACK(DPRINT << "cb_input_idx" << ENDL());
+    print_full_tile(cb_input_idx, col, true);
 
     // Perform elementwise multiplication and sum reduction in one step
     reduce_init<false, PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_gained_dL_dout, cb_input_idx, cb_scale);
@@ -244,12 +266,12 @@ inline void compute_scale(uint32_t col) {
         scale_register);                                // destination register
     reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_gained_dL_dout);
 
-    // print_full_tile(cb_gained_dL_dout, col, true);
-
     if (col == 0) {
         copy_dest_values_init();
         copy_dest_values(scale_reduction_register, scale_register);
     } else {
+        // Think how many ntiles should be here. I guess 1 is enough, but not col then but 0.
+        cb_wait_front(cb_scale, Wt);
         copy_tile_init(cb_scale);
         copy_tile(cb_scale, /* tile_idx */ col, /* register_idx */ scale_reduction_register);
         // NOTE: Keep in mind that this is not the best idea to put everything in CB at one. L1 means only that
@@ -262,7 +284,9 @@ inline void compute_scale(uint32_t col) {
     }
 
     pack_and_push(scale_reduction_register, cb_scale);
-    // print_full_tile(cb_scale, col, true);
+    cb_wait_front(cb_scale, 1);
+    UNPACK(DPRINT << "cb_scale" << ENDL());
+    print_full_tile(cb_scale, col, true);
 }
 
 inline void compute_ms_a_and_c_by_ms_a() {
@@ -275,8 +299,28 @@ inline void compute_ms_a_and_c_by_ms_a() {
     //     ms_a, c, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,1,S,1] x [1] ->
     // [B,1,S,1] (bcast)
 
+    // NOTE: be careful rms_a is bcasted across all cols here. See compute_scaled_gain_and_gained_dL_dout
+    // Not sure if this is expected behaviour here
+    // NOTE2: RMS is bcasted and scaler is filled with the same value for all cols so we would have this outputvalue
+    // already bcasted. Not sure if we want to have like this, but it is how it is now.
+
+    // cb_wait_front(cb_rms_a_idx, onetile);
+    // cb_wait_front(cb_scaler_idx, onetile);
+    // We do not need to wait for cb_rms_a_idx and cb_scaler_idx, because they are already filled with the
+    // bcasted values. We can use them directly.
+
+    // UNPACK(DPRINT << "cb_rms_a_idx" << ENDL());
+    // print_full_tile(cb_rms_a_idx, 0, true);
     compute_and_pack_mul(cb_rms_a_idx, cb_rms_a_idx, /* tile_a */ 0, /* tile_b */ 0, cb_ms_a);
-    compute_and_pack_mul(cb_ms_a, cb_scaler_idx, /* tile_a */ 0, /* tile_b */ 0, cb_c_by_ms_a);
+    // UNPACK(DPRINT << "cb_ms_a" << ENDL());
+    // print_full_tile(cb_ms_a, 0, true);
+    // UNPACK(DPRINT << "cb_scaler_idx" << ENDL());
+    // print_full_tile(cb_scaler_idx, 0, true);
+    // NOTE: div because scale is 1/c - maybe it should be changed to c
+    compute_and_pack_div(cb_ms_a, cb_scaler_idx, /* tile_a */ 0, /* tile_b */ 0, cb_c_by_ms_a);
+    // cb_wait_front(cb_c_by_ms_a, onetile);
+    // UNPACK(DPRINT << "cb_c_by_ms_a" << ENDL());
+    // print_full_tile(cb_c_by_ms_a, 0, true);
     // We can pop_front cb_ms_a, since we do not need it anymore.
     cb_pop_front(cb_ms_a, onetile);
 }
@@ -310,21 +354,56 @@ inline void compute_rhs(uint32_t col) {
     // NOTE: Do not use compute_and_pack_mul and compute_and_pack_div here, because we would unnecessarily pack and
     // unpack the intermediate data to/from CB. We can use registers to perform the operations, and then pack the result
     // to cb_rhs.
-    const uint32_t c_by_ms_a_register = 1;
-    const uint32_t rhs_register = 0;
+    cb_wait_front(cb_scale, onetile);
+    UNPACK(DPRINT << "cb_scale" << ENDL());
+    print_full_tile(cb_scale, col, true);
+
+    uint32_t scale_register = 0;
     tile_regs_acquire();
+    // wait_front for rms_a, gamma and dL_out has been called before this function, so we can safely use them.
+    unary_bcast_init<BroadcastType::COL>(cb_scale, cb_scale);
+    unary_bcast<BroadcastType::COL>(cb_scale, /* tile idx */ col, /* reg tile idx */ scale_register);
+    cb_pop_front(cb_scale, onetile);
+    pack_and_push(scale_register, cb_scale);
+    cb_wait_front(cb_scale, onetile);
+    UNPACK(DPRINT << "cb_scale" << ENDL());
+    print_full_tile(cb_scale, col, true);
+
+    cb_wait_front(cb_input_idx, onetile);  // cannot stack them
+    UNPACK(DPRINT << "cb_input_idx" << ENDL());
+    print_full_tile(cb_input_idx, col, true);
+    uint32_t rhs_register = 0;
+    uint32_t c_by_ms_a_register = 1;
+    tile_regs_acquire();
+    // cb1 * cb2 = reg1
+    // reg1 /= reg2
 
     mul_tiles_init(cb_input_idx, cb_scale);
     // We can use tile idx 0 for all cols as we have a reducted, single value in cb_scale.
     mul_tiles(cb_input_idx, cb_scale, /* tile_idx */ col, /* tile_idx */ 0, rhs_register);
-    copy_tile_init(c_by_ms_a_register);
-    copy_tile(cb_c_by_ms_a, /* tile_idx */ 0, /* register_idx */ c_by_ms_a_register);
+    // pack_and_push(rhs_register, cb_rhs);
+    // cb_wait_front(cb_rhs, onetile);
+    // UNPACK(DPRINT << "cb_rhs (scaled_outer in practise)" << ENDL());
+    // print_full_tile(cb_rhs, col, true);
 
-    div_binary_tile_init();
+    cb_wait_front(cb_c_by_ms_a, onetile);
+    copy_tile_init(cb_c_by_ms_a);
+    copy_tile(cb_c_by_ms_a, /* tile_idx */ 0, /* register_idx */ c_by_ms_a_register);
+    // this bcast here is prob unnecessary, because we bcasted rms_a, so c_by_ms_a is already bcasted
+    // // unary_bcast_init<BroadcastType::COL>(cb_c_by_ms_a, cb_c_by_ms_a);
+    // // unary_bcast<BroadcastType::COL>(cb_c_by_ms_a, col, c_by_ms_a_register);
+    // UNPACK(DPRINT << "cb_c_by_ms_a" << ENDL());
+    // print_full_tile(cb_c_by_ms_a, 0, true);
+
+    div_binary_tile_init();  // Q: can this clear out the rhs_register?
     div_binary_tile(rhs_register, c_by_ms_a_register);
 
-    // Now we have rhs in rhs_register, we can pack it to cb_rhs.
+    // // Now we have rhs in rhs_register, we can pack it to cb_rhs.
     pack_and_push(rhs_register, cb_rhs);
+    cb_wait_front(cb_rhs, onetile);
+    UNPACK(DPRINT << "cb_rhs" << ENDL());
+    // // UNPACK(DPRINT << "cb_rhs col: " << col << ENDL());
+    print_full_tile(cb_rhs, col, true);
 }
 
 inline void compute_dL_da(uint32_t col) {
@@ -339,42 +418,65 @@ inline void compute_dL_da(uint32_t col) {
     //     none,
     //     none,
     //     false);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
-    compute_and_pack_sub(cb_gained_dL_dout, cb_rhs, /* tile_a */ col, /* tile_b */ 0, cb_dL_da_idx);
-    // We can pop_front rsh, since we do not need it anymore.
-    cb_pop_front(cb_rhs, onetile);
+    // cb_wait_front(cb_rhs, Wt);
+    // cb_wait_front(cb_gained_dL_dout, Wt);
+    // UNPACK(DPRINT << "inside compute dL_da" << ENDL());
+    // UNPACK(DPRINT << "cb_rhs" << ENDL());
+    // print_full_tile(cb_rhs, col, true);
+    // UNPACK(DPRINT << "cb_gained_dL_dout" << ENDL());
+    // print_full_tile(cb_gained_dL_dout, col, true);
+
+    compute_and_pack_sub(cb_gained_dL_dout, cb_rhs, /* tile_a */ col, /* tile_b */ col, cb_dL_da_idx);
+    cb_wait_front(cb_dL_da_idx, onetile);
+    UNPACK(DPRINT << "cb_dL_da_idx" << ENDL());
+    print_full_tile(cb_dL_da_idx, col, true);
+    // // We can pop_front rsh, since we do not need it anymore.
+    // cb_pop_front(cb_rhs, onetile);
+
+    // dL_dgamma comps:
+    // compute_and_pack_div(cb_input_idx, cb_rms_a_idx, /* tile_a */ col, /* tile_b */ 0, cb_a_over_rms_a);
+    // compute_and_pack_mul(cb_dL_out_idx, cb_a_over_rms_a, /* tile_a */ 0, /* tile_b */ 0, cb_dL_dgamma_components);
+
+    // cb_wait_front(cb_dL_dgamma_components, onetile);
+    // UNPACK(DPRINT << "cb_dL_dgamma_components" << ENDL());
+    // print_full_tile(cb_dL_dgamma_components, col, true);
 }
 
-inline void compute_dL_dgamma_components(uint32_t col) {
-    // 7. Compute:
-    // auto dL_dg_components = ttnn::multiply(
-    //     dL_dout,
-    //     ttnn::divide(a, rms_a, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
-    //     std::nullopt,
-    //     std::nullopt,
-    //     std::nullopt,
-    //     none,
-    //     none,
-    //     none,
-    //     false);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast); checked by add_grad
-    // auto dL_dg = ttnn::sum(
-    //     dL_dg_components,
-    //     /* dim_arg */ ttnn::SmallVector<int>{0, 1, 2},
-    //     /* keep_dim */ true,
-    //     /* output_mem_config */ std::nullopt,
-    //     /*compute_kernel_config */ core::ComputeKernelConfig::precise());  // [B,1,S,C] -> [1,1,1,C]
-    // NOTE: To compute dL_dg, we need to process all batches. Therefore, we will compute here only dL_dg_components
-    // for each tile, and then store them in CB. The reduction will be done in a separate program.
+// inline void compute_dL_dgamma_components(uint32_t col) {
+//     // 7. Compute:
+//     // auto dL_dg_components = ttnn::multiply(
+//     //     dL_dout,
+//     //     ttnn::divide(a, rms_a, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+//     //     std::nullopt,
+//     //     std::nullopt,
+//     //     std::nullopt,
+//     //     none,
+//     //     none,
+//     //     none,
+//     //     false);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast); checked by add_grad
+//     // auto dL_dg = ttnn::sum(
+//     //     dL_dg_components,
+//     //     /* dim_arg */ ttnn::SmallVector<int>{0, 1, 2},
+//     //     /* keep_dim */ true,
+//     //     /* output_mem_config */ std::nullopt,
+//     //     /*compute_kernel_config */ core::ComputeKernelConfig::precise());  // [B,1,S,C] -> [1,1,1,C]
+//     // NOTE: To compute dL_dg, we need to process all batches. Therefore, we will compute here only dL_dg_components
+//     // for each tile, and then store them in CB. The reduction will be done in a separate program.
 
-    // Let's compute and pack it, so that we can perform the multiplication on FPU.
-    compute_and_pack_div(cb_input_idx, cb_rms_a_idx, /* tile_a */ col, /* tile_b */ 0, cb_a_over_rms_a);
+//     // Let's compute and pack it, so that we can perform the multiplication on FPU.
+//     compute_and_pack_div(cb_input_idx, cb_rms_a_idx, /* tile_a */ col, /* tile_b */ 0, cb_a_over_rms_a);
 
-    // Now we can perform the multiplication with dL_out.
-    // We can use tile idx 0 for all cols as we do not need to store all of the a over rms_a values, but only the
-    // current tile value.
-    compute_and_pack_mul(cb_dL_out_idx, cb_a_over_rms_a, /* tile_a */ 0, /* tile_b */ 0, cb_dL_dgamma_components);
-    // We can pop_front cb_a_over_rms_a, since we do not need it anymore.
-    cb_pop_front(cb_a_over_rms_a, onetile);
-}
+//     // Now we can perform the multiplication with dL_out.
+//     // We can use tile idx 0 for all cols as we do not need to store all of the a over rms_a values, but only the
+//     // current tile value.
+//     compute_and_pack_mul(cb_dL_out_idx, cb_a_over_rms_a, /* tile_a */ 0, /* tile_b */ 0, cb_dL_dgamma_components);
+//     // We can pop_front cb_a_over_rms_a, since we do not need it anymore.
+//     cb_pop_front(cb_a_over_rms_a, onetile);
+
+//     // cb_wait_front(cb_dL_dgamma_components, onetile);
+//     // UNPACK(DPRINT << "cb_dL_dgamma_components" << ENDL());
+//     // print_full_tile(cb_dL_dgamma_components, col, true);
+// }
 
 // Figure out why MAIN without ( )
 void MAIN {
@@ -393,25 +495,31 @@ void MAIN {
 
         for (uint32_t col = 0; col < Wt; ++col) {
             compute_scaled_gain_and_gained_dL_dout(col);
-            // break;
+            UNPACK(DPRINT << "scaled_gain and gained_dL_dout done " << ENDL());
             compute_scale(col);
+            UNPACK(DPRINT << "scale done " << ENDL());
         }
-        // compute_ms_a_and_c_by_ms_a();
+        compute_ms_a_and_c_by_ms_a();
         // break;
 
         // We need to store in registers scale and c_by_ms_a, and iterate over all tiles in cb_input_idx to calculate
         // rhs for each tile.
-        // for (uint32_t col = 0; col < Wt; ++col) {
-        //     compute_rhs(col);
-        //     compute_dL_da(col);
-        //     compute_dL_dgamma_components(col);
-        // }
+        for (uint32_t col = 0; col < Wt; ++col) {
+            compute_rhs(col);
+            // nop to check sync
+            for (uint32_t i = 0; i < 100000; ++i) {
+                asm volatile("nop");
+            }
+            compute_dL_da(col);
+            // compute_dL_dgamma_components(col);
+        }
 
         // pop from the input CBs
 
         // TODO Make sure that we wait and resever for all necessary data in buffers! (probably not)
         // TODO2 Make sure if we do not need to reconfigure data format for any calculation. I neglected it for now.
     }
+    UNPACK(DPRINT << "compute kernel done" << ENDL());
 }
 
 }  // namespace NAMESPACE

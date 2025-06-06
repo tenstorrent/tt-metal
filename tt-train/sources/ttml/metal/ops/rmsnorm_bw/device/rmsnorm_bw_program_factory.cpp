@@ -127,6 +127,17 @@ tt::tt_metal::KernelHandle create_compute_kernel(
             .defines = defines});
 }
 
+void print_buffer_elements(const tt::tt_metal::Buffer* buffer) {
+    std::vector<bfloat16> host_data;
+    tt::tt_metal::detail::ReadFromBuffer(const_cast<tt::tt_metal::Buffer&>(*buffer), host_data);
+
+    std::cout << "Buffer contents: ";
+    for (const auto& value : host_data) {
+        std::cout << value.to_float() << " ";
+    }
+    std::cout << std::endl;
+}
+
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const RMSNormBackwardKernels& kernels,
@@ -140,6 +151,9 @@ void assign_per_core_runtime_args(
     uint32_t num_cores_y,
     uint32_t num_rows_per_core,
     const tt::tt_metal::CoreRangeSet& all_cores) {
+    // std::cerr << "rms_buffer address: " << rms_buffer->address() << std::endl;
+    // print_buffer_elements(rms_buffer);
+
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -174,6 +188,10 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     const auto& rms = tensor_args.rms;
     const auto& dLdout = tensor_args.dL_dout;
 
+    // std::cerr << "Within RMSNormBackwardProgramFactory::create" << std::endl;
+    // dLdout.print();
+    // input.print();
+
     auto* device = input.device();
     tt::tt_metal::Program program{};
 
@@ -206,16 +224,18 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
         std::vector<tt::tt_metal::CoreRange>{tt::tt_metal::CoreRange(core_start, core_end)});
 
     // compile arguments
-    uint32_t packed_scaler = pack_two_bfloat16_to_uint32(1.F / static_cast<float>(num_inner));
+    uint32_t packed_scaler = pack_two_bfloat16_to_uint32(1.F / static_cast<float>(num_inner));  // scalar is 1/c not c!
     uint32_t mask_w = false;  // num_inner % tt::constants::TILE_WIDTH;
     uint32_t block_size = get_block_size(Wt);
 
     // 2) Create and configure circular buffers
+    // std::cerr << "Wt: " << Wt << std::endl;
     auto cb_input = create_circular_buffer(program, all_cores, kInputCbIndex, data_format, single_tile_size_bytes, Wt);
     auto cb_mask_w = create_circular_buffer(program, all_cores, kMaskWCbIndex, data_format, single_tile_size_bytes, Wt);
     auto cb_scaler = create_circular_buffer(program, all_cores, kScalerCbIndex, data_format, single_tile_size_bytes, 1);
     auto cb_gamma = create_circular_buffer(program, all_cores, kGammaCbIndex, data_format, single_tile_size_bytes, Wt);
-    auto cb_rms_a = create_circular_buffer(program, all_cores, kRmsACbIndex, data_format, single_tile_size_bytes, 2);
+    auto cb_rms_a =
+        create_circular_buffer(program, all_cores, kRmsACbIndex, data_format, single_tile_size_bytes, Wt);  // 2
     auto cb_dLdout = create_circular_buffer(program, all_cores, kDLoutCbIndex, data_format, single_tile_size_bytes, Wt);
     auto cb_dL_da = create_circular_buffer(program, all_cores, kDLdaCbIndex, data_format, single_tile_size_bytes, Wt);
     auto cb_dL_dgamma =
@@ -227,8 +247,9 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     auto cb_scale = create_circular_buffer(program, all_cores, kScaleCbIndex, data_format, single_tile_size_bytes, 1);
     auto cb_ms_a = create_circular_buffer(program, all_cores, kMsACbIndex, data_format, single_tile_size_bytes, 1);
     auto cb_c_by_ms_a =
-        create_circular_buffer(program, all_cores, kCByMsACbIndex, data_format, single_tile_size_bytes, 1);
-    auto cb_rhs = create_circular_buffer(program, all_cores, kRhsCbIndex, data_format, single_tile_size_bytes, 1);
+        create_circular_buffer(program, all_cores, kCByMsACbIndex, data_format, single_tile_size_bytes, 1);  // 1?
+    auto cb_rhs =
+        create_circular_buffer(program, all_cores, kRhsCbIndex, data_format, single_tile_size_bytes, Wt);  // 2
     auto cb_a_over_rms_a =
         create_circular_buffer(program, all_cores, kAOverRmsACbIndex, data_format, single_tile_size_bytes, 1);
     auto cb_dL_dgamma_components =

@@ -45,6 +45,31 @@ void generate_tile_with_value(uint32_t cb, uint32_t packed_value) {
     cb_push_back(cb, onetile);
 }
 
+// const char* data_format_to_string(DataFormat fmt) {
+//     switch (fmt) {
+//         case DataFormat::Float32: return "Float32";
+//         case DataFormat::Float16: return "Float16";
+//         case DataFormat::Bfp8: return "Bfp8";
+//         case DataFormat::Bfp4: return "Bfp4";
+//         case DataFormat::Bfp2: return "Bfp2";
+//         case DataFormat::Float16_b: return "Float16_b";
+//         case DataFormat::Bfp8_b: return "Bfp8_b";
+//         case DataFormat::Bfp4_b: return "Bfp4_b";
+//         case DataFormat::Bfp2_b: return "Bfp2_b";
+//         case DataFormat::Lf8: return "Lf8";
+//         case DataFormat::Int8: return "Int8";
+//         case DataFormat::UInt8: return "UInt8";
+//         case DataFormat::UInt16: return "UInt16";
+//         case DataFormat::Int32: return "Int32";
+//         case DataFormat::UInt32: return "UInt32";
+//         case DataFormat::Tf32: return "Tf32";
+//         case DataFormat::testMan7: return "testMan7";
+//         case DataFormat::testMan2: return "testMan2";
+//         case DataFormat::Invalid: return "Invalid";
+//         default: return "Unknown";
+//     }
+// }
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
     uint32_t input_address = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -66,7 +91,7 @@ void kernel_main() {
     constexpr uint32_t mask_w = get_compile_time_arg_val(2);  // Unused atm
     constexpr uint32_t Wt = get_compile_time_arg_val(3);
 
-    constexpr uint32_t onetile = 1U;  // Unused atm
+    constexpr uint32_t onetile = 1U;
 
 #ifdef DO_MASK_W
     constexpt bool do_mask_w = true;
@@ -82,9 +107,17 @@ void kernel_main() {
     // generate tiles to include scalar and epsilon
     generate_tile_with_value(cb_scaler_idx, packed_scaler);
 
+    // constexpr uint32_t val = 6789U;
+    // generate_tile_with_value(cb_rms_a_idx, val);
+    // DPRINT << "Generated dL_out tile with value: " << val << ENDL();
+    // print_full_tile(cb_rms_a_idx, 0, true);
+    // DPRINT << "END OF dL_out tile generation" << ENDL();
+
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     const DataFormat data_format = get_dataformat(cb_input_idx);
 
+    // DPRINT << "DataFormat: " << data_format_to_string(data_format) << ENDL();
+    // DPRINT << "rms_a_address: " << rms_a_address << ENDL();
     // Is it okay to assume that the tile bytes and data format will be the same?
     const InterleavedAddrGenFast</* is_dram */ true> input_address_generator = {
         .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_format};
@@ -98,7 +131,12 @@ void kernel_main() {
     const InterleavedAddrGenFast</* is_dram */ true> dL_out_address_generator = {
         .bank_base_address = dL_out_address, .page_size = tile_bytes, .data_format = data_format};
 
+    // DPRINT << dL_out_address << " dL_out_address" << ENDL();
+
+    // DPRINT << "Print from reader" << ENDL();
+
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
+        // DPRINT << "i: " << i << ENDL();
         uint32_t idx = (start_row + i) * Wt;
 
 #define EVERYTHING_FITS_IN_L1 1
@@ -113,9 +151,13 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb_input_idx, Wt);
+        // if (i == 0) {
+        //     DPRINT << "Printing input from reader" << ENDL();
+        //     print_full_tile(cb_input_idx, 0, true);
+        // }
 
-        // Gamma. Gamma is constant for all rows, so we read it only once. Hence id is j, not idx + j. Its original
-        // shape is [1,1,1,C].
+        // // Gamma. Gamma is constant for all rows, so we read it only once. Hence id is j, not idx + j. Its original
+        // // shape is [1,1,1,C].
         if (i == 0) {
             cb_reserve_back(cb_gamma_idx, Wt);
             uint32_t l1_gamma_write_addr = get_write_ptr(cb_gamma_idx);
@@ -125,31 +167,49 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(cb_gamma_idx, Wt);
+
+            // DPRINT << "Printing gamma from reader" << ENDL();
+            // print_full_tile(cb_gamma_idx, 0, true);
         }
 
-        // RMS(a). RMS(a) is not constant for all rows, but for each row it is a single, scalar value. It is alread
-        // tiled with one value at [0, 0], so we read it only once. Hence id is start_row + i. Its original shape is
-        // [B,1,S,1].
+        // // RMS(a). RMS(a) is not constant for all rows, but for each row it is a single, scalar value. It is alread
+        // // tiled with one value at [0, 0], so we read it only once. Hence id is start_row + i. Its original shape is
+        // // [B,1,S,1].
         cb_reserve_back(cb_rms_a_idx, onetile);
         uint32_t l1_rms_a_write_addr = get_write_ptr(cb_rms_a_idx);
         noc_async_read_tile(start_row + i, rms_a_address_generator, l1_rms_a_write_addr);
         noc_async_read_barrier();
         cb_push_back(cb_rms_a_idx, onetile);
+        // if (i == 0) {
+        //     DPRINT << "Printing RMS(a) from reader" << ENDL();
+        //     print_full_tile(cb_rms_a_idx, 0, true);
+        // }
 
         // dL_out. dL_out is the gradient w.r.t. output, so it is the same shape as input, i.e. [B,1,S,C]. We read it in
         // Wt tiles. Hence id is idx + j.
         cb_reserve_back(cb_dL_out_idx, Wt);
         uint32_t l1_dL_out_write_addr = get_write_ptr(cb_dL_out_idx);
+        // DPRINT << "Wt: " << Wt << ENDL();
+        // DPRINT << idx << " idx, l1_dL_out_write_addr: " << l1_dL_out_write_addr << ENDL();
+        // DPRINT << "start_row: " << start_row << ENDL();
+        // DPRINT << "num_rows_to_process: " << num_rows_to_process << ENDL();
         for (uint32_t j = 0; j < Wt; j++) {
+            // DPRINT << "j: " << j << ENDL();
             noc_async_read_tile(idx + j, dL_out_address_generator, l1_dL_out_write_addr);
             l1_dL_out_write_addr += tile_bytes;
         }
         noc_async_read_barrier();
+        // uint16_t* l1_ptr = (uint16_t*)l1_dL_out_write_addr;
+        // for (uint32_t k = 0; k < 5; k++) {
+        //     DPRINT << "l1_ptr[" << k << "]: " << l1_ptr[k] << ENDL();
+        // }
+
         cb_push_back(cb_dL_out_idx, Wt);
-        if (i == 0) {
-            DPRINT << "Print from reader" << ENDL();
-            print_full_tile(cb_dL_out_idx, 0, true);
-        }
+        // cb_wait_front(cb_dL_out_idx, Wt);  // Wait for the dL_out tile to be ready before proceeding?
+        // if (i == 0) {
+        // DPRINT << "Printing dL_out from reader" << ENDL();
+        // print_full_tile(cb_dL_out_idx, 0, true);
+        // }
     }
 #elif defined(SOME_OTHER_OPTIONS_TBD)
         // TODO

@@ -26,6 +26,9 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     if (a_shape.rank() != 4) {
         throw std::runtime_error("rmsnorm only supports rank-4 input tensors.");
     }
+    // std::cerr << "RMSNorm input data: " << std::endl;
+    // tensor->get_value().print();
+    // gamma->get_value().print();
 
     auto ashape_arr = a_shape.to_array_4D();
     auto [B, N, S, C] = ashape_arr;
@@ -44,6 +47,11 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
 
     auto rms_a = rmsnorm_fw_result[1].value();
     auto out = autograd::create_tensor(rmsnorm_fw_result[0].value());
+
+    // std::cerr << "Calculated RMSNorm output: " << std::endl;
+    // out->get_value().print();
+    // std::cerr << "Calculated RMSNorm rms_a: " << std::endl;
+    // rms_a.print();
 
     // autograd::GradFunction grad = [B, S, C, tensor, gamma, out, rms_a, device]() {
     //     auto a = tensor->get_value();  // [B,1,S,C]
@@ -142,10 +150,14 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     //     gamma->add_grad(dL_dg);
     // };
 
-    autograd::GradFunction grad = [tensor, gamma, out, rms_a, epsilon]() {
+    autograd::GradFunction grad = [B, S, C, tensor, gamma, out, rms_a, epsilon]() {
         auto dL_dout = out->get_grad();
 
-        dL_dout.print();
+        // std::cerr << "Within RMSNorm backward grad function:" << std::endl;
+        // dL_dout.print();
+
+        // std::cerr << "Within Grad RMSNorm backward rms_a" << std::endl;
+        // rms_a.print();
 
         auto grads = ttml::metal::rmsnorm_bw(tensor->get_value(), gamma->get_value(), rms_a, dL_dout, epsilon);
 
@@ -172,6 +184,10 @@ autograd::TensorPtr rmsnorm_composite(
     if (a_shape.rank() != 4) {
         throw std::runtime_error("rmsnorm only supports rank-4 input tensors.");
     }
+
+    // std::cerr << "Composite RMSNorm input data: " << std::endl;
+    // tensor->get_value().print();
+    // gamma->get_value().print();
 
     auto ashape_arr = a_shape.to_array_4D();
     auto [B, N, S, C] = ashape_arr;
@@ -226,6 +242,11 @@ autograd::TensorPtr rmsnorm_composite(
 
     auto out = autograd::create_tensor(out_tensor);
 
+    // std::cerr << "Calculated Composite RMSNorm output: " << std::endl;
+    // out->get_value().print();
+    // std::cerr << "Calculated Composite RMSNorm rms_a: " << std::endl;
+    // rms_a.print();
+
     autograd::GradFunction grad = [B, S, C, tensor, gamma, out, rms_a, device]() {
         auto a = tensor->get_value();  // [B,1,S,C]
         auto g = gamma->get_value();   // [1,1,1,C]
@@ -236,6 +257,7 @@ autograd::TensorPtr rmsnorm_composite(
         std::cout << "g: " << std::endl;
         g.print();
         std::cout << "rms_a: " << std::endl;
+        // std::cerr << "Within Grad Composite RMSNorm backward rms_a" << std::endl;
         rms_a.print();
 
         auto dL_dout = out->get_grad();  // Grad w.r.t normalized arctivations, hence [B,1,S,C]
@@ -290,15 +312,28 @@ autograd::TensorPtr rmsnorm_composite(
             ttnn::multiply(a, gained_dL_dout, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
             3);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C] -> [B,1,S,1]
 
+        std::cout << "scale: " << std::endl;
+        scale.print();
+
         auto scaled_outer = ttnn::multiply(
             scale, a, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,1,S,1] x [B,1,S,C] ->
                                                                                            // [B,1,S,C] (bcast)
 
+        std::cout << "a: " << std::endl;
+        a.print();
+        std::cout << "scaled_outer: " << std::endl;
+        scaled_outer.print();
+        std::cout << "rms_a: " << std::endl;
+        rms_a.print();
         auto ms_a = ttnn::square(rms_a);  // [B,1,S,1] -> [B,1,S,1]
+        std::cout << "ms_a: " << std::endl;
+        ms_a.print();
 
         auto c_by_ms_a = ttnn::multiply(
             ms_a, c, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,1,S,1] x [1] ->
                                                                                           // [B,1,S,1] (bcast)
+        std::cout << "c_by_ms_a: " << std::endl;
+        c_by_ms_a.print();
 
         auto rhs = ttnn::divide(
             scaled_outer,
@@ -310,6 +345,8 @@ autograd::TensorPtr rmsnorm_composite(
             none,
             none,
             false);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast)
+        std::cout << "rhs: " << std::endl;
+        rhs.print();
 
         auto dL_da = ttnn::subtract(
             gained_dL_dout,
@@ -321,6 +358,9 @@ autograd::TensorPtr rmsnorm_composite(
             none,
             none,
             false);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]; checked by add_grad
+        std::cerr << "FINAL GRAD" << std::endl;
+        std::cout << "dL_da: " << std::endl;
+        dL_da.print();
         tensor->add_grad(dL_da);
 
         // dL_dgamma = (a / rms(a)) * dL_dout -> requires sum over batch due to broadcasting
