@@ -51,8 +51,18 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped
 std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) {
     std::vector<uint32_t> ubb_asic_loc_vec;
     const auto& eth_cores = tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(physical_chip_id, false);
-    auto virtual_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-        physical_chip_id, *eth_cores.begin(), CoreType::ETH);
+    CoreCoord eth_core;
+    if (eth_cores.size() == 0) {
+        const auto& inactive_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(physical_chip_id);
+        TT_FATAL(inactive_eth_cores.size() > 0, "Could not find any ethernet cores on a UBB.");
+        eth_core = *inactive_eth_cores.begin();
+    } else {
+        eth_core = *eth_cores.begin();
+    }
+    auto virtual_eth_core =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            physical_chip_id, eth_core, CoreType::ETH);
 
     std::uint32_t addr = 0x1ec0 + 65 * sizeof(uint32_t);
     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
@@ -199,7 +209,9 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 }
 
 ControlPlane::ControlPlane(
-    const std::string& mesh_graph_desc_file, tt::tt_metal::FabricReliabilityMode system_setup_mode) {
+    const std::string& mesh_graph_desc_file,
+    tt_metal::FabricConfig fabric_config,
+    tt::tt_metal::FabricReliabilityMode system_setup_mode) {
     this->system_setup_mode_ = system_setup_mode;
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     // Printing, only enabled with log_debug
@@ -212,6 +224,8 @@ ControlPlane::ControlPlane(
         this->get_physical_chip_mapping_from_mesh_graph_desc_file(mesh_graph_desc_file);
     this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
 
+    this->initialize_fabric_context(fabric_config);
+
     this->initialize_dynamic_routing_plane_counts(
         logical_mesh_chip_id_to_physical_chip_id_mapping,
         this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity());
@@ -220,7 +234,9 @@ ControlPlane::ControlPlane(
 ControlPlane::ControlPlane(
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping,
+    tt_metal::FabricConfig fabric_config,
     tt::tt_metal::FabricReliabilityMode system_setup_mode) {
+    // this->fabric_config_ = fabric_config;
     this->system_setup_mode_ = system_setup_mode;
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     // Printing, only enabled with log_debug
@@ -230,6 +246,8 @@ ControlPlane::ControlPlane(
 
     // Initialize the control plane routers based on mesh graph
     this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
+
+    this->initialize_fabric_context(fabric_config);
 
     this->initialize_dynamic_routing_plane_counts(
         logical_mesh_chip_id_to_physical_chip_id_mapping,
@@ -1257,21 +1275,24 @@ void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr)
 ControlPlane::~ControlPlane() = default;
 
 GlobalControlPlane::GlobalControlPlane(
-    const std::string& mesh_graph_desc_file, tt::tt_metal::FabricReliabilityMode system_setup_mode) {
+    const std::string& mesh_graph_desc_file,
+    tt_metal::FabricConfig fabric_config,
+    tt::tt_metal::FabricReliabilityMode system_setup_mode) {
     mesh_graph_desc_file_ = mesh_graph_desc_file;
     // Initialize host mappings
     this->initialize_host_mapping();
-    control_plane_ = std::make_unique<ControlPlane>(mesh_graph_desc_file, system_setup_mode);
+    control_plane_ = std::make_unique<ControlPlane>(mesh_graph_desc_file, fabric_config, system_setup_mode);
 }
 
 GlobalControlPlane::GlobalControlPlane(
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping,
+    tt_metal::FabricConfig fabric_config,
     tt::tt_metal::FabricReliabilityMode system_setup_mode) {
     mesh_graph_desc_file_ = mesh_graph_desc_file;
     this->initialize_host_mapping();
     control_plane_ = std::make_unique<ControlPlane>(
-        mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping, system_setup_mode);
+        mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping, fabric_config, system_setup_mode);
 }
 
 void GlobalControlPlane::initialize_host_mapping() {

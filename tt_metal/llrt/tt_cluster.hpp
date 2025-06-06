@@ -375,7 +375,8 @@ private:
     void disable_ethernet_cores_with_retrain();
 
     // Initialize control plane, which has mapping of physical device id to MeshGraph config
-    void initialize_control_plane(tt_metal::FabricReliabilityMode reliability_mode);
+    void initialize_control_plane(
+        tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
 
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();

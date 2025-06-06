@@ -1067,6 +1067,10 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
         }
     } else {
         std::set<uint32_t> logical_active_eth_channels = cluster_desc_->get_active_eth_channels(chip_id);
+        log_debug(LogDevice, "Active eth channels for chip: {}", chip_id);
+        for (const auto ch : logical_active_eth_channels) {
+            log_debug(LogDevice, "\t{}", ch);
+        }
         for (const auto& eth_channel : logical_active_eth_channels) {
             tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
             const auto& routing_info = this->device_eth_routing_info_.at(chip_id).at(eth_core);
@@ -1086,9 +1090,10 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
 }
 
 tt::tt_fabric::ControlPlane* Cluster::get_control_plane() {
-    if (global_control_plane_.get() == nullptr) {
-        this->initialize_control_plane(this->reliability_mode_);
-    }
+    // if (global_control_plane_.get() == nullptr) {
+    TT_FATAL(this->global_control_plane_ != nullptr, "Control plane is not initialized");
+    //     this->initialize_control_plane(this->reliability_mode_);
+    // }
     return global_control_plane_->get_local_node_control_plane();
 }
 
@@ -1102,7 +1107,7 @@ void Cluster::set_custom_control_plane_mesh_graph(
         global_control_plane_.reset();
     }
     global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
-        mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping, reliability_mode_);
+        mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping, fabric_config_, reliability_mode_);
     this->initialize_fabric_config(fabric_config_, reliability_mode_);
 }
 
@@ -1113,7 +1118,6 @@ void Cluster::set_default_control_plane_mesh_graph() {
     if (global_control_plane_.get() != nullptr) {
         global_control_plane_.reset();
     }
-    this->initialize_control_plane(reliability_mode_);
     this->initialize_fabric_config(fabric_config_, reliability_mode_);
 }
 
@@ -1123,8 +1127,8 @@ void Cluster::initialize_fabric_config(
     this->reliability_mode_ = reliability_mode;
     if (fabric_config != tt_metal::FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
-        if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
-            this->get_control_plane()->initialize_fabric_context(fabric_config);
+        if (tt::tt_fabric::is_tt_fabric_config(fabric_config) && this->global_control_plane_.get() == nullptr) {
+            this->initialize_control_plane(fabric_config, reliability_mode);
         }
     } else {
         this->release_ethernet_cores_for_fabric_routers();
@@ -1417,7 +1421,8 @@ uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
     return (mmio_device_id == chip_id) ? 0 : this->cluster_desc_->get_ethernet_link_distance(chip_id, mmio_device_id);
 }
 
-void Cluster::initialize_control_plane(tt_metal::FabricReliabilityMode reliability_mode) {
+void Cluster::initialize_control_plane(
+    tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
     // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
     // descriptors
     std::string mesh_graph_descriptor;
@@ -1445,8 +1450,8 @@ void Cluster::initialize_control_plane(tt_metal::FabricReliabilityMode reliabili
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                                        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
 
-    global_control_plane_ =
-        std::make_unique<tt::tt_fabric::GlobalControlPlane>(mesh_graph_desc_path.string(), reliability_mode);
+    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
+        mesh_graph_desc_path.string(), fabric_config, reliability_mode);
 }
 
 }  // namespace tt

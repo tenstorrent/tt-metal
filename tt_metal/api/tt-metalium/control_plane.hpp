@@ -18,10 +18,13 @@ class FabricContext;
 class ControlPlane {
 public:
     explicit ControlPlane(
-        const std::string& mesh_graph_desc_yaml_file, tt_metal::FabricReliabilityMode system_setup_mode);
+        const std::string& mesh_graph_desc_yaml_file,
+        tt_metal::FabricConfig fabric_config,
+        tt_metal::FabricReliabilityMode system_setup_mode);
     explicit ControlPlane(
         const std::string& mesh_graph_desc_yaml_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping,
+        tt_metal::FabricConfig fabric_config,
         tt_metal::FabricReliabilityMode system_setup_mode);
     ~ControlPlane();
 
@@ -162,10 +165,13 @@ private:
 class GlobalControlPlane {
 public:
     explicit GlobalControlPlane(
-        const std::string& mesh_graph_desc_yaml_file, tt_metal::FabricReliabilityMode system_setup_mode);
+        const std::string& mesh_graph_desc_yaml_file,
+        tt_metal::FabricConfig fabric_config,
+        tt_metal::FabricReliabilityMode system_setup_mode);
     explicit GlobalControlPlane(
         const std::string& mesh_graph_desc_yaml_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping,
+        tt_metal::FabricConfig fabric_config,
         tt_metal::FabricReliabilityMode system_setup_mode);
     ~GlobalControlPlane();
 

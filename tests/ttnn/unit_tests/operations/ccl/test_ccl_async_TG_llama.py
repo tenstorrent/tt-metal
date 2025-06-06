@@ -303,7 +303,7 @@ def test_all_reduce_tg_llama(
             "trace_region_size": 23887872,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
         }
     ],
     indirect=True,

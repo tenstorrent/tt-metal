@@ -263,7 +263,9 @@ int main(int argc, char** argv) {
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
             "tt_fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
         auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
-            tg_mesh_graph_desc_path.string(), tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+            tg_mesh_graph_desc_path.string(),
+            tt::tt_metal::FabricConfig::FABRIC_2D,
+            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
         int num_devices = tt_metal::GetNumAvailableDevices();
         if (test_device_id_l >= num_devices) {

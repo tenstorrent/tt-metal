@@ -30,6 +30,12 @@ void py_bind_fabric_api(pybind11::module& module) {
         .value("STRICT_INIT", tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE)
         .value("RELAXED_INIT", tt::tt_metal::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE)
         .value("DYNAMIC_RECONFIG", tt::tt_metal::FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE);
+
+    module.def(
+        "initialize_fabric_config",
+        &tt::tt_metal::detail::InitializeFabricConfig,
+        py::arg("config"),
+        py::arg("reliability_mode") = tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 }  // namespace ttnn::fabric

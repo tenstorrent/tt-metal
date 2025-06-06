@@ -217,7 +217,9 @@ struct test_board_t {
                 std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
                 "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
             cp_owning_ptr = std::make_unique<tt::tt_fabric::ControlPlane>(
-                mesh_graph_desc_path.string(), tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+                mesh_graph_desc_path.string(),
+                tt::tt_metal::FabricConfig::FABRIC_2D,
+                tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
             control_plane = cp_owning_ptr.get();
         } catch (const std::exception& e) {
             log_fatal(e.what());
