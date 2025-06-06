@@ -450,8 +450,8 @@ std::size_t DevicePool::get_max_num_eth_cores_across_all_devices() const {
     for (const auto& device : this->devices) {
         max_eth_core_count = std::max(
             MetalContext::instance()
-                .get_cluster()
-                .get_active_ethernet_cores(device->id(), /*skip_reserved_tunnel_cores*/ true)
+                .get_control_plane()
+                .get_active_ethernet_cores(device->id(), /*skip_reserved_cores*/ true)
                 .size(),
             max_eth_core_count);
     }
