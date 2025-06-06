@@ -93,7 +93,7 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     // disable upstream buffering optimization for now for device init.
     auto dateline_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
         .edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline,
-        .enable_dateline_sender_extra_buffer_slots = true,
+        .enable_dateline_sender_extra_buffer_slots = false,
         .enable_dateline_receiver_extra_buffer_slots = true,
         .enable_dateline_upstream_sender_extra_buffer_slots = false,
         .enable_dateline_upstream_receiver_extra_buffer_slots = false,
