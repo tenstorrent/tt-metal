@@ -39,9 +39,9 @@ void copy_sticks_async_to_temp(
     const uint32_t in_base_l1_addr,
     const uint32_t temp_base_l1_addr,
     const uint32_t out_base_l1_addr) {
-    int i = 0;
-    int length = config_data[2];
-    int remote_entry_count = 0;
+    uint32_t i = 0;
+    uint32_t length = config_data[2];
+    uint32_t remote_entry_count = 0;
 
     constexpr bool noc_orient_x = ((is_block_sharded && !is_col_major) || is_width_sharded);
     constexpr bool noc_orient_y = ((is_block_sharded && is_col_major) || is_width_sharded);
@@ -49,21 +49,21 @@ void copy_sticks_async_to_temp(
     const uint64_t base_addr_temp = get_noc_addr(my_noc_x, my_noc_y, temp_base_l1_addr);
     uint64_t dst_addr_temp = base_addr_temp;
     while (length) {
-        uint16_t noc_x = noc_orient_x ? my_noc_x : config_data[i + 0];
-        uint16_t noc_y = noc_orient_y ? my_noc_y : config_data[i + 1];
+        const uint16_t noc_x = noc_orient_x ? my_noc_x : config_data[i + 0];
+        const uint16_t noc_y = noc_orient_y ? my_noc_y : config_data[i + 1];
         const uint64_t base_addr_final = get_noc_addr(noc_x, noc_y, out_base_l1_addr);
         length = config_data[i + 2];
         i += 3;
         for (uint16_t j = 0; j < length; j += 3) {
-            uint16_t nsticks = config_data[i + j + 2];
-            uint32_t size = nsticks * stick_nbytes;
+            const uint16_t nsticks = config_data[i + j + 2];
+            const uint32_t size = nsticks * stick_nbytes;
             if (remote_entry_count % 2 != main_thread) {
-                uint16_t src_local_idx = config_data[i + j + 0];
-                uint16_t dst_local_idx = config_data[i + j + 1];
-                uint32_t src_offset = src_local_idx * input_aligned_page_size;
-                uint32_t dst_offset = dst_local_idx * stick_nbytes;
+                const uint16_t src_local_idx = config_data[i + j + 0];
+                const uint16_t dst_local_idx = config_data[i + j + 1];
+                const uint32_t src_offset = src_local_idx * input_aligned_page_size;
+                const uint32_t dst_offset = dst_local_idx * stick_nbytes;
                 uint32_t src_addr = in_base_l1_addr + src_offset;
-                uint64_t dst_addr_final = base_addr_final + dst_offset;
+                const uint64_t dst_addr_final = base_addr_final + dst_offset;
                 if constexpr (stick_nbytes == input_aligned_page_size) {
                     noc_async_write(src_addr, dst_addr_temp, size);
                     dst_addr_temp +=
@@ -104,9 +104,9 @@ void copy_sticks_async_from_temp(
         return;
     }
 
-    int i = 0;
-    int length = config_data[2];
-    int remote_entry_count = 0;
+    uint32_t i = 0;
+    uint32_t length = config_data[2];
+    uint32_t remote_entry_count = 0;
 
     uint64_t src_addr = temp_base_l1_addr;
 
@@ -114,18 +114,18 @@ void copy_sticks_async_from_temp(
     constexpr bool noc_orient_y = ((is_block_sharded && is_col_major) || is_width_sharded);
 
     while (length) {
-        uint16_t noc_x = noc_orient_x ? my_noc_x : config_data[i + 0];
-        uint16_t noc_y = noc_orient_y ? my_noc_y : config_data[i + 1];
+        const uint16_t noc_x = noc_orient_x ? my_noc_x : config_data[i + 0];
+        const uint16_t noc_y = noc_orient_y ? my_noc_y : config_data[i + 1];
         const uint64_t base_addr = get_noc_addr(noc_x, noc_y, out_base_l1_addr);
         length = config_data[i + 2];
         i += 3;
         for (uint16_t j = 0; j < length; j += 3) {
-            uint16_t nsticks = config_data[i + j + 2];
-            uint32_t size = nsticks * stick_nbytes;
+            const uint16_t nsticks = config_data[i + j + 2];
+            const uint32_t size = nsticks * stick_nbytes;
 
             if ((remote_entry_count % 2 != main_thread) || (main_thread && padding_exists)) {
-                uint16_t dst_local_idx = config_data[i + j + 1];
-                uint32_t dst_offset = dst_local_idx * stick_nbytes;
+                const uint16_t dst_local_idx = config_data[i + j + 1];
+                const uint32_t dst_offset = dst_local_idx * stick_nbytes;
                 uint64_t dst_addr = base_addr + dst_offset;
                 if constexpr (stick_nbytes == input_aligned_page_size) {
                     noc_async_write(src_addr, dst_addr, size);
@@ -149,7 +149,7 @@ void copy_sticks_async_from_temp(
     }
 }
 
-template <uint32_t stick_nbytes, uint32_t input_aligned_page_size, uint32_t sycn_cb_id, bool main_thread>
+template <uint32_t stick_nbytes, uint32_t input_aligned_page_size, uint32_t sync_cb_id, bool main_thread>
 void copy_sticks_async_local(
     const tt_l1_ptr uint16_t* config_data,
     const uint16_t my_noc_x,
@@ -157,26 +157,26 @@ void copy_sticks_async_local(
     const uint32_t in_base_l1_addr,
     const uint32_t out_base_l1_addr,
     const uint32_t in_out_buffer_start_delta) {
-    int i = 0;
-    int length = config_data[2];
+    uint32_t i = 0;
+    uint32_t length = config_data[2];
 
     const uint64_t base_addr = get_noc_addr(my_noc_x, my_noc_y, out_base_l1_addr);
     while (length) {
         length = config_data[i + 2];
         i += 3;
         for (uint16_t j = 0; j < length; j += 3) {
-            uint16_t src_local_idx = config_data[i + j + 0];
-            uint16_t dst_local_idx = config_data[i + j + 1];
-            uint16_t nsticks = config_data[i + j + 2];
-            uint32_t size = nsticks * stick_nbytes;
-            uint32_t dst_offset = dst_local_idx * stick_nbytes;
-            uint32_t src_offset = src_local_idx * input_aligned_page_size;
+            const uint16_t src_local_idx = config_data[i + j + 0];
+            const uint16_t dst_local_idx = config_data[i + j + 1];
+            const uint16_t nsticks = config_data[i + j + 2];
+            const uint32_t size = nsticks * stick_nbytes;
+            const uint32_t dst_offset = dst_local_idx * stick_nbytes;
+            const uint32_t src_offset = src_local_idx * input_aligned_page_size;
 
-            uint64_t dst_addr = base_addr + dst_offset;
-            uint32_t src_addr = in_base_l1_addr + src_offset;
+            const uint64_t dst_addr = base_addr + dst_offset;
+            const uint32_t src_addr = in_base_l1_addr + src_offset;
 
-            uint32_t dst_relative_src = src_local_idx + in_out_buffer_start_delta;
-            bool is_not_overlap_copy =
+            const uint32_t dst_relative_src = src_local_idx + in_out_buffer_start_delta;
+            const bool is_not_overlap_copy =
                 dst_local_idx + nsticks < dst_relative_src || dst_relative_src + nsticks < dst_local_idx;
 
             if (dst_relative_src == dst_local_idx) {
@@ -184,15 +184,15 @@ void copy_sticks_async_local(
             }
 
             if constexpr (main_thread) {
-                cb_reserve_back(sycn_cb_id, 1);
+                cb_reserve_back(sync_cb_id, 1);
                 noc_async_write_barrier();  // wait for last local copy to finish to preseve order
-                cb_push_back(sycn_cb_id, 1);
+                cb_push_back(sync_cb_id, 1);
             } else {
-                cb_wait_front(sycn_cb_id, 1);  // wait for main thread to be ready to copy
+                cb_wait_front(sync_cb_id, 1);  // wait for main thread to be ready to copy
             }
 
             if (is_not_overlap_copy) {  // dst and src data do not overlap, can copy big chunks
-                uint32_t half_size = size / 2;
+                const uint32_t half_size = size / 2;
                 if constexpr (main_thread) {
                     noc_async_write(src_addr, dst_addr, half_size);
                 } else {
@@ -200,8 +200,8 @@ void copy_sticks_async_local(
                 }
             } else {  // dst and src data overlaps, stick by stick copy is necessary, note front half and back half of
                       // stick copies are orthogonal so relative order doesn't matter
-                bool is_forward_copy = dst_local_idx > dst_relative_src;
-                uint32_t half_stick = stick_nbytes / 2;
+                const bool is_forward_copy = dst_local_idx > dst_relative_src;
+                const uint32_t half_stick = stick_nbytes / 2;
                 if (is_forward_copy) {
                     for (int16_t k = nsticks - 1; k >= 0; k--) {
                         if constexpr (main_thread) {
@@ -229,7 +229,7 @@ void copy_sticks_async_local(
 
             if constexpr (!main_thread) {
                 noc_async_write_barrier();
-                cb_pop_front(sycn_cb_id, 1);  // signal to main thread that secondary thread is ready to copy
+                cb_pop_front(sync_cb_id, 1);  // signal to main thread that secondary thread is ready to copy
             }
         }
 
@@ -295,8 +295,8 @@ void kernel_main() {
 
     const uint16_t my_noc_x = NOC_X(my_x[noc_index]);
     const uint16_t my_noc_y = NOC_Y(my_y[noc_index]);
-    uint32_t noop_core = get_arg_val<uint32_t>(0);
-    uint32_t cast_core = get_arg_val<uint32_t>(1);
+    const uint32_t noop_core = get_arg_val<uint32_t>(0);
+    const uint32_t cast_core = get_arg_val<uint32_t>(1);
     if (noop_core) {
         return;
     }
@@ -330,7 +330,7 @@ void kernel_main() {
 
     // copy remote sticks to temp buffer
     const uint32_t temp_base_l1_addr = get_write_ptr(remote_temp_cb_id);
-    uint32_t remote_config_data_l1_addr = get_read_ptr(remote_config_cb_id);
+    const uint32_t remote_config_data_l1_addr = get_read_ptr(remote_config_cb_id);
     const tt_l1_ptr uint16_t* remote_config_data =
         reinterpret_cast<const tt_l1_ptr uint16_t*>(remote_config_data_l1_addr);
     copy_sticks_async_to_temp<
@@ -353,13 +353,13 @@ void kernel_main() {
     }
 
     // move local sticks
-    uint32_t local_config_data_l1_addr = get_read_ptr(local_config_cb_id);
+    const uint32_t local_config_data_l1_addr = get_read_ptr(local_config_cb_id);
     const tt_l1_ptr uint16_t* local_config_data =
         reinterpret_cast<const tt_l1_ptr uint16_t*>(local_config_data_l1_addr);
     copy_sticks_async_local<stick_nbytes, input_aligned_page_size, sync_cb_id1, main_thread>(
         local_config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, in_out_buffer_start_delta);
 
-    uint32_t semaphore_addr = get_semaphore(semaphore_id);
+    const uint32_t semaphore_addr = get_semaphore(semaphore_id);
     const uint64_t semaphore_noc_addr = get_noc_addr(noc_TL_x, noc_TL_y, semaphore_addr);
     noc_async_write_barrier();
     if constexpr (main_thread) {
@@ -396,14 +396,14 @@ void kernel_main() {
         fill_with_val(get_write_ptr(pad_cb_id), stick_nbytes / elem_nbytes, pad_val);
         cb_push_back(pad_cb_id, 1);
 
-        uint32_t padding_config_l1_addr = get_read_ptr(padding_config_cb_id);
-        volatile tt_l1_ptr uint16_t* config_data =
+        const uint32_t padding_config_l1_addr = get_read_ptr(padding_config_cb_id);
+        const volatile tt_l1_ptr uint16_t* config_data =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
         const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
         const uint32_t dst_base_addr = out_base_l1_addr;
         uint16_t nsticks = 1;
         for (uint16_t j = 0; nsticks; j += 2) {
-            uint16_t dst_local_idx = config_data[j + 0];
+            const uint16_t dst_local_idx = config_data[j + 0];
             nsticks = config_data[j + 1];
 
             uint64_t dst_addr = dst_base_addr + dst_local_idx * stick_nbytes;
