@@ -274,6 +274,10 @@ static void run_daemon_mode() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
+    if (test_fixture != nullptr) {
+        delete test_fixture;
+    }
+
     // Cleanup
     unlink(daemon_pipe_path.c_str());
     unlink((daemon_pipe_path + "_result").c_str());
