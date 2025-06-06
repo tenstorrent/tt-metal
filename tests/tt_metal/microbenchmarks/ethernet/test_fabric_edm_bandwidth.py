@@ -648,6 +648,35 @@ def test_fabric_4chip_multi_link_mcast_full_ring_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [8])
+@pytest.mark.parametrize("num_links", [1, 2, 3, 4])
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+def test_fabric_8chip_multi_link_edm_mcast_half_ring_bw(
+    num_messages,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+):
+    run_fabric_edm(
+        is_unicast=False,
+        num_messages=num_messages,
+        noc_message_type="noc_unicast_write",
+        num_links=num_links,
+        num_op_invocations=num_op_invocations,
+        line_sync=line_sync,
+        line_size=line_size,
+        packet_size=packet_size,
+        fabric_mode=FabricTestMode.HalfRing,
+        disable_sends_for_interior_workers=False,
+    )
+
+
+@pytest.mark.ubench_quick_tests
+@pytest.mark.parametrize("num_messages", [200000])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [8])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
