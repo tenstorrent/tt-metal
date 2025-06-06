@@ -2,88 +2,94 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-TOOL_PATH?=sfpi/compiler/bin
-BUILD_DIR ?=build
+# =========================
+# Toolchain and Directories
+# =========================
+CXX_VERSION     := c++17
+TOOL_PATH       ?= sfpi/compiler/bin
+BUILD_DIR       ?= build
+OUTPUT_ELFS     := $(BUILD_DIR)/elf
+HELPERS         := helpers
+RISCV_SOURCES   := $(HELPERS)/src
+LINKER_SCRIPTS  := $(HELPERS)/ld
+HEADER_DIR      := hw_specific/inc
+RMDIR           := rm -rf
 
-RMDIR := rm -rf
+GXX             := $(TOOL_PATH)/riscv32-tt-elf-g++
+OBJDUMP         := $(TOOL_PATH)/riscv32-tt-elf-objdump
 
-# Tool paths, mfc changing from 'unknown' to 'tt'
-GXX:=$(wildcard $(TOOL_PATH)/riscv32-*-elf-g++)
-OBJDUMP:=$(wildcard $(TOOL_PATH)/riscv32-*-elf-objdump)
-
-# GCC options
-OPTIONS_ALL=-O3 -mabi=ilp32 -std=c++17 -ffast-math
-OPTIONS_COMPILE=-fno-use-cxa-atexit -Wall -fpermissive -fno-exceptions -fno-rtti -Werror -Wno-unknown-pragmas -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -DTENSIX_FIRMWARE #-DDEBUG_PRINT_ENABLED
-
-# Default values
-ARCH_ROOT := unknown
-
-# Architecture-specific options
-ifeq ($(CHIP_ARCH), wormhole)
-    ARCH_OPTS := -mcpu=tt-wh -DARCH_WORMHOLE
-    ARCH_LLK_ROOT := tt_llk_wormhole_b0
-else ifeq ($(CHIP_ARCH), blackhole)
-    ARCH_OPTS := -mcpu=tt-bh -DARCH_BLACKHOLE
-    ARCH_LLK_ROOT := tt_llk_blackhole
+# =========================
+# Architecture Selection
+# =========================
+ifeq ($(CHIP_ARCH),wormhole)
+	ARCH_CPU	:= -mcpu=tt-wh
+	ARCH_DEFINE     := -DARCH_WORMHOLE
+	ARCH_LLK_ROOT   := tt_llk_wormhole_b0
+else ifeq ($(CHIP_ARCH),blackhole)
+	ARCH_CPU	:= -mcpu=tt-bh
+	ARCH_DEFINE     := -DARCH_BLACKHOLE
+	ARCH_LLK_ROOT   := tt_llk_blackhole
 else
-    $(error CHIP_ARCH is neither wormhole nor blackhole.)
-	exit (1)
+	$(error CHIP_ARCH must be either 'wormhole' or 'blackhole')
 endif
 
-# Append architecture-specific options
-OPTIONS_ALL += $(filter -mcpu=%, $(ARCH_OPTS))
-OPTIONS_COMPILE += $(filter -DARCH_%, $(ARCH_OPTS))
+# =========================
+# Compiler and Linker Flags
+# =========================
+OPTIONS_ALL	:= -O3 -mabi=ilp32 -std=$(CXX_VERSION) -ffast-math $(ARCH_CPU)
+OPTIONS_COMPILE := -fno-use-cxa-atexit -Wall -fpermissive -fno-exceptions -fno-rtti -Werror \
+				   -Wno-unknown-pragmas -Wno-error=multistatement-macros -Wno-error=parentheses \
+				   -Wno-error=unused-but-set-variable -Wno-unused-variable -DTENSIX_FIRMWARE \
+				   $(ARCH_DEFINE)
+OPTIONS_LINK	:= -fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace
 
-# Architecture specific header files
-HEADER_DIR = hw_specific/inc
+INCLUDES := -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc \
+			-I../$(ARCH_LLK_ROOT)/common/inc/sfpu -I$(HEADER_DIR) \
+			-Ifirmware/riscv/common -Ifirmware/riscv/$(CHIP_ARCH) \
+			-Isfpi/include -Ihelpers/include
 
-OPTIONS_LINK=-fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace
-INCLUDES = -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc -I../$(ARCH_LLK_ROOT)/common/inc/sfpu -I$(HEADER_DIR)
-INCLUDES += -Ifirmware/riscv/common -Ifirmware/riscv/$(CHIP_ARCH)/ -Isfpi/include -Ihelpers/include
+FORMAT_ARG := $(foreach var, unpack_A_src unpack_A_dst unpack_B_src unpack_B_dst fpu pack_src pack_dst, $(if $($(var)),-D$($(var))))
+MATHOP_ARG := $(if $(mathop),-D$(mathop) -DAPPROX_MODE=$(approx_mode) -DPOOL_TYPE=$(pool_type) -DREDUCE_DIM=$(reduce_dim))
 
-FORMAT_ARG += $(foreach var, unpack_A_src unpack_A_dst unpack_B_src unpack_B_dst fpu pack_src pack_dst, $(if $($(var)),-D$($(var))))
+OPTIONS_COMPILE += $(INCLUDES) $(FORMAT_ARG) $(MATHOP_ARG) -DTILE_SIZE_CNT=0x1000 -DMATH_FIDELITY=$(math_fidelity) -DUNPACKING_TO_DEST=$(unpack_to_dest)
 
 ifeq ($(llk_profiler), true)
-	OPTIONS_COMPILE+=-DLLK_PROFILER
+	OPTIONS_COMPILE += -DLLK_PROFILER
 endif
-
-ifeq ($(mathop),)
-    MATHOP_ARG =
-else
-	MATHOP_ARG:= -D$(mathop) -DAPPROX_MODE=$(approx_mode)  -DPOOL_TYPE=$(pool_type) -DREDUCE_DIM=$(reduce_dim)
-endif
-
-OPTIONS_COMPILE+= -DMATH_FIDELITY=$(math_fidelity) -DUNPACKING_TO_DEST=$(unpack_to_dest)
-
-# If test needs to run muliple consecutive operations it needs some additional
-# files to be linked to it
-ifeq ($(testname), multiple_tiles_eltwise_test)
-	MULTIPLE_OPS:=-DMULTIPLE_OPS
-	OPTIONS_UNPACK:=-DKERN_CNT=$(kern_cnt)
-	OPTIONS_MATH:=-DKERN_CNT=$(kern_cnt)
-	OPTIONS_PACK:=-DKERN_CNT=$(kern_cnt)
-	OPTIONS_PACK+=-DPACK_ADDR_CNT=$(pack_addr_cnt)
-	OPTIONS_PACK+=-DPACK_ADDRS=$(pack_addrs)
-endif
-
-OPTIONS_COMPILE+=$(FORMAT_ARG) $(MATHOP_ARG) -DTILE_SIZE_CNT=0x1000
-OPTIONS_COMPILE+=$(INCLUDES)
-
 ifeq ($(dest_acc), DEST_ACC)
-	OPTIONS_COMPILE+=-DDEST_ACC
+	OPTIONS_COMPILE += -DDEST_ACC
 endif
 
-# Define project paths
-HELPERS=helpers
-RISCV_SOURCES=$(HELPERS)/src
-LINKER_SCRIPTS=$(HELPERS)/ld
-OUTPUT_ELFS = $(BUILD_DIR)/elf
+# =========================
+# Special Test Options
+# =========================
+ifeq ($(testname), multiple_tiles_eltwise_test)
+	MULTIPLE_OPS   := -DMULTIPLE_OPS
+	OPTIONS_UNPACK := -DKERN_CNT=$(kern_cnt)
+	OPTIONS_MATH   := -DKERN_CNT=$(kern_cnt)
+	OPTIONS_PACK   := -DKERN_CNT=$(kern_cnt) -DPACK_ADDR_CNT=$(pack_addr_cnt) -DPACK_ADDRS=$(pack_addrs)
+endif
 
-# Define targets
-.PHONY: all clean
+# =========================
+# Targets
+# =========================
+.PHONY: all dis clean
 
-all: $(BUILD_DIR) $(OUTPUT_ELFS) $(OUTPUT_ELFS)/$(testname)_trisc0.elf $(OUTPUT_ELFS)/$(testname)_trisc1.elf $(OUTPUT_ELFS)/$(testname)_trisc2.elf $(OUTPUT_ELFS)/brisc.elf
-dis: $(BUILD_DIR) $(OUTPUT_ELFS) $(BUILD_DIR)/$(testname)_trisc0.dis $(BUILD_DIR)/$(testname)_trisc1.dis $(BUILD_DIR)/$(testname)_trisc2.dis $(BUILD_DIR)/brisc.dis
+all: $(BUILD_DIR) $(OUTPUT_ELFS) \
+	 $(OUTPUT_ELFS)/$(testname)_trisc0.elf \
+	 $(OUTPUT_ELFS)/$(testname)_trisc1.elf \
+	 $(OUTPUT_ELFS)/$(testname)_trisc2.elf \
+	 $(OUTPUT_ELFS)/brisc.elf
+
+dis: $(BUILD_DIR) $(OUTPUT_ELFS) \
+	 $(BUILD_DIR)/$(testname)_trisc0.dis \
+	 $(BUILD_DIR)/$(testname)_trisc1.dis \
+	 $(BUILD_DIR)/$(testname)_trisc2.dis \
+	 $(BUILD_DIR)/brisc.dis
+
+# =========================
+# Build Rules
+# =========================
 
 $(BUILD_DIR)/%.dis :  $(OUTPUT_ELFS)/%.elf
 	$(OBJDUMP) -xsD $< > $@
@@ -95,6 +101,7 @@ $(BUILD_DIR):
 $(OUTPUT_ELFS): $(BUILD_DIR)
 	mkdir -p $@
 
+# Explicit rules for TRISC .elfs
 # Buiding .elf files for every TRISC core
 $(OUTPUT_ELFS)/$(testname)_trisc0.elf :$(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/main_unpack.o $(BUILD_DIR)/$(testname)_unpack.o
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/trisc0.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
@@ -108,7 +115,8 @@ $(OUTPUT_ELFS)/brisc.elf: $(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/brisc.o
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(CHIP_ARCH).ld -T$(LINKER_SCRIPTS)/brisc.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
 
 #compiling _test.pp to .o
-.PHONY: $(BUILD_DIR)/$(testname)_unpack.o $(BUILD_DIR)/$(testname)_math.o $(BUILD_DIR)/$(testname)_pack.o
+.PHONY: $(BUILD_DIR)/$(testname)_unpack.o $(BUILD_DIR)/$(testname)_math.o $(BUILD_DIR)/$(testname)_pack.o \
+        $(BUILD_DIR)/main_unpack.o $(BUILD_DIR)/main_math.o $(BUILD_DIR)/main_pack.o
 
 $(BUILD_DIR)/$(testname)_unpack.o: sources/$(testname).cpp
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) $(OPTIONS_UNPACK) -DLLK_TRISC_UNPACK -c -o $@ $<
@@ -131,6 +139,9 @@ $(BUILD_DIR)/tmu-crt0.o: $(HELPERS)/tmu-crt0.S | $(BUILD_DIR)
 $(BUILD_DIR)/brisc.o: $(RISCV_SOURCES)/brisc.cpp | $(BUILD_DIR)
 	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -c -o $@ $<
 
+# =========================
+# Clean
+# =========================
 clean:
 	$(RMDIR) $(BUILD_DIR)
 	$(RMDIR) __pycache__
