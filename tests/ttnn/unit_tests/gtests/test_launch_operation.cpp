@@ -274,6 +274,8 @@ TEST_F(LaunchOperationT3000Test, LaunchOpFilterTensorShards) {
 }
 
 TEST_F(LaunchOperationT3000Test, CachingHeterogeneousDispatch) {
+    // Since we are going to validate cache entries, we need to clear the cache
+    mesh_device_->disable_and_clear_program_cache();
     mesh_device_->enable_program_cache();
     EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 0);
 

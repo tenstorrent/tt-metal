@@ -358,10 +358,9 @@ void test_bert() {
         tt::log_info(tt::LogTest, "average duration: {} average_duration", total_duration);
         tt::log_info(tt::LogTest, "samples per second: {}", num_samples_per_second);
     };
-    device->enable_program_cache();
+
     run_bert();
     run_loop();
-    device->disable_and_clear_program_cache();
 }
 
 int main(int argc, char** argv) {

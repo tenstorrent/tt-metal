@@ -139,7 +139,6 @@ profile_input_bcast_shape_pairs = [
 )
 @pytest.mark.parametrize("shape_and_broadcast_spec", profile_input_bcast_shape_pairs)
 def test_broadcast_to_profile(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memory_config_input):
-    device.enable_program_cache()
     torch.manual_seed(0)
     shape, broadcast_shape = shape_and_broadcast_spec
     if dtype_pt == torch.bfloat16 and shape[-1] < 2 and broadcast_shape[-1] < 2:

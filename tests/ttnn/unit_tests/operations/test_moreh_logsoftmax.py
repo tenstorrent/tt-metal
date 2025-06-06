@@ -358,7 +358,10 @@ def test_logsoftmax_backward_large_algorithm_for_dim_hw(shape_dim, dtype, comput
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_logsoftmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
+    # Since we are going to validate cache entries, we need to clear the cache
+    device.disable_and_clear_program_cache()
     device.enable_program_cache()
+
     shape, dim = shape_dim
     torch.manual_seed(0)
     rtol = atol = 0.1
@@ -395,7 +398,10 @@ def test_logsoftmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, dtype, com
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_logsoftmax_backward_for_dim_nc(shape_dim, dtype, compute_kernel_options, device):
+    # Since we are going to validate cache entries, we need to clear the cache
+    device.disable_and_clear_program_cache()
     device.enable_program_cache()
+
     shape, dim = shape_dim
     torch.manual_seed(0)
 
@@ -426,6 +432,8 @@ def test_logsoftmax_backward_for_dim_nc(shape_dim, dtype, compute_kernel_options
     ],
 )
 def test_logsoftmax_optional_output_tensor(shape_dim, dtype, device):
+    # Since we are going to validate cache entries, we need to clear the cache
+    device.disable_and_clear_program_cache()
     device.enable_program_cache()
 
     shape, dim = shape_dim
