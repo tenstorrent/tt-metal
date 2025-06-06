@@ -2464,15 +2464,35 @@ static std::vector<std::vector<IDevice*>> generate_line_fabrics_under_test(
     return fabrics_under_test;
 }
 
+template <typename FABRIC_DEVICE_FIXTURE>
+void create_fabric_fixture(Fabric1DFixture*& test_fixture) {
+    if (test_fixture == nullptr) {
+        test_fixture = new FABRIC_DEVICE_FIXTURE();
+    } else {
+        // NOTE: Currently non device init fabric is always reuse test_fixture
+        //       device init fabric is not supported yet
+        auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+        if ((fabric_config == tt::tt_metal::FabricConfig::DISABLED &&
+             !std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
+            (fabric_config != tt::tt_metal::FabricConfig::DISABLED &&
+             std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
+            (std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture>) ||
+            (std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DRingDeviceInitFixture>)) {
+            delete test_fixture;
+            test_fixture = new FABRIC_DEVICE_FIXTURE();
+        }
+    }
+}
+
 template <typename FABRIC_DEVICE_FIXTURE = Fabric1DFixture>
 void Run1DFabricPacketSendTest(
+    Fabric1DFixture*& test_fixture,
     const std::vector<Fabric1DPacketSendTestSpec>& test_specs,
     const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
     size_t fabric_context_switch_interval =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval) {
     constexpr bool use_device_init_fabric = std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture> ||
                                             std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DRingDeviceInitFixture>;
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     TT_FATAL(
         !params.disable_sends_for_interior_workers || params.fabric_mode == FabricTestMode::Linear ||
@@ -2488,10 +2508,6 @@ void Run1DFabricPacketSendTest(
     bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
-        return;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
         return;
     }
 
@@ -2566,9 +2582,9 @@ void Run1DFabricPacketSendTest(
 
     log_info("Device open and fabric init");
     // MeshFabric1DLineDeviceInitFixture test_fixture;
-    FABRIC_DEVICE_FIXTURE test_fixture;
+    create_fabric_fixture<FABRIC_DEVICE_FIXTURE>(test_fixture);
     log_info("\tDone");
-    auto view = *(test_fixture.view_);
+    auto view = *(test_fixture->view_);
 
     auto fabrics_under_test_devices =
         generate_line_fabrics_under_test(params, use_galaxy, use_tg, line_size, topology, view);
@@ -3024,6 +3040,9 @@ void Run1DFabricPacketSendTest(
         log_info(tt::LogTest, "Fabric teardown");
         persistent_fabric_teardown_sequence(
             devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+        for (auto& device : devices) {
+            device->clear_loaded_sub_device_manager();
+        }
     }
 
     log_info(tt::LogTest, "Waiting for teardown completion");
@@ -3050,6 +3069,12 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     size_t num_op_invocations,
     const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
     size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    if (arch == tt::ARCH::GRAYSKULL) {
+        log_info("Test must be run on WH");
+        return;
+    }
+
     std::vector<Fabric1DPacketSendTestSpec> test_specs;
     if (num_mcasts > 0) {
         test_specs.push_back(
@@ -3068,7 +3093,11 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     auto params_copy = params;
     params_copy.num_links = num_links;
     params_copy.num_op_invocations = num_op_invocations;
-    Run1DFabricPacketSendTest(test_specs, params_copy, 0);
+    Fabric1DFixture* test_fixture = nullptr;
+    Run1DFabricPacketSendTest(test_fixture, test_specs, params_copy, 0);
+    if (test_fixture != nullptr) {
+        delete test_fixture;
+    }
 }
 
 void RunRingDeadlockStabilityTestWithPersistentFabric(

@@ -78,7 +78,7 @@ static int baseline_validate_test_environment(const WriteThroughputStabilityTest
     return 0;
 }
 
-static int run_single_test(TestParams& test_params, const std::string& test_mode) {
+static int run_single_test(Fabric1DFixture*& test_fixture, TestParams& test_params, const std::string& test_mode) {
     auto chip_send_type = test_params.fabric_unicast ? tt::tt_fabric::CHIP_UNICAST : tt::tt_fabric::CHIP_MULTICAST;
     auto [noc_send_type, flush] = get_noc_send_type(test_params.message_noc_type);
 
@@ -91,12 +91,12 @@ static int run_single_test(TestParams& test_params, const std::string& test_mode
 
     try {
         if (test_mode == "1_fabric_instance") {
-            Run1DFabricPacketSendTest(test_specs, test_params.params);
+            Run1DFabricPacketSendTest(test_fixture, test_specs, test_params.params);
         } else if (test_mode == "1D_fabric_on_mesh") {
             if (test_params.params.fabric_mode == FabricTestMode::Linear) {
-                Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_specs, test_params.params);
+                Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_fixture, test_specs, test_params.params);
             } else if (test_params.params.fabric_mode == FabricTestMode::FullRing) {
-                Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_specs, test_params.params);
+                Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_fixture, test_specs, test_params.params);
             } else {
                 TT_THROW(
                     "Invalid fabric mode when using device init fabric in 1D fabric on mesh BW test: {}",
@@ -206,6 +206,13 @@ static void run_daemon_mode() {
 
     tt::log_info("Daemon listening on pipe: {}", daemon_pipe_path);
 
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    if (arch == tt::ARCH::GRAYSKULL) {
+        log_info("Test must be run on WH");
+        return;
+    }
+
+    Fabric1DFixture* test_fixture = nullptr;
     while (daemon_running) {
         std::ifstream pipe(daemon_pipe_path);
         if (!pipe.is_open()) {
@@ -249,7 +256,7 @@ static void run_daemon_mode() {
                         tt::log_warning("Test environment validation failed");
                         result = 1;  // Return 1 for environment validation failure
                     } else {
-                        result = run_single_test(test_params, test_mode);
+                        result = run_single_test(test_fixture, test_params, test_mode);
                     }
 
                     write_result_to_pipe(result);
@@ -296,5 +303,10 @@ int main(int argc, char** argv) {
     TT_FATAL(test_params.params.num_op_invocations > 0, "num_op_invocations must be greater than 0");
     TT_FATAL(test_params.params.line_size > 0, "line_size must be greater than 0");
 
-    return run_single_test(test_params, test_mode);
+    Fabric1DFixture* test_fixture = nullptr;
+    auto result = run_single_test(test_fixture, test_params, test_mode);
+    if (test_fixture != nullptr) {
+        delete test_fixture;
+    }
+    return result;
 }
