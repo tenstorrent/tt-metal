@@ -415,7 +415,7 @@ MeshCoordinateRange MeshGraph::get_coord_range(MeshId mesh_id, std::optional<Hos
         return this->mesh_host_rank_coord_ranges_.at(std::make_pair(mesh_id, *host_rank));
     }
     auto mesh_shape = this->mesh_to_chip_ids_.at(mesh_id).shape();
-    return MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(mesh_shape[0] - 1, mesh_shape[1] - 1));
+    return MeshCoordinateRange(mesh_shape);
 }
 
 const IntraMeshConnectivity& MeshGraph::get_intra_mesh_connectivity() const { return intra_mesh_connectivity_; }
@@ -423,7 +423,6 @@ const InterMeshConnectivity& MeshGraph::get_inter_mesh_connectivity() const { re
 
 std::vector<MeshId> MeshGraph::get_mesh_ids() const {
     std::vector<MeshId> mesh_ids;
-    mesh_ids.reserve(this->mesh_to_chip_ids_.size());
     for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
         mesh_ids.push_back(mesh_id);
     }
@@ -453,6 +452,18 @@ MeshContainer<chip_id_t> MeshGraph::get_chip_ids(MeshId mesh_id, std::optional<H
     return MeshContainer<chip_id_t>(submesh_shape, submesh_chip_ids);
 }
 
+MeshCoordinate MeshGraph::chip_to_coordinate(MeshId mesh_id, chip_id_t chip_id) const {
+    const auto& mesh_shape = this->mesh_to_chip_ids_.at(mesh_id).shape();
+    int ns = chip_id / mesh_shape[1];
+    int ew = chip_id % mesh_shape[1];
+    return MeshCoordinate(ns, ew);
+}
+
+chip_id_t MeshGraph::coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const {
+    const auto& mesh_shape = this->mesh_to_chip_ids_.at(mesh_id).shape();
+    return coordinate[0] * mesh_shape[1] + coordinate[1];
+}
+
 std::optional<HostRankId> MeshGraph::get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const {
     auto it = mesh_to_chip_ids_.find(mesh_id);
     if (it == mesh_to_chip_ids_.end()) {
@@ -463,19 +474,14 @@ std::optional<HostRankId> MeshGraph::get_host_rank_for_chip(MeshId mesh_id, chip
     const auto& host_ranks_container = mesh_host_ranks_[*mesh_id];
 
     // Convert chip_id to mesh coordinates
-    int ns = chip_id / mesh_shape[1];
-    int ew = chip_id % mesh_shape[1];
-    MeshCoordinate chip_coord(ns, ew);
+    MeshCoordinate chip_coord = this->chip_to_coordinate(mesh_id, chip_id);
 
     // Find which host rank owns this coordinate
-    for (const auto& [key, coord_range] : mesh_host_rank_coord_ranges_) {
-        if (key.first != mesh_id) {
-            continue;
-        }
-
-        if (chip_coord[0] >= coord_range.start_coord()[0] && chip_coord[0] <= coord_range.end_coord()[0] &&
-            chip_coord[1] >= coord_range.start_coord()[1] && chip_coord[1] <= coord_range.end_coord()[1]) {
-            return key.second;
+    for (const auto& [mesh_id_host_rank_pair, coord_range] : mesh_host_rank_coord_ranges_) {
+        if (mesh_id_host_rank_pair.first != mesh_id && chip_coord[0] >= coord_range.start_coord()[0] &&
+            chip_coord[0] <= coord_range.end_coord()[0] && chip_coord[1] >= coord_range.start_coord()[1] &&
+            chip_coord[1] <= coord_range.end_coord()[1]) {
+            return mesh_id_host_rank_pair.second;
         }
     }
 
