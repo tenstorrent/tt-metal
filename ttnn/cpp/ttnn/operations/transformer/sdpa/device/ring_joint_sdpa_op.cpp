@@ -436,46 +436,4 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
     return all_gather_program;
 }
 
-// operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_program(
-//     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-//     auto& input_tensor_q = input_tensors.at(0);
-//     auto& input_tensor_k = input_tensors.at(1);
-//     auto& input_tensor_v = input_tensors.at(2);
-//     auto& joint_tensor_q = input_tensors.at(3);
-//     auto& joint_tensor_k = input_tensors.at(4);
-//     auto& joint_tensor_v = input_tensors.at(5);
-//     auto& persistent_intermediate_buffer_k = input_tensors.at(6);
-//     auto& persistent_intermediate_buffer_v = input_tensors.at(7);
-//     auto& persistent_output_buffer_k = input_tensors.at(8);
-//     auto& persistent_output_buffer_v = input_tensors.at(9);
-//     auto& output_tensor = output_tensors.at(0);
-//     auto& joint_output_tensor = output_tensors.at(1);
-//     auto& lse_output_tensor = output_tensors.at(2);
-//     auto scale = this->scale;
-//     if (not scale.has_value()) {
-//         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_logical_shape()[-1]));
-//     }
-
-//     std::size_t q_chunk_size = this->get_q_chunk_size();
-//     std::size_t k_chunk_size = this->get_k_chunk_size();
-
-//     return detail::ring_joint_sdpa(
-//         input_tensor_q,
-//         input_tensor_k,
-//         input_tensor_v,
-//         joint_tensor_q,
-//         joint_tensor_k,
-//         joint_tensor_v,
-//         output_tensor,
-//         joint_output_tensor,
-//         lse_output_tensor,
-//         this->logical_n,
-//         scale,
-//         q_chunk_size,
-//         k_chunk_size,
-//         this->ring_size,
-//         this->compute_kernel_config,
-//         this->program_config);
-// }
-
 }  // namespace ttnn::operations::transformer

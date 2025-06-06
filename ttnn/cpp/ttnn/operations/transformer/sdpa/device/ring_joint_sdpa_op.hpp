@@ -53,7 +53,6 @@ struct RingJointScaledDotProductAttention {
         "output_mem_config",
         "program_config",
         "compute_kernel_config",
-        // "all_gather_struct",
         "ccl_core_grid_offset");
     const auto attribute_values() const {
         return std::forward_as_tuple(
@@ -64,7 +63,6 @@ struct RingJointScaledDotProductAttention {
             this->output_mem_config,
             this->program_config,
             this->compute_kernel_config,
-            // this->all_gather_struct,
             this->ccl_core_grid_offset);
     }
 };

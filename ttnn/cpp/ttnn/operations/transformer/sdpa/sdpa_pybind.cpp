@@ -251,16 +251,28 @@ void py_bind_sdpa(py::module& module) {
             joint_tensor_v (ttnn.Tensor): Joint values      [b x nh x L x dh].
 
         Keyword args:
+            persistent_output_buffer_k (ttnn.Tensor): Persistent buffer for gathered K tensor.
+            persistent_output_buffer_v (ttnn.Tensor): Persistent buffer for gathered V tensor.
             joint_strategy (str): Strategy for joint attention. Must be "rear".
-            program_config (ttnn.SDPAProgramConfig)
+            logical_n (int): The logical sequence length N before sharding across devices.
+            program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):Defaults to None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
+            dim (int): Dimension along which to perform the ring all-gather operation.
+            multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): Global semaphores for multi-device synchronization.
+            num_links (int): Number of communication links to use for ring all-gather.
+            cluster_axis (int): Axis of the mesh device along which to perform the all-gather.
+            mesh_device (ttnn.MeshDevice): Multi-device mesh for distributed computation.
+            topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
+            subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
+            ccl_core_grid_offset (ttnn.CoreCoord): Core grid offset for CCL operations.
             queue_id (int, optional): Command queue ID. Defaults to 0.
 
         Returns:
-            (ttnn.Tensor, ttnn.Tensor):
+            (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dh].
               - The attention output for the joint Q/K/V shape    [b x nh x L x dh].
+              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L) x 1]
         )doc";
 
     using RingJointOperationType = decltype(ttnn::transformer::ring_joint_scaled_dot_product_attention);

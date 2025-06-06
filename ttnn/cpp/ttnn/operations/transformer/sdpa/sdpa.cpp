@@ -249,8 +249,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         joint_tensor_q,
         joint_tensor_k,
         joint_tensor_v,
-        persistent_output_buffer_k,  // AllGather output / RingGather input
-        persistent_output_buffer_v,  // AllGather output / RingGather input
+        persistent_output_buffer_k,  // AllGather output / RingAttention input
+        persistent_output_buffer_v,  // AllGather output / RingAttention input
     };
 
     auto results = tt::tt_metal::operation::run(
