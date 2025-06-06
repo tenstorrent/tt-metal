@@ -118,16 +118,13 @@ def test_llama_attention_inference(
     paged_attention_config = None
 
     if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-
-        paged_attn = PagedAttention(paged_attention_config, model_args)
+        paged_attn = PagedAttention(page_params, model_args)
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
         page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper)
+
+        paged_attention_config = PagedAttentionConfig(**page_params)
 
     prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
     mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])

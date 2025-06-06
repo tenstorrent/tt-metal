@@ -104,7 +104,7 @@ def run_llama3_demo(
     batch_size,
     num_batches,
     paged_attention,
-    paged_attention_config,
+    page_params,
     max_generated_tokens,
     optimizations,
     sampling_params,
@@ -187,9 +187,7 @@ def run_llama3_demo(
 
     if paged_attention:
         paged_cache_max_seq_len = (
-            paged_attention_config.block_size
-            * paged_attention_config.max_num_blocks
-            / model_args.batch_size_per_device_group
+            page_params["block_size"] * page_params["max_num_blocks"] / model_args.batch_size_per_device_group
         )
         is_valid_token_position = (stress_test and start_pos <= paged_cache_max_seq_len) or (
             max_generated_tokens + start_pos <= paged_cache_max_seq_len
@@ -203,9 +201,11 @@ def run_llama3_demo(
             mesh_shape=model_args.cluster_shape,
         )
 
-        paged_attn = PagedAttention(config=paged_attention_config, model_args=model_args)
+        paged_attn = PagedAttention(page_params=page_params, model_args=model_args)
 
         page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper, per_device_group=True)
+
+        paged_attention_config = PagedAttentionConfig(**page_params)
 
         logger.info("Page table tensor done")
 
@@ -727,14 +727,6 @@ def test_llama_demo(
     if galaxy_type != "6U" and galaxy_type != "4U":
         raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
 
-    if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-    else:
-        paged_attention_config = None
-
     enable_pf_perf_mode = not request.config.getoption("--disable_pf_perf_mode")
 
     return run_llama3_demo(
@@ -744,7 +736,7 @@ def test_llama_demo(
         batch_size=batch_size,
         num_batches=repeat_batches,
         paged_attention=paged_attention,
-        paged_attention_config=paged_attention_config,
+        page_params=page_params,
         max_generated_tokens=max_generated_tokens,
         optimizations=optimizations,
         sampling_params=sampling_params,

@@ -123,20 +123,17 @@ def test_llama_decoder_inference(
     paged_attention_config = None
 
     if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
             dims=(None, None),
             mesh_shape=model_args.cluster_shape,
         )
 
-        paged_attn = PagedAttention(paged_attention_config, model_args)
+        paged_attn = PagedAttention(page_params, model_args)
 
         page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper, per_device_group=True)
+
+        paged_attention_config = PagedAttentionConfig(**page_params)
 
     # Initialize TT model
     tt_model = TtTransformerBlock(
