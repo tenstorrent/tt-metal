@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DumpDeviceProfileResults &mdash; TT-Metalium  documentation</title>
+  <title>DumpMeshDeviceProfileResults &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/host_apis/profiler/DumpDeviceProfileResults.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/host_apis/profiler/DumpMeshDeviceProfileResults.html" />
   <!--[if lt IE 9]>
     <script src="../../../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -67,7 +67,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../kernels/kernels.html">Kernels</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../runtime_args/runtime_args.html">Runtime Arguments</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="profiler.html">Profiler</a><ul class="current">
-<li class="toctree-l4 current"><a class="current reference internal" href="#">DumpDeviceProfileResults</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">DumpMeshDeviceProfileResults</a></li>
 </ul>
 </li>
 </ul>
@@ -101,9 +101,9 @@
           <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
           <li class="breadcrumb-item"><a href="../../host_apis.html">Host APIs</a></li>
           <li class="breadcrumb-item"><a href="profiler.html">Profiler</a></li>
-      <li class="breadcrumb-item active">DumpDeviceProfileResults</li>
+      <li class="breadcrumb-item active">DumpMeshDeviceProfileResults</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/host_apis/profiler/DumpDeviceProfileResults.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../../../_sources/tt_metal/apis/host_apis/profiler/DumpMeshDeviceProfileResults.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -111,15 +111,15 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="dumpdeviceprofileresults">
-<span id="id1"></span><h1>DumpDeviceProfileResults<a class="headerlink" href="#dumpdeviceprofileresults" title="Permalink to this heading"></a>
+  <section id="dumpmeshdeviceprofileresults">
+<span id="id1"></span><h1>DumpMeshDeviceProfileResults<a class="headerlink" href="#dumpmeshdeviceprofileresults" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N2tt8tt_metal24DumpDeviceProfileResultsEP7IDeviceRK7Program">
-<span class="target" id="namespacett_1_1tt__metal_1a503fc74174eaeda5aa0e98c91c7daddd"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">tt</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">tt_metal</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">DumpDeviceProfileResults</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">IDevice</span></span><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="n sig-param"><span class="pre">device</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">Program</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">program</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N2tt8tt_metal24DumpDeviceProfileResultsEP7IDeviceRK7Program" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N2tt8tt_metal28DumpMeshDeviceProfileResultsERN11distributed10MeshDeviceE17ProfilerDumpStateRKNSt8optionalI24ProfilerOptionalMetadataEE">
+<span class="target" id="namespacett_1_1tt__metal_1a8ceaaf011dd13d6cc649d0ea330ab3ae"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">tt</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">tt_metal</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">DumpMeshDeviceProfileResults</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">distributed</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">MeshDevice</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">mesh_device</span></span>, <span class="n"><span class="pre">ProfilerDumpState</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">state</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">ProfilerDumpState</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">NORMAL</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">optional</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">ProfilerOptionalMetadata</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">metadata</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="p"><span class="pre">{</span></span><span class="p"><span class="pre">}</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N2tt8tt_metal28DumpMeshDeviceProfileResultsERN11distributed10MeshDeviceE17ProfilerDumpStateRKNSt8optionalI24ProfilerOptionalMetadataEE" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Read device side profiler data and dump results into device side CSV log</p>
+<p>Read device side profiler data for all devices in the mesh device and dump results into device side CSV log</p>
 <p>This function only works in PROFILER builds. Please refer to the “Device Program Profiler” section for more information.</p>
 <p>Return value: void</p>
 <p></p>
@@ -135,18 +135,25 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>device   </p></td>
-<td><p>The device holding the program being profiled.   </p></td>
-<td><p>IDevice*   </p></td>
+<td><p>mesh_device   </p></td>
+<td><p>The mesh device containing the devices to be profiled   </p></td>
+<td><p>MeshDevice&amp;   </p></td>
 <td><p></p></td>
-<td><p>True    </p></td>
+<td><p>Yes    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>program   </p></td>
-<td><p>The program being profiled.   </p></td>
-<td><p>const Program &amp;   </p></td>
+<td><p>state   </p></td>
+<td><p>The dump state to use for this profiler dump   </p></td>
+<td><p>ProfilerDumpState   </p></td>
 <td><p></p></td>
-<td><p>True   </p></td>
+<td><p>No    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>metadata   </p></td>
+<td><p>Metadata to include in the profiler results   </p></td>
+<td><p>ProfilerOptionalMetadata   </p></td>
+<td><p></p></td>
+<td><p>No   </p></td>
 </tr>
 </tbody>
 </table>

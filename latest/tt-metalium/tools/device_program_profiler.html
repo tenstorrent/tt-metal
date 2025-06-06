@@ -150,7 +150,7 @@ build_metal.sh<span class="w"> </span>--enable-profiler
 <p>On top of tt_metal’s program dispatch API calls, two additional steps specific to this example are taken, which are:</p>
 <ol class="arabic simple">
 <li><p>Setting <code class="docutils literal notranslate"><span class="pre">LOOP_COUNT</span></code> and <code class="docutils literal notranslate"><span class="pre">LOOP_SIZE</span></code> defines for the kernels</p></li>
-<li><p>Calling <a class="reference internal" href="../tt_metal/apis/host_apis/profiler/DumpDeviceProfileResults.html#dumpdeviceprofileresults"><span class="std std-ref">DumpDeviceProfileResults</span></a> after the call to Finish to collect the device side profiling data</p></li>
+<li><p>Calling DumpDeviceProfileResults after the call to Finish to collect the device side profiling data</p></li>
 </ol>
 <p>The kernel code for full buffer is in <code class="docutils literal notranslate"><span class="pre">{$TT_METAL_HOME}/tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp</span></code> and demonstrated below:</p>
 <div class="highlight-c++ notranslate">
