@@ -172,7 +172,11 @@ protected:
 
         // If test induced a watcher error, re-initialize the context.
         if (watcher_server_killed_due_to_error()) {
-            MetalContext::instance().reinitialize();
+            // Special case for watcher_dump testing, keep the error for watcher dump to look at later. TODO: remove
+            // when watcher_dump is removed.
+            if (getenv("TT_METAL_WATCHER_KEEP_ERRORS") == nullptr) {
+                MetalContext::instance().reinitialize();
+            }
         }
 
         // Reset watcher settings to their previous values
