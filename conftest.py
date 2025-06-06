@@ -21,7 +21,7 @@ from datetime import datetime
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result
-from tests.scripts.common import get_dispatch_core_type, get_updated_device_params
+from tests.scripts.common import get_dispatch_core_type, get_updated_device_params, reset_fabric, set_fabric
 
 # Constants for device configurations
 GALAXY_NUM_DEVICES = 32
@@ -357,27 +357,6 @@ def all_devices(request, device_params):
     ttnn.CloseDevices(devices)
 
 
-# Reset fabric config to DISABLED if not None, and do nothing otherwise
-# Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
-# This is to ensure that we don't propagate the instability to the rest of CI
-def reset_fabric(fabric_config):
-    import ttnn
-
-    if fabric_config:
-        ttnn.initialize_fabric_config(ttnn.FabricConfig.DISABLED)
-
-
-# Set fabric config to passed in value
-# Do nothing if not set
-# Must be called before creating the mesh device
-def set_fabric(fabric_config):
-    import ttnn
-
-    # If fabric_config is not None, set it to fabric_config
-    if fabric_config:
-        ttnn.initialize_fabric_config(fabric_config)
-
-
 @pytest.fixture(scope="function")
 def mesh_device(request, silicon_arch_name, device_params):
     """
@@ -431,8 +410,8 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     ttnn.close_mesh_device(mesh_device)
     # !TODO figure out why this line triggers hangs for subsequent tests
-    # reset_fabric(fabric_config)
     del mesh_device
+    reset_fabric(fabric_config)
 
 
 @pytest.fixture(scope="function")
