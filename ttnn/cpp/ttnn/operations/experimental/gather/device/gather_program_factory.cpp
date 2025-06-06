@@ -4,6 +4,7 @@
 
 #include "gather_program_factory.hpp"
 
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
@@ -484,5 +485,261 @@ void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
             }
         }  // core_x loop
     }  // core_y loop
+}
+GatherProgramFactoryMulticast::cached_program_t GatherProgramFactoryMulticast::create(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    tt::tt_metal::Program program{};
+
+    // Tensor config info
+    const tt::DataFormat input_tensor_cb_data_format =
+        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.get_dtype());
+    const tt::DataFormat input_index_tensor_cb_data_format =
+        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_index_tensor.get_dtype());
+    const tt::DataFormat output_tensor_cb_data_format =
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+
+    const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
+    const uint32_t input_index_tensor_tile_size = tile_size(input_index_tensor_cb_data_format);
+    const uint32_t output_tensor_tile_size = tile_size(output_tensor_cb_data_format);
+
+    const auto input_tensor_buffer = tensor_args.input_tensor.buffer();
+    const auto input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
+    const auto output_tensor_buffer = output_tensor.buffer();
+
+    const bool input_tensor_is_dram = input_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool input_index_tensor_is_dram = input_index_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool output_tensor_is_dram = output_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
+
+    const auto input_index_shape = tensor_args.input_index_tensor.get_padded_shape();
+    const auto input_shape = tensor_args.input_tensor.get_padded_shape();
+    const uint32_t Ht = (input_index_shape[0] * input_index_shape[1] * input_index_shape[2]) / tile_height;
+    const uint32_t Wt_input = input_shape[3] / tile_width;
+    const uint32_t Wt_index = input_index_shape[3] / tile_width;
+
+    // Calculate the number of cores available for computation
+    auto device = tensor_args.input_tensor.device();
+    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
+
+    const uint32_t number_of_available_cores = total_number_of_cores - 1;  // One core for coordinator
+
+    // Calculate how many iterations of outer loop - index loop we need
+    const auto all_core_utilization_loop_count = Wt_index / number_of_available_cores;  // Ile rdzenie potrzeba
+    const auto all_core_utilization_loop_residuum = Wt_index % number_of_available_cores;
+
+    // Calculate core range
+    /**
+// TODO: Fill
+     */
+    CoreCoord coordinator_core = {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1};
+    CoreRangeSet core_range;
+    if (all_core_utilization_loop_count > 0) {
+        core_range = CoreRangeSet(
+            CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 2}));
+        core_range = core_range.merge<CoreRangeSet>(CoreRangeSet(CoreRange(
+            {0, compute_with_storage_grid_size.y - 1},
+            {compute_with_storage_grid_size.x - 2, compute_with_storage_grid_size.y - 1})));
+    } else {
+        const uint32_t core_grid_calculated_rows_number = Wt_index / compute_with_storage_grid_size.x;
+        const uint32_t core_grid_calculated_columns_number = Wt_index % compute_with_storage_grid_size.x;
+
+        if (core_grid_calculated_rows_number == 0 && core_grid_calculated_columns_number == 0) {
+            core_range = CoreRangeSet(CoreCoord({0, 0}));
+        } else if (core_grid_calculated_rows_number == 0) {
+            core_range = CoreRangeSet(CoreRange({0, 0}, {core_grid_calculated_columns_number - 1, 0}));
+        } else {
+            core_range = CoreRangeSet(
+                CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, core_grid_calculated_rows_number - 1}));
+            if (core_grid_calculated_columns_number != 0) {
+                const CoreRange additional_range(
+                    {0, core_grid_calculated_rows_number},
+                    {core_grid_calculated_columns_number, core_grid_calculated_rows_number});
+                core_range = core_range.merge(CoreRangeSet(additional_range));
+            }
+        }
+    }
+    CoreRangeSet all_core_set({CoreRange(coordinator_core)});
+    all_core_set = all_core_set.merge<CoreRangeSet>(core_range);
+
+    // Circular buffers
+    constexpr uint32_t buffer_scale_factor = 2;
+    constexpr uint32_t input_tensor_cb_index = tt::CBIndex::c_0;
+    const tt::tt_metal::CircularBufferConfig input_tensor_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            buffer_scale_factor * input_tensor_tile_size, {{input_tensor_cb_index, input_tensor_cb_data_format}})
+            .set_page_size(input_tensor_cb_index, input_tensor_tile_size);
+    auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, all_core_set, input_tensor_cb_config);
+
+    constexpr uint32_t input_index_tensor_cb_index = tt::CBIndex::c_1;
+    const tt::tt_metal::CircularBufferConfig input_index_tensor_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            input_index_tensor_tile_size, {{input_index_tensor_cb_index, input_index_tensor_cb_data_format}})
+            .set_page_size(input_index_tensor_cb_index, input_index_tensor_tile_size);
+    auto cb_input_index_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, input_index_tensor_cb_config);
+
+    constexpr uint32_t output_tensor_cb_index = tt::CBIndex::c_2;
+    const tt::tt_metal::CircularBufferConfig output_tensor_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            output_tensor_tile_size, {{output_tensor_cb_index, output_tensor_cb_data_format}})
+            .set_page_size(output_tensor_cb_index, output_tensor_tile_size);
+    auto cb_output_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, output_tensor_cb_config);
+
+    // Semaphores
+    const uint32_t coordinator_to_cores_semaphore_id = CreateSemaphore(program, all_core_set, 0);
+    const uint32_t cores_to_coordinator_semaphore_id = CreateSemaphore(program, all_core_set, 0);
+    const auto coordinator_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
+
+    const auto start_core_logical = core_range.ranges()[0].start_coord;
+    const auto end_core_logical = core_range.ranges()[core_range.ranges().size() - 1].end_coord;
+    const auto start_core_physical_coord = device->worker_core_from_logical_core(start_core_logical);
+    // const auto end_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
+    const auto end_core_physical_coord = device->worker_core_from_logical_core(end_core_logical);
+
+    // Kernels
+    const std::vector<uint32_t> coordinator_compile_time_args = {
+        input_tensor_cb_index, Ht, Wt_input, Wt_index, static_cast<uint32_t>(input_tensor_is_dram)};
+    const std::string coordinator_kernel_path =
+        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_coordinator.cpp";
+    tt::tt_metal::KernelHandle coordinator_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        coordinator_kernel_path,
+        coordinator_core,
+        tt::tt_metal::ReaderDataMovementConfig{coordinator_compile_time_args});
+    uint32_t index_loop_count = all_core_utilization_loop_count;
+    if (all_core_utilization_loop_residuum != 0) {
+        index_loop_count++;
+    }
+    SetRuntimeArgs(
+        program,
+        coordinator_kernel_id,
+        coordinator_core,
+        {start_core_physical_coord.x,
+         start_core_physical_coord.y,
+         end_core_physical_coord.x,
+         end_core_physical_coord.y,
+         coordinator_to_cores_semaphore_id,
+         cores_to_coordinator_semaphore_id,
+         core_range.num_cores(),
+         input_tensor_buffer->address(),
+         index_loop_count});
+
+    const std::vector<uint32_t> reader_compile_time_args = {
+        input_tensor_cb_index,
+        output_tensor_cb_index,
+        input_index_tensor_cb_index,
+        Ht,
+        Wt_input,
+        Wt_index,
+        tile_width,
+        static_cast<uint32_t>(input_index_tensor_is_dram),
+        compute_with_storage_grid_size.x,
+        compute_with_storage_grid_size.y,
+        core_range.num_cores()};
+    const std::string gather_reader_kernel_path =
+        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_reader.cpp";
+    tt::tt_metal::KernelHandle gather_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        gather_reader_kernel_path,
+        core_range,
+        tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
+    SetRuntimeArgs(
+        program,
+        gather_reader_kernel_id,
+        core_range,
+        {coordinator_core_physical_coord.x,
+         coordinator_core_physical_coord.y,
+         coordinator_to_cores_semaphore_id,
+         cores_to_coordinator_semaphore_id,
+         input_index_tensor_buffer->address(),
+         all_core_utilization_loop_count ? all_core_utilization_loop_count : 1,
+         0});
+
+    const std::vector<uint32_t> writer_compile_time_args = {
+        output_tensor_cb_index,
+        Ht,
+        Wt_input,
+        Wt_index,
+        output_tensor_is_dram,
+        compute_with_storage_grid_size.x,
+        compute_with_storage_grid_size.y,
+        core_range.num_cores()};
+    const std::string gather_writer_kernel_path =
+        "ttnn/cpp/ttnn/operations/experimental/gather/device/kernels/dataflow/gather_writer.cpp";
+    tt::tt_metal::KernelHandle gather_writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        gather_writer_kernel_path,
+        core_range,
+        tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
+    SetRuntimeArgs(
+        program,
+        gather_writer_kernel_id,
+        core_range,
+        {output_tensor_buffer->address(), all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+
+    // Adjust runtime arguments if cores are used more than once
+    if (all_core_utilization_loop_residuum != 0 && all_core_utilization_loop_count != 0) {
+        uint32_t residuum_count = 0;
+        for (const auto& core_range : core_range.ranges()) {
+            for (const auto& core : core_range) {
+                uint32_t additional_loop_count = 0;
+                uint32_t new_loop_count = all_core_utilization_loop_count;
+                if (residuum_count < all_core_utilization_loop_residuum) {
+                    new_loop_count++;
+                } else {
+                    additional_loop_count = 1;
+                }
+                SetRuntimeArgs(
+                    program,
+                    gather_reader_kernel_id,
+                    core,
+                    {coordinator_core_physical_coord.x,
+                     coordinator_core_physical_coord.y,
+                     coordinator_to_cores_semaphore_id,
+                     cores_to_coordinator_semaphore_id,
+                     input_index_tensor_buffer->address(),
+                     new_loop_count,
+                     additional_loop_count});
+
+                SetRuntimeArgs(
+                    program, gather_writer_kernel_id, core, {output_tensor_buffer->address(), new_loop_count});
+
+                residuum_count++;
+            }  // core loop
+        }  // core_range loop
+    }  // if all_core_utilization_loop_residuum != 0 && all_core_utilization_loop_count != 0
+
+    return {
+        std::move(program),
+        {gather_reader_kernel_id, gather_writer_kernel_id, coordinator_kernel_id, coordinator_core, core_range}};
+}
+void GatherProgramFactoryMulticast::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    auto input_tensor_buffer = tensor_args.input_tensor.buffer();
+    auto input_index_tensor_buffer = tensor_args.input_tensor.buffer();
+    auto output_tensor_buffer = output_tensor.buffer();
+
+    auto& coordinator_core_runtime_args = GetRuntimeArgs(
+        cached_program.program,
+        cached_program.shared_variables.coordinator_core_kernel_id,
+        cached_program.shared_variables.coordinator_core);
+    coordinator_core_runtime_args[7] = input_tensor_buffer->address();
+
+    for (const auto& core_range : cached_program.shared_variables.worker_core_range.ranges()) {
+        for (const auto& core : core_range) {
+            auto& reader_runtime_args =
+                GetRuntimeArgs(cached_program.program, cached_program.shared_variables.gather_reader_kernel_id, core);
+            reader_runtime_args[4] = input_index_tensor_buffer->address();
+
+            auto& writer_runtime_args =
+                GetRuntimeArgs(cached_program.program, cached_program.shared_variables.gather_writer_kernel_id, core);
+            writer_runtime_args[0] = output_tensor_buffer->address();
+        }  // core loop
+    }  // core_range loop
 }
 }  // namespace ttnn::operations::experimental::gather::program
