@@ -177,7 +177,6 @@ tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
     auto input_memory_layout = input_tensors[0].get_layout();
     auto input_dtype = input_tensors[0].get_dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-    uint32_t semaphore_address = this->semaphore.at(0).address();
 
     return tt::tt_metal::operation::hash_operation<RingAttentionAllGatherAsync>(
         this->dim,
@@ -186,11 +185,11 @@ tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
+        this->sub_device_id,
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config,
-        semaphore_address);
+        input_memory_config);
 }
 
 namespace operations {

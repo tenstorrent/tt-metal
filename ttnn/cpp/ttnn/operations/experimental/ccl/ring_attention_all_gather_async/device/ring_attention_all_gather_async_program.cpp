@@ -451,6 +451,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
+            const auto& semaphore = static_cast<const RingAttentionAllGatherAsync*>(operation)->semaphore;
             // update senders
             auto& worker_reader_sender_forward_runtime_args_by_core =
                 GetRuntimeArgs(program, worker_sender_reader_forward_kernel_id);
@@ -469,6 +470,11 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
                 worker_writer_sender_forward_runtime_args_by_core[sender_worker_cores[1].x][sender_worker_cores[1].y];
             auto& worker_writer_sender_backward_runtime_args =
                 worker_writer_sender_backward_runtime_args_by_core[sender_worker_cores[0].x][sender_worker_cores[0].y];
+
+            worker_reader_sender_forward_runtime_args[8] = semaphore.at(1).address();
+            worker_reader_sender_backward_runtime_args[8] = semaphore.at(0).address();
+            worker_writer_sender_forward_runtime_args[10] = semaphore.at(1).address();
+            worker_writer_sender_backward_runtime_args[10] = semaphore.at(0).address();
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
                 // sender reader
                 worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + 2 * input_idx] =
