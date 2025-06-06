@@ -73,8 +73,6 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_output_id, num_pages_to_read);
     }
-    DPRINT << "reader: done local\n";
-
     constexpr bool output_tensor_is_dram = output_buffer_type == tt::tt_metal::BufferType::DRAM;
     auto output_tensor_addrgen = InterleavedAddrGenFast<output_tensor_is_dram>{
         .bank_base_address = output_tensor_address,

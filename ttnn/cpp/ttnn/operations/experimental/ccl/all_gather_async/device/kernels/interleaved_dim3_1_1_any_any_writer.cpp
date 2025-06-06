@@ -39,7 +39,6 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-
     uint32_t arg_idx = 0;
     address_t output_address = get_arg_val<address_t>(arg_idx++);
     uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
@@ -52,7 +51,6 @@ void kernel_main() {
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
-
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
 
@@ -60,7 +58,6 @@ void kernel_main() {
         arg_idx = arg_for_fab;
         op_signaler_sender = OpSignaler(arg_idx);
     }
-
     // packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_addr = get_write_ptr(reserved_packet_header_cb_id);
@@ -68,7 +65,6 @@ void kernel_main() {
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
-
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
     pkt_hdr->to_chip_unicast(1);
@@ -82,7 +78,6 @@ void kernel_main() {
     fabric_connection.open();
 
     uint32_t slice_writes = 0;
-
     // Write out the local slice to both DRAM and forward and backward
     // TODO: send as rt args
 
@@ -206,11 +201,11 @@ void kernel_main() {
             slice_chip_id = my_chip_id - slice_writes - 1;
             actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
         }
-        uint32_t tiles_read = 0;
-        uint32_t tiles_to_read = slice_num_pages;
+        uint32_t tiles_read = input_tile_id_start;
+        uint32_t tiles_to_read = input_tile_id_end;
         uint32_t tile_id_start = actual_slice_chip_id * input_tensor_Wt;
-        uint32_t row_offset = 0;
-        uint32_t pages_read_in_row = 0;
+        uint32_t row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
+        uint32_t pages_read_in_row = (input_tile_id_start % input_tensor_Wt);
         uint32_t slice_Wt = input_tensor_Wt;
         uint32_t stride_Wt = output_tensor_Wt;
 
