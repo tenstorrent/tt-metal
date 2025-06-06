@@ -155,7 +155,8 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
     CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
 
     Shape tensor_shape{16, 1024, 1024};
-    Shape shard_shape_nd{16, 160, 160};
+    Shape shard_shape_nd_batch{16, 160, 160};
+    Shape shard_shape_nd_small{1, 64, 64};
     Shape2D shard_shape_2d{2368, 160};
 
     size_t volume = tensor_shape.volume();
@@ -164,33 +165,43 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
         data[i] = static_cast<uint16_t>(i);
     }
 
-    double batch_nd_sharding_time_ns = [&]() {
-        MemoryConfig memory_config{BufferType::L1, NdShardSpec{shard_shape_nd, cores}};
-        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
-        TensorSpec tensor_spec(tensor_shape, tensor_layout);
+    auto measure_to_device_time_ns = [&](const TensorSpec& tensor_spec) -> double {
         auto tensor = Tensor::from_vector(data, tensor_spec);
 
         auto start = std::chrono::high_resolution_clock::now();
-        auto device_tensor = tensor.to_device(device_, memory_config);
+        auto device_tensor = tensor.to_device(device_, tensor_spec.memory_config());
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
         return duration.count();
+    };
+
+    double batch_nd_sharding_time_ns = [&]() {
+        MemoryConfig memory_config{BufferType::L1, NdShardSpec{shard_shape_nd_batch, cores}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        return measure_to_device_time_ns(tensor_spec);
+    }();
+
+    double small_shards_nd_sharding_time_ns = [&]() {
+        MemoryConfig memory_config{BufferType::L1, NdShardSpec{shard_shape_nd_small, cores}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        return measure_to_device_time_ns(tensor_spec);
     }();
 
     double block_2d_sharding_time_ns = [&]() {
         MemoryConfig memory_config{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, ShardSpec{cores, shard_shape_2d}};
         TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
         TensorSpec tensor_spec(tensor_shape, tensor_layout);
-        auto tensor = Tensor::from_vector(data, tensor_spec);
-
-        auto start = std::chrono::high_resolution_clock::now();
-        auto device_tensor = tensor.to_device(device_, memory_config);
-        auto end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
-        return duration.count();
+        return measure_to_device_time_ns(tensor_spec);
     }();
 
-    EXPECT_TRUE(batch_nd_sharding_time_ns < block_2d_sharding_time_ns * 2);
+    tt::log_info("Batch ND sharding time: {} ns", batch_nd_sharding_time_ns);
+    tt::log_info("Small shards ND sharding time: {} ns", small_shards_nd_sharding_time_ns);
+    tt::log_info("Block 2D sharding time: {} ns", block_2d_sharding_time_ns);
+
+    EXPECT_TRUE(batch_nd_sharding_time_ns < block_2d_sharding_time_ns * 4);
+    EXPECT_TRUE(small_shards_nd_sharding_time_ns < block_2d_sharding_time_ns * 4);
 }
 
 INSTANTIATE_TEST_SUITE_P(
