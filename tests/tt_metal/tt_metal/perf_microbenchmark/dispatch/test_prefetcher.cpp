@@ -2058,14 +2058,26 @@ void configure_for_single_chip(
         0,                                           // unused: for prefetch_hd <--> dispatch_hd
         0,                                           // unused: for prefetch_hd <--> dispatch_hd
         0,                                           // unused: for prefetch_hd <--> dispatch_hd
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
         scratch_db_size_g,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -2351,17 +2363,29 @@ void configure_for_single_chip(
         host_completion_queue_wr_ptr,
         dev_completion_queue_wr_ptr,
         dev_completion_queue_rd_ptr,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
         MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).get_dispatch_stream_index(0),
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
