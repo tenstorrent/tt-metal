@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,5 +23,6 @@ class TtnnSentenceBertIntermediate:
                 math_approx_mode=False,
                 packer_l1_acc=False,
             ),
+            dtype=ttnn.bfloat8_b,
         )
         return out_intermediate
