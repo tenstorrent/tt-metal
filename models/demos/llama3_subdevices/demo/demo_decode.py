@@ -35,9 +35,9 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 620, "max": 800}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
+    "4U": {1: {"min": 290, "max": 320}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 720, "max": 900}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+    "6U": {1: {"min": 350, "max": 400}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
 
 
@@ -433,7 +433,7 @@ def run_llama3_demo(
             block_host = True
             prefill = True
         else:
-            block_host = False
+            block_host = False if layers == 80 else True
             prefill = False
 
         if iteration == 0:  # First iteration also accounts for compile time
