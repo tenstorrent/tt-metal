@@ -21,7 +21,7 @@ void pack_main() {
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_packer_wait_for_math_done();
                 llk_pack<DST_ACCUM_MODE, false, false>(0, 24);
-                llk_pack_dest_section_done();
+                llk_pack_dest_section_done<DST_ACCUM_MODE>();
             }
             llk_push_tiles<false, false>(24, per_core_block_c_tiles);
 
@@ -29,7 +29,7 @@ void pack_main() {
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_packer_wait_for_math_done();
                 llk_pack<DST_ACCUM_MODE, false, false>(0, 16);
-                llk_pack_dest_section_done();
+                llk_pack_dest_section_done<DST_ACCUM_MODE>();
             }
             llk_push_tiles<false, false>(16, per_core_block_c_tiles);
         }

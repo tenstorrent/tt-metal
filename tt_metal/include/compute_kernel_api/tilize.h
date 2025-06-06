@@ -54,7 +54,7 @@ ALWI void tilizeA_B_reduce_init(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
 
     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>()));
-    MATH((llk_math_pack_sync_init()));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(icb0, icb1_scaler)));
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
@@ -86,7 +86,7 @@ ALWI void tilizeA_B_dot_product_init(
     UNPACK((llk_unpack_tilizeA_B_init<false, false, true>(icb0, icb1, block, num_faces, face_r_dim, face_r_dim)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY>(icb0, icb1)));
-    MATH((llk_math_pack_sync_init()));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(icb0, icb1)));
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));

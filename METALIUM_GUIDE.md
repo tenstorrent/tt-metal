@@ -282,13 +282,13 @@ ALWI void tile_regs_wait() {
 * `tile_regs_commit()` releases the lock from MATH kernel:
 ```
 ALWI void tile_regs_commit() {
-    MATH(( llk_math_dest_section_done()  ));
+    MATH(( llk_math_dest_section_done<DST_ACCUM_MODE>()  ));
 }
 ```
 * `tile_regs_release()` releases the lock from PACK kernel:
 ```
 ALWI void tile_regs_release() {
-    PACK(( llk_pack_dest_section_done()  ));
+    PACK(( llk_pack_dest_section_done<DST_ACCUM_MODE>()  ));
 }
 ```
 

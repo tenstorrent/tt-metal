@@ -16,7 +16,7 @@ inline void tilize_activation(uint32_t in0_subblock_h, uint32_t in0_block_w, uin
             for (uint32_t j = 0U; j < in0_block_w; j++) {
                 llk_math_wait_for_dest_available();
                 llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0);
-                llk_math_dest_section_done();
+                llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
         }
     }
@@ -30,7 +30,7 @@ inline void reblock_and_untilize_output(uint32_t out_subblock_h, uint32_t out_bl
             for (uint32_t k = 0; k < out_block_w; k++) {
                 llk_math_wait_for_dest_available();
                 llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(0);
-                llk_math_dest_section_done();
+                llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
         }
     }
@@ -38,7 +38,7 @@ inline void reblock_and_untilize_output(uint32_t out_subblock_h, uint32_t out_bl
 
 void math_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);
-    llk_math_pack_sync_init();
+    llk_math_pack_sync_init<DST_ACCUM_MODE>();
 
     // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);
@@ -105,7 +105,7 @@ void math_main() {
                     }
                 }
 
-                llk_math_dest_section_done();
+                llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
             if constexpr (untilize_out) {
                 if (last_out) {
