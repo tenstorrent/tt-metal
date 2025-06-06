@@ -170,7 +170,6 @@ target_sources(
             include/compute_kernel_api/transpose_wh.h
             include/compute_kernel_api/untilize.h            include/compute_kernel_api/eltwise_binary.h
             include/compute_kernel_api/tile_move_copy.h
-
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
@@ -335,8 +334,6 @@ target_sources(
             impl/dispatch/kernels/packet_mux.cpp
             impl/dispatch/kernels/vc_eth_tunneler.cpp
             impl/dispatch/kernels/vc_packet_router.cpp
-
-
             kernels/compute/blank.cpp
             kernels/compute/eltwise_binary.cpp
             kernels/compute/eltwise_sfpu.cpp
@@ -345,11 +342,8 @@ target_sources(
             kernels/dataflow/reader_unary.cpp
             kernels/dataflow/writer_unary.cpp
             kernels/dataflow/writer_unary_1.cpp
-
             jit_build/genfiles.cpp
             jit_build/genfiles.hpp
-
-
 )
 
 target_link_libraries(
