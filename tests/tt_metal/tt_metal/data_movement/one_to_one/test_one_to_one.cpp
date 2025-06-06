@@ -122,6 +122,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 
     // Write Input to Master L1
     tt_metal::detail::WriteToDeviceL1(device, test_config.master_core_coord, l1_base_address, packed_input);
+    MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // LAUNCH THE PROGRAM
     detail::LaunchProgram(device, program);
