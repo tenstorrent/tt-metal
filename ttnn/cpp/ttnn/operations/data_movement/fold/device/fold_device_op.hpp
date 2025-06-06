@@ -18,6 +18,9 @@ struct Fold {
     struct operation_attributes_t {
         uint32_t stride_h;
         uint32_t stride_w;
+        uint32_t pad_h;
+        uint32_t pad_w;
+        uint32_t pad_c;
         bool is_sharded;
         bool is_dram_interleaved = false;
     };
