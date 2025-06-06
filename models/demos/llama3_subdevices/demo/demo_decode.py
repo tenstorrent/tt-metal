@@ -14,7 +14,7 @@ import requests
 from pathlib import Path
 import hashlib
 
-is_6U_RING = os.environ.get("6U_RING", "0") == "1"
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 from models.demos.llama3_subdevices.tt.llama_common import (
     PagedAttentionConfig,
@@ -37,7 +37,7 @@ TSU_PERF_DROP_LIMIT_COUNT = 20
 TSU_THRESHOLDS = {
     "4U": {1: {"min": 540, "max": 565}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 625, "max": 655}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+    "6U": {1: {"min": 625, "max": 655}, 10: {"min": 230, "max": 250}, 80: {"min": 53, "max": 58}},
 }
 
 
@@ -131,7 +131,7 @@ def run_llama3_demo(
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
     dtype = ttnn.bfloat8_b
-    num_links = 4 if is_6U_RING else 2
+    num_links = 4 if is_RING_6U else 2
     assert batch_size <= 32, "Max batch size currently supported is 32"
     assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
 
@@ -700,7 +700,7 @@ def run_llama3_demo(
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6U_RING else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
