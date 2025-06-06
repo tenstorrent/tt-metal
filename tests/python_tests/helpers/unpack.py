@@ -42,7 +42,7 @@ def unpack_fp32(packed_list):
 def unpack_int32(packed_list):
     def bytes_to_int32(byte_list):
         bytes_data = bytes(byte_list)
-        unpacked_value = struct.unpack(">I", bytes_data)[0]
+        unpacked_value = struct.unpack(">i", bytes_data)[0]
         return unpacked_value
 
     return [
