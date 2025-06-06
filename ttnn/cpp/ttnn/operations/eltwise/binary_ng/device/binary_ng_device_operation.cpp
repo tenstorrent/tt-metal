@@ -423,13 +423,13 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
         return operation::hash_operation<BinaryNgDeviceOperation>(
             attributes,
             input_tensor_a.dtype(),
-            std::get<DeviceStorage>(input_tensor_a.storage()).memory_config(),
+            input_tensor_a.memory_config(),
             input_tensor_b->dtype(),
-            std::get<DeviceStorage>(input_tensor_b->storage()).memory_config());
+            input_tensor_b->memory_config());
     }
 
     return operation::hash_operation<BinaryNgDeviceOperation>(
-        attributes, input_tensor_a.dtype(), std::get<DeviceStorage>(input_tensor_a.storage()).memory_config());
+        attributes, input_tensor_a.dtype(), input_tensor_a.memory_config());
 }
 
 bool BinaryNgDeviceOperation::skip_launch(

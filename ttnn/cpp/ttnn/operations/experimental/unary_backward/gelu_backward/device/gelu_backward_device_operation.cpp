@@ -125,9 +125,9 @@ tt::stl::hash::hash_t GeluBackwardDeviceOperation::compute_program_hash(
         args,
         program_factory.index(),
         input_tensor.dtype(),
-        std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
+        input_tensor.memory_config(),
         grad_output.dtype(),
-        std::get<DeviceStorage>(grad_output.storage()).memory_config(),
+        grad_output.memory_config(),
         input_shape.volume());
 
     return hash;
