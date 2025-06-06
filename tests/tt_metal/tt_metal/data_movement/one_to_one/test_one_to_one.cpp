@@ -61,12 +61,12 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // Checks that both master and subordinate cores have the same L1 base address and size
     if (master_l1_info.base_address != subordinate_l1_info.base_address ||
         master_l1_info.size != subordinate_l1_info.size) {
-        log_error("Mismatch in L1 address or size between master and subordinate cores");
+        log_error(tt::LogTest, "Mismatch in L1 address or size between master and subordinate cores");
         return false;
     }
     // Check if the L1 size is sufficient for the test configuration
     if (master_l1_info.size < total_size_bytes) {
-        log_error("Insufficient L1 size for the test configuration");
+        log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
     // Assigns a "safe" L1 local address for the master and subordinate cores
