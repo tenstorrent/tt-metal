@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t K,
     bool bcast_batch,
     uint32_t in0_block_w,
+    uint32_t in0_last_ktile_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
     uint32_t per_core_M,
@@ -163,6 +164,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in0_is_dram,
+        (std::uint32_t)in0_last_ktile_w,
     };
     std::vector<uint32_t> reader_writer_compile_time_args = {// interleaved accessor args
                                                              (std::uint32_t)in1_is_dram,
@@ -532,6 +534,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
 
+    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile_shape[1];
+
     // TODO: Generalize
     TT_FATAL(!fuse_batch, "Only fuse_batch=false is supported for optimized bmm!");
 
@@ -566,6 +570,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
         Kt,
         bcast_batch,
         in0_block_w,
+        in0_last_ktile_w,
         out_subblock_h,
         out_subblock_w,
         per_core_M,

@@ -376,7 +376,7 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
 }
 
 void InitializeFabricConfig(FabricConfig fabric_config) {
-    tt::tt_metal::MetalContext::instance().get_cluster().initialize_fabric_config(fabric_config);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config(fabric_config);
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
@@ -773,7 +773,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
         if (!force_slow_dispatch) {
             detail::DispatchStateCheck(false);
+        } else {
+            TT_ASSERT(!tt::DevicePool::instance().is_dispatch_firmware_active());
         }
+
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
             program.finalize_offsets(device);
@@ -805,6 +808,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
+                if (force_slow_dispatch) {
+                    tt::llrt::send_reset_go_signal(device->id(), physical_core);
+                }
+
                 tt::llrt::write_launch_msg_to_core(
                     device->id(),
                     physical_core,
@@ -819,7 +826,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
-        DumpDeviceProfileResults(device, program);
+        detail::DumpDeviceProfileResults(device);
     }
 }
 
@@ -838,7 +845,7 @@ void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile
     }
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
     if (dump_device_profile_results) {
-        DumpDeviceProfileResults(device, program);
+        detail::DumpDeviceProfileResults(device);
     }
 }
 
@@ -1065,8 +1072,8 @@ KernelHandle CreateDataMovementKernel(
         kernel_name);
 
     std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto mode = control_plane->get_routing_mode();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
     }
@@ -1094,8 +1101,8 @@ KernelHandle CreateEthernetKernel(
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto mode = control_plane->get_routing_mode();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
     }

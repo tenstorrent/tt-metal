@@ -61,19 +61,19 @@ FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::Cluster
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     chip_id_t src_chip_id, chip_id_t dst_chip_id, RoutingDirection direction) {
-    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    const auto src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_chip_id);
-    const auto dst_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(dst_chip_id);
-    const bool is_2d_fabric = control_plane->get_fabric_context().get_fabric_topology() == Topology::Mesh;
+    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_chip_id);
+    const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+    const bool is_2d_fabric = control_plane.get_fabric_context().get_fabric_topology() == Topology::Mesh;
 
     const std::vector<chan_id_t>& fabric_channels =
-        control_plane->get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
+        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
 
     // the subset of routers that support forwarding b/w those chips
     std::vector<chan_id_t> forwarding_channels;
     if (is_2d_fabric) {
         forwarding_channels =
-            control_plane->get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
+            control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
     } else {
         // for 1D check if each port has an active connection to the dst_chip_id
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -100,12 +100,12 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
 }
 
 std::vector<uint32_t> get_forwarding_link_indices(chip_id_t src_chip_id, chip_id_t dst_chip_id) {
-    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    const auto src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_chip_id);
-    const auto dst_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_chip_id);
+    const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
 
     // find the forwarding direction b/w src and dest chip
-    const auto& forwarding_direction = control_plane->get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
     if (!forwarding_direction.has_value()) {
         return {};
     }
@@ -150,8 +150,8 @@ void set_routing_mode(uint16_t routing_mode) {
         !(routing_mode & ROUTING_MODE_2D) || !(routing_mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING)),
         "2D routing mode cannot be combined with LINE or RING topology");
 
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    control_plane->set_routing_mode(routing_mode);
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    control_plane.set_routing_mode(routing_mode);
 }
 
 void set_routing_mode(Topology topology, tt::tt_metal::FabricConfig fabric_config, uint32_t dimension /*, take more*/) {

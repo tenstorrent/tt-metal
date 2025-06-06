@@ -107,10 +107,10 @@ enum fabric_lifetime_mode {
 enum LineDirection { FORWARD, BACKWARD };
 static_assert(
     static_cast<size_t>(LineDirection::FORWARD) ==
-    static_cast<size_t>(ttnn::ccl::LineDirection::FORWARD));
+    static_cast<size_t>(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD));
 static_assert(
     static_cast<size_t>(LineDirection::BACKWARD) ==
-    static_cast<size_t>(ttnn::ccl::LineDirection::BACKWARD));
+    static_cast<size_t>(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
 
 constexpr LineDirection relay_to_final_output_dir = LineDirection::FORWARD;
 // TODO: promote to header
@@ -1209,7 +1209,7 @@ static void populate_partial_reduce_rt_args(
     std::unordered_map<CoreCoord, ttnn::ccl::tensor_address_runtime_args_overrider>& reader_rt_args_overrider_map,
     std::unordered_map<CoreCoord, ttnn::ccl::tensor_address_runtime_args_overrider>& writer_rt_args_overrider_map) {
     using namespace ttnn::ccl::worker_detail;
-    using Direction = ttnn::ccl::LineDirection;
+    using Direction = ttnn::ccl::EdmLineFabricOpInterface::Direction;
 
     auto const& all_tensors = builder_config.all_tensors.get();
     auto const& kernel_ids = builder_config.kernel_ids.get();
@@ -1526,7 +1526,7 @@ static void create_end_of_line_worker_runtime_args(
     std::unordered_map<CoreCoord, ttnn::ccl::tensor_address_runtime_args_overrider>& writer_rt_args_overrider_map) {
     using namespace ttnn::ccl::worker_detail;
     using namespace ttnn::ccl::cmd;
-    using Direction = ttnn::ccl::LineDirection;
+    using Direction = ttnn::ccl::EdmLineFabricOpInterface::Direction;
     Program& program = builder_config.program.get();
     IDevice* device = builder_config.device;
     ProgramTensorsBundle const& all_tensors = builder_config.all_tensors.get();

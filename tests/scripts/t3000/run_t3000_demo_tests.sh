@@ -83,14 +83,40 @@ run_t3000_qwen25_tests() {
 
   echo "LOG_METAL: Running run_t3000_qwen25_tests"
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  qwen72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
+  qwen25_7b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-7B-Instruct
+  qwen25_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
 
-  HF_MODEL=$qwen72b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 3600 -k "not performance-ci-stress-1"; fail+=$?
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_7b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600; fail+=$?
+  HF_MODEL=$qwen25_72b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_qwen25_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_qwen3_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Warning: updating transformers version. Make sure this is the last-run test."
+  echo "LOG_METAL: Remove this when https://github.com/tenstorrent/tt-metal/pull/22608 merges."
+  pip install -r models/tt_transformers/requirements.txt
+
+  echo "LOG_METAL: Running run_t3000_qwen3_tests"
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
+
+  HF_MODEL=$qwen32b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_qwen3_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -216,6 +242,29 @@ run_t3000_resnet50_tests() {
   fi
 }
 
+
+run_t3000_sd35large_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_sd35large_tests"
+
+  # Run test_model (decode and prefill) for llama3 70B
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  mesh_device=T3K
+  sd35large=/mnt/MLPerf/tt_dnn-models/StableDiffusion_35_Large/
+  NO_PROMPT=1 MESH_DEVICE=$mesh_device SD35L_DIR=$sd35large WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/stable_diffusion_35_large/demo.py  --timeout 600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_sd35large_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_llama3_load_checkpoints_tests() {
   # Record the start time
   fail=0
@@ -273,6 +322,15 @@ run_t3000_tests() {
 
   # Run resnet50 tests
   run_t3000_resnet50_tests
+
+  # Run qwen25 tests
+  run_t3000_qwen25_tests
+
+  # Run qwen3 tests
+  run_t3000_qwen3_tests
+
+  # Run sd35_large tests
+  run_t3000_sd35large_tests
 }
 
 fail=0

@@ -79,7 +79,8 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_workers_per_link,
     bool persistent_fabric_mode,
     IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord core_grid_offset) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     if (persistent_fabric_mode) {
@@ -103,8 +104,9 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
             auto end = cr.end_coord;
             for (size_t y = start.y; y <= end.y; y++) {
                 for (size_t x = start.x; x <= end.x; x++) {
-                    sender_worker_core_range =
-                        sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
+                    sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
                     if (sender_worker_core_range.num_cores() == num_workers_preferred) {
                         break;
                     }
@@ -224,8 +226,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     size_t num_targets_backward = 0;
     if (topology == ccl::Topology::Linear) {
         LineTopology line_topology(ring_size, ring_index);
-        num_targets_forward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
-        num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
+        num_targets_forward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+        num_targets_backward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
         // TODO: Commonize
         num_targets_forward = tt::div_up(ring_size - 1, 2);
