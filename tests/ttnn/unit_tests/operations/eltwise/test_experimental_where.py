@@ -3,28 +3,53 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.ttnn.ttnn_utility_fuction import create_random_torch_tensors, convert_torch_to_ttnn_tensor
+from tests.ttnn.utils_for_testing import assert_with_pcc, tt_dtype_to_torch_dtype
+
 
 DEFAULT_SHAPE = (64, 64)
+
+
+def is_ttnn_float_type(tt_dtype) -> bool:
+    match tt_dtype:
+        case ttnn.bfloat16 | ttnn.float32 | ttnn.bfloat8_b | ttnn.bfloat4_b:
+            return True
+        case _:
+            return False
 
 
 def _ttt_where_test_impl(
     device, tensor_shape: tuple, tt_dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, mem_config=None
 ):
-    torch_inputs = create_random_torch_tensors(tensor_shape, tt_dtype, 3)
+    torch.manual_seed(0)
+    torch_dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-    condition_torch, true_torch, false_torch = torch_inputs
+    condition_torch, true_torch, false_torch = [
+        torch.rand(tensor_shape, dtype=torch_dtype)
+        if is_ttnn_float_type(tt_dtype)
+        else torch.randint(0, 100, tensor_shape, dtype=torch_dtype)
+        for _ in range(3)
+    ]
+    condition_torch = condition_torch.to(torch.bool)
+
     golden_fn = ttnn.get_golden_function(ttnn.where)
-    torch_output_tensor = golden_fn(condition_torch.to(torch.bool), true_torch, false_torch)
+    torch_output_tensor = golden_fn(condition_torch, true_torch, false_torch)
 
-    condition, true_values, false_values = convert_torch_to_ttnn_tensor(
-        torch_inputs, device, tt_dtype, layout, mem_config
-    )
+    condition, true_values, false_values = [
+        ttnn.to_device(
+            ttnn.from_torch(
+                tensor,
+                layout=layout,
+                dtype=tt_dtype,
+                memory_config=mem_config,
+                device=device,
+            ),
+            device,
+        )
+        for tensor in (condition_torch, true_torch, false_torch)
+    ]
 
     output_tensor = ttnn.experimental.where(condition, true_values, false_values)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -33,7 +58,7 @@ def _ttt_where_test_impl(
 
 
 def test_ttt_where_0d(device):
-    _ttt_where_test_impl(device, (0))
+    _ttt_where_test_impl(device, ())
 
 
 @pytest.mark.parametrize("h", [16, 32, 64, 65, 1024])
