@@ -36,15 +36,16 @@ namespace {
 constexpr size_t kMmapThresholdBytes = 1 << 20;  // 1MB
 
 // Allocates memory on the host in batch; using either mmap for large allocations or std::vector for small allocations.
-std::shared_ptr<void> allocate_host_data(size_t size_bytes) {
+using SharedMemoryPtr = std::shared_ptr<void>;
+SharedMemoryPtr allocate_host_data(size_t size_bytes) {
     if (size_bytes >= kMmapThresholdBytes) {
         ZoneScopedN("AllocateBufferMmap");
         void* ptr = mmap(nullptr, size_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         TT_FATAL(ptr != MAP_FAILED, "Failed to allocate {} bytes of memory", size_bytes);
-        return std::shared_ptr<void>(ptr, [size_bytes](void* p) { munmap(p, size_bytes); });
+        return SharedMemoryPtr(ptr, [size_bytes](void* p) { munmap(p, size_bytes); });
     } else {
         auto vec = std::make_shared<std::vector<std::byte>>(size_bytes);
-        return std::shared_ptr<void>(vec, vec->data());
+        return SharedMemoryPtr(vec, vec->data());
     }
 }
 
@@ -590,7 +591,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     {
         ZoneScopedN("AllocateBuffer");
         const size_t shard_size = tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T);
-        std::shared_ptr<void> batch_memory = allocate_host_data(num_buffers * shard_size * sizeof(T));
+        SharedMemoryPtr batch_memory = allocate_host_data(num_buffers * shard_size * sizeof(T));
         MemoryPin allocation_pin(batch_memory);
 
         for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
