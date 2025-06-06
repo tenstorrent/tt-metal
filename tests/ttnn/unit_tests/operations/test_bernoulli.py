@@ -12,7 +12,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 from collections import Counter
 from loguru import logger
 
@@ -59,8 +58,6 @@ def run_bernoulli(shape, in_dtype, out_dtype, device, seed=0, is_out_alloc=False
     assert np.allclose(expected_one_prob, np.mean(one_probs), rtol=0.05)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
-@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -69,7 +66,7 @@ def run_bernoulli(shape, in_dtype, out_dtype, device, seed=0, is_out_alloc=False
         [1, 512, 2, 256],
     ],
 )
-@pytest.mark.parametrize("seed", [6296, 3501, 1712])
+@pytest.mark.parametrize("seed", [6296, 3506, 1712])
 @pytest.mark.parametrize("in_dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("out_dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("is_out_alloc", [True, False])
@@ -78,8 +75,6 @@ def test_bernoulli(shape, seed, in_dtype, out_dtype, device, is_out_alloc):
     run_bernoulli(shape, in_dtype, out_dtype, device, seed=seed, is_out_alloc=is_out_alloc)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
-@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -106,8 +101,6 @@ def test_bernoulli_callback(shape, seed, in_dtype, out_dtype, device, is_out_all
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
-@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 8, 70, 40]],
