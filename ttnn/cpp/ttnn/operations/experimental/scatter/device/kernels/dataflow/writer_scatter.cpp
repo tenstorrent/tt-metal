@@ -8,16 +8,17 @@
 
 namespace {
 
-template <bool is_dram>
-FORCE_INLINE void write_wt_tiles(
-    IAGF<is_dram> addr_gtor, const uint32_t& cb, const uint32_t Wt_input, const uint32_t& ht_offset = 0) {
-    for (uint32_t tile_num_in_row = 0; tile_num_in_row < Wt_input; ++tile_num_in_row) {
-        cb_wait_front(cb, ONE_TILE);
-        const uint32_t l1_addr = get_read_ptr(cb);
-        noc_async_write_tile(ht_offset * Wt_input + tile_num_in_row, addr_gtor, l1_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb, ONE_TILE);
-    }
+template <bool is_dram, typename AddrGen>
+FORCE_INLINE void write_to_output(
+    const uint32_t& cb, const AddrGen& addr_gtor, const uint32_t& stick_size_bytes, const uint32_t& stick_id) {
+    cb_wait_front(cb, ONE_PAGE);  // read a whole input row
+    const uint64_t destination_noc_address = get_noc_addr(stick_id, addr_gtor);
+    const uint32_t l1_read_address = get_read_ptr(cb);
+
+    noc_async_write(destination_noc_address, l1_read_address, stick_size_bytes);
+    noc_async_write_barrier();
+
+    cb_pop_front(cb, ONE_PAGE);
 }
 
 }  // namespace
@@ -25,15 +26,17 @@ FORCE_INLINE void write_wt_tiles(
 void kernel_main() {
     constexpr auto ctas{get_ctas()};
 
+    const uint32_t output_buffer_address = get_arg_val<uint32_t>(0);
+    const uint32_t start_stick_id = get_arg_val<uint32_t>(1);
+    const uint32_t sticks_for_core = get_arg_val<uint32_t>(2);
+
     const auto output_addr_gtor{
-        make_addr_gtor<ctas.output_tensor_is_dram>(ctas.output_tensor_cb, ctas.output_tensor_addr)};
+        get_interleaved_addr_gen<ctas.output_tensor_is_dram, ctas.is_output_stick_size_bytes_pow2_min_32>(
+            output_buffer_address, ctas.output_stick_size_bytes, ctas.output_stick_size_bytes_log2)};
+    using output_addr_gtor_type = decltype(output_addr_gtor);
 
-    const uint32_t start_ht_id = get_arg_val<uint32_t>(0);
-    const uint32_t ht_per_core = get_arg_val<uint32_t>(1);
-
-    for (uint32_t h = start_ht_id; h < start_ht_id + ht_per_core; ++h) {
-        // simply read the output_tensor_cb and write to the NoC
-        // this writes tile-by-tile as soon as a single tile becomes available in the output CB
-        write_wt_tiles<ctas.output_tensor_is_dram>(output_addr_gtor, ctas.output_tensor_cb, ctas.Wt_input, h);
+    for (uint32_t stick_id = start_stick_id; stick_id < start_stick_id + sticks_for_core; ++stick_id) {
+        write_to_output<ctas.output_tensor_is_dram, output_addr_gtor_type>(
+            ctas.output_cb, output_addr_gtor, ctas.output_stick_size_bytes, stick_id);
     }
 }

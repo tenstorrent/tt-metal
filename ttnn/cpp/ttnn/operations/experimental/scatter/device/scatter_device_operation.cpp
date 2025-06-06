@@ -70,8 +70,8 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
             static_cast<int32_t>(output_rank));
 
         TT_FATAL(
-            output_tensor.layout() == Layout::TILE,
-            "Output tensor doesn't have a tile layout - only tile layout is supported.");
+            output_tensor.get_layout() == Layout::ROW_MAJOR,
+            "Output tensor doesn't have a row-major layout - only row-major layout is supported.");
         TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor's buffer is null.");
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor must be allocated on a device.");
         TT_FATAL(!output_tensor.is_sharded(), "Sharded tensors are not supported - output_tensor is sharded.");
@@ -121,13 +121,14 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!src_tensor.is_sharded(), "Sharded tensors are not supported - src_tensor is sharded.");
 
     TT_FATAL(
-        input_tensor.layout() == Layout::TILE,
-        "Input tensor doesn't have a tile layout - only tile layout is supported.");
+        input_tensor.get_layout() == Layout::ROW_MAJOR,
+        "Input tensor doesn't have a row-major layout - only row-major layout is supported.");
     TT_FATAL(
-        index_tensor.layout() == Layout::TILE,
-        "Index tensor doesn't have a tile layout - only tile layout is supported.");
+        index_tensor.get_layout() == Layout::ROW_MAJOR,
+        "Index tensor doesn't have a row-major layout - only row-major layout is supported.");
     TT_FATAL(
-        src_tensor.layout() == Layout::TILE, "Src tensor doesn't have a tile layout - only tile layout is supported.");
+        src_tensor.get_layout() == Layout::ROW_MAJOR,
+        "Src tensor doesn't have a row-major layout - only row-major layout is supported.");
 
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor's buffer is null.");
     TT_FATAL(index_tensor.buffer() != nullptr, "Index tensor's buffer is null.");
@@ -146,8 +147,8 @@ ScatterDeviceOperation::spec_return_value_t ScatterDeviceOperation::compute_outp
     }
 
     return TensorSpec{
-        tensor_args.input_tensor.logical_shape(),
-        TensorLayout{tensor_args.input_tensor.dtype(), PageConfig{Layout::TILE}, args.output_memory_config}};
+        tensor_args.input_tensor.get_logical_shape(),
+        TensorLayout{tensor_args.input_tensor.get_dtype(), PageConfig{Layout::ROW_MAJOR}, args.output_memory_config}};
 }
 
 ScatterDeviceOperation::tensor_return_value_t ScatterDeviceOperation::create_output_tensors(

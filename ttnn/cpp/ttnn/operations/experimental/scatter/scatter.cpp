@@ -24,34 +24,52 @@ Tensor pre_scatter_transform_tensor(
         return input_tensor;
     }
 
-    const Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
-    Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
+    Tensor processed_tensor = input_tensor;
+    // if layout is tile, convert to row-major first
+    if (processed_tensor.layout() != Layout::ROW_MAJOR) {
+        processed_tensor =
+            ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, input_tensor.device());
+    }
+    // transposing a row-major tensor here
+    processed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    processed_tensor = reduction_common::transform_to_4d_tensor(input_tensor, is_rank_le_4d);
 
-    return transformed_tensor;
+    return processed_tensor;
 }
 
 Tensor post_scatter_transform_tensor(
-    Tensor& output_tensor, const int32_t dim, const bool is_dim_last_idx, const Shape& original_lshape) {
-    const auto orig_rank = original_lshape.rank();
+    Tensor& output_tensor,
+    const int32_t dim,
+    const bool is_dim_last_idx,
+    const Shape& original_logical_shape,
+    const Layout& original_layout) {
+    const auto orig_rank = original_logical_shape.rank();
 
     if (orig_rank == 1) {
-        output_tensor = ttnn::reshape(output_tensor, original_lshape);
+        output_tensor = ttnn::reshape(output_tensor, original_logical_shape);
     } else if (orig_rank < 4) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, orig_rank);
     } else if (orig_rank > 4) {
-        ttnn::SmallVector<uint32_t> result_shape(original_lshape.cbegin(), original_lshape.cend());
-        output_tensor = ttnn::reshape(output_tensor, original_lshape);
+        ttnn::SmallVector<uint32_t> result_shape(original_logical_shape.cbegin(), original_logical_shape.cend());
+        output_tensor = ttnn::reshape(output_tensor, original_logical_shape);
     }
 
+    // transposing a row-major tensor here
     if (!is_dim_last_idx) {
         output_tensor = ttnn::transpose(output_tensor, dim, -1, output_tensor.memory_config());
     }
 
     TT_FATAL(
-        output_tensor.logical_shape() == original_lshape,
+        output_tensor.get_logical_shape() == original_logical_shape,
         "Output tensor transformation did not create correct output shape! Got: {}, expected: {}",
-        output_tensor.logical_shape(),
-        original_lshape);
+        output_tensor.get_logical_shape(),
+        original_logical_shape);
+
+    // if layout is not row-major, convert to row-major
+    if (original_layout != Layout::ROW_MAJOR) {
+        output_tensor =
+            ttnn::to_layout(output_tensor, original_layout, std::nullopt, std::nullopt, output_tensor.device());
+    }
 
     return output_tensor;
 }
@@ -75,53 +93,19 @@ Tensor ScatterOperation::invoke(
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;
     }
+    const auto original_layout = input_tensor.layout();
 
     // index and source tensors should have same rank as input tensor
     const bool input_tensor_is_dim_last_idx = (dim == -1 || dim == input_tensor_rank - 1);
     const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
 
-    constexpr uint64_t max_complexity = 2.08e9;  // 25e3x25e3 -> ~1.5s, 5e4x5e4 -> ~6s
-    const uint64_t given_complexity = static_cast<uint64_t>(original_input_tensor_lshape[dim]) *
-                                      static_cast<uint64_t>(original_index_tensor_lshape[dim]);
-    TT_FATAL(given_complexity < max_complexity, "");
-
-    // transposition case size growth check
-    if (!input_tensor_is_dim_last_idx) {
-        const int64_t original_volume = static_cast<int64_t>(input_tensor.physical_volume());
-        ttnn::Shape new_shape = input_tensor.logical_shape();
-        std::swap(new_shape[dim], new_shape[-1]);
-        const int64_t tile_width = input_tensor.tensor_spec().tile().get_width();
-        const int64_t tile_height = input_tensor.tensor_spec().tile().get_height();
-        new_shape[-1] = ((new_shape[-1] + tile_width - 1) / tile_width) * tile_width;
-        new_shape[-2] = ((new_shape[-2] + tile_height - 1) / tile_height) * tile_height;
-        const uint32_t new_volume = new_shape.volume();
-
-        std::cout << new_volume << " " << original_volume << " " << new_shape << " " << new_shape << " "
-                  << input_tensor.padded_shape();
-
-        if (new_volume > original_volume) {
-            const int64_t datum_size = input_tensor.element_size();
-            constexpr int64_t growth_limit = 200 * 1024;
-            const int64_t growth = (new_volume - original_volume) * datum_size;
-            TT_FATAL(
-                input_tensor.logical_shape()[-2] % 32 != 0 && input_tensor.logical_shape()[-1] % 32 != 0 &&
-                    growth < growth_limit,
-                "Original tensor's volume is {} KB, which is more than {} KB larger than the volume of the same tiled "
-                "transposed tensor: {} KB (growth limit: {} KB)",
-                new_volume * datum_size / 1024,
-                growth / 1024,
-                original_volume * datum_size / 1024,
-                growth_limit / 1024);
-        }
-    }
-
-    Tensor padded_index_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
+    Tensor transformed_index_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
         index_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
-    Tensor padded_source_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
+    Tensor transformed_source_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
         source_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
-    Tensor padded_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
+    Tensor transformed_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
         input_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
     std::optional<Tensor> optional_output_tensor_value = std::nullopt;
@@ -139,16 +123,16 @@ Tensor ScatterOperation::invoke(
                                                         : input_tensor.memory_config())};
 
     Tensor output = ttnn::prim::scatter_(
-        padded_input_tensor,
+        transformed_input_tensor,
         dim,
-        padded_index_tensor,
-        padded_source_tensor,
+        transformed_index_tensor,
+        transformed_source_tensor,
         final_memory_config,
         std::nullopt,
         optional_output_tensor_value,
         queue_id);
     return CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
-        output, dim, input_tensor_is_dim_last_idx, original_input_tensor_lshape);
+        output, dim, input_tensor_is_dim_last_idx, original_input_tensor_lshape, original_layout);
 }
 
 }  // namespace ttnn::operations::experimental
