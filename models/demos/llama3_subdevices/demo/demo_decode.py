@@ -526,8 +526,8 @@ def run_llama3_demo(
             f"Median tsu throughput: {sorted(all_tokens_per_second_per_user)[len(all_tokens_per_second_per_user) // 2]}"
         )
         # 95 percentile tsu throughput
-        percentile_5 = int(sorted(all_tokens_per_second_per_user)[0.05 * len(all_tokens_per_second_per_user)])
-        percentile_95 = int(sorted(all_tokens_per_second_per_user)[0.95 * len(all_tokens_per_second_per_user)])
+        percentile_5 = sorted(all_tokens_per_second_per_user)[int(0.05 * len(all_tokens_per_second_per_user))]
+        percentile_95 = sorted(all_tokens_per_second_per_user)[int(0.95 * len(all_tokens_per_second_per_user))]
         logger.info(f"5 percentile tsu throughput: {percentile_5}")
         logger.info(f"95 percentile tsu throughput: {percentile_95}")
 
