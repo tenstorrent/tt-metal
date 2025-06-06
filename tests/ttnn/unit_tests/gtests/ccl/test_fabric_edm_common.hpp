@@ -2272,23 +2272,37 @@ struct WriteThroughputStabilityTestWithPersistentFabricParams {
     bool senders_are_unidirectional = false;
 };
 
+struct Fabric1DWorkerConfig {
+    IDevice* backward_device = nullptr;
+    IDevice* forward_device = nullptr;
+    bool has_forward_connection = false;
+    bool has_backward_connection = false;
+    bool unicast_forward = false;
+    size_t num_fwd_hops = 0;
+    size_t num_bwd_hops = 0;
+    size_t sync_num_fwd_hops = 0;
+    size_t sync_num_bwd_hops = 0;
+    size_t sync_count_per_link = 0;
+};
+
 std::vector<CoreCoord> compute_top_row_ethernet_cores(
-    IDevice* device,
-    bool has_fwd_connection,
-    bool has_bwd_connection,
-    IDevice* forward_device,
-    IDevice* backward_device) {
+    IDevice* device, const Fabric1DWorkerConfig& worker_config
+    // bool has_fwd_connection,
+    // bool has_bwd_connection,
+    // IDevice* forward_device,
+    // IDevice* backward_device
+) {
     std::vector<CoreCoord> reordered_ethernet_cores;
-    if (has_fwd_connection) {
-        for (auto core : device->get_ethernet_sockets(forward_device->id())) {
+    if (worker_config.has_forward_connection) {
+        for (auto core : device->get_ethernet_sockets(worker_config.forward_device->id())) {
             auto core_virtual = device->virtual_core_from_logical_core(core, CoreType::ETH);
             reordered_ethernet_cores.push_back(core_virtual);
         }
         std::sort(reordered_ethernet_cores.begin(), reordered_ethernet_cores.end(), [](auto& a, auto& b) {
             return a.x < b.x;
         });
-    } else if (has_bwd_connection) {
-        for (auto core : device->get_ethernet_sockets(backward_device->id())) {
+    } else if (worker_config.has_backward_connection) {
+        for (auto core : device->get_ethernet_sockets(worker_config.backward_device->id())) {
             auto core_virtual = device->virtual_core_from_logical_core(core, CoreType::ETH);
             reordered_ethernet_cores.push_back(core_virtual);
         }
@@ -2470,6 +2484,115 @@ static std::vector<std::vector<IDevice*>> generate_line_fabrics_under_test(
     }
 
     return fabrics_under_test;
+}
+
+Fabric1DWorkerConfig get_fabric_1d_worker_config(
+    size_t device_index,
+    const std::vector<IDevice*>& devices,
+    ttnn::ccl::Topology topology,
+    FabricTestMode fabric_mode,
+    size_t line_size,
+    size_t line_index,
+    bool senders_are_unidirectional,
+    size_t num_devices_with_workers) {
+    Fabric1DWorkerConfig config;
+    if (topology == ttnn::ccl::Topology::Ring && fabric_mode != FabricTestMode::RingAsLinear) {
+        config.backward_device = device_index == 0 ? devices.back() : devices[device_index - 1];
+        config.forward_device = device_index == line_size - 1 ? devices.front() : devices[device_index + 1];
+
+        // Initialize the fabric handle for worker connection
+        config.has_forward_connection = true;
+        config.has_backward_connection = true;
+        config.unicast_forward = true;
+        // Have the sync for ring always use the same algorithm as HalfRing
+        config.sync_num_fwd_hops = tt::div_up(line_size - 1, 2);
+        config.sync_num_bwd_hops = line_size - 1 - config.sync_num_fwd_hops;
+        if (device_index % 2 == 0) {
+            std::swap(config.sync_num_fwd_hops, config.sync_num_bwd_hops);
+        }
+        if (fabric_mode == FabricTestMode::HalfRing) {
+            config.num_fwd_hops = tt::div_up(line_size - 1, 2);
+            config.num_bwd_hops = line_size - 1 - config.num_fwd_hops;
+            if (device_index % 2 == 0) {
+                std::swap(config.num_fwd_hops, config.num_bwd_hops);
+            }
+            config.sync_num_fwd_hops = config.num_fwd_hops;
+            config.sync_num_bwd_hops = config.num_bwd_hops;
+            // We will get 1 inc per remote chip + 1 local
+            config.sync_count_per_link = num_devices_with_workers;
+        } else if (fabric_mode == FabricTestMode::FullRing) {
+            config.num_fwd_hops = line_size - 1;
+            config.num_bwd_hops = line_size - 1;
+            config.sync_num_fwd_hops = config.num_fwd_hops;
+            config.sync_num_bwd_hops = config.num_bwd_hops;
+            // We will get 2 inc per remote chip + 1 local
+            config.sync_count_per_link = 2 * (num_devices_with_workers - 1) + 1;
+        } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+            // We want to saturate the middle links between chip 1 and 2 in a 4 chip ring with the dateline
+            // between the first and last chip Mcast 2 hops from chip 1 F and chip 2 B, which is S0 -> R0
+            // Mcast 3 hops from chip 0 F and chip 3 B, which is S1 -> R0 Mcast 4 hops from Chip 3 F and
+            // chip 0 B, which is S2 -> R1
+            if (line_index == line_size - 1) {
+                config.num_fwd_hops = line_size - 1;
+            } else {
+                config.num_fwd_hops = line_size - 2 - line_index;
+            }
+            if (line_index == 0) {
+                config.num_bwd_hops = line_size - 1;
+            } else {
+                config.num_bwd_hops = line_index - 1;
+            }
+            // The above calculations calculates the number of hops to land on the dest chip
+            // Extend by one so we mcast through them
+            if (config.num_fwd_hops != 0) {
+                config.num_fwd_hops++;
+            }
+            if (config.num_bwd_hops != 0) {
+                config.num_bwd_hops++;
+            }
+            // Flush all the way around the ring
+            config.sync_num_fwd_hops = line_size;
+            config.sync_num_bwd_hops = line_size;
+            // We will get 2 inc for all chips + 1 local
+            config.sync_count_per_link = 2 * num_devices_with_workers + 1;
+        } else {
+            TT_THROW("Invalid fabric mode");
+        }
+        if (config.num_fwd_hops >= config.num_bwd_hops) {
+            config.unicast_forward = true;
+        } else {
+            config.unicast_forward = false;
+        }
+    } else {
+        config.backward_device = device_index == 0 ? nullptr : devices[device_index - 1];
+        config.forward_device = device_index == line_size - 1 ? nullptr : devices[device_index + 1];
+
+        // Initialize the fabric handle for worker connection
+        bool start_of_line = line_index == 0;
+        bool end_of_line = line_index == line_size - 1;
+        config.has_forward_connection = !end_of_line;
+        config.has_backward_connection = !start_of_line;
+        config.unicast_forward = line_index < (line_size / 2);
+        config.num_fwd_hops = line_size - line_index - 1;
+        config.num_bwd_hops = line_index;
+        config.sync_num_fwd_hops = config.num_fwd_hops;
+        config.sync_num_bwd_hops = config.num_bwd_hops;
+
+        // Do this AFTER sync_num_fwd_hops and sync_num_bwd_hops are set
+        // otherwise sync hops will be misconfigured - you'll get a hang because
+        // setup/teardown will be done incorrectly
+
+        if (senders_are_unidirectional) {
+            if (config.unicast_forward) {
+                config.num_bwd_hops = 0;
+            } else {
+                config.num_fwd_hops = 0;
+            }
+        }
+        // We will get 1 inc per remote chip + 1 local
+        config.sync_count_per_link = num_devices_with_workers;
+    }
+    return config;
 }
 
 template <typename FABRIC_DEVICE_FIXTURE = Fabric1DFixture>
@@ -2660,118 +2783,22 @@ void Run1DFabricPacketSendTest(
             auto& program = programs[i];
             auto* device = devices[i];
 
-            IDevice* backward_device;
-            IDevice* forward_device;
-            bool has_forward_connection;
-            bool has_backward_connection;
-            bool unicast_forward;
-            size_t num_fwd_hops;
-            size_t num_bwd_hops;
-            size_t sync_num_fwd_hops;
-            size_t sync_num_bwd_hops;
-            size_t sync_count_per_link;
-            if (topology == ttnn::ccl::Topology::Ring && fabric_mode != FabricTestMode::RingAsLinear) {
-                backward_device = i == 0 ? devices.back() : devices[i - 1];
-                forward_device = i == line_size - 1 ? devices.front() : devices[i + 1];
-
-                // Initialize the fabric handle for worker connection
-                has_forward_connection = true;
-                has_backward_connection = true;
-                unicast_forward = true;
-                // Have the sync for ring always use the same algorithm as HalfRing
-                sync_num_fwd_hops = tt::div_up(line_size - 1, 2);
-                sync_num_bwd_hops = line_size - 1 - sync_num_fwd_hops;
-                if (i % 2 == 0) {
-                    std::swap(sync_num_fwd_hops, sync_num_bwd_hops);
-                }
-                if (fabric_mode == FabricTestMode::HalfRing) {
-                    num_fwd_hops = tt::div_up(line_size - 1, 2);
-                    num_bwd_hops = line_size - 1 - num_fwd_hops;
-                    if (i % 2 == 0) {
-                        std::swap(num_fwd_hops, num_bwd_hops);
-                    }
-                    sync_num_fwd_hops = num_fwd_hops;
-                    sync_num_bwd_hops = num_bwd_hops;
-                    // We will get 1 inc per remote chip + 1 local
-                    sync_count_per_link = num_devices_with_workers;
-                } else if (fabric_mode == FabricTestMode::FullRing) {
-                    num_fwd_hops = line_size - 1;
-                    num_bwd_hops = line_size - 1;
-                    sync_num_fwd_hops = num_fwd_hops;
-                    sync_num_bwd_hops = num_bwd_hops;
-                    // We will get 2 inc per remote chip + 1 local
-                    sync_count_per_link = 2 * (num_devices_with_workers - 1) + 1;
-                } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
-                    // We want to saturate the middle links between chip 1 and 2 in a 4 chip ring with the dateline
-                    // between the first and last chip Mcast 2 hops from chip 1 F and chip 2 B, which is S0 -> R0 Mcast
-                    // 3 hops from chip 0 F and chip 3 B, which is S1 -> R0 Mcast 4 hops from Chip 3 F and chip 0 B,
-                    // which is S2 -> R1
-                    if (line_index == line_size - 1) {
-                        num_fwd_hops = line_size - 1;
-                    } else {
-                        num_fwd_hops = line_size - 2 - line_index;
-                    }
-                    if (line_index == 0) {
-                        num_bwd_hops = line_size - 1;
-                    } else {
-                        num_bwd_hops = line_index - 1;
-                    }
-                    // The above calculations calculates the number of hops to land on the dest chip
-                    // Extend by one so we mcast through them
-                    if (num_fwd_hops != 0) {
-                        num_fwd_hops++;
-                    }
-                    if (num_bwd_hops != 0) {
-                        num_bwd_hops++;
-                    }
-                    // Flush all the way around the ring
-                    sync_num_fwd_hops = line_size;
-                    sync_num_bwd_hops = line_size;
-                    // We will get 2 inc for all chips + 1 local
-                    sync_count_per_link = 2 * num_devices_with_workers + 1;
-                } else {
-                    TT_THROW("Invalid fabric mode");
-                }
-                if (num_fwd_hops >= num_bwd_hops) {
-                    unicast_forward = true;
-                } else {
-                    unicast_forward = false;
-                }
-            } else {
-                backward_device = i == 0 ? nullptr : devices[i - 1];
-                forward_device = i == line_size - 1 ? nullptr : devices[i + 1];
-
-                // Initialize the fabric handle for worker connection
-                bool start_of_line = line_index == 0;
-                bool end_of_line = line_index == line_size - 1;
-                has_forward_connection = !end_of_line;
-                has_backward_connection = !start_of_line;
-                unicast_forward = line_index < (line_size / 2);
-                num_fwd_hops = line_size - line_index - 1;
-                num_bwd_hops = line_index;
-                sync_num_fwd_hops = num_fwd_hops;
-                sync_num_bwd_hops = num_bwd_hops;
-
-                // Do this AFTER sync_num_fwd_hops and sync_num_bwd_hops are set
-                // otherwise sync hops will be misconfigured - you'll get a hang because
-                // setup/teardown will be done incorrectly
-
-                if (params.senders_are_unidirectional) {
-                    if (unicast_forward) {
-                        num_bwd_hops = 0;
-                    } else {
-                        num_fwd_hops = 0;
-                    }
-                }
-                // We will get 1 inc per remote chip + 1 local
-                sync_count_per_link = num_devices_with_workers;
-            }
+            auto worker_config = get_fabric_1d_worker_config(
+                i,
+                devices,
+                topology,
+                fabric_mode,
+                line_size,
+                line_index,
+                params.senders_are_unidirectional,
+                num_devices_with_workers);
 
             // compute worker based on ethernet cores
             CoreRangeSet worker_cores = {};
             if (use_tg and topology == ttnn::ccl::Topology::Linear) {
                 std::vector<CoreCoord> ethernet_cores_virtual = compute_top_row_ethernet_cores(
-                    device, has_forward_connection, has_backward_connection, forward_device, backward_device);
+                    device, worker_config);  // has_forward_connection, has_backward_connection, forward_device,
+                                             // backward_device);
                 worker_cores = get_optimal_worker_core_placement(
                     device, ethernet_cores_virtual, params.num_links, params.first_link_offset);
             } else {
@@ -2790,8 +2817,8 @@ void Run1DFabricPacketSendTest(
                 local_device_fabric_handle =
                     ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
                         device,
-                        forward_device,
-                        backward_device,
+                        worker_config.forward_device,
+                        worker_config.backward_device,
                         &program,
                         enable_persistent_fabric_mode,
                         params.num_links,
@@ -2888,8 +2915,8 @@ void Run1DFabricPacketSendTest(
                         send_types.push_back(static_cast<size_t>(test_spec.noc_send_type));
                         chip_send_types.push_back(static_cast<size_t>(test_spec.chip_send_type));
                         send_counts_per_type.push_back(test_spec.num_messages);
-                        num_fwd_hops_per_type.push_back(num_fwd_hops);
-                        num_bwd_hops_per_type.push_back(num_bwd_hops);
+                        num_fwd_hops_per_type.push_back(worker_config.num_fwd_hops);
+                        num_bwd_hops_per_type.push_back(worker_config.num_bwd_hops);
                         send_type_payload_sizes.push_back(test_spec.packet_payload_size_bytes);
                         flush_send.push_back(test_spec.flush);
                     }
@@ -2907,11 +2934,11 @@ void Run1DFabricPacketSendTest(
 
                 // Reserve space for all arrays upfront
                 rt_args.reserve(
-                    rt_args.size() + num_send_types * 6 +  // 6 arrays of size num_send_types
-                    3 +                                    // CB indices
-                    (has_forward_connection ? 10 : 1) +    // Forward connection args
-                    (has_backward_connection ? 10 : 1) +   // Backward connection args
-                    (params.line_sync ? 6 : 0));           // Line sync args
+                    rt_args.size() + num_send_types * 6 +               // 6 arrays of size num_send_types
+                    3 +                                                 // CB indices
+                    (worker_config.has_forward_connection ? 10 : 1) +   // Forward connection args
+                    (worker_config.has_backward_connection ? 10 : 1) +  // Backward connection args
+                    (params.line_sync ? 6 : 0));                        // Line sync args
 
                 // Add send types arrays using std::copy
                 std::copy(send_types.begin(), send_types.end(), std::back_inserter(rt_args));
@@ -2929,15 +2956,15 @@ void Run1DFabricPacketSendTest(
                 build_connection_args(
                     worker_core,
                     l,
-                    has_forward_connection,
-                    forward_device,
+                    worker_config.has_forward_connection,
+                    worker_config.forward_device,
                     ttnn::ccl::EdmLineFabricOpInterface::FORWARD,
                     rt_args);
                 build_connection_args(
                     worker_core,
                     l,
-                    has_backward_connection,
-                    backward_device,
+                    worker_config.has_backward_connection,
+                    worker_config.backward_device,
                     ttnn::ccl::EdmLineFabricOpInterface::BACKWARD,
                     rt_args);
 
@@ -2949,9 +2976,9 @@ void Run1DFabricPacketSendTest(
                     }
                     TT_FATAL(global_semaphore_addrs.at(0) != -1, "Invalid test setup. Global semaphore address is -1");
                     rt_args.push_back(global_semaphore_addrs.at(0));
-                    rt_args.push_back(params.num_links * sync_count_per_link);
-                    rt_args.push_back(sync_num_fwd_hops);
-                    rt_args.push_back(sync_num_bwd_hops);
+                    rt_args.push_back(params.num_links * worker_config.sync_count_per_link);
+                    rt_args.push_back(worker_config.sync_num_fwd_hops);
+                    rt_args.push_back(worker_config.sync_num_bwd_hops);
                 }
 
                 tt_metal::SetRuntimeArgs(program, worker_kernel_id, worker_core, rt_args);
@@ -3228,113 +3255,15 @@ void Run1DFullMeshFabricPacketSendTest(
                 auto* device = devices[i];
                 auto& program = device_programs.at(device);
 
-                IDevice* backward_device;
-                IDevice* forward_device;
-                bool has_forward_connection;
-                bool has_backward_connection;
-                bool unicast_forward;
-                size_t num_fwd_hops;
-                size_t num_bwd_hops;
-                size_t sync_num_fwd_hops;
-                size_t sync_num_bwd_hops;
-                size_t sync_count_per_link;
-                if (topologies[axis] == ttnn::ccl::Topology::Ring &&
-                    fabric_modes[axis] != FabricTestMode::RingAsLinear) {
-                    backward_device = i == 0 ? devices.back() : devices[i - 1];
-                    forward_device = i == line_size - 1 ? devices.front() : devices[i + 1];
-
-                    // Initialize the fabric handle for worker connection
-                    has_forward_connection = true;
-                    has_backward_connection = true;
-                    unicast_forward = true;
-                    // Have the sync for ring always use the same algorithm as HalfRing
-                    sync_num_fwd_hops = tt::div_up(line_size - 1, 2);
-                    sync_num_bwd_hops = line_size - 1 - sync_num_fwd_hops;
-                    if (i % 2 == 0) {
-                        std::swap(sync_num_fwd_hops, sync_num_bwd_hops);
-                    }
-                    if (fabric_mode == FabricTestMode::HalfRing) {
-                        num_fwd_hops = tt::div_up(line_size - 1, 2);
-                        num_bwd_hops = line_size - 1 - num_fwd_hops;
-                        if (i % 2 == 0) {
-                            std::swap(num_fwd_hops, num_bwd_hops);
-                        }
-                        sync_num_fwd_hops = num_fwd_hops;
-                        sync_num_bwd_hops = num_bwd_hops;
-                        // We will get 1 inc per remote chip + 1 local
-                        sync_count_per_link = num_devices_with_workers;
-                    } else if (fabric_mode == FabricTestMode::FullRing) {
-                        num_fwd_hops = line_size - 1;
-                        num_bwd_hops = line_size - 1;
-                        sync_num_fwd_hops = num_fwd_hops;
-                        sync_num_bwd_hops = num_bwd_hops;
-                        // We will get 2 inc per remote chip + 1 local
-                        sync_count_per_link = 2 * (num_devices_with_workers - 1) + 1;
-                    } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
-                        // We want to saturate the middle links between chip 1 and 2 in a 4 chip ring with the dateline
-                        // between the first and last chip Mcast 2 hops from chip 1 F and chip 2 B, which is S0 -> R0
-                        // Mcast 3 hops from chip 0 F and chip 3 B, which is S1 -> R0 Mcast 4 hops from Chip 3 F and
-                        // chip 0 B, which is S2 -> R1
-                        if (line_index == line_size - 1) {
-                            num_fwd_hops = line_size - 1;
-                        } else {
-                            num_fwd_hops = line_size - 2 - line_index;
-                        }
-                        if (line_index == 0) {
-                            num_bwd_hops = line_size - 1;
-                        } else {
-                            num_bwd_hops = line_index - 1;
-                        }
-                        // The above calculations calculates the number of hops to land on the dest chip
-                        // Extend by one so we mcast through them
-                        if (num_fwd_hops != 0) {
-                            num_fwd_hops++;
-                        }
-                        if (num_bwd_hops != 0) {
-                            num_bwd_hops++;
-                        }
-                        // Flush all the way around the ring
-                        sync_num_fwd_hops = line_size;
-                        sync_num_bwd_hops = line_size;
-                        // We will get 2 inc for all chips + 1 local
-                        sync_count_per_link = 2 * num_devices_with_workers + 1;
-                    } else {
-                        TT_THROW("Invalid fabric mode");
-                    }
-                    if (num_fwd_hops >= num_bwd_hops) {
-                        unicast_forward = true;
-                    } else {
-                        unicast_forward = false;
-                    }
-                } else {
-                    backward_device = i == 0 ? nullptr : devices[i - 1];
-                    forward_device = i == line_size - 1 ? nullptr : devices[i + 1];
-
-                    // Initialize the fabric handle for worker connection
-                    bool start_of_line = line_index == 0;
-                    bool end_of_line = line_index == line_size - 1;
-                    has_forward_connection = !end_of_line;
-                    has_backward_connection = !start_of_line;
-                    unicast_forward = line_index < (line_size / 2);
-                    num_fwd_hops = line_size - line_index - 1;
-                    num_bwd_hops = line_index;
-                    sync_num_fwd_hops = num_fwd_hops;
-                    sync_num_bwd_hops = num_bwd_hops;
-
-                    // Do this AFTER sync_num_fwd_hops and sync_num_bwd_hops are set
-                    // otherwise sync hops will be misconfigured - you'll get a hang because
-                    // setup/teardown will be done incorrectly
-
-                    if (senders_are_unidirectional) {
-                        if (unicast_forward) {
-                            num_bwd_hops = 0;
-                        } else {
-                            num_fwd_hops = 0;
-                        }
-                    }
-                    // We will get 1 inc per remote chip + 1 local
-                    sync_count_per_link = num_devices_with_workers;
-                }
+                auto worker_config = get_fabric_1d_worker_config(
+                    i,
+                    devices,
+                    topologies[axis],
+                    fabric_modes[axis],
+                    line_size,
+                    line_index,
+                    senders_are_unidirectional,
+                    num_devices_with_workers);
 
                 // compute worker based on ethernet cores
                 // TODO: Move out of loop so we can check ahead of time if sync core needs to be moved in order
@@ -3342,7 +3271,8 @@ void Run1DFullMeshFabricPacketSendTest(
                 worker_cores_per_axis[axis] = {};
                 if (use_tg and topology == ttnn::ccl::Topology::Linear) {
                     std::vector<CoreCoord> ethernet_cores_virtual = compute_top_row_ethernet_cores(
-                        device, has_forward_connection, has_backward_connection, forward_device, backward_device);
+                        device, worker_config);  // has_forward_connection, has_backward_connection, forward_device,
+                                                 // backward_device);
                     worker_cores_per_axis[axis] = get_optimal_worker_core_placement(
                         device, ethernet_cores_virtual, params.num_links[axis], params.first_link_offset[axis]);
                 } else {
@@ -3426,8 +3356,8 @@ void Run1DFullMeshFabricPacketSendTest(
                         send_types.push_back(static_cast<size_t>(test_specs.noc_send_type));
                         chip_send_types.push_back(static_cast<size_t>(test_specs.chip_send_type));
                         send_counts_per_type.push_back(num_messages);
-                        num_fwd_hops_per_type.push_back(num_fwd_hops);
-                        num_bwd_hops_per_type.push_back(num_bwd_hops);
+                        num_fwd_hops_per_type.push_back(worker_config.num_fwd_hops);
+                        num_bwd_hops_per_type.push_back(worker_config.num_bwd_hops);
                         send_type_payload_sizes.push_back(test_specs.packet_payload_size_bytes);
                         flush_send.push_back(test_specs.flush);
                     }
@@ -3444,11 +3374,11 @@ void Run1DFullMeshFabricPacketSendTest(
 
                     // Reserve space for all arrays upfront
                     rt_args.reserve(
-                        rt_args.size() + num_send_types * 6 +  // 6 arrays of size num_send_types
-                        3 +                                    // CB indices
-                        (has_forward_connection ? 10 : 1) +    // Forward connection args
-                        (has_backward_connection ? 10 : 1) +   // Backward connection args
-                        (params.line_sync ? 6 : 0));           // Line sync args
+                        rt_args.size() + num_send_types * 6 +               // 6 arrays of size num_send_types
+                        3 +                                                 // CB indices
+                        (worker_config.has_forward_connection ? 10 : 1) +   // Forward connection args
+                        (worker_config.has_backward_connection ? 10 : 1) +  // Backward connection args
+                        (params.line_sync ? 6 : 0));                        // Line sync args
 
                     // Add send types arrays using std::copy
                     std::copy(send_types.begin(), send_types.end(), std::back_inserter(rt_args));
@@ -3467,15 +3397,15 @@ void Run1DFullMeshFabricPacketSendTest(
                     build_connection_args(
                         worker_core,
                         l,
-                        has_forward_connection,
-                        forward_device,
+                        worker_config.has_forward_connection,
+                        worker_config.forward_device,
                         ttnn::ccl::EdmLineFabricOpInterface::FORWARD,
                         rt_args);
                     build_connection_args(
                         worker_core,
                         l,
-                        has_backward_connection,
-                        backward_device,
+                        worker_config.has_backward_connection,
+                        worker_config.backward_device,
                         ttnn::ccl::EdmLineFabricOpInterface::BACKWARD,
                         rt_args);
 
@@ -3489,9 +3419,9 @@ void Run1DFullMeshFabricPacketSendTest(
                             global_semaphore_addrs_per_axis[axis].at(0) != -1,
                             "Invalid test setup. Global semaphore address is -1");
                         rt_args.push_back(global_semaphore_addrs_per_axis[axis].at(0));
-                        rt_args.push_back(params.num_links[axis] * sync_count_per_link);
-                        rt_args.push_back(sync_num_fwd_hops);
-                        rt_args.push_back(sync_num_bwd_hops);
+                        rt_args.push_back(params.num_links[axis] * worker_config.sync_count_per_link);
+                        rt_args.push_back(worker_config.sync_num_fwd_hops);
+                        rt_args.push_back(worker_config.sync_num_bwd_hops);
                     }
 
                     tt_metal::SetRuntimeArgs(program, worker_kernel_id, worker_core, rt_args);
