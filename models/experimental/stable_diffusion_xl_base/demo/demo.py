@@ -489,7 +489,7 @@ def run_demo_inference(
     return images
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 6 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),

@@ -17,6 +17,14 @@ struct UnaryWithParam;
 }
 namespace binary {
 
+bool is_legacy_only(
+    const Tensor& lhs,
+    const auto& rhs,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations);
+
 template <BinaryOpType binary_op_type>
 struct BinaryOperation {
     static Tensor invoke(

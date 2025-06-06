@@ -345,7 +345,11 @@ tt_metal::Program create_program_mcast_in0_in1(
             (std::uint32_t)top_left_core_physical.y);  // in1_mcast_sender_noc_y
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in3_mcast_sender_semaphore_id);
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in3_mcast_receiver_semaphore_id);
+    } else {
+        in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
+    // no fusion
+    in1_receiver_writer_compile_time_args.push_back(0);
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;

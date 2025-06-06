@@ -482,14 +482,16 @@ def test_conv_dram(
 
 
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, on_device, is_owned",
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w",
     (
-        (1, 1024, 3, 224, 224, 16, 16, 16, 16, True, True),
-        (1, 1024, 3, 224, 224, 32, 32, 32, 32, True, False),
-        (1, 192, 3, 512, 672, 16, 16, 16, 16, False, True),
-        (1, 192, 3, 512, 672, 32, 32, 32, 32, False, False),
+        (1, 1024, 3, 224, 224, 16, 16, 16, 16),
+        (1, 1024, 3, 224, 224, 32, 32, 32, 32),
+        (1, 192, 3, 512, 672, 16, 16, 16, 16),
+        (1, 192, 3, 512, 672, 32, 32, 32, 32),
+        (1, 768, 3, 384, 512, 32, 32, 32, 32),
     ),
 )
+@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_conv_weights_with_fold(
     batch_size,
@@ -502,7 +504,6 @@ def test_prepare_conv_weights_with_fold(
     stride_h,
     stride_w,
     on_device,
-    is_owned,
     device,
 ):
     pad_h = 0
@@ -525,6 +526,6 @@ def test_prepare_conv_weights_with_fold(
         on_device,
         device,
         groups,
-        is_owned,
+        is_owned=False,
         enable_kernel_stride_folding=True,
     )

@@ -5,6 +5,10 @@
 #include <fmt/format.h>
 #include <optional>
 
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include "tt-metalium/memory_pin.hpp"
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
@@ -24,6 +28,28 @@
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
+
+namespace {
+
+// Threshold for switch for mmap-based allocations to regular allocations.
+// Determined empirically using a microbenchmark; see https://github.com/tenstorrent/tt-metal/pull/22959 for details.
+constexpr size_t kMmapThresholdBytes = 1 << 20;  // 1MB
+
+// Allocates memory on the host in batch; using either mmap for large allocations or std::vector for small allocations.
+using SharedMemoryPtr = std::shared_ptr<void>;
+SharedMemoryPtr allocate_host_data(size_t size_bytes) {
+    if (size_bytes >= kMmapThresholdBytes) {
+        ZoneScopedN("AllocateBufferMmap");
+        void* ptr = mmap(nullptr, size_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        TT_FATAL(ptr != MAP_FAILED, "Failed to allocate {} bytes of memory", size_bytes);
+        return SharedMemoryPtr(ptr, [size_bytes](void* p) { munmap(p, size_bytes); });
+    } else {
+        auto vec = std::make_shared<std::vector<std::byte>>(size_bytes);
+        return SharedMemoryPtr(vec, vec->data());
+    }
+}
+
+}  // unnamed namespace
 
 namespace tt {
 
@@ -560,28 +586,27 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     specs.reserve(num_buffers);
     shard_data_transfers.reserve(num_buffers);
 
-    const auto tensor_size_bytes = tensor.get_tensor_spec().compute_packed_buffer_size_bytes();
-    for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
-        const auto& coord = storage.coords[shard_idx];
-        // Multithreaded memory allocation on host. This is a bottleneck for models with large outputs
-        // and must thus be parallelized across devices.
-        tensor.mesh_device()->enqueue_to_thread_pool([shard_idx, &buffers, tensor_size_bytes]() {
-            ZoneScopedN("AllocateBuffer");
-            std::vector<T> host_buffer(tensor_size_bytes / sizeof(T));
-            {
-                // Track the buffer index, since the order of shards matters
-                buffers[shard_idx] = HostBuffer(std::move(host_buffer));
-            }
-        });
-        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = coord, .region = BufferRegion(0, tensor_size_bytes)});
+    // For performance, batch host-side allocations, then split the memory chunk across shards using host buffer
+    // borrowing.
+    {
+        ZoneScopedN("AllocateBuffer");
+        const size_t shard_size = tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T);
+        SharedMemoryPtr batch_memory = allocate_host_data(num_buffers * shard_size * sizeof(T));
+        MemoryPin allocation_pin(batch_memory);
+
+        for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
+            buffers[shard_idx] = HostBuffer(
+                tt::stl::Span<T>(static_cast<T*>(batch_memory.get()) + shard_idx * shard_size, shard_size),
+                allocation_pin);
+        }
     }
-    // Wait for allocations to complete
-    tensor.mesh_device()->wait_for_thread_pool();
-    // Point shard_data_transfers to their associated host memory, which was allocated
-    // through the thread-pool.
+
     for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
-        shard_data_transfers[shard_idx].host_data = buffers[shard_idx].view_bytes().data();
+        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
+            .shard_coord = storage.coords[shard_idx],
+            .host_data = buffers[shard_idx].view_bytes().data(),
+            .region = BufferRegion(0, buffers[shard_idx].view_bytes().size()),
+        });
     }
 
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);

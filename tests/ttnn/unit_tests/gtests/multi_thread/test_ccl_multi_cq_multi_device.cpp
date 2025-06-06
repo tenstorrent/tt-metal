@@ -147,10 +147,12 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 
         // Enqueue the all_gather_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
+        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
+            multi_device_global_semaphore};
         const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_async(
             device_tensors,
             0,
-            multi_device_global_semaphore,
+            multi_dev_semaphore,
             1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
@@ -302,10 +304,12 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
 
         // Enqueue the all_gather_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
+        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
+            multi_device_global_semaphore};
         const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_async(
             device_tensors,
             0,
-            multi_device_global_semaphore,
+            multi_dev_semaphore,
             1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
