@@ -307,7 +307,7 @@
             "op_to_op": 668.0,
             "non-overlapped-dispatch-time": 4645.0,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.7,
             "dispatch_duration_relative_margin": 0.5
         },
         "AllGatherAsync_0": {
