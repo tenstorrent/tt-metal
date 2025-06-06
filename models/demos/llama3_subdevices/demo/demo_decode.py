@@ -35,9 +35,9 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 290, "max": 320}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
+    "4U": {1: {"min": 340, "max": 380}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 350, "max": 400}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+    "6U": {1: {"min": 450, "max": 490}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
 
 
@@ -475,14 +475,9 @@ def run_llama3_demo(
                 current_decode_iteration = decode_iteration - trace_exec_offset
                 # Write to host
                 ttnn.event_synchronize(read_events[current_decode_iteration])
-                tt_output_torch = ttnn.to_torch(
-                    tt_out_toks_cpu[current_decode_iteration],
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device,
-                        dims=(3, 1),
-                        mesh_shape=model_args.cluster_shape,
-                    ),
-                )[0, 0, 0, :batch_size]
+                tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks_cpu[current_decode_iteration])[0])[
+                    0, 0, 0, :batch_size
+                ]
                 all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
 
                 profiler.start(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
