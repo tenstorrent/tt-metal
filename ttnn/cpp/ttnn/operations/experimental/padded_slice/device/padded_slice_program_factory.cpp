@@ -26,7 +26,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-const uint32_t cb_buffer_size = 1;
+const uint32_t cb_buffer_size = 4;
 const uint32_t cb_input_index = 0;
 const uint32_t cb_untilized_index = 1;
 const uint32_t cb_output_index = 2;
@@ -507,13 +507,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
             end_index_per_dim[j] =
                 (j == num_dims - 1) ? output_written_end : output_written_end % num_output_sticks_per_dim[j];
             output_written_end = output_written_end / num_output_sticks_per_dim[j];
-
-            tt::log_debug(
-                "j = {}, start_index_per_dim[j]: {}, end_index_per_dim[j]: {}, output_written_start: {}",
-                j,
-                start_index_per_dim[j],
-                end_index_per_dim[j],
-                output_written_start);
         }
         std::vector<uint32_t> start_index_in_input_per_dim(num_dims);
         std::vector<uint32_t> end_index_in_input_per_dim(num_dims);
@@ -541,21 +534,12 @@ get_padded_slice_runtime_args_tile_sharded_output(
         }
         uint32_t num_tiles_this_core = num_full_rows * num_tiles_per_full_row;
 
-        tt::log_debug(
-            "Adding tiles for the last row {}, {}",
-            end_index_in_input_per_dim[num_dims - 2],
-            output_tensor_start[num_dims - 2]);
         num_tiles_this_core += ((tt::round_up(end_index_in_input_per_dim[num_dims - 2], TILE_HEIGHT) -
                                  tt::round_down(output_tensor_start[num_dims - 2], TILE_HEIGHT)) /
                                 TILE_HEIGHT) *
                                num_output_tiles_per_dim[0];
 
         if (start_index_per_dim[2] != 0) {
-            tt::log_debug(
-                "Adding tiles for the first row {}, {}",
-                output_tensor_start[-2] + actual_output_shape[-2],
-                start_index_in_input_per_dim[num_dims - 2]);
-
             num_tiles_this_core += ((tt::round_up(output_tensor_start[-2] + actual_output_shape[-2], TILE_HEIGHT) -
                                      tt::round_down(start_index_in_input_per_dim[num_dims - 2], TILE_HEIGHT)) /
                                     TILE_HEIGHT) *
