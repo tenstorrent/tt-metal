@@ -273,6 +273,7 @@ class ModelOptimisations:
             deallocate_activation=True,
             reallocate_halo_output=True,
             enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
             reshard_if_not_optimal=True,
