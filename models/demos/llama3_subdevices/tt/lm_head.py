@@ -211,6 +211,7 @@ class LMHead(LightweightModule):
                     program_config=self.prefill_pc,
                     dtype=ttnn.bfloat8_b,
                 )
+                x.deallocate(True)
                 outputs.append(output)
 
         outputs_reduced = []
