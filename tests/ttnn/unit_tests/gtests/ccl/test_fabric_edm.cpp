@@ -264,10 +264,7 @@ class TokenProvider {
 
 public:
     TokenProvider(const std::vector<std::string>& tokens, size_t& idx) : tokens(tokens), idx(idx) {}
-    std::string next() {
-        std::string ret = tokens[idx++];
-        return ret;
-    }
+    std::string next() { return tokens[idx++]; }
 };
 
 // Helper function to parse command line arguments

@@ -2285,13 +2285,7 @@ struct Fabric1DWorkerConfig {
     size_t sync_count_per_link = 0;
 };
 
-std::vector<CoreCoord> compute_top_row_ethernet_cores(
-    IDevice* device, const Fabric1DWorkerConfig& worker_config
-    // bool has_fwd_connection,
-    // bool has_bwd_connection,
-    // IDevice* forward_device,
-    // IDevice* backward_device
-) {
+std::vector<CoreCoord> compute_top_row_ethernet_cores(IDevice* device, const Fabric1DWorkerConfig& worker_config) {
     std::vector<CoreCoord> reordered_ethernet_cores;
     if (worker_config.has_forward_connection) {
         for (auto core : device->get_ethernet_sockets(worker_config.forward_device->id())) {
@@ -2796,9 +2790,7 @@ void Run1DFabricPacketSendTest(
             // compute worker based on ethernet cores
             CoreRangeSet worker_cores = {};
             if (use_tg and topology == ttnn::ccl::Topology::Linear) {
-                std::vector<CoreCoord> ethernet_cores_virtual = compute_top_row_ethernet_cores(
-                    device, worker_config);  // has_forward_connection, has_backward_connection, forward_device,
-                                             // backward_device);
+                std::vector<CoreCoord> ethernet_cores_virtual = compute_top_row_ethernet_cores(device, worker_config);
                 worker_cores = get_optimal_worker_core_placement(
                     device, ethernet_cores_virtual, params.num_links, params.first_link_offset);
             } else {
@@ -3168,11 +3160,6 @@ void Run1DFullMeshFabricPacketSendTest(
             use_galaxy, use_tg, params.line_size[axis], topologies[axis], view, num_fabric_rows, num_fabric_cols);
     }
 
-    // Persistent Fabric Setup
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt;
-    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
-    std::optional<std::vector<Program>> fabric_programs = std::nullopt;
-
     size_t packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     TT_FATAL(packet_header_size_bytes != 0, "Error in initializing local variable `packet_header_size_bytes`");
 
@@ -3270,9 +3257,8 @@ void Run1DFullMeshFabricPacketSendTest(
                 //       to support optimal worker core placement
                 worker_cores_per_axis[axis] = {};
                 if (use_tg and topology == ttnn::ccl::Topology::Linear) {
-                    std::vector<CoreCoord> ethernet_cores_virtual = compute_top_row_ethernet_cores(
-                        device, worker_config);  // has_forward_connection, has_backward_connection, forward_device,
-                                                 // backward_device);
+                    std::vector<CoreCoord> ethernet_cores_virtual =
+                        compute_top_row_ethernet_cores(device, worker_config);
                     worker_cores_per_axis[axis] = get_optimal_worker_core_placement(
                         device, ethernet_cores_virtual, params.num_links[axis], params.first_link_offset[axis]);
                 } else {
@@ -3492,7 +3478,7 @@ void Run1DFullMeshFabricPacketSendTest(
             for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices_per_axis[axis].size();
                  fabric_index++) {
                 auto& worker_devices = fabrics_under_test_devices_per_axis[axis][fabric_index];
-                wait_for_worker_program_completion(worker_devices, subdevice_managers);
+                wait_for_worker_program_completion(worker_devices, std::nullopt);
             }
         }
     }
