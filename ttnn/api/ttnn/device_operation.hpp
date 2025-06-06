@@ -447,7 +447,11 @@ void create_and_cache_mesh_workload(
 
     auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
     auto program_factory_index = program_factory.index();
-
+    auto log_msg_func = []{
+        log_warning(
+            tt::LogOp,
+            "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
+    };
     dispatch_to_mesh_workload_factory<mesh_device_operation_t>(
         program_factory, [&]<MeshWorkloadFactoryConcept WorkloadFactory>() {
             using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
@@ -458,12 +462,7 @@ void create_and_cache_mesh_workload(
                 tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
             } else {
                 // Slow path - iterate over coordinates and merge them into a range set one by one.
-#ifdef COMPILATION_SEGFAULT_DESIRED_GCC_12
-                log_warning(
-                    tt::LogOp,
-                    "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch "
-                    "performance.");
-#endif
+                log_msg_func();  // Work around for g++12 compiler bug
                 for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args)) {
                     tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
                 }
