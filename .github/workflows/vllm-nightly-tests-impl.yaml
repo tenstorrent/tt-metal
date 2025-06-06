@@ -12,6 +12,11 @@ on:
       build-artifact-name:
         required: true
         type: string
+      vllm-commit:
+        description: "vLLM branch or sha"
+        required: false
+        default: dev
+        type: string
 
 jobs:
   vllm-tests:
@@ -84,12 +89,12 @@ jobs:
         with:
           repository: tenstorrent/vllm
           path: docker-job/vllm
-          ref: dev
+          ref: ${{ inputs.vllm-commit }}
           fetch-depth: 1
 
       - name: 📀 Install vLLM
         run: |
-          pip3 install vllm/
+          pip3 install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: 📂 Create output directory
         run: |
