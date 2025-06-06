@@ -36,7 +36,7 @@ void MAIN {
 
     for (uint32_t block = start_block; block < end_block; block++) {
         // tilize input via unpack and then pack
-        tilize_init_short(cb_in, 1, cb_tilize);
+        tilize_init(cb_in, 1, cb_tilize);
 
         cb_wait_front(cb_in, 1);
         cb_reserve_back(cb_tilize, 1);
