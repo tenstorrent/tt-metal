@@ -94,7 +94,7 @@ jobs:
             # Health check loop
             for i in {1..10}; do
               echo "Health check attempt $i"
-              if tt-smi-metal -r 0,1,2,3 && ./build/test/tt_metal/tt_fabric/test_system_health; then
+              if tt-smi -r 0,1,2,3 && ./build/test/tt_metal/tt_fabric/test_system_health; then
                 echo "Health checks passed"
                 break
               fi
