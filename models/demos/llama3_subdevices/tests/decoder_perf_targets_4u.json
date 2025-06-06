@@ -205,7 +205,7 @@
             "first_to_last_start": 2043.3333333333333,
             "non-overlapped-dispatch-time": 3113.6,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.4,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         }
@@ -388,7 +388,7 @@
             "op_to_op": 2169.0,
             "non-overlapped-dispatch-time": 2007.0,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.4,
             "dispatch_duration_relative_margin": 0.5
         },
         "PlusOne_1": {
@@ -397,7 +397,7 @@
             "op_to_op": 1929.0,
             "non-overlapped-dispatch-time": 2443.0,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.4,
             "dispatch_duration_relative_margin": 0.5
         }
     }

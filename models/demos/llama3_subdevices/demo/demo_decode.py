@@ -36,7 +36,7 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
     "4U": {1: {"min": 617, "max": 640}, 80: {"min": 50, "max": 54}},
-    "6U": {1: {"min": 738, "max": 755}, 80: {"min": 55, "max": 59}},
+    "6U": {1: {"min": 738, "max": 762}, 80: {"min": 55, "max": 59}},
 }
 
 

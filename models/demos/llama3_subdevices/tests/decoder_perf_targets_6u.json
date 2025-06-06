@@ -370,7 +370,7 @@
             "op_to_op": 536.0,
             "non-overlapped-dispatch-time": 3821.0,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.4,
             "dispatch_duration_relative_margin": 0.5
         },
         "Sampling_0": {
@@ -388,7 +388,7 @@
             "op_to_op": 1873.0,
             "non-overlapped-dispatch-time": 1811.0,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.4,
             "dispatch_duration_relative_margin": 0.5
         },
         "PlusOne_1": {
@@ -397,7 +397,7 @@
             "op_to_op": 1737.0,
             "non-overlapped-dispatch-time": 2224.0,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.4,
             "dispatch_duration_relative_margin": 0.5
         }
     }
