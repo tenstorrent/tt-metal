@@ -264,11 +264,11 @@ def read_golden_results(
         (df["Test Name"] == test_name)
         & (df["Noc Message Type"] == noc_message_type)
         & (df["Packet Size"] == packet_size)
-        & (str(df["Line Size"]) == str(line_size))
-        & (str(df["Num Links"]) == str(num_links))
-        & (str(df["Disable Interior Workers"]) == str(disable_sends_for_interior_workers))
-        & (str(df["Unidirectional"]) == str(unidirectional))
-        & (str(df["Senders Are Unidirectional"]) == str(senders_are_unidirectional))
+        & (df["Line Size"] == str(line_size))
+        & (df["Num Links"] == str(num_links))
+        & (df["Disable Interior Workers"] == str(disable_sends_for_interior_workers))
+        & (df["Unidirectional"] == str(unidirectional))
+        & (df["Senders Are Unidirectional"] == str(senders_are_unidirectional))
     ]
 
     if len(results["Bandwidth (B/c)"]) == 0 or len(results["Packets/Second"]) == 0:
