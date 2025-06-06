@@ -5,6 +5,9 @@ mcast_FullRing,noc_unicast_write,16,4,1,False,False,False,0.03791728145983809,23
 mcast_FullRing,noc_unicast_write,2048,4,1,False,False,False,4.134989143432557,2019037.6676916785
 mcast_FullRing,noc_unicast_write,4096,4,1,False,False,False,7.089412626298119,1730813.6294673143
 mcast_FullRing,noc_unicast_write,4096,4,2,False,False,False,6.995681456187986,1707930.043014645
+mcast_HalfRing,noc_unicast_write,16,8,1,False,False,False,0.027373459894297042,1710841.243393565
+mcast_HalfRing,noc_unicast_write,2048,8,1,False,False,False,2.748127904957714,1341859.3285926338
+mcast_HalfRing,noc_unicast_write,4096,8,1,False,False,False,4.752365665206931,1160245.5237321607
 mcast_FullRing,noc_unicast_write,16,8,1,False,False,False,0.031434188690024095,1964636.793126506
 mcast_FullRing,noc_unicast_write,2048,8,1,False,False,False,3.1006265154789268,1513977.7907611947
 mcast_FullRing,noc_unicast_write,4096,8,1,False,False,False,5.400723823383435,1318536.0896932215
