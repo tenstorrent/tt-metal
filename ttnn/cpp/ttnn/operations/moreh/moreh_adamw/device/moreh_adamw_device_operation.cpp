@@ -75,25 +75,25 @@ MorehAdamWDeviceOperation::spec_return_value_t MorehAdamWDeviceOperation::comput
     TensorSpec outSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
 
     if (tensor_args.param_out.has_value()) {
-        result.push_back(tensor_args.param_out->get_tensor_spec());
+        result.push_back(tensor_args.param_out->tensor_spec());
     } else {
         result.push_back(outSpec);
     }
 
     if (tensor_args.exp_avg_out.has_value()) {
-        result.push_back(tensor_args.exp_avg_out->get_tensor_spec());
+        result.push_back(tensor_args.exp_avg_out->tensor_spec());
     } else {
         result.push_back(outSpec);
     }
 
     if (tensor_args.exp_avg_sq_out.has_value()) {
-        result.push_back(tensor_args.exp_avg_sq_out->get_tensor_spec());
+        result.push_back(tensor_args.exp_avg_sq_out->tensor_spec());
     } else {
         result.push_back(outSpec);
     }
 
     if (tensor_args.max_exp_avg_sq_out.has_value()) {
-        result.push_back(tensor_args.max_exp_avg_sq_out->get_tensor_spec());
+        result.push_back(tensor_args.max_exp_avg_sq_out->tensor_spec());
     } else if (operation_attributes.amsgrad) {
         result.push_back(outSpec);
     } else {

@@ -73,7 +73,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     auto output_datatype = args.output_dtype;
     if (preallocated_output_tensor.has_value()) {
         out_memory_config = preallocated_output_tensor->memory_config();
-        output_datatype = preallocated_output_tensor->get_dtype();
+        output_datatype = preallocated_output_tensor->dtype();
     }
 
     auto arch = input_tensor.device()->arch();
@@ -132,7 +132,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 spec_return_value_t UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output->get_tensor_spec();
+        return tensor_args.preallocated_output->tensor_spec();
     }
 
     auto output_layout = Layout::TILE;

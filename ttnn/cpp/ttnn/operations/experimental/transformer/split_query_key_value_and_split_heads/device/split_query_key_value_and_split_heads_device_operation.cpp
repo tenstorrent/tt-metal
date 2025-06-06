@@ -48,9 +48,9 @@ std::vector<ttnn::TensorSpec> SplitFusedQKVAndSplitHeadsDeviceOperation::compute
     if (output_tensors.size() == 3 && output_tensors[0].has_value() && output_tensors[1].has_value() &&
         output_tensors[2].has_value()) {
         return {
-            output_tensors.at(0)->get_tensor_spec(),
-            output_tensors.at(1)->get_tensor_spec(),
-            output_tensors.at(2)->get_tensor_spec()};
+            output_tensors.at(0)->tensor_spec(),
+            output_tensors.at(1)->tensor_spec(),
+            output_tensors.at(2)->tensor_spec()};
     }
 
     const auto& input_tensor = input_tensors.at(0);

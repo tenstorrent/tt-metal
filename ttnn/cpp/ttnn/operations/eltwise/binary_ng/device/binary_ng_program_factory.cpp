@@ -242,7 +242,7 @@ void set_or_update_runtime_arguments(
     const uint32_t tile_height = c.tensor_spec().tile().get_height();
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
-    const uint32_t c_num_tiles = c.volume() / tile_hw;
+    const uint32_t c_num_tiles = c.padded_volume() / tile_hw;
     uint32_t c_shard_height{}, c_shard_width{}, num_shards_per_width{};
 
     ShardShapeGenerator a_shard_shape_generator;
@@ -449,7 +449,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     const auto a_dtype = a.dtype();
     // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
-    const auto b_dtype = b.has_value() ? b->get_dtype()
+    const auto b_dtype = b.has_value() ? b->dtype()
                          : is_quant_op ? DataType::FLOAT32
                          : is_sfpu_op  ? a_dtype
                                        : DataType::BFLOAT16;

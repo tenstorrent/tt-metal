@@ -85,7 +85,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         }
     }
 
-    const auto num_input_grad_tiles = input_grad.volume() / tt::constants::TILE_HW;
+    const auto num_input_grad_tiles = input_grad.padded_volume() / tt::constants::TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(output_grad.device()->arch(), operation_attributes.compute_kernel_config);
 

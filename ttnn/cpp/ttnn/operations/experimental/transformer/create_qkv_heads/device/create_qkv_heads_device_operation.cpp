@@ -60,10 +60,7 @@ std::vector<ttnn::TensorSpec> CreateQKVHeadsDeviceOperation::compute_output_spec
         this->transpose_k_heads ? ttnn::Shape{input_shape[0], this->num_kv_heads, head_dim, input_shape[2]} : v_shape;
 
     if (output_tensors.size() == 3) {
-        return {
-            output_tensors[0]->get_tensor_spec(),
-            output_tensors[1]->get_tensor_spec(),
-            output_tensors[2]->get_tensor_spec()};
+        return {output_tensors[0]->tensor_spec(), output_tensors[1]->tensor_spec(), output_tensors[2]->tensor_spec()};
     }
     // no create_output_tensors variant that takes in optional input tensors?
 

@@ -182,7 +182,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
 
     if (attributes.dtype.has_value() && output_tensor.has_value()) {
         TT_FATAL(
-            *attributes.dtype == output_tensor->get_dtype(),
+            *attributes.dtype == output_tensor->dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
 
@@ -209,7 +209,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.device() == input_tensor_b->device(),
             "Operands to eltwise binary need to be on the same device!");
-        TT_FATAL(input_tensor_b->get_layout() == Layout::TILE, "Second operand to eltwise binary must be tilized");
+        TT_FATAL(input_tensor_b->layout() == Layout::TILE, "Second operand to eltwise binary must be tilized");
 
         if (not tensor_b_sharded) {
             TT_FATAL(
@@ -267,7 +267,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     }
 
     const auto& input_shape_a = input_tensor_a.logical_shape();
-    const auto& input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : input_shape_a;
+    const auto& input_shape_b = input_tensor_b.has_value() ? input_tensor_b->logical_shape() : input_shape_a;
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
@@ -364,7 +364,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
             "Shape of Output tensor {} provided does not match the broadcasted output shape {}",
             shape,
             output_shape);
-        return output_tensor->get_tensor_spec();
+        return output_tensor->tensor_spec();
     }
 
     if (attributes.memory_config.is_sharded()) {

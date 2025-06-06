@@ -49,7 +49,7 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto input_shape = input_tensor.padded_shape();  // TODO: Replace with get_logical_shape()
+    auto input_shape = input_tensor.padded_shape();  // TODO: Replace with logical_shape()
     auto num_heads = this->num_heads;
     auto sequence_length = input_shape[0];
     auto batch = input_shape[1];

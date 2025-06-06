@@ -35,7 +35,7 @@ Tensor ArgmaxOperation::invoke(
     Tensor input_a = create_mask(input, output_memory_config);
 
     uint32_t dim = input_shape.get_normalized_index(_dim);
-    int size = input_a.volume();
+    int size = input_a.padded_volume();
 
     if (!all) {
         if ((dim == (input_shape.rank() - 1)) || (dim == (input_shape.rank() - 2))) {

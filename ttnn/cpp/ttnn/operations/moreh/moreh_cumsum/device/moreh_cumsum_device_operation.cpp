@@ -48,7 +48,7 @@ void MorehCumsumDeviceOperation::validate_on_program_cache_hit(
 MorehCumsumDeviceOperation::spec_return_value_t MorehCumsumDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output->get_tensor_spec();
+        return tensor_args.output->tensor_spec();
     }
 
     const auto& input = tensor_args.input;

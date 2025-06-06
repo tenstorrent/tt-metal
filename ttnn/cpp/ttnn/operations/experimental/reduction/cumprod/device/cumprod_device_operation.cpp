@@ -73,7 +73,7 @@ void CumprodDeviceOperation::validate_on_program_cache_hit(
 CumprodDeviceOperation::spec_return_value_t CumprodDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_out.has_value()) {
-        return tensor_args.optional_out->get_tensor_spec();
+        return tensor_args.optional_out->tensor_spec();
     }
 
     auto output_layout{Layout::TILE};

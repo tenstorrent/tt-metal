@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t num_tiles = a.padded_volume() / TILE_HW;
 
     tt_metal::IDevice* device = a.device();
 

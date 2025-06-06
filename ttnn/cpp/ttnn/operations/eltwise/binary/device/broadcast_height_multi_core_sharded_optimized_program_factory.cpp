@@ -81,7 +81,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
         ncores);
 
     tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b->get_dtype());
+    tt::DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b->dtype());
     tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);

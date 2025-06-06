@@ -125,7 +125,7 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
 std::vector<ttnn::TensorSpec> EltwiseBinaryBroadcast::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
-        return {output_tensors.at(0)->get_tensor_spec()};
+        return {output_tensors.at(0)->tensor_spec()};
     }
     if (this->in_place) {
         return {};

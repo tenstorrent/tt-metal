@@ -1341,12 +1341,12 @@ Matmul create_matmul_struct(
 
         if (output_dtype.has_value()) {
             TT_FATAL(
-                optional_output_tensor->get_dtype() == output_dtype.value(),
+                optional_output_tensor->dtype() == output_dtype.value(),
                 "Type mismatch between optional output tensor {} & output tensor {}",
-                optional_output_tensor->get_dtype(),
+                optional_output_tensor->dtype(),
                 output_dtype.value());
         } else {
-            output_dtype = optional_output_tensor->get_dtype();
+            output_dtype = optional_output_tensor->dtype();
         }
     } else {
         if (!output_dtype.has_value()) {
@@ -1487,16 +1487,16 @@ void Matmul::validate(
     const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}, optional_input_tensors).at(0);
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor_c = optional_output_tensors.at(0);
-        const auto& optional_output_tensor_shape = optional_output_tensor_c->get_logical_shape();
+        const auto& optional_output_tensor_shape = optional_output_tensor_c->logical_shape();
         TT_FATAL(
             optional_output_tensor_shape == output_tensor_spec.logical_shape(),
             "Shape of Optional Output Tensor {} doesnt match Output Tensor {}",
             optional_output_tensor_shape,
             output_tensor_spec.logical_shape());
         TT_FATAL(
-            optional_output_tensor_c->get_dtype() == this->output_dtype.value(),
+            optional_output_tensor_c->dtype() == this->output_dtype.value(),
             "Type mismatch between optional output tensor {} & output tensor {}",
-            optional_output_tensor_c->get_dtype(),
+            optional_output_tensor_c->dtype(),
             this->output_dtype.value());
         TT_FATAL(
             optional_output_tensor_c->memory_config() == this->output_mem_config,
@@ -2162,7 +2162,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
         !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
 
     if (is_optional_output_tensor) {
-        return {optional_output_tensors.at(0)->get_tensor_spec()};
+        return {optional_output_tensors.at(0)->tensor_spec()};
     }
 
     const auto& input_tensor_a = input_tensors.at(0);

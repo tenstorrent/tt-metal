@@ -98,7 +98,7 @@ void MorehSoftmaxBackwardOperation::validate_on_program_cache_hit(
 MorehSoftmaxBackwardOperation::spec_return_value_t MorehSoftmaxBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad_tensor.has_value()) {
-        return tensor_args.input_grad_tensor->get_tensor_spec();
+        return tensor_args.input_grad_tensor->tensor_spec();
     }
     return TensorSpec(
         tensor_args.output_tensor.logical_shape(),

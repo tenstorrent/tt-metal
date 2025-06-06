@@ -93,27 +93,27 @@ void check_per_channel_tensor_args(
     const int32_t axis,
     const int32_t rank) {
     TT_FATAL(
-        scale_p != nullptr && scale_p->get_logical_shape().rank() == 1,
+        scale_p != nullptr && scale_p->logical_shape().rank() == 1,
         "Per-channel quantization expects 1D scale tensors");
     TT_FATAL(
-        zero_point_p != nullptr && zero_point_p->get_logical_shape().rank() == 1,
+        zero_point_p != nullptr && zero_point_p->logical_shape().rank() == 1,
         "Per-channel quantization expects 1D zero-point tensors");
     TT_FATAL(
-        scale_p->get_logical_shape() == zero_point_p->get_logical_shape(),
+        scale_p->logical_shape() == zero_point_p->logical_shape(),
         "Per-channel quantization expects scale & zero-point tensors of matching shapes");
     TT_FATAL(axis >= -rank && axis < rank, "Axis {} is outside the range [{}, {}]", axis, -rank, rank - 1);
     TT_FATAL(
-        input_tensor.logical_shape()[axis] == scale_p->get_logical_volume(),
+        input_tensor.logical_shape()[axis] == scale_p->logical_volume(),
         "Size of the scale tensor doesn't match the size of the input tensor along the given axis");
     TT_FATAL(
-        input_tensor.logical_shape()[axis] == zero_point_p->get_logical_volume(),
+        input_tensor.logical_shape()[axis] == zero_point_p->logical_volume(),
         "Size of the zero-point tensor doesn't match the size of the input tensor along the given axis");
 
-    const auto scale_dtype = scale_p->get_dtype();
+    const auto scale_dtype = scale_p->dtype();
     TT_FATAL(tt::tt_metal::is_floating_point(scale_dtype), "Quantization only takes floating-point number scales");
     TT_FATAL(!tt::tt_metal::is_block_float(scale_dtype), "Unsupported quantization scale data type");
 
-    const auto zero_point_dtype = zero_point_p->get_dtype();
+    const auto zero_point_dtype = zero_point_p->dtype();
     TT_FATAL(zero_point_dtype == ttnn::DataType::INT32, "Quantization only takes int32 zero-points for now");
 }
 

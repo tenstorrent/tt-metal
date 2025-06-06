@@ -39,7 +39,7 @@ void MorehMeanBackwardOperation::validate_on_program_cache_hit(
 MorehMeanBackwardOperation::spec_return_value_t MorehMeanBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad.has_value()) {
-        return tensor_args.input_grad->get_tensor_spec();
+        return tensor_args.input_grad->tensor_spec();
     }
     auto input_grad_shape = operation_attributes.input_grad_shape.value();
     return TensorSpec(

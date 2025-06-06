@@ -63,20 +63,20 @@ void validate(
         operation_attributes.memory_config);
     if (output.has_value()) {
         TT_FATAL(
-            output->get_logical_shape() == operation_attributes.output_shape,
+            output->logical_shape() == operation_attributes.output_shape,
             "bcast_to: Invalid output shape {}Output shape must match operation attributes {}",
-            output->get_logical_shape(),
+            output->logical_shape(),
             operation_attributes.output_shape);
         TT_FATAL(
-            input.layout() == output->get_layout(),
+            input.layout() == output->layout(),
             "bcast_to: Input {} and output {} must have same layout",
             input.layout(),
-            output->get_layout());
+            output->layout());
         TT_FATAL(
-            input.dtype() == output->get_dtype(),
+            input.dtype() == output->dtype(),
             "bcast_to: Input {} and output {} must have same dtype",
             input.dtype(),
-            output->get_dtype());
+            output->dtype());
     }
 }
 
@@ -93,7 +93,7 @@ void BcastToOperation::validate_on_program_cache_hit(
 BcastToOperation::spec_return_value_t BcastToOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output->get_tensor_spec();
+        return tensor_args.output->tensor_spec();
     }
     return TensorSpec(
         Shape{operation_attributes.output_shape},

@@ -352,7 +352,7 @@ inline auto invoke_binary_ng(
 
     const auto a_dtype = lhs.dtype();
     const auto output_preallocated = output.has_value();
-    const auto out_dtype = output_preallocated ? output->get_dtype() : dtype.value_or(a_dtype);
+    const auto out_dtype = output_preallocated ? output->dtype() : dtype.value_or(a_dtype);
 
     const auto mem_config = output_preallocated ? output->memory_config() : memory_config.value_or(lhs.memory_config());
 

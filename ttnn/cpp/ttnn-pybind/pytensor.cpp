@@ -1449,7 +1449,7 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             // TODO: Rename to physical_volume
             "volume",
-            [](const Tensor& self) { return self.volume(); },
+            [](const Tensor& self) { return self.padded_volume(); },
             R"doc(
             Get the volume of the tensor.
 

@@ -88,7 +88,7 @@ void MorehNllLossBackwardDeviceOperation::validate_on_program_cache_hit(
 MorehNllLossBackwardDeviceOperation::spec_return_value_t MorehNllLossBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad_tensor.has_value()) {
-        return {tensor_args.input_grad_tensor->get_tensor_spec()};
+        return {tensor_args.input_grad_tensor->tensor_spec()};
     }
     // To calculate the output shape, we need the channel_size. However, the required tensors, target and output_grad,
     // do not contain the channel_size information.

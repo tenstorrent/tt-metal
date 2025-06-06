@@ -68,7 +68,7 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
         return BroadcastHeightAndWidthMultiCore{};
     }
 
-    const auto input_shape_b = tensor_args.input_tensor_b->get_logical_shape();
+    const auto input_shape_b = tensor_args.input_tensor_b->logical_shape();
 
     auto height_a = input_shape_a[-2];
     auto width_a = input_shape_a[-1];
@@ -79,7 +79,7 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
     if (height_a == height_b and width_a == width_b) {
         BinaryOpType op = operation_attributes.binary_op_type;
         DataType dtype1 = tensor_args.input_tensor_a.dtype();
-        DataType dtype2 = tensor_args.input_tensor_b->get_dtype();
+        DataType dtype2 = tensor_args.input_tensor_b->dtype();
         bool sfpu_op_check = utils::is_binary_sfpu_op(op, dtype1, dtype2);
         if(sfpu_op_check){
             return ElementWiseMultiCoreSfpu{};
@@ -132,7 +132,7 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_a.device() == input_tensor_b->device(),
                 "Operands to eltwise binary need to be on the same device!");
         }
-        TT_FATAL(input_tensor_b->get_layout() == Layout::TILE, "Inputs to eltwise binary must be tilized");
+        TT_FATAL(input_tensor_b->layout() == Layout::TILE, "Inputs to eltwise binary must be tilized");
     }
 
     if (input_tensor_a.memory_config().is_sharded()) {
@@ -186,7 +186,7 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
     auto width_a = input_shape_a[-1];
 
     const auto input_shape_b =
-        tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
+        tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->logical_shape() : ttnn::Shape{1, 1};
     auto batch_size_0_b = input_shape_b.rank() >= 4 ? input_shape_b[-4] : 1;
     auto batch_size_1_b = input_shape_b.rank() >= 3 ? input_shape_b[-3] : 1;
     auto height_b = input_shape_b[-2];
@@ -212,7 +212,7 @@ BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_tensor = tensor_args.output_tensor;
     if (output_tensor.has_value()) {
-        return output_tensor->get_tensor_spec();
+        return output_tensor->tensor_spec();
     }
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
@@ -334,7 +334,7 @@ operation::OpPerformanceModelGeneral<BinaryDeviceOperation::tensor_return_value_
     total_bytes += input_tensor_a.padded_volume() * input_tensor_a.element_size();
     if (input_tensor_b.has_value()) {
         input_tensors.push_back(*input_tensor_b);
-        total_bytes += input_tensor_b->volume() * input_tensor_b->element_size();
+        total_bytes += input_tensor_b->padded_volume() * input_tensor_b->element_size();
     }
     uint32_t ideal_eltwise_cycles = total_bytes / 80 / num_cores;
 

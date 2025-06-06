@@ -36,7 +36,7 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
 
     if (preallocated_input_grad.has_value()) {
         out_memory_config = preallocated_input_grad->memory_config();
-        output_datatype = preallocated_input_grad->get_dtype();
+        output_datatype = preallocated_input_grad->dtype();
     }
 
     TT_FATAL(
@@ -89,7 +89,7 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
 spec_return_value_t GeluBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_input_grad.has_value()) {
-        return tensor_args.preallocated_input_grad->get_tensor_spec();
+        return tensor_args.preallocated_input_grad->tensor_spec();
     }
 
     auto output_layout = Layout::TILE;

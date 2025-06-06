@@ -1497,7 +1497,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         out_buffer,
         in0_tile,
         in1_tile,
-        bias.has_value() ? bias->get_tensor_spec().tile() : output_tile,
+        bias.has_value() ? bias->tensor_spec().tile() : output_tile,
         output_tile,
         in0_data_format,
         in1_data_format,

@@ -43,7 +43,7 @@ void set_or_update_runtime_arguments(
     const auto [bN, bC, bHt, bWt] = extract_shape_dims(batch_mean_tensor);
     const auto [cN, cC, cHt, cWt] = extract_shape_dims(c);
 
-    uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = c.padded_volume() / c.tensor_spec().tile().get_tile_hw();
 
     constexpr bool row_major = true;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -146,9 +146,9 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto c_data_format = datatype_to_dataformat_converter(output.dtype());
     auto d_data_format = datatype_to_dataformat_converter(batch_var_tensor.dtype());
     auto e_data_format =
-        weight_has_value ? datatype_to_dataformat_converter(weight_tensor->get_dtype()) : DataFormat::Float16_b;
+        weight_has_value ? datatype_to_dataformat_converter(weight_tensor->dtype()) : DataFormat::Float16_b;
     auto f_data_format =
-        bias_has_value ? datatype_to_dataformat_converter(bias_tensor->get_dtype()) : DataFormat::Float16_b;
+        bias_has_value ? datatype_to_dataformat_converter(bias_tensor->dtype()) : DataFormat::Float16_b;
 
     uint32_t a_single_tile_size = tt_metal::detail::TileSize(a_data_format);
     uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);

@@ -70,14 +70,14 @@ void SortDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.output_tensors.size() == 2) {
         if (tensor_args.output_tensors.at(0).has_value() && tensor_args.output_tensors.at(1).has_value()) {
-            const auto output_tensor_shape = tensor_args.output_tensors.at(0)->get_padded_shape();
+            const auto output_tensor_shape = tensor_args.output_tensors.at(0)->padded_shape();
             TT_FATAL(
                 output_tensor_shape == input_tensor_shape,
                 "Output tensor shape must be the same as input tensor shape. Got output tensor shape: {} and input "
                 "tensor shape: {}",
                 output_tensor_shape,
                 input_tensor_shape);
-            const auto output_indices_shape = tensor_args.output_tensors.at(1)->get_padded_shape();
+            const auto output_indices_shape = tensor_args.output_tensors.at(1)->padded_shape();
             TT_FATAL(
                 output_indices_shape == input_tensor_shape,
                 "Output tensor indices shape must be the same as input tensor shape. Got output indices tensor shape: "
@@ -93,7 +93,7 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensors.size() == 2) {
         if (tensor_args.output_tensors.at(0).has_value() && tensor_args.output_tensors.at(1).has_value()) {
-            return {tensor_args.output_tensors[0]->get_tensor_spec(), tensor_args.output_tensors[1]->get_tensor_spec()};
+            return {tensor_args.output_tensors[0]->tensor_spec(), tensor_args.output_tensors[1]->tensor_spec()};
         }
     }
     // Create output tensors specs

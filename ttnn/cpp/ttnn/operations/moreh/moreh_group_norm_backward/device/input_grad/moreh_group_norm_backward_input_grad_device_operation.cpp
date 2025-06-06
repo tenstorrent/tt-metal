@@ -72,7 +72,7 @@ MorehGroupNormBackwardInputGradOperation::spec_return_value_t
 MorehGroupNormBackwardInputGradOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad.has_value()) {
-        return {tensor_args.input_grad->get_tensor_spec()};
+        return {tensor_args.input_grad->tensor_spec()};
     }
     return TensorSpec(
         tensor_args.output_grad.logical_shape(),

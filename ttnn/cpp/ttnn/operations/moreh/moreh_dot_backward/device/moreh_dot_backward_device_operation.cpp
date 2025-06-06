@@ -74,7 +74,7 @@ MorehDotBackwardOperation::spec_return_value_t MorehDotBackwardOperation::comput
     output_specs.reserve(tensor_args.output_tensors.size());
     for (const auto& output_tensor : tensor_args.output_tensors) {
         if (output_tensor.has_value()) {
-            output_specs.push_back(output_tensor->get_tensor_spec());
+            output_specs.push_back(output_tensor->tensor_spec());
         } else {
             output_specs.push_back(std::nullopt);
         }

@@ -162,15 +162,15 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
     uint32_t num_tiles = a.padded_volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume() / TILE_HW : 0;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().padded_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().padded_volume() / TILE_HW : 0;
 
     // For bert, tensor is packed as RM with width 32
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().volume() / TILE_WIDTH : 0;
+        num_gamma_tiles = gamma.has_value() ? gamma.value().padded_volume() / TILE_WIDTH : 0;
     }
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().volume() / TILE_WIDTH : 0;
+        num_beta_tiles = beta.has_value() ? beta.value().padded_volume() / TILE_WIDTH : 0;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -693,8 +693,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     // num tiles for a, gamma, beta
     uint32_t num_tiles = a.padded_volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume() / TILE_HW : 0;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().padded_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().padded_volume() / TILE_HW : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

@@ -59,7 +59,7 @@ void CopyDeviceOperation::validate_with_output_tensors(
 std::vector<ttnn::TensorSpec> CopyDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (!output_tensors.empty() && output_tensors[0].has_value()) {
-        return {output_tensors[0]->get_tensor_spec()};
+        return {output_tensors[0]->tensor_spec()};
     }
     if (input_tensors.size() == 2) {
         return {input_tensors[1].tensor_spec()};

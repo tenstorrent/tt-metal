@@ -29,7 +29,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
     auto a_dtype = a.dtype();
-    auto b_dtype = b.has_value() ? b->get_dtype() : a_dtype;
+    auto b_dtype = b.has_value() ? b->dtype() : a_dtype;
     auto& output = tensor_return_value;
     const auto& op_type = operation_attributes.binary_op_type;
 

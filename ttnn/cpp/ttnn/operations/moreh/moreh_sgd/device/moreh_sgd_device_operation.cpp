@@ -54,14 +54,14 @@ MorehSgdOperation::spec_return_value_t MorehSgdOperation::compute_output_specs(
     std::vector<std::optional<TensorSpec>> ret;
 
     if (tensor_args.param_out.has_value()) {
-        ret.push_back(tensor_args.param_out->get_tensor_spec());
+        ret.push_back(tensor_args.param_out->tensor_spec());
     } else {
         ret.push_back(TensorSpec(
             input_tensor_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.param_out_memory_config)));
     }
 
     if (tensor_args.momentum_buffer_out.has_value()) {
-        ret.push_back(tensor_args.momentum_buffer_out->get_tensor_spec());
+        ret.push_back(tensor_args.momentum_buffer_out->tensor_spec());
     } else if (operation_attributes.momentum != 0.0f) {
         ret.push_back(TensorSpec(
             input_tensor_shape,

@@ -121,7 +121,7 @@ std::vector<TensorSpec> TopK::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (output_tensors.size() == 2) {
         if (output_tensors.at(0).has_value() && output_tensors.at(1).has_value()) {
-            return {output_tensors[0]->get_tensor_spec(), output_tensors[1]->get_tensor_spec()};
+            return {output_tensors[0]->tensor_spec(), output_tensors[1]->tensor_spec()};
         }
     }
     const auto& input_tensor = input_tensors.at(0);

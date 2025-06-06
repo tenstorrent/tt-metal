@@ -49,7 +49,7 @@ void MorehDotOperation::validate_on_program_cache_hit(
 MorehDotOperation::spec_return_value_t MorehDotOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output->get_tensor_spec();
+        return tensor_args.output->tensor_spec();
     }
     const auto& input = tensor_args.input_a;
     auto output_shape = input.logical_shape();

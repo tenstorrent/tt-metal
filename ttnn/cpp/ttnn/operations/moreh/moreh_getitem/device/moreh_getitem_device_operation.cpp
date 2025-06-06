@@ -89,7 +89,7 @@ void MorehGetItemOperation::validate_on_program_cache_hit(
 MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return {tensor_args.output->get_tensor_spec()};
+        return {tensor_args.output->tensor_spec()};
     }
 
     const auto& input_tensor = tensor_args.input;

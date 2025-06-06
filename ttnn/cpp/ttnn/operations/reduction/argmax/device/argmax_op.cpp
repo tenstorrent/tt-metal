@@ -90,7 +90,7 @@ void ArgMax::validate_with_output_tensors(
 std::vector<TensorSpec> ArgMax::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (output_tensors.at(0).has_value()) {
-        return {output_tensors.at(0)->get_tensor_spec()};
+        return {output_tensors.at(0)->tensor_spec()};
     }
 
     const auto& input_tensor = input_tensors[0];

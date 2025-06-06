@@ -96,7 +96,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::compute_output_specs(
 
     if (gamma_requires_grad) {
         if (tensor_args.gamma_grad.has_value()) {
-            result[0] = tensor_args.gamma_grad->get_tensor_spec();
+            result[0] = tensor_args.gamma_grad->tensor_spec();
         } else {
             result[0] = TensorSpec(
                 dgamma_dbeta_shape,
@@ -106,7 +106,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::compute_output_specs(
 
     if (beta_requires_grad) {
         if (tensor_args.beta_grad.has_value()) {
-            result[1] = tensor_args.beta_grad->get_tensor_spec();
+            result[1] = tensor_args.beta_grad->tensor_spec();
         } else {
             result[1] = TensorSpec(
                 dgamma_dbeta_shape,

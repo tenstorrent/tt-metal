@@ -52,7 +52,7 @@ void PermuteDeviceOperation::validate_on_program_cache_hit(
 PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
-        return tensor_args.optional_output_tensor->get_tensor_spec();
+        return tensor_args.optional_output_tensor->tensor_spec();
     }
 
     SmallVector<uint32_t> shape;

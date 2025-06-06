@@ -37,8 +37,8 @@ void MorehFoldOperation::validate_inputs(
     TT_FATAL(input_shape[input_rank - 2] % kernel_size_product == 0, "Fold: Invalid input tensor size");
 
     if (tensor_args.output) {
-        auto output_shape = tensor_args.output->get_logical_shape();
-        auto output_rank = tensor_args.output->get_logical_shape().rank();
+        auto output_shape = tensor_args.output->logical_shape();
+        auto output_rank = tensor_args.output->logical_shape().rank();
         TT_FATAL(
             output_shape[output_rank - 3] == input_shape[input_rank - 2] / kernel_size_product,
             "Fold: Invalid output tensor size");
@@ -68,7 +68,7 @@ void MorehFoldOperation::validate_on_program_cache_hit(
 MorehFoldOperation::spec_return_value_t MorehFoldOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output->get_tensor_spec();
+        return tensor_args.output->tensor_spec();
     }
 
     auto input_tensor_shape = tensor_args.input.logical_shape();

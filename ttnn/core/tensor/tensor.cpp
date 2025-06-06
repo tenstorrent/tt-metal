@@ -166,13 +166,16 @@ const ttnn::Shape& Tensor::get_logical_shape() const { return logical_shape(); }
 
 const ttnn::Shape& Tensor::get_padded_shape() const { return padded_shape(); }
 
-const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
+uint64_t Tensor::get_logical_volume() const { return logical_shape().volume(); }
+uint32_t Tensor::volume() const { return padded_shape().volume(); }
 
 Storage& Tensor::get_storage() { return this->tensor_attributes->get_storage(); }
 
 const DistributedTensorConfig& Tensor::get_distributed_tensor_config() const {
     return this->tensor_attributes->get_distributed_tensor_config();
 }
+
+const Storage& Tensor::get_storage() const { return this->tensor_attributes->get_storage(); }
 
 template <>
 Tensor Tensor::from_span<float>(
@@ -334,9 +337,9 @@ std::vector<float> Tensor::to_vector<float>(ttnn::QueueId cq_id) const {
 template <typename T>
 std::vector<T> Tensor::to_vector(ttnn::QueueId cq_id) const {
     TT_FATAL(
-        this->get_dtype() == convert_to_data_type<T>(),
+        this->dtype() == convert_to_data_type<T>(),
         "Unsupported data type for to_vector: got {}, expected: {}",
-        this->get_dtype(),
+        this->dtype(),
         convert_to_data_type<T>());
     auto cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
     auto data = host_buffer::get_as<T>(cpu_tensor);
@@ -503,7 +506,7 @@ bool Tensor::is_sharded() const {
     return tt::tt_metal::is_device_tensor(*this) ? this->memory_config().is_sharded() : false;
 }
 
-uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->get_dtype()); }
+uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->dtype()); }
 
 Tensor Tensor::reshape(const ttnn::Shape& new_shape) const { return tensor_ops::tensor_reshape(*this, new_shape); }
 
@@ -533,15 +536,13 @@ StorageType Tensor::storage_type() const {
         this->storage());
 }
 
-ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->get_padded_shape())); }
+ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->padded_shape())); }
 
-uint32_t Tensor::volume() const { return get_padded_shape().volume(); }
-uint64_t Tensor::logical_volume() const { return get_logical_shape().volume(); }
-uint64_t Tensor::padded_volume() const { return get_padded_shape().volume(); }
-uint64_t Tensor::get_logical_volume() const { return get_logical_shape().volume(); }
+uint64_t Tensor::logical_volume() const { return logical_shape().volume(); }
+uint64_t Tensor::padded_volume() const { return padded_shape().volume(); }
 
 bool Tensor::is_scalar() const {
-    const ttnn::Shape logical_shape = this->get_logical_shape();
+    const ttnn::Shape logical_shape = this->logical_shape();
     return logical_shape.rank() == 0 || logical_shape.volume() == 1;
 }
 
@@ -775,8 +776,9 @@ Tensor set_tensor_id(const Tensor& tensor) {
     return output;
 };
 
-const Storage& Tensor::get_storage() const { return this->tensor_attributes->get_storage(); }
 Storage& Tensor::storage() { return this->tensor_attributes->get_storage(); }
+
+const Storage& Tensor::storage() const { return this->tensor_attributes->get_storage(); }
 
 const ttnn::Shape& Tensor::logical_shape() const { return this->tensor_attributes->get_tensor_spec().logical_shape(); }
 
@@ -821,7 +823,7 @@ IDevice* Tensor::device() const {
     }
 }
 
-const MemoryConfig& Tensor::memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
+const MemoryConfig& Tensor::memory_config() const { return tensor_spec().tensor_layout().get_memory_config(); }
 
 const std::optional<ShardSpec>& Tensor::shard_spec() const { return this->memory_config().shard_spec(); }
 

@@ -21,7 +21,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t num_tiles = a.padded_volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
     tt_metal::IDevice* device = a.device();

@@ -84,7 +84,7 @@ MorehLayerNormOperation::spec_return_value_t MorehLayerNormOperation::compute_ou
     std::vector<std::optional<TensorSpec>> result(3);
 
     if (tensor_args.output.has_value()) {
-        result[0] = tensor_args.output->get_tensor_spec();
+        result[0] = tensor_args.output->tensor_spec();
     } else {
         result[0] = TensorSpec(
             input.logical_shape(),
@@ -92,11 +92,11 @@ MorehLayerNormOperation::spec_return_value_t MorehLayerNormOperation::compute_ou
     }
 
     if (tensor_args.mean.has_value()) {
-        result[1] = tensor_args.mean->get_tensor_spec();
+        result[1] = tensor_args.mean->tensor_spec();
     }
 
     if (tensor_args.rstd.has_value()) {
-        result[2] = tensor_args.rstd->get_tensor_spec();
+        result[2] = tensor_args.rstd->tensor_spec();
     }
 
     return result;

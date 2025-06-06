@@ -99,12 +99,12 @@ void MorehSumBackwardOperation::validate_on_program_cache_hit(
 MorehSumBackwardOperation::spec_return_value_t MorehSumBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad.has_value()) {
-        return tensor_args.input_grad->get_tensor_spec();
+        return tensor_args.input_grad->tensor_spec();
     }
     TT_FATAL(tensor_args.input.has_value(), "input tensor should not be std::nullopt.");
     return TensorSpec(
-        tensor_args.input->get_logical_shape(),
-        TensorLayout(tensor_args.input->get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+        tensor_args.input->logical_shape(),
+        TensorLayout(tensor_args.input->dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
 MorehSumBackwardOperation::tensor_return_value_t MorehSumBackwardOperation::create_output_tensors(

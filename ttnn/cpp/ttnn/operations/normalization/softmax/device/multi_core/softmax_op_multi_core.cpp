@@ -409,7 +409,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 output_tensors.size() == 1 ? output_tensors.at(0).buffer()->address() : src_buffer_address;
 
             const auto shape = input_tensors.at(0).padded_shape();
-            uint32_t W = shape[-1], H = (input_tensors.at(0).volume() / (shape[0] * shape[-1])), NC = shape[0];
+            uint32_t W = shape[-1], H = (input_tensors.at(0).padded_volume() / (shape[0] * shape[-1])), NC = shape[0];
             uint32_t HW = H * W;
 
             uint32_t Wt = W / TILE_WIDTH;
@@ -424,7 +424,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 num_datum_padded = W - W_unpadded;
             }
 
-            int32_t num_tiles = input_tensors.at(0).volume() / TILE_HW;
+            int32_t num_tiles = input_tensors.at(0).padded_volume() / TILE_HW;
             uint32_t block_size =
                 fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
@@ -618,9 +618,8 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
 
     tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat mask_cb_data_format = mask.has_value()
-                                             ? tt::tt_metal::datatype_to_dataformat_converter(mask->get_dtype())
-                                             : tt::DataFormat::Float16_b;
+    tt::DataFormat mask_cb_data_format =
+        mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(mask->dtype()) : tt::DataFormat::Float16_b;
     tt::DataFormat scale_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
 
@@ -646,7 +645,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
 
     uint32_t mask_H = shape[2];
     if (mask.has_value()) {
-        mask_H = mask->get_padded_shape()[2];
+        mask_H = mask->padded_shape()[2];
     }
     uint32_t mask_Ht = mask_H / TILE_HEIGHT;
     // block
@@ -725,9 +724,9 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_wt, (std::uint32_t)is_dram_mask};
     std::map<string, string> softmax_defines;
     // hw_dims_only_causal_mask does not support RM Layout atm
-    bool use_row_major_kernel = (mask.has_value() and mask->get_layout() == tt::tt_metal::Layout::ROW_MAJOR);
+    bool use_row_major_kernel = (mask.has_value() and mask->layout() == tt::tt_metal::Layout::ROW_MAJOR);
     if (use_row_major_kernel) {
-        auto mask_stick_size = mask->get_padded_shape()[3] * mask->element_size();
+        auto mask_stick_size = mask->padded_shape()[3] * mask->element_size();
         bool mask_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(mask_stick_size);
         reader_compile_time_args.push_back((std::uint32_t)mask_stick_size_is_power_of_two);
         if (mask_stick_size_is_power_of_two) {
@@ -905,11 +904,11 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
                         num_cores_per_batch_index = 0;
                         if (mask.has_value()) {
                             if (causal_mask) {
-                                mask_start_tile_id += mask->get_padded_shape()[-1] * mask->get_padded_shape()[-2] /
-                                                      TILE_WIDTH / TILE_HEIGHT;
+                                mask_start_tile_id +=
+                                    mask->padded_shape()[-1] * mask->padded_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
                             } else {
-                                mask_start_tile_id += use_row_major_kernel ? mask->get_padded_shape()[-2]
-                                                                           : mask->get_padded_shape()[-1] / TILE_WIDTH;
+                                mask_start_tile_id += use_row_major_kernel ? mask->padded_shape()[-2]
+                                                                           : mask->padded_shape()[-1] / TILE_WIDTH;
                             }
                         }
                     }
@@ -944,11 +943,11 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
                         num_cores_per_batch_index = 0;
                         if (mask.has_value()) {
                             if (causal_mask) {
-                                mask_start_tile_id += mask->get_padded_shape()[-1] * mask->get_padded_shape()[-2] /
-                                                      TILE_WIDTH / TILE_HEIGHT;
+                                mask_start_tile_id +=
+                                    mask->padded_shape()[-1] * mask->padded_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
                             } else {
-                                mask_start_tile_id += use_row_major_kernel ? mask->get_padded_shape()[-2]
-                                                                           : mask->get_padded_shape()[-1] / TILE_WIDTH;
+                                mask_start_tile_id += use_row_major_kernel ? mask->padded_shape()[-2]
+                                                                           : mask->padded_shape()[-1] / TILE_WIDTH;
                             }
                         }
                     }

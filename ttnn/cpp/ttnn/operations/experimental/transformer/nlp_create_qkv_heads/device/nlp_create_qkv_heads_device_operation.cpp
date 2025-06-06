@@ -111,9 +111,9 @@ NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation
     if (tensor_args.optional_output_tensors.size() == 3) {
         const auto& output_tensors = tensor_args.optional_output_tensors;
         return {
-            output_tensors.at(0)->get_tensor_spec(),
-            output_tensors.at(1)->get_tensor_spec(),
-            output_tensors.at(2)->get_tensor_spec()};
+            output_tensors.at(0)->tensor_spec(),
+            output_tensors.at(1)->tensor_spec(),
+            output_tensors.at(2)->tensor_spec()};
     }
 
     const auto& input_tensor = tensor_args.input_tensor_q;

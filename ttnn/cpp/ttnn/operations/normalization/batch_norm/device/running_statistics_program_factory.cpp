@@ -44,7 +44,7 @@ void set_or_update_runtime_arguments(
     const auto [bN, bC, bHt, bWt] = extract_shape_dims(batch_var_tensor);
     const auto [cN, cC, cHt, cWt] = extract_shape_dims(c);
 
-    uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = c.padded_volume() / c.tensor_spec().tile().get_tile_hw();
 
     constexpr bool row_major = true;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -144,10 +144,10 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     auto a_data_format = datatype_to_dataformat_converter(batch_mean_tensor.dtype());
     auto b_data_format = datatype_to_dataformat_converter(batch_var_tensor.dtype());
     auto c_data_format = datatype_to_dataformat_converter(output.dtype());
-    auto d_data_format = running_mean_has_value ? datatype_to_dataformat_converter(running_mean_tensor->get_dtype())
-                                                : DataFormat::Float16_b;
-    auto e_data_format = running_var_has_value ? datatype_to_dataformat_converter(running_var_tensor->get_dtype())
-                                               : DataFormat::Float16_b;
+    auto d_data_format =
+        running_mean_has_value ? datatype_to_dataformat_converter(running_mean_tensor->dtype()) : DataFormat::Float16_b;
+    auto e_data_format =
+        running_var_has_value ? datatype_to_dataformat_converter(running_var_tensor->dtype()) : DataFormat::Float16_b;
 
     uint32_t a_single_tile_size = tt_metal::detail::TileSize(a_data_format);
     uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);

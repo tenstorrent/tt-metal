@@ -72,13 +72,13 @@ MorehAdamOperation::spec_return_value_t MorehAdamOperation::compute_output_specs
         output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
     for (int idx = 0; idx < 3; idx++) {
         if (tensor_args.output_tensors.at(idx).has_value()) {
-            ret.push_back(tensor_args.output_tensors.at(idx)->get_tensor_spec());
+            ret.push_back(tensor_args.output_tensors.at(idx)->tensor_spec());
         } else {
             ret.push_back(out_spec);
         }
     }
     if (tensor_args.output_tensors.at(3).has_value()) {
-        ret.push_back(tensor_args.output_tensors.at(3)->get_tensor_spec());
+        ret.push_back(tensor_args.output_tensors.at(3)->tensor_spec());
     } else if (operation_attributes.amsgrad) {
         ret.push_back(out_spec);
     } else {

@@ -236,7 +236,7 @@ operation::ProgramWithCallbacks pad_tile(
     uint32_t num_total_W = output_shape[0];
     uint32_t num_padded_Wt = (num_total_W - num_unpadded_W) * num_total_Z * num_total_Yt * num_total_Xt;
 
-    uint32_t num_unpadded_tiles = a.volume() / TILE_HW;
+    uint32_t num_unpadded_tiles = a.padded_volume() / TILE_HW;
 
     const std::array reader_kernel_args = {
         src0_buffer->address(),
