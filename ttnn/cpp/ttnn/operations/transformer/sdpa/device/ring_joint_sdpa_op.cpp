@@ -384,7 +384,6 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
     auto all_gather_program = ring_attention_all_gather_async_multi_core_with_workers_helper(
         ring_joint_sdpa_program.program,
         all_gather_input_tensors,
-        all_gather_intermediate_tensors,
         target_device,
         forward_device,
         backward_device,
