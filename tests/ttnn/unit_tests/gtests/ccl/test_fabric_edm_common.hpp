@@ -2476,7 +2476,8 @@ void create_fabric_fixture(Fabric1DFixture*& test_fixture) {
              !std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
             (fabric_config != tt::tt_metal::FabricConfig::DISABLED &&
              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
-            (std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture>) ||
+            (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D &&
+             std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture>) ||
             (std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DRingDeviceInitFixture>)) {
             delete test_fixture;
             test_fixture = new FABRIC_DEVICE_FIXTURE();
