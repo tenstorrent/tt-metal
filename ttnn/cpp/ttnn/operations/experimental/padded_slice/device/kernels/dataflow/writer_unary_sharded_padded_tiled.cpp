@@ -87,6 +87,7 @@ void kernel_main() {
         uint64_t noc_read_addr = get_noc_addr(get_read_ptr(cb_untilized_id));
         noc_read_addr += read_start_offset * block_row_size;
         noc_async_read(noc_read_addr, write_addr, read_rows_size * block_row_size);
+        noc_async_read_barrier();
         write_addr += read_rows_size * block_row_size;
         cb_pop_front(cb_untilized_id, num_tiles_per_read);
         tiles_read += num_tiles_per_read;

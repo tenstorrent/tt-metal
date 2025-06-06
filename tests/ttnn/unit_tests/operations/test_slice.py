@@ -1107,6 +1107,8 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
     torch.manual_seed(2001)
     torch_input = torch.randint(-10, 10, dims).to(dtype=torch.bfloat16)
     # torch_input = torch.tensor(range(dims[1])).reshape([1, dims[1], 1, 1]).broadcast_to(dims).to(dtype=torch.bfloat16)
+    torch_input = torch.tensor(range(dims[2])).reshape([1, 1, dims[2], 1]).broadcast_to(dims).to(dtype=torch.bfloat16)
+
     core_range = ttnn.num_cores_to_corerangeset(cores, core_grid, orientation == ttnn.ShardOrientation.ROW_MAJOR)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
