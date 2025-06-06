@@ -406,11 +406,11 @@ def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, use_pack_
 @pytest.mark.parametrize(
     "num_shard_cores, standard_shard_core_grid, block_shard_core_grid",
     [
-        # [
-        #     4,
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-        # ],
+        [
+            4,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ],
         [
             16,
             ttnn.CoreRangeSet(
