@@ -492,7 +492,6 @@ def build_test_params_str(
             try:
                 validate_two_entries(x)
             except Exception as e:
-                breakpoint()
                 raise ValueError(f"Expected list of length 2, got {x} with type {type(x)}. {e}")
 
     arg_order = [
@@ -599,6 +598,7 @@ def run_fabric_edm(
     disable_persistent_kernel_cache()
     if rc != 0:
         # Handle exit codes differently for daemon vs direct execution
+        reset_machine_type_suffix()
         if rc == 1:
             pytest.skip("Skipping test because it only works with T3000")
             return
