@@ -122,7 +122,7 @@ def create_tt_model(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
+            max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
         )
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
@@ -172,7 +172,7 @@ def create_tt_model(
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -185,7 +185,7 @@ def create_tt_model(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -198,12 +198,12 @@ def create_tt_model(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
+        (  # Long-context run - multiple users, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -211,7 +211,20 @@ def create_tt_model(
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -221,7 +234,8 @@ def create_tt_model(
         "batch-32",  # throughput
         "batch-1",  # latency
         "repeat2",  # latency with 5 repeat batches
-        "long-context",  # max-length
+        "long-context-batch32",  # max-length for 32 users
+        "long-context-32k",  # max-length
     ],
 )
 @pytest.mark.parametrize(
@@ -351,7 +365,9 @@ def test_demo_text(
                 12222 * 2,
                 15384 * 2,
             ]
-            * 2,
+            * 2
+            if batch_size == 32
+            else [15384 * 8],
             input_prompts,
         )
     profiler.end("loading_inputs")
@@ -442,12 +458,10 @@ def test_demo_text(
         assert (
             max_generated_tokens + max_encoded_prompt_len <= max_seq_len
         ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
-
+        batch_size_per_device_group = 8 if batch_size == 32 else 1
         if paged_attention:
             paged_cache_max_seq_len = (
-                page_params["page_block_size"]
-                * page_params["page_max_num_blocks"]
-                / model_args.batch_size_per_device_group
+                page_params["page_block_size"] * page_params["page_max_num_blocks"] / batch_size_per_device_group
             )
             assert (
                 max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
@@ -523,8 +537,10 @@ def test_demo_text(
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
         if batch_size == 1:
-            # pad ito to 32 with -1s
+            # pad current_pos to 32 with -1s
             current_pos = torch.nn.functional.pad(current_pos, (0, 32 - current_pos.shape[0]), value=-1)
+            # pad page_table to 32 with 0s
+            page_table = torch.nn.functional.pad(page_table, (0, 0, 0, 32 - page_table.shape[0]), value=0)
         # Start decoding
         iteration = 0
         users_decoding = True
@@ -639,7 +655,7 @@ def test_demo_text(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
-            if not users_decoding and batch_size == 1:
+            if not users_decoding and batch_size == 1 and repeat_batches > 1:
                 # Compare to text in outputs_batch_1.json for the first user of the first batch
                 if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
                     if i == 0:  # Only for the first user of the batch (i.e., user 0)

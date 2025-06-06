@@ -245,6 +245,7 @@ class TtLlamaMLP(LightweightModule):
         w1_out_reduced = self.tt_ccl.line_reduce_scatter(
             w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
         )
+        ttnn.deallocate(w1_out)
         w3_out = ttnn.linear(
             x,
             self.w3_interleaved if use_w1_w3_interleaved else self.w3,
@@ -257,11 +258,11 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # ttnn.deallocate(x)
+        ttnn.deallocate(x)
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
         )
-
+        ttnn.deallocate(w3_out)
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
@@ -272,6 +273,7 @@ class TtLlamaMLP(LightweightModule):
         w2_in_gathered = self.tt_ccl.line_all_gather(
             w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
         )
+        ttnn.deallocate(w2_in)
         # ttnn.deallocate(w3_out)
         # ttnn.deallocate(w1_out)
 
@@ -288,7 +290,7 @@ class TtLlamaMLP(LightweightModule):
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
         )
-
+        ttnn.deallocate(w2_out)
         if 1024 <= seq_len < 4096:
             original_shape = w2_out_reduced.shape
             w2_out_reduced = ttnn.reshape(
