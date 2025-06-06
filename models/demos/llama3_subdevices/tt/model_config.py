@@ -703,6 +703,18 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            num_cores = 32
+            shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                start_core, num_cores, core_grid, row_wise=False
+            )
+            self.model_config["DECODE_LOGITS_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(1, 1, max(self.max_batch_size, self.tile_size), self.padded_vocab_size // num_cores),
+                core_grid=shard_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             # Chunk values based on what works best empirically
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),

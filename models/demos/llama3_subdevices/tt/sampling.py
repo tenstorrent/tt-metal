@@ -28,6 +28,29 @@ class TTSampling(LightweightModule):
         self.p = [sampling_params["top_p"]] * self.max_batch_size
         self.seed = sampling_params["seed"]
 
+        # Prepare temperature reciprocal tensor
+        temperature = sampling_params["temperature"]
+        if temperature is None:
+            temperature_reciprocal_scalar = [1.0] * self.max_batch_size
+        elif not isinstance(temperature, list):
+            temperature_reciprocal_scalar = [1.0 / temperature] * self.max_batch_size
+        else:
+            temperature_reciprocal_scalar = temperature
+
+        temperature_reciprocal_tensor_torch = torch.ones(
+            [1, 1, self.max_batch_size, self.args.max_top_k * self.args.cluster_shape[0]], dtype=torch.bfloat16
+        )
+        for i in range(self.max_batch_size):
+            temperature_reciprocal_tensor_torch[:, :, i, :] = temperature_reciprocal_scalar[i]
+        self.temperature_reciprocal_tensor = ttnn.from_torch(
+            temperature_reciprocal_tensor_torch,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.args.cluster_shape),
+            memory_config=self.args.model_config["DECODE_SAMPLING_INPUT_MEMCFG"],
+        )
+
         assert args.max_top_k >= sampling_params["top_k"]
 
         # Create indices tensor
@@ -70,6 +93,10 @@ class TTSampling(LightweightModule):
             memory_config=self.args.model_config["DECODE_SAMPLING_INPUT_MEMCFG"],
             dtype=ttnn.bfloat16,
         )
+
+        # Apply temperature
+        topk_values_gathered_bf16 = ttnn.mul(topk_values_gathered_bf16, self.temperature_reciprocal_tensor)
+
         topk_values_gathered_bf16_interleaved = ttnn.to_memory_config(
             topk_values_gathered_bf16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )

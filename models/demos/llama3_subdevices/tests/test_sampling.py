@@ -136,6 +136,10 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 
     topk_indices_tensor += tt_indices_device_offsets
 
+    # Apply temperature
+    for i in range(32):
+        topk_values_tensor[:, :, i, :] = topk_values_tensor[:, :, i, :] / sampling_params["temperature"]
+
     # Do topk on gathered
     topk_values_gathered, topk_indices_gathered = torch.topk(topk_values_tensor, k=sampling_params["top_k"], dim=-1)
     topk_indices_gathered = torch.gather(topk_indices_tensor, dim=-1, index=topk_indices_gathered)
@@ -161,12 +165,13 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 @pytest.mark.parametrize(
     "sampling_params",
     (
-        {"top_k": 1, "top_p": 0.5, "seed": 42},  # argmax
-        # {"top_k": 32, "top_p": 0.00, "seed": 42}, # argmax
-        # {"top_k": 32, "top_p": 1.00, "seed": 42}, # multinomial sampling from all tok-k tokens
-        # {"top_k": 32, "top_p": 0.95, "seed": 42}, # typical top-k top-p sampling
-        # # {"top_k": 128, "top_p": 0.95, "seed": 42}, # large top-k # does not work with CCL persistent buffers!!!
-        # {"top_k": 32, "top_p": 0.08, "seed": 42}, # small top-p
+        # {"temperature": None, "top_k": 1, "top_p": 0.5, "seed": 42},  # argmax
+        # {"temperature": None, "top_k": 32, "top_p": 0.00, "seed": 42}, # argmax
+        # {"temperature": None, "top_k": 32, "top_p": 1.00, "seed": 42}, # multinomial sampling from all tok-k tokens
+        # {"temperature": None, "top_k": 32, "top_p": 0.95, "seed": 42}, # typical top-k top-p sampling
+        # # {"temperature": None, "top_k": 128, "top_p": 0.95, "seed": 42}, # large top-k # does not work with CCL persistent buffers!!!
+        # {"temperature": None, "top_k": 32, "top_p": 0.08, "seed": 42}, # small top-p
+        {"temperature": 0.001, "top_k": 32, "top_p": 0.9, "seed": 42},  # temperature 0.7
     ),
 )
 @pytest.mark.parametrize(
@@ -183,7 +188,7 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 25600,
+            "trace_region_size": 31744,
             "worker_l1_size": 1344544,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
@@ -196,6 +201,7 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
     num_samples = 10
     num_compile_steps = 1
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=32, dummy_weights=True)
+    max_top_k = model_args.max_top_k
 
     if load_cached_outputs:
         # Cached model outputs
@@ -231,7 +237,7 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
     reference_outputs = []
     for i in range(num_samples):
         reference_output = reference_sampling(
-            torch_input, sampling_params, model_args.cluster_shape[0], model_args.padded_vocab_size
+            torch_input, sampling_params, model_args.cluster_shape[0], model_args.padded_vocab_size, max_top_k
         )
         reference_outputs.append(reference_output[0].item())
 
@@ -356,6 +362,4 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
 
     tt_ccl.close()
 
-    assert (
-        passing
-    ), f"Llama Sampling output does not meet KL / PCC requirement {d_kl:.4f}/{kl_required} KL, {pcc_message}/{pcc_required} PCC."
+    assert passing, f"Llama Sampling output does not meet KL requirement {d_kl:.4f}/{kl_required} KL."
