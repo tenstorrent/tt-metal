@@ -302,6 +302,9 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
     const BufferRegion& region) {
     ShardedBufferWriteDispatchParams dispatch_params;
     if (buffer.is_nd_sharded()) {
+        TT_FATAL(
+            region.offset == 0 && region.size == buffer.size(),
+            "Specifying a region for ND sharded buffers is not supported");
         dispatch_params.width_split = true;
         dispatch_params.max_pages_per_shard = buffer.buffer_distribution_spec()->num_dev_pages_per_core();
         dispatch_params.total_pages_to_write = dispatch_params.max_pages_per_shard * *buffer.num_cores();
@@ -576,9 +579,9 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
     const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping,
     uint32_t starting_host_page_idx,
     uint32_t ending_host_page_idx) {
+    TT_ASSERT(!buffer.is_nd_sharded());
     const std::vector<std::optional<uint32_t>> core_host_pages = buffer_page_mapping->core_host_page_indices_[core_id];
     TT_ASSERT(std::is_sorted(core_host_pages.begin(), core_host_pages.end()));
-    TT_ASSERT(!buffer.is_nd_sharded());
 
     auto is_host_page_within_region = [&](const std::optional<uint32_t> host_page) {
         return *host_page >= starting_host_page_idx && *host_page < ending_host_page_idx;
@@ -638,6 +641,7 @@ void write_sharded_buffer_to_core(
     uint32_t remaining_pages_in_shard = dispatch_params.max_pages_per_shard;
     uint32_t curr_page_idx_in_shard = 0;
     if (buffer.is_nd_sharded()) {
+        // ND sharded buffers are always written in full
         num_pages = dispatch_params.buffer_page_mapping->core_host_page_indices_[core_id].size();
     } else if (dispatch_params.width_split) {
         const uint32_t ending_dst_host_page_index = dispatch_params.starting_dst_host_page_index +
@@ -803,6 +807,9 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     ShardedBufferReadDispatchParams dispatch_params;
 
     if (buffer.is_nd_sharded()) {
+        TT_FATAL(
+            region.offset == 0 && region.size == buffer.size(),
+            "Specifying a region for ND sharded buffers is not supported");
         dispatch_params.width_split = true;
         dispatch_params.max_pages_per_shard = buffer.buffer_distribution_spec()->num_dev_pages_per_core();
     } else {
@@ -940,6 +947,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     uint32_t address = buffer.address();
 
     if (buffer.is_nd_sharded()) {
+        // ND sharded buffers are always read in full
         pages_per_txn = dispatch_params.buffer_page_mapping->core_host_page_indices_[core_id].size();
     } else if (dispatch_params.width_split) {
         const uint32_t ending_src_host_page_index = dispatch_params.starting_src_host_page_index +
