@@ -452,6 +452,9 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
+            continue;
+        }
         auto [device_id, receiver_core] = device_0->get_connected_ethernet_core(sender_core);
         if (device_1->id() != device_id) {
             continue;
@@ -507,6 +510,9 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
     for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_1->id(), sender_core)) {
+            continue;
+        }
         auto [device_id, receiver_core] = device_1->get_connected_ethernet_core(sender_core);
         if (device_0->id() != device_id) {
             continue;
@@ -771,10 +777,16 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
 
     std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
+            continue;
+        }
         const auto& receiver_core = device_0->get_connected_ethernet_core(sender_core);
         connectivity.insert({{0, sender_core}, receiver_core});
     }
     for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_1->id(), sender_core)) {
+            continue;
+        }
         const auto& receiver_core = device_1->get_connected_ethernet_core(sender_core);
         connectivity.insert({{1, sender_core}, receiver_core});
     }

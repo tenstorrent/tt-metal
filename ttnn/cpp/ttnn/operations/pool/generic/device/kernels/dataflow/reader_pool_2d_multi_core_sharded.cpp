@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
+#include "reader_pool2d_sharded_common.hpp"
 
 #define ENABLE_DEBUG_PRINT 0
 
@@ -11,19 +12,6 @@
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #endif
-
-#define ALWI inline __attribute__((always_inline))
-
-// Fill an L1 buffer with the given val
-// WARNING: Use with caution as there's no memory protection. Make sure size is within limits
-ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
-    // simplest impl:
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
-    for (uint32_t i = 0; i < n / 2; ++i) {
-        ptr[i] = (val | (val << 16));
-    }
-    return true;
-}
 
 template <uint32_t cb_id, uint32_t clear_value_cb_id>
 FORCE_INLINE void clear_out_tiles() {
@@ -90,14 +78,26 @@ void kernel_main() {
     constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
     constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(20);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(21);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(24);
+    constexpr uint32_t pool_type = (bool)get_compile_time_arg_val(25);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
+    constexpr uint32_t in_scalar_cb_id =
+        split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
 
-    if (reader_id == 0) {
-        cb_reserve_back(in_scalar_cb_id, 1);
-        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
-        cb_push_back(in_scalar_cb_id, 1);
+    uint32_t scalar_index = 0;
+    uint32_t scalar_start = 0;
+    uint32_t scalar_end = 1;
+    uint32_t scalar_value = 0;
+
+    if constexpr (reader_id == 0 && one_scalar_per_core) {
+        cb_reserve_back(in_scalar_cb_id_0, 1);
+        fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
+        cb_push_back(in_scalar_cb_id_0, 1);
     }
 
     constexpr uint32_t window_hw = window_h * window_w;
@@ -120,13 +120,46 @@ void kernel_main() {
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
+    uint32_t config_l1_addr;
+    volatile tt_l1_ptr uint16_t* config_ptr;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr uint32_t is_wide_reduction = in_c > MAX_TILES_PER_REDUCTION * TILE_WIDTH;
 
+    if constexpr (!one_scalar_per_core) {
+        config_l1_addr = get_read_ptr(config_cb_id);
+        config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
+        scalar_start = config_ptr[3 * scalar_index];
+        scalar_value = config_ptr[3 * scalar_index + 1];
+        scalar_end = config_ptr[3 * scalar_index + 2];
+        scalar_index++;
+    }
+
     constexpr uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
     while (counter < reader_nindices) {
+        if constexpr (!one_scalar_per_core) {
+            cb_reserve_back(in_scalar_cb_id, 1);
+            while ((counter >= scalar_end) && scalar_end != reader_nindices) {
+                scalar_start = scalar_end;
+                scalar_value = config_ptr[3 * scalar_index + 1];
+                scalar_end = config_ptr[3 * scalar_index + 2];
+                scalar_index++;
+            }
+            // We want to fill the scalar CB at most only the fisrt 2 times since the number of pages is 2, only for the
+            // intervals [x, y) where y >= x + 3 exactly 2 times and when y < x + 3 only once. When split reader is
+            // enabled counter takes even or odd values only depennding on the reader id so if the scalar start is even
+            // and counter is even it will fullfill the first half of the condition counter == scalar_start || counter
+            // == scalar_start + 2. When reader is even and scalar_start is odd or vice versa we will fullfill the
+            // second half of the condition counter == scalar_start + 1 || counter == scalar_start + 3.
+            if (counter < scalar_end &&
+                (counter == scalar_start || counter == scalar_start + 1 ||
+                 (split_reader && (counter == scalar_start + 2 || counter == scalar_start + 3)))) {
+                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value, false);
+            }
+
+            cb_push_back(in_scalar_cb_id, 1);
+        }
         if constexpr (is_wide_reduction) {
             const uint16_t top_left_local_index = reader_indices_ptr[counter++];
             for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {

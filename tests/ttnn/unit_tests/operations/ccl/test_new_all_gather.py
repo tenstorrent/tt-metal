@@ -146,7 +146,9 @@ def run_all_gather_impl(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    ccl_semaphore_handles = [
+        [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)] for _ in range(num_iters)
+    ]
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")

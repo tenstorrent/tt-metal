@@ -6,6 +6,7 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
     // READER
@@ -77,7 +78,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in3 = 3;
 #endif
-
+    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(19);
+    OpSignaler op_signaler;
+    if constexpr (fuse_op_reduce_scatter) {
+        op_signaler = OpSignaler(rt_args_idx);
+    }
     // WRITER
 
     constexpr uint32_t cb_id_in1 = 1;
@@ -214,6 +219,11 @@ void kernel_main() {
             out_tensor_current_h_dim_block_tile_id += out_tensor_next_h_dim_block_stride;
         }
         out_tensor_start_tile_id += MtNt;
+
+        if (fuse_op_reduce_scatter) {
+            // Signal reduce_scatter to go
+            op_signaler.synchronize_workers_and_signal_op(0);
+        }
     }
 
 #if OUT_SHARDED

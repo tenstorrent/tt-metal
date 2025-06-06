@@ -58,8 +58,8 @@ void RelayMux::GenerateStaticConfigs() {
     static_config_.num_full_size_channels = kernels_requiring_full_size_channel;
     static_config_.num_header_only_channels = kernels_requiring_header_only_channel;
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    const auto& fabric_context = control_plane->get_fabric_context();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
     static_config_.buffer_size_bytes = fabric_context.get_fabric_packet_header_size_bytes() + k_BufferSize;
 
     // FabricMuxConfig only accepts Worker or Idle Eth. Eth is not accepted.

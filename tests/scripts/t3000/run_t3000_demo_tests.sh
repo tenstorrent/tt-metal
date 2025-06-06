@@ -86,8 +86,8 @@ run_t3000_qwen25_tests() {
   qwen25_7b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-7B-Instruct
   qwen25_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
 
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_7b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600; fail+=$?
-  HF_MODEL=$qwen25_72b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800; fail+=$?
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_7b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600; fail+=$?
+  HF_MODEL=$qwen25_72b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -111,7 +111,7 @@ run_t3000_qwen3_tests() {
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
 
-  HF_MODEL=$qwen32b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1800; fail+=$?
+  HF_MODEL=$qwen32b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

@@ -5,8 +5,8 @@
 #include <chrono>
 #include <emmintrin.h>
 #include <fmt/base.h>
-#include <stdint.h>
 #include <stdio.h>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -18,11 +18,9 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -1235,6 +1233,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
 
     uint32_t length = exec_buf_cmds.size() * sizeof(uint32_t);
     length += (page_size - (length & (page_size - 1))) & (page_size - 1);  // rounded up to full pages
+    exec_buf_cmds.resize(length / sizeof(uint32_t));  // make sure access to the last segment do not overrun the buffer
 
     uint32_t pages = length / page_size;
     uint32_t index = 0;
