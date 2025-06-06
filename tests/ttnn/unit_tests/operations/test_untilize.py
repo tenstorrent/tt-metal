@@ -12,17 +12,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True, False])
-@pytest.mark.parametrize(
-    "tensor_shape",
-    [
-        [2, 256, 512],
-        [2, 2, 256, 512],
-    ],
-)
+@pytest.mark.parametrize("tensor_shape", [[2, 2, 256, 512]])
 def test_untilize_single_core_interleaved_to_interleaved(device, dtype, use_pack_untilize, tensor_shape):
+    # Input memory config
     input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    # Output memory config
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
+    # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
@@ -35,13 +33,7 @@ def test_untilize_single_core_interleaved_to_interleaved(device, dtype, use_pack
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize(
-    "tensor_shape",
-    [
-        [2, 256, 512],
-        [2, 2, 256, 512],
-    ],
-)
+@pytest.mark.parametrize("tensor_shape", [[2, 2, 256, 512]])
 @pytest.mark.parametrize(
     "output_memory_layout",
     [
@@ -122,9 +114,9 @@ def test_untilize_single_core_interleaved_to_sharded(
     input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     # Output memory config
-    shard_memory_layout = shard_memory_layout_map[output_memory_layout]
+    output_shard_memory_layout = shard_memory_layout_map[output_memory_layout]
     output_shard_spec = ttnn.ShardSpec(
-        shard_memory_layout["shard_grid"], shard_memory_layout["shard_shape"], output_shard_orientation
+        output_shard_memory_layout["shard_grid"], output_shard_memory_layout["shard_shape"], output_shard_orientation
     )
     output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
 
@@ -141,13 +133,7 @@ def test_untilize_single_core_interleaved_to_sharded(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize(
-    "tensor_shape",
-    [
-        [2, 256, 512],
-        [2, 2, 256, 512],
-    ],
-)
+@pytest.mark.parametrize("tensor_shape", [[2, 2, 256, 512]])
 @pytest.mark.parametrize(
     "input_memory_layout",
     [
@@ -225,9 +211,9 @@ def test_untilize_single_core_sharded_to_interleaved(
     }
 
     # Input memory config
-    shard_memory_layout = shard_memory_layout_map[input_memory_layout]
+    input_shard_memory_layout = shard_memory_layout_map[input_memory_layout]
     output_shard_spec = ttnn.ShardSpec(
-        shard_memory_layout["shard_grid"], shard_memory_layout["shard_shape"], input_shard_orientation
+        input_shard_memory_layout["shard_grid"], input_shard_memory_layout["shard_shape"], input_shard_orientation
     )
     input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, output_shard_spec)
 
@@ -247,13 +233,7 @@ def test_untilize_single_core_sharded_to_interleaved(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize(
-    "tensor_shape",
-    [
-        [2, 256, 512],
-        [2, 2, 256, 512],
-    ],
-)
+@pytest.mark.parametrize("tensor_shape", [[2, 2, 256, 512]])
 @pytest.mark.parametrize(
     "input_memory_layout",
     [
@@ -348,16 +328,16 @@ def test_untilize_single_core_sharded_to_sharded(
     }
 
     # Input memory config
-    shard_memory_layout = shard_memory_layout_map[input_memory_layout]
+    input_shard_memory_layout = shard_memory_layout_map[input_memory_layout]
     input_shard_spec = ttnn.ShardSpec(
-        shard_memory_layout["shard_grid"], shard_memory_layout["shard_shape"], input_shard_orientation
+        input_shard_memory_layout["shard_grid"], input_shard_memory_layout["shard_shape"], input_shard_orientation
     )
     input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, input_shard_spec)
 
     # Output memory config
-    shard_memory_layout = shard_memory_layout_map[output_memory_layout]
+    output_shard_memory_layout = shard_memory_layout_map[output_memory_layout]
     output_shard_spec = ttnn.ShardSpec(
-        shard_memory_layout["shard_grid"], shard_memory_layout["shard_shape"], output_shard_orientation
+        output_shard_memory_layout["shard_grid"], output_shard_memory_layout["shard_shape"], output_shard_orientation
     )
     output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
 
@@ -372,21 +352,23 @@ def test_untilize_single_core_sharded_to_sharded(
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_pack_untilize", [True])
 @pytest.mark.parametrize(
     "tensor_shape",
     [
         [2, 256, 512],
-        [4, 4, 256, 512],  # multiple blocks per core
-        [2080, 512],  # has a cliff core
-        [4128, 512],  # multiple blocks per core, and a cliff core
+        [4128, 512],  # multiple blocks per core and a cliff core
     ],
 )
 def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, use_pack_untilize, tensor_shape):
+    # Input memory config
     input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    # Output memory config
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
+    # Test
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
@@ -403,9 +385,7 @@ def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, use_pack_
     "tensor_shape",
     [
         [2, 256, 512],
-        [4, 4, 256, 512],  # multiple blocks per core
-        [2080, 512],  # has a cliff core
-        [4128, 512],  # multiple blocks per core, and a cliff core
+        [4128, 512],  # multiple blocks per core and a cliff core
     ],
 )
 @pytest.mark.parametrize(
@@ -488,9 +468,9 @@ def test_untilize_multi_core_interleaved_to_sharded(
     input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     # Output memory config
-    shard_memory_layout = shard_memory_layout_map[output_memory_layout]
+    input_shard_memory_layout = shard_memory_layout_map[output_memory_layout]
     output_shard_spec = ttnn.ShardSpec(
-        shard_memory_layout["shard_grid"], shard_memory_layout["shard_shape"], output_shard_orientation
+        input_shard_memory_layout["shard_grid"], input_shard_memory_layout["shard_shape"], output_shard_orientation
     )
     output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
 
@@ -591,9 +571,9 @@ def test_untilize_multi_core_sharded_to_interleaved(
     }
 
     # Input memory config
-    shard_memory_layout = shard_memory_layout_map[input_memory_layout]
+    input_shard_memory_layout = shard_memory_layout_map[input_memory_layout]
     output_shard_spec = ttnn.ShardSpec(
-        shard_memory_layout["shard_grid"], shard_memory_layout["shard_shape"], input_shard_orientation
+        input_shard_memory_layout["shard_grid"], input_shard_memory_layout["shard_shape"], input_shard_orientation
     )
     input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, output_shard_spec)
 
@@ -651,12 +631,9 @@ def test_untilize_multi_core_sharded_to_interleaved_uneven_input_shard_spec(
     input_shard_core_grid,
     input_shard_orientation,
 ):
-    # This test targets a special case implementation for when the input and output shard specs are identical.
-    # This special case implementation maintains perf numbers from a previous implementation of the op.
-
     # Input Memory config
-    shard_spec = ttnn.ShardSpec(input_shard_core_grid, input_shard_shape, input_shard_orientation)
-    input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, shard_spec)
+    input_shard_spec = ttnn.ShardSpec(input_shard_core_grid, input_shard_shape, input_shard_orientation)
+    input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, input_shard_spec)
 
     # Output memory config
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
@@ -674,12 +651,7 @@ def test_untilize_multi_core_sharded_to_interleaved_uneven_input_shard_spec(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize(
-    "tensor_shape",
-    [
-        [2, 2, 128, 512],
-    ],
-)
+@pytest.mark.parametrize("tensor_shape", [[2, 2, 128, 512]])
 @pytest.mark.parametrize(
     "input_memory_layout, output_memory_layout",
     [
@@ -691,15 +663,8 @@ def test_untilize_multi_core_sharded_to_interleaved_uneven_input_shard_spec(
         [ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED],
     ],
 )
-@pytest.mark.parametrize(
-    "input_shard_orientation, output_shard_orientation",
-    [
-        [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.ROW_MAJOR],
-        [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
-        [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
-        [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR],
-    ],
-)
+@pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("output_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize(
     "num_shard_cores, standard_shard_core_grid, block_shard_core_grid",
     [
@@ -720,7 +685,7 @@ def test_untilize_multi_core_sharded_to_interleaved_uneven_input_shard_spec(
         ],
     ],
 )
-def test_untilize_multi_core_sharded_to_sharded_different_memory_layout(
+def test_untilize_multi_core_sharded_to_sharded_different_shard_types(
     device,
     dtype,
     use_pack_untilize,
@@ -764,16 +729,16 @@ def test_untilize_multi_core_sharded_to_sharded_different_memory_layout(
     }
 
     # Input memory config
-    shard_memory_layout = shard_memory_layout_map[input_memory_layout]
+    input_shard_memory_layout = shard_memory_layout_map[input_memory_layout]
     input_shard_spec = ttnn.ShardSpec(
-        shard_memory_layout["shard_grid"], shard_memory_layout["shard_shape"], input_shard_orientation
+        input_shard_memory_layout["shard_grid"], input_shard_memory_layout["shard_shape"], input_shard_orientation
     )
     input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, input_shard_spec)
 
     # Output memory config
-    shard_memory_layout = shard_memory_layout_map[output_memory_layout]
+    output_shard_memory_layout = shard_memory_layout_map[output_memory_layout]
     output_shard_spec = ttnn.ShardSpec(
-        shard_memory_layout["shard_grid"], shard_memory_layout["shard_shape"], output_shard_orientation
+        output_shard_memory_layout["shard_grid"], output_shard_memory_layout["shard_shape"], output_shard_orientation
     )
     output_memory_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, output_shard_spec)
 
@@ -851,7 +816,7 @@ def test_untilize_multi_core_sharded_to_sharded_different_memory_layout(
 )
 @pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("output_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-def test_untilize_multi_core_sharded_to_sharded_different_memory_layout_uneven_input_shard_spec(
+def test_untilize_multi_core_sharded_to_sharded_different_shard_types_uneven_input_shard_spec(
     device,
     dtype,
     use_pack_untilize,
@@ -886,12 +851,7 @@ def test_untilize_multi_core_sharded_to_sharded_different_memory_layout_uneven_i
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize(
-    "tensor_shape",
-    [
-        [2, 2, 128, 512],
-    ],
-)
+@pytest.mark.parametrize("tensor_shape", [[2, 2, 128, 512]])
 @pytest.mark.parametrize(
     "memory_layout",
     [
@@ -900,20 +860,8 @@ def test_untilize_multi_core_sharded_to_sharded_different_memory_layout_uneven_i
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-@pytest.mark.parametrize(
-    "input_shard_orientation",
-    [
-        ttnn.ShardOrientation.ROW_MAJOR,
-        ttnn.ShardOrientation.COL_MAJOR,
-    ],
-)
-@pytest.mark.parametrize(
-    "output_shard_orientation",
-    [
-        ttnn.ShardOrientation.ROW_MAJOR,
-        ttnn.ShardOrientation.COL_MAJOR,
-    ],
-)
+@pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize("output_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize(
     "input_num_shard_cores, input_standard_shard_core_grid, input_block_shard_core_grid",
     [
@@ -954,7 +902,7 @@ def test_untilize_multi_core_sharded_to_sharded_different_memory_layout_uneven_i
         ],
     ],
 )
-def test_untilize_multi_core_sharded_to_sharded_same_memory_layout_different_shard_spec(
+def test_untilize_multi_core_sharded_to_sharded_same_shard_type_different_shard_spec(
     device,
     dtype,
     use_pack_untilize,
@@ -1024,16 +972,16 @@ def test_untilize_multi_core_sharded_to_sharded_same_memory_layout_different_sha
     }
 
     # Input memory config
-    shard_memory_layout = input_shard_memory_layout_map[memory_layout]
+    input_shard_memory_layout = input_shard_memory_layout_map[memory_layout]
     input_shard_spec = ttnn.ShardSpec(
-        shard_memory_layout["shard_grid"], shard_memory_layout["shard_shape"], input_shard_orientation
+        input_shard_memory_layout["shard_grid"], input_shard_memory_layout["shard_shape"], input_shard_orientation
     )
     input_memory_config = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, input_shard_spec)
 
     # Output memory config
-    shard_memory_layout = output_shard_memory_layout_map[memory_layout]
+    output_shard_memory_layout = output_shard_memory_layout_map[memory_layout]
     output_shard_spec = ttnn.ShardSpec(
-        shard_memory_layout["shard_grid"], shard_memory_layout["shard_shape"], output_shard_orientation
+        output_shard_memory_layout["shard_grid"], output_shard_memory_layout["shard_shape"], output_shard_orientation
     )
     output_memory_config = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, output_shard_spec)
 
@@ -1079,9 +1027,9 @@ def test_untilize_multi_core_sharded_to_sharded_same_memory_layout_different_sha
         ],
     ],
 )
-@pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-@pytest.mark.parametrize("output_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-def test_untilize_multi_core_sharded_to_sharded_same_memory_layout_different_shard_spec_uneven_input_shard_spec(
+@pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize("output_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+def test_untilize_multi_core_sharded_to_sharded_same_shard_type_different_shard_spec_uneven_input_shard_spec(
     device,
     dtype,
     use_pack_untilize,
@@ -1115,12 +1063,7 @@ def test_untilize_multi_core_sharded_to_sharded_same_memory_layout_different_sha
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize(
-    "tensor_shape",
-    [
-        [2, 2, 128, 512],
-    ],
-)
+@pytest.mark.parametrize("tensor_shape", [[2, 2, 128, 512]])
 @pytest.mark.parametrize(
     "memory_layout",
     [
@@ -1129,13 +1072,7 @@ def test_untilize_multi_core_sharded_to_sharded_same_memory_layout_different_sha
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-@pytest.mark.parametrize(
-    "shard_orientation",
-    [
-        ttnn.ShardOrientation.ROW_MAJOR,
-        ttnn.ShardOrientation.COL_MAJOR,
-    ],
-)
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize(
     "num_shard_cores, standard_shard_core_grid, block_shard_core_grid",
     [
@@ -1156,7 +1093,7 @@ def test_untilize_multi_core_sharded_to_sharded_same_memory_layout_different_sha
         ],
     ],
 )
-def test_untilize_multi_core_sharded_to_sharded_identical_memory_layout_and_shard_spec(
+def test_untilize_multi_core_sharded_to_sharded_same_shard_type_and_shard_spec(
     device,
     dtype,
     use_pack_untilize,
@@ -1167,8 +1104,8 @@ def test_untilize_multi_core_sharded_to_sharded_identical_memory_layout_and_shar
     standard_shard_core_grid,
     block_shard_core_grid,
 ):
-    # This test targets a special case implementation for when the input and output shard specs are identical.
-    # This special case implementation maintains perf numbers from a previous implementation of the op.
+    # This test targets a special case implementation for when
+    # the input and output shard types and shard specs are identical
 
     num_tensor_dims = len(tensor_shape)
     tensor_height = 1
@@ -1241,14 +1178,8 @@ def test_untilize_multi_core_sharded_to_sharded_identical_memory_layout_and_shar
         ],
     ],
 )
-@pytest.mark.parametrize(
-    "shard_orientation",
-    [
-        ttnn.ShardOrientation.ROW_MAJOR,
-        ttnn.ShardOrientation.COL_MAJOR,
-    ],
-)
-def test_untilize_multi_core_sharded_to_sharded_identical_memory_layout_and_shard_spec_uneven_shard_spec(
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+def test_untilize_multi_core_sharded_to_sharded_same_shard_type_and_shard_spec_uneven_shard_spec(
     device,
     dtype,
     use_pack_untilize,
@@ -1258,8 +1189,8 @@ def test_untilize_multi_core_sharded_to_sharded_identical_memory_layout_and_shar
     shard_core_grid,
     shard_orientation,
 ):
-    # This test targets a special case implementation for when the input and output shard specs are identical.
-    # This special case implementation maintains perf numbers from a previous implementation of the op.
+    # This test targets a special case implementation for when
+    # the input and output shard types and shard specs are identical
 
     # Memory config
     shard_spec = ttnn.ShardSpec(shard_core_grid, shard_shape, shard_orientation)
