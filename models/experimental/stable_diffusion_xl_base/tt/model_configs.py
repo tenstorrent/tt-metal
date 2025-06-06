@@ -422,17 +422,19 @@ class ModelOptimisations:
             elif ("up_blocks.0.resnets.0.conv1" == conv_path) or ("up_blocks.0.resnets.1.conv1" == conv_path):
                 return self.conv_configs["ABH_256_NO_ADB_WS"]  # Note: ABH should be 512 (OOM)
             elif "up_blocks.0.upsamplers.0" == conv_path:
-                return self.conv_configs["ABH_256_NO_ADB_WS"]
+                return self.conv_configs["ABH_64_NO_ADB_BS"]
             elif ("up_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
                 return self.conv_configs["ABH_64_NO_ADB_BS_BF16"]
             elif "up_blocks.0.resnets.2.conv1" == conv_path:
                 return self.conv_configs["ABH_512_NO_ADB_WS"]
 
             # UP BLOCK 1
-            elif ("up_blocks.1.resnets.0.conv1" == conv_path) or ("up_blocks.1.resnets.2.conv1" == conv_path):
+            elif "up_blocks.1.resnets.0.conv1" == conv_path:
                 return self.conv_configs["ABH_256_NO_ADB_WS"]
             elif "up_blocks.1.resnets.1.conv1" == conv_path:
                 return self.conv_configs["ABH_64_NO_ADB_BS"]
+            elif "up_blocks.1.resnets.2.conv1" == conv_path:
+                return self.conv_configs["ABH_32_NO_ADB_BS"]
             elif ("up_blocks.1.resnets" in conv_path) and ("conv2" in conv_path):
                 return self.conv_configs["ABH_128_NO_ADB_WDB_BS"]
             elif "up_blocks.1.upsamplers.0" == conv_path:
