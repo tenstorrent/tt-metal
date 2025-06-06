@@ -1,0 +1,51 @@
+Tests: [
+  {
+    name: test1,
+  },
+  {
+    name: test2,
+    fabric_setup: {
+      topology: Linear,
+      devices: {
+        sequence: [1, 2, 3, 4]
+      }
+    }
+  },
+  {
+    name: test3,
+    fabric_setup: {
+      topology: Linear,
+      devices: {
+        sequence: [[0, 1], [0, 2], [0, 3], [0, 4]]
+      }
+    }
+  },
+  {
+    name: test4,
+    fabric_setup: {
+      topology: Linear,
+      devices: {
+        range: [1, 5]
+      }
+    }
+  },
+  {
+    name: test5,
+    fabric_setup: {
+      topology: Linear,
+      devices: {
+        mesh_id: 0,
+        sequence: [1, 2, 3, 4]        # dictates that the fabric should be connected in this order, logical devices
+      }
+    }
+  },
+  {
+    name: test6,
+    fabric_setup: {
+      topology: Linear,
+      devices: {
+        range: [[0, 0], [0, 5]]  # dictates the range of devices, logical devices
+      }
+    }
+  }
+]
