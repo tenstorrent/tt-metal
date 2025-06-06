@@ -39,10 +39,12 @@ TILE_SIZE = 32
         "cfg_factor",
         "sp_factor",
         "tp_factor",
+        "rp_factor",
+        "up_factor",
         "topology",
     ),
     [
-        ("large", 0, 1, 4096, 333, 1, 2, 4, ttnn.Topology.Linear),
+        ("large", 0, 1, 4096, 333, 1, 2, 4, 2, 4, ttnn.Topology.Linear),
         #        ("large", 37, 2, 4096, 333),
     ],
 )
@@ -61,10 +63,14 @@ def test_transformer_block(
     cfg_factor: int,
     sp_factor: int,
     tp_factor: int,
+    rp_factor: int,
+    up_factor: int,
     topology: ttnn.Topology,
 ) -> None:
     mesh_shape = tuple(mesh_device.shape)
-    dit_parallel_config = initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, topology)
+    dit_parallel_config = initialize_sd_parallel_config(
+        mesh_shape, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology
+    )
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
@@ -72,15 +78,26 @@ def test_transformer_block(
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
+    worker_sub_device = ttnn.SubDevice(
+        [
+            ccl_sub_device_crs,
+        ]
+    )
+    worker_sub_device_id = ttnn.SubDeviceId(0)
 
     # create global semaphore handles
     num_devices = mesh_device.get_num_devices()
     ag_ccl_semaphore_handle = create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0)
     rs_from_ccl_semaphore_handle = create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0)
     rs_to_ccl_semaphore_handle = create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0)
-
+    ring_attention_semaphore_handles = [
+        create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(2)
+    ]
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch_dtype
+        f"stabilityai/stable-diffusion-3.5-{model_name}",
+        subfolder="transformer",
+        torch_dtype=torch_dtype,
+        local_files_only=True,
     )
     embedding_dim = 1536 if model_name == "medium" else 2432
 
@@ -177,6 +194,19 @@ def test_transformer_block(
     with torch.no_grad():
         spatial_output, prompt_output = torch_model(spatial=spatial, prompt=prompt, time_embed=time)
 
+    # Create persistent buffers
+    persistent_buffer_shape = [1, num_heads // up_factor, spatial_padded_4d.shape[2], head_size]
+    persistent_buffers = [
+        ttnn.from_torch(
+            torch.zeros(persistent_buffer_shape),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn_dtype,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
+        )
+        for _ in range(2)
+    ]
+
     tt_spatial_output, tt_prompt_output = sd_transformer_block(
         spatial=tt_spatial,
         prompt=tt_prompt,
@@ -189,6 +219,9 @@ def test_transformer_block(
         ag_global_semaphore=ag_ccl_semaphore_handle,
         rs_from_global_semaphore=rs_from_ccl_semaphore_handle,
         rs_to_global_semaphore=rs_to_ccl_semaphore_handle,
+        ring_attention_semaphore_handles=ring_attention_semaphore_handles,
+        persistent_buffers=persistent_buffers,
+        worker_sub_device_id=worker_sub_device_id,
     )
 
     ttnn.synchronize_device(mesh_device)

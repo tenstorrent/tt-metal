@@ -165,6 +165,9 @@ def sd_dual_attn_block(
     N: int,
     L: int,
     ag_global_semaphore,
+    ring_attention_semaphore_handles,
+    persistent_buffers,
+    worker_sub_device_id,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
     device = spatial.device()
 
@@ -198,6 +201,9 @@ def sd_dual_attn_block(
         L=L,
         parallel_config=parallel_config,
         ag_global_semaphore=ag_global_semaphore,
+        ring_attention_semaphore_handles=ring_attention_semaphore_handles,
+        persistent_buffers=persistent_buffers,
+        worker_sub_device_id=worker_sub_device_id,
     )
     spatial_attn_scaled = spatial_gate * spatial_attn
     prompt_attn_scaled = prompt_gate * prompt_attn if prompt_gate is not None else None
@@ -254,6 +260,9 @@ def sd_transformer_block(  # noqa: PLR0915
     ag_global_semaphore,
     rs_from_global_semaphore,
     rs_to_global_semaphore,
+    ring_attention_semaphore_handles,
+    persistent_buffers,
+    worker_sub_device_id,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
     t = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     spatial_time = sd_linear(t, parameters.spatial_time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -329,6 +338,9 @@ def sd_transformer_block(  # noqa: PLR0915
         N=N,
         L=L,
         ag_global_semaphore=ag_global_semaphore,
+        ring_attention_semaphore_handles=ring_attention_semaphore_handles,
+        persistent_buffers=persistent_buffers,
+        worker_sub_device_id=worker_sub_device_id,
     )
     ttnn.deallocate(prompt_normed)
     ttnn.deallocate(spatial_gate_dual_attn)

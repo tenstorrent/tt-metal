@@ -38,6 +38,8 @@ class TtStableDiffusion3Pipeline:
         ag_ccl_semaphore_handles,
         rs_from_ccl_semaphore_handles,
         rs_to_ccl_semaphore_handles,
+        ring_attention_semaphore_handles,
+        worker_sub_device_id,
         height: int,
         width: int,
     ) -> None:
@@ -73,6 +75,8 @@ class TtStableDiffusion3Pipeline:
         self._ag_ccl_semaphore_handles = ag_ccl_semaphore_handles
         self._rs_from_ccl_semaphore_handles = rs_from_ccl_semaphore_handles
         self._rs_to_ccl_semaphore_handles = rs_to_ccl_semaphore_handles
+        self._ring_attention_semaphore_handles = ring_attention_semaphore_handles
+        self._worker_sub_device_id = worker_sub_device_id
 
         logger.info("creating TT-NN transformer...")
 
@@ -371,6 +375,22 @@ class TtStableDiffusion3Pipeline:
         # ttnn.copy_host_to_device_tensor(tt_pooled_prompt_embeds, self._trace.pooled_projection_input)
         # ttnn.copy_host_to_device_tensor(tt_initial_latents, self._trace.spatial_input_output)
 
+        # Create persistent buffers
+        persistent_buffer_shape = [1, self.num_heads // self.parallel_config.ulysses_parallel.factor, 4096, 64]
+        persistent_buffers = [
+            [
+                ttnn.from_torch(
+                    torch.zeros(persistent_buffer_shape),
+                    device=sm,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(sm, mesh_shape=tuple(sm.shape), dims=[None, None]),
+                )
+                for _ in range(2)
+            ]
+            for sm in self._submesh_devices
+        ]
+
         for i, t in enumerate(tqdm.tqdm(timesteps)):
             sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
 
@@ -403,6 +423,7 @@ class TtStableDiffusion3Pipeline:
                 sigma_difference=tt_sigma_difference_list,
                 prompt_sequence_length=333,
                 spatial_sequence_length=4096,
+                persistent_buffers=persistent_buffers,
             )
 
         denoising_end_time = time.time()
@@ -459,6 +480,7 @@ class TtStableDiffusion3Pipeline:
         sigma_difference: List[ttnn.Tensor],
         prompt_sequence_length: int,
         spatial_sequence_length: int,
+        persistent_buffers: List[List[ttnn.Tensor]],
     ) -> None:
         noise_pred_list = []
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
@@ -481,6 +503,9 @@ class TtStableDiffusion3Pipeline:
                 ag_global_semaphore=self._ag_ccl_semaphore_handles[submesh_id],
                 rs_from_global_semaphore=self._rs_from_ccl_semaphore_handles[submesh_id],
                 rs_to_global_semaphore=self._rs_to_ccl_semaphore_handles[submesh_id],
+                ring_attention_semaphore_handles=self._ring_attention_semaphore_handles[submesh_id],
+                worker_sub_device_id=self._worker_sub_device_id,
+                persistent_buffers=persistent_buffers[submesh_id],
             )
 
             noise_pred = _reshape_noise_pred(

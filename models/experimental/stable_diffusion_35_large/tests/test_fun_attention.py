@@ -188,7 +188,7 @@ def test_attention(
             dtype=ttnn_dtype,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
         )
-        for _ in range(4)
+        for _ in range(2)
     ]
 
     # if joint_attention:

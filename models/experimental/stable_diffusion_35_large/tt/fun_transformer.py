@@ -119,6 +119,9 @@ def sd_transformer(
     ag_global_semaphore,
     rs_from_global_semaphore,
     rs_to_global_semaphore,
+    ring_attention_semaphore_handles,
+    persistent_buffers,
+    worker_sub_device_id,
 ) -> ttnn.Tensor:
     spatial = sd_patch_embed(spatial, parameters.pos_embed, parallel_config=parallel_config)
     time_embed = sd_combined_timestep_embed(
@@ -142,6 +145,9 @@ def sd_transformer(
             ag_global_semaphore=ag_global_semaphore,
             rs_from_global_semaphore=rs_from_global_semaphore,
             rs_to_global_semaphore=rs_to_global_semaphore,
+            ring_attention_semaphore_handles=ring_attention_semaphore_handles,
+            persistent_buffers=persistent_buffers,
+            worker_sub_device_id=worker_sub_device_id,
         )
         if prompt_out is not None:
             prompt = prompt_out
