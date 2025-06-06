@@ -184,7 +184,6 @@ static int run_single_test(TestParams& test_params, const std::string& test_mode
 template <typename StringProvider>
 static TestParams parse_parameters(StringProvider& provider, bool has_mesh_params) {
     TestParams test_params;
-    tt::log_info("parse_parameters");
     bool both_axes_active = std::stoi(provider.next());
     if (both_axes_active) {
         test_params.params = FullMeshTestParams();
@@ -267,7 +266,6 @@ public:
     TokenProvider(const std::vector<std::string>& tokens, size_t& idx) : tokens(tokens), idx(idx) {}
     std::string next() {
         std::string ret = tokens[idx++];
-        tt::log_info("TokenProvider: next() = {}", ret);
         return ret;
     }
 };
