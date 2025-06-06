@@ -5,4 +5,4 @@ add_executable(metal_example_pad_multi_core)
 target_sources(metal_example_pad_multi_core PRIVATE pad_multi_core.cpp)
 
 find_package(TT-Metalium REQUIRED)
-target_link_libraries(metal_example_pad_multi_core PUBLIC TT::Metalium) 
+target_link_libraries(metal_example_pad_multi_core PUBLIC TT::Metalium)
