@@ -20,9 +20,9 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
     return _sfpu_reciprocal_<APPROXIMATE>(in);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_reciprocal() {
-    _calculate_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(ITERATIONS);
+    _calculate_reciprocal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
 }
 
 template <bool APPROXIMATION_MODE>
