@@ -11,20 +11,20 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 struct PageMappingIntermData {
-    BufferPageMapping* page_mapping;
+    BufferPageMapping* page_mapping = nullptr;
 
-    const size_t num_cores;
-    const size_t num_shards_per_core;
-    const size_t rank;
-    const uint32_t* tensor_shape;
-    const uint32_t* shard_shape;
-    const uint64_t shard_volume;
-    const uint32_t* shard_grid;
-    const uint32_t* tensor_strides;
-    const uint32_t* shard_strides;
+    const size_t num_cores = 0;
+    const size_t num_shards_per_core = 0;
+    const size_t rank = 0;
+    const uint32_t* tensor_shape = nullptr;
+    const uint32_t* shard_shape = nullptr;
+    const uint64_t shard_volume = 0;
+    const uint32_t* shard_grid = nullptr;
+    const uint32_t* tensor_strides = nullptr;
+    const uint32_t* shard_strides = nullptr;
 
-    uint32_t* actual_shard_size;
-    size_t shard_id;
+    uint32_t* actual_shard_size = nullptr;
+    size_t shard_id = 0;
 };
 
 void iterate_within_shard(
