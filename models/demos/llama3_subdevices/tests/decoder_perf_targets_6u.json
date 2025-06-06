@@ -221,7 +221,7 @@
             "dispatch_duration_relative_margin": 0.5
         },
         "InterleavedToShardedDeviceOperation_1": {
-            "op_name": "InterleavedToSharded_0",
+            "op_name": "InterleavedToSharded_1",
             "kernel_duration": 1550.0,
             "op_to_op": 648.0,
             "non-overlapped-dispatch-time": 2324.0,
@@ -230,7 +230,7 @@
             "dispatch_duration_relative_margin": 0.5
         },
         "InterleavedToShardedDeviceOperation_2": {
-            "op_name": "InterleavedToSharded_0",
+            "op_name": "InterleavedToSharded_2",
             "kernel_duration": 1348.0,
             "op_to_op": 693.0,
             "non-overlapped-dispatch-time": 2590.0,
