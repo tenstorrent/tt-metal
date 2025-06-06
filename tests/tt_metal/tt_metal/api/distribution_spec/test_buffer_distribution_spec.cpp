@@ -95,7 +95,7 @@ TEST_P(MeshBufferAllocationTests, Allocation) {
 
     // Check that the stored cores in local device buffer matches expected cores to be used
     auto page_mapping = shard_view->buffer_distribution_spec()->compute_page_mapping();
-    EXPECT_EQ(page_mapping.all_cores_, params.expected.cores);
+    EXPECT_EQ(page_mapping.all_cores, params.expected.cores);
 
     /* These are the params allocator cares about; check all of them */
     EXPECT_EQ(shard_view->num_cores().value(), params.expected.num_cores);
@@ -289,8 +289,8 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         const auto* src_ptr = static_cast<const uint8_t*>(src.data());
 
         auto buffer_page_mapping = shard_view->buffer_distribution_spec()->compute_page_mapping();
-        const auto& cores = buffer_page_mapping.all_cores_;
-        const auto& page_mapping = buffer_page_mapping.core_host_page_indices_;
+        const auto& cores = buffer_page_mapping.all_cores;
+        const auto& page_mapping = buffer_page_mapping.core_host_page_indices;
 
         const auto& expected_page_mapping = params.expected.explicit_core_page_mapping;
         EXPECT_TRUE(expected_page_mapping.size() <= page_mapping.size());
