@@ -486,8 +486,13 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string config_name =
-        "/home/ttuser/git/tt-metal/tt-train/configs/training_shakespear_gpt2s.yaml";  // std::string(CONFIGS_FOLDER) +
-                                                                                      // "/training_shakespear_nanogpt.yaml";
+        "/home/ttuser/git/tt-metal/tt-train/configs/training_shakespeare_llama3_gpt2s_size_tracy.yaml";
+
+    // std::string config_name =
+    //     "/home/ttuser/git/tt-metal/tt-train/configs/training_shakespear_gpt2s.yaml";  // std::string(CONFIGS_FOLDER)
+    //     +
+    //                                                                                   //
+    //                                                                                   "/training_shakespear_nanogpt.yaml";
     std::string run_name = "";
     bool is_eval = false;
     bool add_time_to_name = true;
