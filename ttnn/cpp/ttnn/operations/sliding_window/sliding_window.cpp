@@ -1148,12 +1148,22 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
 
     uint32_t indices_length_per_core = sharded_input_top_left_indices[0].size();
     for (uint32_t core_idx = 1; core_idx < shard_boundaries.size(); core_idx++) {
+        const auto& [output_shard_start, output_shard_end] = shard_boundaries[core_idx].output_range;
+        if (output_shard_start >= op_trace_metadata.size()) {
+            // this core has no output
+            continue;
+        }
         if (sharded_input_top_left_indices[core_idx].size() > indices_length_per_core) {
             indices_length_per_core = sharded_input_top_left_indices[core_idx].size();
         }
     }
     if (pad_cores) {
         for (uint32_t core_idx = 0; core_idx < shard_boundaries.size(); core_idx++) {
+            const auto& [output_shard_start, output_shard_end] = shard_boundaries[core_idx].output_range;
+            if (output_shard_start >= op_trace_metadata.size()) {
+                // this core has no output
+                continue;
+            }
             // Pad indices for this core if not equal to other cores
             if (sharded_input_top_left_indices.size() == core_idx) {
                 sharded_input_top_left_indices.push_back(std::vector<uint16_t>());
