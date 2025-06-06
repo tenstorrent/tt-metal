@@ -5,6 +5,7 @@
 #include <tt-metalium/constants.hpp>
 #include "padded_slice_op.hpp"
 #include "padded_slice_program_factory.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -77,6 +78,7 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
     }
 
     ttnn::Shape output_tensor_shape(std::move(out_shape));
+    auto output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
     auto tensor_layout = TensorLayout(input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), this->output_mem_config);
     return {ttnn::TensorSpec(output_tensor_shape, tensor_layout)};
 }
