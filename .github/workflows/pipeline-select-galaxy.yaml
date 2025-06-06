@@ -41,11 +41,12 @@ on:
         type: boolean
         default: false
       tg-model-perf:
-        description: "TG model perf tests (requires tracy build)"
+        description: "tg-model-perf (Requires tracy build)"
         required: false
         type: boolean
         default: false
       tg-nightly:
+        description: "tg-nightly (Warning: Long running test! Do not choose this unless there is a specific need. Requires tracy build)"
         required: false
         type: boolean
         default: false
