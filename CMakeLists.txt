@@ -128,6 +128,30 @@ if(ENABLE_BUILD_TIME_TRACE)
     endif()
 endif()
 
+############################################################################################################################
+# Find all required libraries to build
+############################################################################################################################
+# TODO: This block was removed in main. Figure out how to interop with
+# manylinux work
+# nanobind requires this to be invoked before nanobind is included
+if(WITH_PYTHON_BINDINGS)
+    if (CMAKE_VERSION VERSION_LESS 3.18)
+      set(DEV_MODULE Development)
+    else()
+      set(DEV_MODULE Development.Module)
+    endif()
+
+    set(Python3_FIND_STRATEGY LOCATION)
+    find_package(
+        Python3
+        COMPONENTS
+            Interpreter
+            ${DEV_MODULE}
+        REQUIRED
+    )
+    message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
+endif()
+
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
