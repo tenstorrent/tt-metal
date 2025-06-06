@@ -24,10 +24,7 @@ void kernel_main() {
 
     uint32_t subordinate_x_coord;
     uint32_t subordinate_y_coord;
-
     uint64_t subordinate_l1_noc_address;
-
-    uint32_t start_time = ckernel::read_wall_clock();
 
     {
         DeviceZoneScopedN("RISCV0");
@@ -48,13 +45,9 @@ void kernel_main() {
         noc_async_write_barrier();
     }
 
-    uint32_t end_time = ckernel::read_wall_clock();
-
+    DeviceTimestampedData("Test id", test_id);
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction_per_master * num_subordinates);
     DeviceTimestampedData(
-        "Total bytes transferred", num_of_transactions * bytes_per_transaction_per_master * num_subordinates);
-    DeviceTimestampedData("Test id", test_id);
-
-    DPRINT << "Sender kernel completed in " << (end_time - start_time) << " cycles." << ENDL();
+        "Total bytes transferred", num_of_transactions * bytes_per_transaction_per_master * num_subordinates)
 }
