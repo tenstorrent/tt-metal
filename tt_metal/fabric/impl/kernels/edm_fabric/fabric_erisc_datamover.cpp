@@ -1050,7 +1050,6 @@ void run_receiver_channel_step(
             can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
         }
         if (can_send_completion) {
-            DPRINT << "RX completion\n";
             receiver_send_completion_ack(receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             completion_counter.increment();
@@ -1162,7 +1161,6 @@ void run_fabric_edm_main_loop(
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
-            DPRINT << "EDM Graceful termination\n";
             bool all_drained = all_channels_drained<
                 RECEIVER_NUM_BUFFERS,
                 NUM_RECEIVER_CHANNELS,
@@ -1328,7 +1326,6 @@ void run_fabric_edm_main_loop(
             }
         }
     }
-    DPRINT << "EDM Terminating\n";
 }
 
 template <typename EdmChannelWorkerIFs>
@@ -2119,6 +2116,5 @@ void kernel_main() {
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
 
-    DPRINT << "EDM DONE\n";
     WAYPOINT("DONE");
 }
