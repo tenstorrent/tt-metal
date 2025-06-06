@@ -16,6 +16,7 @@
 //  Using the normal NoC APIs for writes and/or inline_dw_writes are not allowed on this kernel.
 //
 
+#include "compile_time_args.h"
 #include "dataflow_api.h"
 #include "dataflow_api_addrgen.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
@@ -96,10 +97,18 @@ constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(42);
 constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(43);
 constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(44);
 
-constexpr uint32_t num_hops = get_compile_time_arg_val(45);
+constexpr uint8_t num_hops = static_cast<uint8_t>(get_compile_time_arg_val(45));
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(46);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(47);
+constexpr uint32_t my_dev_id = get_compile_time_arg_val(46);
+constexpr uint32_t ew_dim = get_compile_time_arg_val(47);
+constexpr uint32_t to_mesh_id = get_compile_time_arg_val(48);
+constexpr uint32_t to_dev_id = get_compile_time_arg_val(49);
+constexpr uint32_t router_direction = get_compile_time_arg_val(50);
+
+constexpr bool is_2d_fabric = FABRIC_2D;
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(51);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(52);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -1508,7 +1517,6 @@ bool process_cmd(
 // It expects the NoC async write state to be initialized to point to the downstream
 static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool is_exec_buf) {
     uint32_t length = fence - data_ptr;
-
     // Downstream doesn't have FetchQ to tell it how much data to process
     // This packet header just contains the length
     volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr = (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
@@ -1535,19 +1543,15 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
     if (downstream_pages_left >= npages) {
         // WAIT is not needed here because previous writes have already been flushed. Prefetch H only uses this
         // function and this function always flushes before returning
-        relay_client.write_atomic_inc_any_len<
-            my_noc_index,
-            downstream_noc_xy,
-            downstream_cb_sem_id,
-            num_hops,
-            false,
-            NCRISC_WR_CMD_BUF>(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length, npages);
+        relay_client
+            .write_atomic_inc_any_len<my_noc_index, downstream_noc_xy, downstream_cb_sem_id, false, NCRISC_WR_CMD_BUF>(
+                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length, npages);
         downstream_data_ptr += npages * downstream_cb_page_size;
     } else {
         uint32_t tail_pages = npages - downstream_pages_left;
         uint32_t available = downstream_pages_left * downstream_cb_page_size;
         if (available > 0) {
-            relay_client.write_any_len<my_noc_index, num_hops, false, NCRISC_WR_CMD_BUF, true>(
+            relay_client.write_any_len<my_noc_index, false, NCRISC_WR_CMD_BUF, true>(
                 data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
             data_ptr += available;
             length -= available;
@@ -1556,13 +1560,9 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
         // Remainder
         // WAIT is needed here because previously "if (available > 0)" then it used the write buf which may still be
         // busy at this point
-        relay_client.write_atomic_inc_any_len<
-            my_noc_index,
-            downstream_noc_xy,
-            downstream_cb_sem_id,
-            num_hops,
-            true,
-            NCRISC_WR_CMD_BUF>(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length, npages);
+        relay_client
+            .write_atomic_inc_any_len<my_noc_index, downstream_noc_xy, downstream_cb_sem_id, true, NCRISC_WR_CMD_BUF>(
+                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length, npages);
 
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
@@ -1630,6 +1630,13 @@ void kernel_main_h() {
         fabric_worker_buffer_index_sem,
         fabric_mux_status_address,
         my_fabric_sync_status_addr,
+        my_dev_id,
+        to_dev_id,
+        to_mesh_id,
+        ew_dim,
+        router_direction,
+        fabric_header_rb_base,
+        num_hops,
         NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
 
     while (!done) {
@@ -1686,6 +1693,13 @@ void kernel_main_d() {
         fabric_worker_buffer_index_sem,
         fabric_mux_status_address,
         my_fabric_sync_status_addr,
+        my_dev_id,
+        to_dev_id,
+        to_mesh_id,
+        ew_dim,
+        router_direction,
+        fabric_header_rb_base,
+        num_hops,
         NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
 #else
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
@@ -1724,7 +1738,7 @@ void kernel_main_d() {
         // TODO: evaluate less costly free pattern (blocks?)
         uint32_t total_length = length + sizeof(CQPrefetchHToPrefetchDHeader);
         uint32_t pages_to_free = (total_length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
-        relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id, num_hops>(pages_to_free);
+        relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, cmddat_q_page_size);
@@ -1765,7 +1779,8 @@ void kernel_main_hd() {
 
 void kernel_main() {
 #if defined(FABRIC_RELAY)
-    DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start (fabric relay)" << ENDL();
+    DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
+           << ")" << ENDL();
 #else
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
 #endif

@@ -431,13 +431,13 @@ FORCE_INLINE void cb_block_release_pages(uint32_t& block_noc_writes_to_clear, ui
     block_noc_writes_to_clear = noc_nonposted_writes_num_issued[noc];
 }
 
-template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id, uint32_t cb_pages_per_block, uint32_t num_hops, typename T>
+template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id, uint32_t cb_pages_per_block, typename T>
 FORCE_INLINE void cb_block_release_pages_remote(
     T& relay_client, uint32_t& block_noc_writes_to_clear, uint8_t noc = noc_index) {
     if (cb_block_released_prev_block) {
         WAYPOINT("CBRW");
         while (!wrap_ge(NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT), block_noc_writes_to_clear));
-        relay_client.template release_pages<noc_idx, noc_xy, sem_id, num_hops>(cb_pages_per_block);
+        relay_client.template release_pages<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
         WAYPOINT("CBRD");
     } else {
         cb_block_released_prev_block = true;
@@ -465,11 +465,10 @@ template <
     uint32_t sem_id,
     uint32_t cb_pages_per_block,
     uint32_t cb_blocks,
-    uint32_t num_hops,
     typename T>
 FORCE_INLINE void move_rd_to_next_block_and_release_pages_remote(
     T& relay_client, uint32_t& block_noc_writes_to_clear, uint32_t& rd_block_idx, uint8_t noc = noc_index) {
-    cb_block_release_pages_remote<noc_idx, noc_xy, sem_id, cb_pages_per_block, num_hops>(
+    cb_block_release_pages_remote<noc_idx, noc_xy, sem_id, cb_pages_per_block>(
         relay_client, block_noc_writes_to_clear, noc);
     move_rd_to_next_block<cb_blocks>(rd_block_idx);
 }
@@ -522,7 +521,6 @@ template <
     uint32_t upstream_noc_xy,
     uint32_t upstream_cb_sem,
     uint32_t cb_pages_per_block,
-    uint32_t num_hops,
     typename T>
 FORCE_INLINE uint32_t get_cb_page_and_release_pages_remote(
     T& relay_client,
@@ -544,8 +542,7 @@ FORCE_INLINE uint32_t get_cb_page_and_release_pages_remote(
             upstream_noc_xy,
             upstream_cb_sem,
             cb_pages_per_block,
-            cb_blocks,
-            num_hops>(relay_client, block_noc_writes_to_clear, rd_block_idx, noc);
+            cb_blocks>(relay_client, block_noc_writes_to_clear, rd_block_idx, noc);
     }
 
     // Wait for dispatcher to supply a page

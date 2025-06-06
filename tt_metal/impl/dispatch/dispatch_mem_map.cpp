@@ -140,10 +140,10 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
             device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB) {
             // At this point fabric context is not initialized yet
-            // Hardcode to 64B (more than enough space) for now
+            // Hardcode to 128B (more than enough space) for now
             // const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
             // const auto& fabric_context = control_plane.get_fabric_context();
-            device_cq_addr_sizes_[dev_addr_idx] = tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES * 64;
+            device_cq_addr_sizes_[dev_addr_idx] = tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES * 128;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS) {
             device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
         } else {
