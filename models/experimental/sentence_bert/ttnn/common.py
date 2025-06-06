@@ -113,7 +113,7 @@ def preprocess_inputs(
     attention_mask,
     device,
 ):
-    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32)  # , device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
     token_type_ids = ttnn.from_torch(
         token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )

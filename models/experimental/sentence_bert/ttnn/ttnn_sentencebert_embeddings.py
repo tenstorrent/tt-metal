@@ -6,6 +6,13 @@ import ttnn
 from models.experimental.sentence_bert.ttnn.common import layernorm_program_config
 
 
+def p(x, a="x"):
+    print(f"{a}'s  shape: {x.shape}")
+    print(f"{a}'s  layout: {x.layout}")
+    print(f"{a}'s  dtype: {x.dtype}")
+    print(f"{a}'s config: {x.memory_config()}")
+
+
 class TtnnSentenceBertEmbeddings:
     def __init__(self, parameters, config):
         self.parameters = parameters
@@ -16,6 +23,9 @@ class TtnnSentenceBertEmbeddings:
         self.LayerNorm = ttnn.layer_norm
 
     def __call__(self, input_ids: ttnn.Tensor, token_type_ids: ttnn.Tensor, position_ids: ttnn.Tensor, device):
+        p(input_ids, "input_ids")
+        p(token_type_ids, "token_type_ids")
+        p(position_ids, "position_ids")
         if input_ids.is_sharded():
             input_ids_interleaved = ttnn.sharded_to_interleaved(input_ids, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(input_ids)
@@ -28,7 +38,9 @@ class TtnnSentenceBertEmbeddings:
             memory_config=ttnn.L1_MEMORY_CONFIG,
             padding_idx=self.config.pad_token_id,
         )
-
+        ttnn.deallocate(input_ids_interleaved)
+        print("qjfbwjbef", token_type_ids.shape, input_ids.shape, position_ids.shape)
+        # ss
         token_type_embeddings = self.token_type_embeddings(
             token_type_ids,
             self.parameters.token_type_embeddings.weight,
