@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <limits>
+
 #include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpi.h"
 
@@ -15,12 +18,13 @@ namespace sfpu
 
 enum class BinaryOp : uint8_t
 {
-    ADD  = 0,
-    SUB  = 1,
-    MUL  = 2,
-    DIV  = 3,
-    RSUB = 4,
-    POW  = 5
+    ADD   = 0,
+    SUB   = 1,
+    MUL   = 2,
+    DIV   = 3,
+    RSUB  = 4,
+    POW   = 5,
+    XLOGY = 6
 };
 
 sfpi_inline sfpi::vFloat _calculate_sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow)
@@ -102,6 +106,7 @@ sfpi_inline sfpi::vFloat _calculate_sfpu_binary_power_(sfpi::vFloat base, sfpi::
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8>
 inline void _calculate_sfpu_binary_(const uint dst_offset)
 {
+    static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
     {
@@ -155,6 +160,20 @@ inline void _calculate_sfpu_binary_(const uint dst_offset)
         {
             result = _calculate_sfpu_binary_power_(in0, in1);
         }
+        else if constexpr (BINOP == BinaryOp::XLOGY)
+        {
+            v_if ((in1 < 0.0f) || (in1 == nan))
+            {
+                result = nan;
+            }
+            v_else
+            {
+                sfpi::dst_reg[0] = in1;
+                _calculate_log_body_<false>(0);
+                result = sfpi::dst_reg[0] * in0;
+            }
+            v_endif;
+        }
 
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
@@ -167,6 +186,10 @@ inline void _sfpu_binary_init_()
     if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW)
     {
         _init_reciprocal_<APPROXIMATION_MODE>();
+    }
+    else if constexpr (BINOP == BinaryOp::XLOGY)
+    {
+        _init_log_<APPROXIMATION_MODE>();
     }
 }
 

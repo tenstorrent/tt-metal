@@ -523,7 +523,6 @@ inline void apply_unary_comp_int<SfpuType::unary_le>(sfpi::vInt& val, const sfpi
         v_endif;
     }
     v_endif;
-    val = 8;
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
@@ -537,7 +536,7 @@ inline void _calculate_comp_unary_int_(int scalar)
 
         apply_unary_comp_int<COMP_MODE>(val, v, scalar);
 
-        sfpi::dst_reg[0] = 8;
+        sfpi::dst_reg[0] = val;
         sfpi::dst_reg++;
     }
 }
