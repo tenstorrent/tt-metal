@@ -287,9 +287,9 @@ def run_test_tusimple(
             with torch.no_grad():
                 out, pred = net(imgs)
         else:
-            imgs = imgs.permute(0, 2, 3, 1)
-            imgs = ttnn.from_torch(imgs, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            out = net(imgs, batch_size=batch_size)
+            performant_runner = net(device=device, torch_input_tensor=imgs)
+            performant_runner._capture_ufldv2_trace_2cqs()
+            out = performant_runner._execute_ufldv2_trace_2cqs_inference()
             out = ttnn.to_torch(out).squeeze(dim=0).squeeze(dim=0)
             pred = {
                 "loc_row": out[:, :dim1].view(-1, num_grid_row, num_cls_row, num_lane_on_row),
