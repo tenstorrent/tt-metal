@@ -119,6 +119,8 @@ void MAIN {
     constexpr uint32_t interm_cb_id = get_compile_time_arg_val(15);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(16);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
+    constexpr uint32_t sync_cb_id1 = get_compile_time_arg_val(18);
+    constexpr uint32_t sync_cb_id2 = get_compile_time_arg_val(19);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -147,8 +149,11 @@ void MAIN {
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
-    if constexpr (one_scalar_per_core) {
-        cb_wait_front(in_scalar_cb_id_0, 1);
+
+    // wait for initialization to complete
+    cb_wait_front(sync_cb_id1, 2);
+    if constexpr (split_reader) {
+        cb_wait_front(sync_cb_id2, 2);
     }
 
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
