@@ -113,11 +113,7 @@ TEST_P(AccessorBenchmarks, Generic) {
             *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), ArgConfig::BankCoordsCRTA);
         auto input_sharded_accessor_args_rta_DDD = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
             *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), ArgConfig::CRTA);
-        std::vector<uint32_t> input_compile_time_args = {
-            (uint32_t)data_format,
-            aligned_page_size,
-            input_sharded_accessor_args_cta.rank,
-            input_sharded_accessor_args_cta.num_banks};
+        std::vector<uint32_t> input_compile_time_args = {(uint32_t)data_format, aligned_page_size};
         input_compile_time_args.insert(
             input_compile_time_args.end(),
             input_sharded_accessor_args_cta.compile_time_args.cbegin(),

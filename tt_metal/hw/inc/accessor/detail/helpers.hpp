@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 
 namespace nd_sharding {
 namespace detail {
@@ -35,5 +36,40 @@ template <std::size_t Base, std::size_t Size>
 constexpr auto array_rta_sequence_wrapper() {
     return make_rta_array_from_sequence<Base>(std::make_index_sequence<Size>{});
 }
+
+template <bool Enable, typename T = void, std::size_t N = 0>
+struct ConditionalBuffer {
+    T value[N];  // when Enable == true
+};
+
+// Specialization for false: empty struct
+template <std::size_t N, typename T>
+struct ConditionalBuffer<false, T, N> {};
+
+// Trait to detect operator[]
+template <typename, typename = void>
+struct has_subscript_operator : std::false_type {};
+
+template <typename T>
+struct has_subscript_operator<T, std::void_t<decltype(std::declval<T>()[std::declval<std::size_t>()])>>
+    : std::true_type {};
+
+template <typename T>
+constexpr bool has_subscript_operator_v = has_subscript_operator<T>::value;
+
+// No c++20 == to std::span :(
+template <typename T>
+struct Span {
+    T* _data;
+    std::size_t _size;
+
+    constexpr Span(T* data, std::size_t size) : _data(data), _size(size) {}
+
+    T& operator[](std::size_t idx) const { return _data[idx]; }
+    T* begin() const { return _data; }
+    T* end() const { return _data + _size; }
+    std::size_t size() const { return _size; }
+};
+
 }  // namespace detail
 }  // namespace nd_sharding

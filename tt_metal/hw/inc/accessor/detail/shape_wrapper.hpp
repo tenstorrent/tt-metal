@@ -4,12 +4,16 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "const.hpp"
+#include "helpers.hpp"
+
 namespace nd_sharding {
 namespace detail {
 template <size_t... Dims>
 struct ShapeWrapperStaticDimsStaticRank {
     static constexpr size_t rank = sizeof...(Dims);
     static constexpr bool is_static = true;
+    static constexpr bool has_static_rank = true;
     using ShapeBase = std::array<uint32_t, rank>;
     static constexpr ShapeBase shape = {Dims...};
 
@@ -43,6 +47,7 @@ template <size_t Rank>
 struct ShapeWrapperDynamicDimsStaticRank {
     static constexpr size_t rank = Rank;
     static constexpr bool is_static = false;
+    static constexpr bool has_static_rank = true;
     using ShapeBase = std::array<uint32_t, rank>;
     ShapeBase shape;    // runtime shape
     ShapeBase strides;  // runtime strides
@@ -67,6 +72,35 @@ struct ShapeWrapperDynamicDimsStaticRank {
     }
 
     inline void compute_volume_and_strides(const ShapeBase& shape) {
+        uint32_t stride = 1;
+        for (int i = rank - 1; i >= 0; --i) {
+            strides[i] = stride;
+            stride *= shape[i];
+        }
+        volume = strides[0] * shape[0];
+    }
+};
+
+struct ShapeWrapperDynamicRank {
+    static constexpr bool is_static = false;
+    static constexpr bool has_static_rank = false;
+    using ShapeBase = Span<uint32_t>;
+
+    // uint32_t shape_buffer[10];
+    // NOTE: No additional buffer fo shape is required, since span in constructed on top of &get_common_arg_addr(BASE)
+    uint32_t strides_buffer[MAX_RANK];  // TODO: Can we have rank higher than 10?
+    uint32_t rank;
+    ShapeBase shape;    // runtime shape
+    ShapeBase strides;  // runtime strides
+    size_t volume = 0;  // runtime volume
+
+    explicit ShapeWrapperDynamicRank(ShapeBase&& shape_in) :
+        rank(shape_in.size()), shape(std::move(shape_in)), strides(strides_buffer, rank) {
+        ASSERT(rank <= MAX_RANK);
+        compute_volume_and_strides();
+    }
+
+    inline void compute_volume_and_strides() {
         uint32_t stride = 1;
         for (int i = rank - 1; i >= 0; --i) {
             strides[i] = stride;
