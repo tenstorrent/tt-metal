@@ -13,7 +13,7 @@ import pytest
 import os
 import ttnn
 
-is_6U_RING = os.environ.get("6U_RING", "0") == "1"
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 from models.demos.llama3_subdevices.tt.generator import Generator, SamplingParams
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
@@ -238,7 +238,7 @@ def create_tt_model(
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_6U_RING else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
@@ -554,6 +554,7 @@ def test_demo_text(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
+                    argmax_on_device=argmax_on_device,
                     reset_inputs=iteration == 0 or batch_size > 1,
                 )
             except Exception as e:
