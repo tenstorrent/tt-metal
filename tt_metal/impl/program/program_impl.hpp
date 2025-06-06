@@ -188,7 +188,7 @@ public:
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
 
-    void generate_trace_dispatch_commands(IDevice* device);
+    ProgramCommandSequence& generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_trace_cached_program_command_sequences() noexcept;
 
     // debug/test

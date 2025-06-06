@@ -1748,7 +1748,9 @@ void assemble_device_commands(
     TT_ASSERT(
         program_command_sequence.program_binary_command_sequence.size_bytes() ==
         program_command_sequence.program_binary_command_sequence.write_offset_bytes());
-    program_command_sequence.kernel_bins_base_addr = program.get_kernels_buffer(device)->address();
+    if (use_prefetcher_cache) {
+        program_command_sequence.kernel_bins_base_addr = program.get_kernels_buffer(device)->address();
+    }
 
     // Assemble launch message
     LaunchMessageGenerator launch_message_generator;
@@ -1972,19 +1974,26 @@ void update_program_dispatch_commands(
 
         auto is_cached = dispatch_md.prefetcher_cache_info.is_cached;
         auto cache_offset = dispatch_md.prefetcher_cache_info.offset;
-        CQPrefetchCmd cq_prefetch;
+        auto program_sizeB = cached_program_command_sequence.kernel_bins_sizeB;
+        auto max_program_sizeB = dispatch_md.prefetcher_cache_info.mesh_max_program_kernels_sizeB;
         if (is_cached) {
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_set_ringbuffer_offset(cache_offset);
         } else {
+            TT_ASSERT(
+                program_sizeB <= max_program_sizeB,
+                "Kernel binary size exceeds prefetcher cache size ({}, {})",
+                program_sizeB,
+                max_program_sizeB);
+            bool wraparound_flag = cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
                 .add_prefetch_paged_to_ringbuffer(CQPrefetchPagedToRingbufferCmd{
-                    .flags = uint8_t(cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START),
+                    .flags = uint8_t(wraparound_flag),
                     .log2_page_size = uint16_t(HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE),
                     .start_page = 0,
-                    .wp_offset_update = dispatch_md.prefetcher_cache_info.mesh_max_program_kernels_sizeB,
+                    .wp_offset_update = max_program_sizeB,
                     .base_addr = cached_program_command_sequence.kernel_bins_base_addr,
-                    .length = cached_program_command_sequence.kernel_bins_sizeB});
+                    .length = program_sizeB});
         }
         TT_ASSERT(
             cached_program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes() ==
@@ -2123,6 +2132,29 @@ void update_traced_program_dispatch_commands(
     for (size_t i = 0; i < cached_program_command_sequence.rta_updates.size(); i++) {
         auto& rta_update = cached_program_command_sequence.rta_updates[i];
         std::memcpy(rta_update.dst, trace_node.rta_data[i].data(), rta_update.size);
+    }
+
+    // Update prefetcher cache initialization
+    if (cached_program_command_sequence.prefetcher_cache_used) {
+        // reserve space for cache command
+        uint32_t pcie_alignment =
+            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+        cached_program_command_sequence.program_binary_setup_prefetcher_cache_command =
+            HostMemDeviceCommand(tt::align(sizeof(CQPrefetchCmd), pcie_alignment));
+
+        auto program_sizeB = cached_program_command_sequence.kernel_bins_sizeB;
+        auto max_program_sizeB = program_sizeB;
+        cached_program_command_sequence.program_binary_setup_prefetcher_cache_command.add_prefetch_paged_to_ringbuffer(
+            CQPrefetchPagedToRingbufferCmd{
+                .flags = CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START,
+                .log2_page_size = uint16_t(HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE),
+                .start_page = 0,
+                .wp_offset_update = max_program_sizeB,
+                .base_addr = cached_program_command_sequence.kernel_bins_base_addr,
+                .length = program_sizeB});
+        TT_ASSERT(
+            cached_program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes() ==
+            cached_program_command_sequence.program_binary_setup_prefetcher_cache_command.write_offset_bytes());
     }
 
     // Update launch messages
@@ -2275,14 +2307,12 @@ void write_program_command_sequence(
     }
 }
 
-TraceNode create_trace_node(ProgramImpl& program, IDevice* device) {
+TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_prefetcher_cache, uint32_t program_sizeB) {
     std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(device)};
-    program.generate_trace_dispatch_commands(device);
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
-
-    // By using the traced command sequence, we know the RTA data source-of-truth isn't this command sequence (it's in a
-    // regular cached program command sequence), so rta_updates includes all the RTAs.
-    auto& cached_program_command_sequence = program.get_trace_cached_program_command_sequences().at(command_hash);
+    ProgramCommandSequence& cached_program_command_sequence =
+        program.generate_trace_dispatch_commands(device, use_prefetcher_cache);
+    cached_program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
+    cached_program_command_sequence.kernel_bins_sizeB = program_sizeB;
     std::vector<std::vector<uint8_t>> rta_data;
     for (auto& update : cached_program_command_sequence.rta_updates) {
         rta_data.push_back(std::vector<uint8_t>(

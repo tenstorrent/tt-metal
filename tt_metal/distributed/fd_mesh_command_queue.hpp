@@ -14,6 +14,7 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "mesh_trace.hpp"
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
+#include "tt_metal/impl/program/dispatch.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -61,7 +62,8 @@ private:
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
-        bool unicast_go_signals);
+        bool unicast_go_signals,
+        const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Workload dispatch utility functions
     // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
     void write_program_cmds_to_subgrid(
@@ -79,7 +81,8 @@ private:
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
-        bool unicast_go_signals);
+        bool unicast_go_signals,
+        const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // When the device profiler is not enabled, launch messages are identical across all physical devices running the
     // same program, to reduce state managed on host. When the profiler is enabled, the host_assigned_id field in the
     // launch message must be unique across physical devices to accurately capture program execution time on host and
@@ -121,7 +124,7 @@ private:
     std::vector<MeshTraceStagingMetadata> ordered_mesh_trace_md_;
 
     CoreCoord dispatch_core_;
-    CoreType dispatch_core_type_ = CoreType::WORKER;
+    const CoreType dispatch_core_type_;
     // MeshCommandQueues and the MeshDevice share thread-pools for dispatching to and reading from the Mesh
     std::shared_ptr<ThreadPool>
         reader_thread_pool_;  // Thread pool used to read from the Mesh (used by the Completion Queue Reader thread)

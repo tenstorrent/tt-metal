@@ -68,8 +68,10 @@ struct ProgramCommandSequence {
         uint32_t one_shot_fetch_size =
             ((stall_before_program || stall_first) ? stall_command_sequences[current_stall_seq_idx].size_bytes() : 0) +
             preamble_command_sequence.size_bytes() + program_config_buffer_command_sequence.size_bytes() +
-            get_rt_args_size() + (send_binary ? program_binary_command_sequence.size_bytes() +
-            program_binary_setup_prefetcher_cache_command.size_bytes() : 0) + 
+            get_rt_args_size() +
+            (send_binary ? program_binary_command_sequence.size_bytes() +
+                               program_binary_setup_prefetcher_cache_command.size_bytes()
+                         : 0) +
             launch_msg_command_sequence.size_bytes() + go_msg_command_sequence.size_bytes();
         return one_shot_fetch_size;
     }

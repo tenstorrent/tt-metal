@@ -252,11 +252,12 @@ void DeviceCommand<hugepage_write>::add_prefetch_paged_to_ringbuffer(
 }
 
 template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_prefetch_set_ringbuffer_offset(uint32_t offset) {
+void DeviceCommand<hugepage_write>::add_prefetch_set_ringbuffer_offset(uint32_t offset, bool update_wp) {
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     auto initialize_set_ringbuffer_offset_cmd = [&](CQPrefetchCmd* set_ringbuffer_offset_cmd) {
         set_ringbuffer_offset_cmd->base.cmd_id = CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET;
         set_ringbuffer_offset_cmd->set_ringbuffer_offset.offset = offset;
+        set_ringbuffer_offset_cmd->set_ringbuffer_offset.update_wp = update_wp;
     };
     CQPrefetchCmd* set_ringbuffer_offset_cmd_dst = this->reserve_space<CQPrefetchCmd*>(increment_sizeB);
 
