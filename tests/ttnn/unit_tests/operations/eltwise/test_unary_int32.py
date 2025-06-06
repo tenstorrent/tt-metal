@@ -13,18 +13,21 @@ import ttnn
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 1024, 1024])),
+        (torch.Size([1, 3, 1024, 1024])),
     ],
 )
 @pytest.mark.parametrize(
     "low_a, high_a",
     [
-        (-100, 100),
-        (-300, 300),
-        (-500, 500),
         (-1000, 1000),
         (-1e4, 1e4),
-        (2e9, 2077000000),  # large positive input
+        (-1e6, 1e6),
+        (-2147483647, 0),  # max negative to zero
+        (0, 2147483647),  # zero to max positive
+        (2e9, 2147483647),  # large positive input
         (-2147483647, -2e9),  # large negative input
+        (-2147483647, 2147483647),  # whole range
     ],
 )
 @pytest.mark.parametrize(
@@ -63,6 +66,8 @@ def test_unary_logical_int32(input_shapes, low_a, high_a, logical_op, device):
     ],
 )
 def test_unary_logical_int32_edge_cases(logical_op, device):
+    # Note: torch.logical_not(-2147483648) returns False, whereas ttnn.logical_not(-2147483648) returns True.
+    # This discrepancy occurs because, in Wormhole, the value -2147483648 wraps around to 0 due to integer overflow.
     torch_input_tensor_a = torch.tensor([0, 1, -1, 2147483647, -2147483647])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
