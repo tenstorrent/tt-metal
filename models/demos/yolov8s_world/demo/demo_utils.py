@@ -1,16 +1,17 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import requests
-import cv2
 import math
+import os
 import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+import requests
 import torch
 import torchvision
-import numpy as np
-from pathlib import Path
 from loguru import logger
 
 
