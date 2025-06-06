@@ -23,13 +23,10 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 10, label: pipeline-functional, owner_id: UJ45FEC7M}, # Allan Liu
+          { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 10, owner_id: UJ45FEC7M}, # Allan Liu
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - arch-wormhole_b0
-      - config-t3000
-      - ${{ matrix.test-group.label}}
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
