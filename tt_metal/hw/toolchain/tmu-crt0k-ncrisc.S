@@ -35,5 +35,5 @@ _start:
 	lw  s11, 12 * 4( sp )
 	lw  a0, 13 * 4( sp )
 	addi sp, sp, (16 * 4)
-	tail    _Z13kernel_launchm
+	tail    kernel_launch
 	.size  _start, .-_start
