@@ -234,4 +234,58 @@ TEST(MeshGraphValidation, TestT3kDualHostMeshGraph) {
         MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{2, 3, 6, 7}));
 }
 
+TEST(MeshGraphValidation, TestT3k2x2MeshGraph) {
+    const std::filesystem::path t3k_2x2_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml";
+    auto mesh_graph = std::make_unique<tt_fabric::MeshGraph>(t3k_2x2_mesh_graph_desc_path.string());
+
+    // This configuration has two meshes (id 0 and id 1)
+    EXPECT_THAT(mesh_graph->get_mesh_ids(), ElementsAre(MeshId{0}, MeshId{1}));
+
+    // Check host ranks for mesh 0 - single host rank 0
+    const auto& host_ranks_mesh0 = mesh_graph->get_host_ranks(MeshId{0});
+    EXPECT_EQ(host_ranks_mesh0, MeshContainer<HostRankId>(MeshShape(1, 1), {HostRankId(0)}));
+
+    // Check host ranks for mesh 1 - single host rank 0
+    const auto& host_ranks_mesh1 = mesh_graph->get_host_ranks(MeshId{1});
+    EXPECT_EQ(host_ranks_mesh1, MeshContainer<HostRankId>(MeshShape(1, 1), {HostRankId(0)}));
+
+    // Each mesh has a 2x2 board topology
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}), MeshShape(2, 2));
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{1}), MeshShape(2, 2));
+
+    // Since there's only one host rank per mesh, mesh shape should be same
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}, HostRankId(0)), MeshShape(2, 2));
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{1}, HostRankId(0)), MeshShape(2, 2));
+
+    // Check coordinate ranges
+    EXPECT_EQ(mesh_graph->get_coord_range(MeshId{0}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+    EXPECT_EQ(mesh_graph->get_coord_range(MeshId{1}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+
+    // Since each mesh has only one host rank, the coord range should be the same
+    EXPECT_EQ(
+        mesh_graph->get_coord_range(MeshId{0}, HostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+    EXPECT_EQ(
+        mesh_graph->get_coord_range(MeshId{1}, HostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+
+    // Check chip IDs - each mesh has 4 chips (2x2)
+    EXPECT_EQ(
+        mesh_graph->get_chip_ids(MeshId{0}),
+        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
+    EXPECT_EQ(
+        mesh_graph->get_chip_ids(MeshId{1}),
+        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
+
+    // Check chip IDs per host rank
+    EXPECT_EQ(
+        mesh_graph->get_chip_ids(MeshId{0}, HostRankId(0)),
+        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
+    EXPECT_EQ(
+        mesh_graph->get_chip_ids(MeshId{1}, HostRankId(0)),
+        MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

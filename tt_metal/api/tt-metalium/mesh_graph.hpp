@@ -104,6 +104,10 @@ public:
     // Get the host rank that owns a given chip in a mesh
     std::optional<HostRankId> get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const;
 
+    // Translation functions for chip_id and coordinate using RM-convention
+    MeshCoordinate chip_to_coordinate(MeshId mesh_id, chip_id_t chip_id) const;
+    chip_id_t coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const;
+
 private:
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
         chip_id_t src_chip_id, std::uint32_t row_size, std::uint32_t num_chips_in_mesh, FabricType fabric_type) const;
@@ -117,7 +121,7 @@ private:
         RoutingDirection port_direction);
 
     ChipSpec chip_spec_;
-    std::unordered_map<MeshId, MeshContainer<chip_id_t>> mesh_to_chip_ids_;
+    std::map<MeshId, MeshContainer<chip_id_t>> mesh_to_chip_ids_;
     IntraMeshConnectivity intra_mesh_connectivity_;
     InterMeshConnectivity inter_mesh_connectivity_;
 
