@@ -1086,6 +1086,51 @@ def test_fabric_6u_4chip_rows_mcast_bw(
 
 # expected_Mpps = expected millions of packets per second
 @pytest.mark.ubench_quick_tests
+@pytest.mark.parametrize("is_unicast", [True, False])
+@pytest.mark.parametrize("num_messages", [200000])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [[4, 8]])  # first entry is row size (X dim), second entry is col size (Y dim)
+@pytest.mark.parametrize("num_links", [[4, 4], [1, 1]])
+@pytest.mark.parametrize("packet_size", [4096])
+# @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.FullRing, FabricTestMode.Linear])
+@pytest.mark.parametrize("num_cluster_rows,num_cluster_cols", [(8, 4)])
+def test_fabric_6u_all_rows_and_cols_mcast_bw(
+    is_unicast,
+    num_messages,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    fabric_test_mode,
+    num_cluster_rows,
+    num_cluster_cols,
+):
+    is_ring = fabric_test_mode == FabricTestMode.FullRing
+    update_machine_type_suffix("6u")
+    run_fabric_edm(
+        is_unicast=is_unicast,
+        num_messages=num_messages,
+        num_links=num_links,
+        noc_message_type="noc_unicast_write",
+        num_op_invocations=num_op_invocations,
+        line_sync=line_sync,
+        line_size=line_size,
+        packet_size=packet_size,
+        fabric_mode=fabric_test_mode,
+        disable_sends_for_interior_workers=[False, False],
+        unidirectional=[False, False],
+        senders_are_unidirectional=[not is_ring, not is_ring],
+        test_mode="1D_fabric_on_mesh_multi_axis",
+        num_cluster_rows=num_cluster_rows,
+        num_cluster_cols=num_cluster_cols,
+    )
+
+
+# expected_Mpps = expected millions of packets per second
+@pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])

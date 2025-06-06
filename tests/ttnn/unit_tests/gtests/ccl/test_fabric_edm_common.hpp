@@ -3215,6 +3215,58 @@ void Run1DFullMeshFabricPacketSendTest(
     size_t dest_bank_addr = device_dest_buffers[0]->address();
     per_axis_array_t<CoreRangeSet> worker_cores_per_axis;
     const size_t max_line_size = *std::max_element(params.line_size.begin(), params.line_size.end());
+
+    per_axis_array_t<std::vector<std::vector<Fabric1DWorkerConfig>>> worker_configs_per_axis_per_fabric_per_device;
+    size_t sync_count = 0;
+    for (size_t axis = 0; axis < MAX_NUM_AXES; axis++) {
+        auto line_size = params.line_size[axis];
+        auto num_devices_with_workers = params.num_devices_with_workers[axis];
+        if (num_devices_with_workers == 0) {
+            num_devices_with_workers = line_size;
+        }
+        auto senders_are_unidirectional = params.senders_are_unidirectional[axis];
+
+        worker_configs_per_axis_per_fabric_per_device[axis].resize(fabrics_under_test_devices_per_axis[axis].size());
+        std::optional<size_t> sync_count_per_axis = std::nullopt;
+        for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices_per_axis[axis].size(); fabric_index++) {
+            worker_configs_per_axis_per_fabric_per_device[axis][fabric_index].resize(num_devices_with_workers);
+            auto& devices = fabrics_under_test_devices_per_axis[axis][fabric_index];
+            for (size_t i = 0; i < num_devices_with_workers; i++) {
+                const size_t line_index = i;
+
+                log_info(
+                    tt::LogTest,
+                    "axis: {}, fabric_index: {}, line_index: {} num_devices_with_workers: {}",
+                    axis,
+                    fabric_index,
+                    line_index,
+                    num_devices_with_workers);
+                auto worker_config = get_fabric_1d_worker_config(
+                    i,
+                    devices,
+                    topologies[axis],
+                    fabric_modes[axis],
+                    params.line_size[axis],
+                    line_index,
+                    senders_are_unidirectional,
+                    num_devices_with_workers);
+                worker_configs_per_axis_per_fabric_per_device[axis][fabric_index][i] = worker_config;
+                if (!sync_count_per_axis) {
+                    sync_count_per_axis = worker_config.sync_count_per_link;
+                } else {
+                    TT_FATAL(
+                        sync_count_per_axis.value() == worker_config.sync_count_per_link,
+                        "Sync count per axis must be the same for all fabrics");
+                }
+            }
+        }
+        TT_FATAL(sync_count_per_axis, "Sync count per axis must be set");
+        sync_count += params.num_links[axis] * sync_count_per_axis.value();
+        log_info(tt::LogTest, "sync_count_per_axis: {}", sync_count_per_axis.value());
+        log_info(tt::LogTest, "params.num_links[axis]: {}", params.num_links[axis]);
+        log_info(tt::LogTest, "sync_count: {}", sync_count);
+    }
+
     for (size_t axis = 0; axis < MAX_NUM_AXES; axis++) {
         const uint32_t packet_header_cb_index = axis == 0 ? tt::CB::c_in0 : tt::CB::c_in2;
         const uint32_t source_payload_cb_index = axis == 0 ? tt::CB::c_in1 : tt::CB::c_in3;
@@ -3230,7 +3282,8 @@ void Run1DFullMeshFabricPacketSendTest(
         auto first_link_offset = params.first_link_offset[axis];
         auto num_op_invocations = params.num_op_invocations;
         auto senders_are_unidirectional = params.senders_are_unidirectional[axis];
-        size_t num_messages = (test_specs.num_messages * max_line_size) / line_size;
+        size_t num_messages = (test_specs.num_messages * line_size) / max_line_size;
+        log_info(tt::LogTest, "axis: {}, num_messages: {}", axis, num_messages);
 
         for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices_per_axis[axis].size(); fabric_index++) {
             auto& devices = fabrics_under_test_devices_per_axis[axis][fabric_index];
@@ -3242,21 +3295,13 @@ void Run1DFullMeshFabricPacketSendTest(
                 auto* device = devices[i];
                 auto& program = device_programs.at(device);
 
-                auto worker_config = get_fabric_1d_worker_config(
-                    i,
-                    devices,
-                    topologies[axis],
-                    fabric_modes[axis],
-                    line_size,
-                    line_index,
-                    senders_are_unidirectional,
-                    num_devices_with_workers);
+                auto& worker_config = worker_configs_per_axis_per_fabric_per_device.at(axis).at(fabric_index).at(i);
 
                 // compute worker based on ethernet cores
                 // TODO: Move out of loop so we can check ahead of time if sync core needs to be moved in order
                 //       to support optimal worker core placement
                 worker_cores_per_axis[axis] = {};
-                if (use_tg and topology == ttnn::ccl::Topology::Linear) {
+                if ((use_tg or is_6u_galaxy) and topology == ttnn::ccl::Topology::Linear) {
                     std::vector<CoreCoord> ethernet_cores_virtual =
                         compute_top_row_ethernet_cores(device, worker_config);
                     worker_cores_per_axis[axis] = get_optimal_worker_core_placement(
@@ -3273,8 +3318,8 @@ void Run1DFullMeshFabricPacketSendTest(
                 worker_cores_vec_per_axis_per_device[axis].push_back(worker_cores_vec);
 
                 // sync core
-                const size_t sync_core_noc_x = device->worker_core_from_logical_core(worker_cores_vec[0]).x;
-                const size_t sync_core_noc_y = device->worker_core_from_logical_core(worker_cores_vec[0]).y;
+                const size_t sync_core_noc_x = device->worker_core_from_logical_core(sync_core_coord).x;
+                const size_t sync_core_noc_y = device->worker_core_from_logical_core(sync_core_coord).y;
 
                 // reserve CB
                 tt_metal::CircularBufferConfig cb_src0_config =
@@ -3402,10 +3447,10 @@ void Run1DFullMeshFabricPacketSendTest(
                             per_device_global_sem_addr_rt_arg.push_back(rt_args.size());
                         }
                         TT_FATAL(
-                            global_semaphore_addrs_per_axis[axis].at(0) != -1,
+                            global_semaphore_addrs_per_axis[0].at(0) != -1,
                             "Invalid test setup. Global semaphore address is -1");
-                        rt_args.push_back(global_semaphore_addrs_per_axis[axis].at(0));
-                        rt_args.push_back(params.num_links[axis] * worker_config.sync_count_per_link);
+                        rt_args.push_back(global_semaphore_addrs_per_axis[0].at(0));
+                        rt_args.push_back(sync_count);
                         rt_args.push_back(worker_config.sync_num_fwd_hops);
                         rt_args.push_back(worker_config.sync_num_bwd_hops);
                     }
@@ -3458,28 +3503,45 @@ void Run1DFullMeshFabricPacketSendTest(
             }
         }
 
+        // Both axes share programs, because we want to run them together, so we only launch once
         std::vector<Program*> program_ptrs;
-        for (size_t axis = 0; axis < MAX_NUM_AXES; axis++) {
-            for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices_per_axis[axis].size();
-                 fabric_index++) {
-                auto& worker_devices = fabrics_under_test_devices_per_axis[axis][fabric_index];
-                program_ptrs.clear();
-                program_ptrs.reserve(worker_devices.size());
-                std::transform(
-                    worker_devices.begin(),
-                    worker_devices.end(),
-                    std::back_inserter(program_ptrs),
-                    [&device_programs](IDevice* d) { return &device_programs.at(d); });
-                build_and_enqueue(worker_devices, program_ptrs, i != 0);
+        std::vector<IDevice*> worker_devices;
+        {
+            std::set<IDevice*> all_worker_devices_set;
+            for (size_t axis = 0; axis < MAX_NUM_AXES; axis++) {
+                log_info(tt::LogTest, "Enqueuing axis: {}", axis);
+                for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices_per_axis[axis].size();
+                     fabric_index++) {
+                    auto& fabric_worker_devices = fabrics_under_test_devices_per_axis[axis][fabric_index];
+                    for (auto* device : fabric_worker_devices) {
+                        all_worker_devices_set.insert(device);
+                    }
+                }
             }
+            program_ptrs.reserve(all_worker_devices_set.size());
+            std::transform(
+                all_worker_devices_set.begin(),
+                all_worker_devices_set.end(),
+                std::back_inserter(program_ptrs),
+                [&device_programs](IDevice* d) { return &device_programs.at(d); });
+            std::copy(all_worker_devices_set.begin(), all_worker_devices_set.end(), std::back_inserter(worker_devices));
+            build_and_enqueue(worker_devices, program_ptrs, i != 0);
         }
 
         for (size_t axis = 0; axis < MAX_NUM_AXES; axis++) {
+            log_info(tt::LogTest, "Waiting for axis: {}", axis);
             for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices_per_axis[axis].size();
                  fabric_index++) {
                 auto& worker_devices = fabrics_under_test_devices_per_axis[axis][fabric_index];
+                std::stringstream ss;
+                for (auto* device : worker_devices) {
+                    ss << device->id() << " ";
+                }
+                log_info(
+                    tt::LogTest, "Waiting for axis: {} fabric_index: {} devices: {}", axis, fabric_index, ss.str());
                 wait_for_worker_program_completion(worker_devices, std::nullopt);
             }
+            log_info(tt::LogTest, "Waiting for axis: {} done", axis);
         }
     }
 
