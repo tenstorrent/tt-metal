@@ -24,18 +24,15 @@ target_sources(
         conv2d/prepare_conv2d_weights.cpp
         conv1d/conv1d.cpp
 )
+
+file(GLOB_RECURSE kernels conv2d/device/kernels/*)
 target_sources(
     ttnn_op_conv
     PUBLIC
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp
-            conv2d/device/kernels/height_sharded_reader_common.hpp
-            conv2d/device/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp
-            conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp
-            conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp
+        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_conv PRIVATE ${FixmeOpIncDirs})

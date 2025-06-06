@@ -19,13 +19,14 @@ target_sources(
         sliding_window.cpp
 )
 
+file(GLOB_RECURSE kernels halo/device/kernels/*)
 target_sources(
     ttnn_op_sliding_window
     PUBLIC
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES halo/device/kernels/dataflow/halo_gather.cpp
+        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_sliding_window PRIVATE ${FixmeOpIncDirs})

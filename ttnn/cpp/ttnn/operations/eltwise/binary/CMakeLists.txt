@@ -25,17 +25,15 @@ target_sources(
         device/broadcast_height_multi_core_sharded_optimized_program_factory.cpp
         device/broadcast_height_multi_core_sharded_program_factory.cpp
 )
+
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_binary
     PUBLIC
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            device/kernels/compute/bcast_hw.cpp
-            device/kernels/compute/eltwise_binary_kernel.cpp
-            device/kernels/dataflow/reader_bcast_scalar_interleaved_partitioned.cpp
-            device/kernels/dataflow/reader_binary_interleaved_start_id.cpp
+        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_eltwise_binary PRIVATE ${FixmeOpIncDirs})

@@ -142,6 +142,7 @@ target_sources(
         moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_program_factory.cpp
         moreh_clip_grad_norm/moreh_clip_grad_norm.cpp
 )
+file(GLOB_RECURSE kernels moreh_dot/device/kernels/*)
 target_sources(
     ttnn_op_moreh
     PUBLIC
@@ -149,9 +150,7 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
-            moreh_dot/device/kernels/moreh_dot.cpp
-            moreh_dot/device/kernels/reader_moreh_dot.cpp
-            moreh_dot/device/kernels/writer_moreh_dot.cpp
+            ${kernels}
             moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp
             moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp
             moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_sum_w.cpp

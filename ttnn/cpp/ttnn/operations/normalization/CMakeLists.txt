@@ -33,13 +33,14 @@ target_sources(
         rmsnorm/rmsnorm.cpp
 )
 
+file(GLOB_RECURSE kernels softmax/device/kernels/*)
 target_sources(
     ttnn_op_normalization
     PUBLIC
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES softmax/device/kernels/compute/softmax.cpp
+        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})

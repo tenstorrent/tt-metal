@@ -112,6 +112,14 @@ target_sources(
         view/view.cpp
 )
 
+file(
+    GLOB_RECURSE kernels
+    common/kernels/*
+    move/device/kernels/*
+    permute/device/kernels/*
+    sharded/device/kernels/*
+    transpose/device/kernels/*
+)
 target_sources(
     ttnn_op_data_movement
     PUBLIC
@@ -119,23 +127,11 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
-            common/kernels/common.hpp
-            move/device/kernels/dataflow/reader_unary_local_l1_copy_backwards.cpp
-            permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp
-            permute/device/kernels/dataflow/reader_permute_interleaved_rm_blocked_generic.cpp
-            permute/device/kernels/dataflow/reader_permute_interleaved_rm_row_invariant.cpp
-            permute/device/kernels/dataflow/writer_permute_interleaved_rm_blocked_generic.cpp
-            permute/device/kernels/dataflow/writer_permute_interleaved_rm_row_invariant.cpp
-            permute/device/kernels/dataflow/writer_permute_interleaved_tiled_row_invariant.cpp
+            ${kernels}
             reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
             reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
             reshape_view/device/device/rm_reshape_interleaved.cpp
             reshape_view/device/hostdevcommon/common.hpp
-            sharded/device/kernels/dataflow/reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp
-            sharded/device/kernels/dataflow/writer_unary_sharded.cpp
-            sharded/device/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp
-            transpose/device/kernels/compute/transpose_wh.cpp
-            transpose/device/kernels/dataflow/reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
 )
 
 target_include_directories(ttnn_op_data_movement PRIVATE ${FixmeOpIncDirs})

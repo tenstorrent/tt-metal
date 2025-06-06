@@ -11,13 +11,14 @@ target_sources(
         device/binary_ng_program_factory.cpp
         device/binary_ng_utils.cpp
 )
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_binary_ng
     PUBLIC
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES device/kernels/compute/eltwise_binary_no_bcast.cpp device/kernels/compute/eltwise_utils_common.hpp
+        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_eltwise_binary_ng PRIVATE ${FixmeOpIncDirs})

@@ -38,13 +38,14 @@ target_sources(
         reduction_common/reduction_common.cpp
 )
 
+file(GLOB_RECURSE kernels argmax/device/kernels/*)
 target_sources(
     ttnn_op_reduction
     PUBLIC
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES argmax/device/kernels/reader_argmax_interleaved.cpp
+        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})

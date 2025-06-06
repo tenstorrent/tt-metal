@@ -23,17 +23,15 @@ target_sources(
         tanh_accurate/tanh_accurate.cpp
         unary.cpp
 )
+
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_unary
     PUBLIC
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            device/kernels/compute/eltwise_sfpu.cpp
-            device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
-            device/kernels/dataflow/reader_unary_sharded.cpp
-            device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_eltwise_unary PRIVATE ${FixmeOpIncDirs})
