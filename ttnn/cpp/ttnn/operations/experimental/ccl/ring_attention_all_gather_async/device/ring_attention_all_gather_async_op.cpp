@@ -155,19 +155,12 @@ tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::creat
         }
     }
 
-    std::vector<Tensor> persistent_intermediate_tensors, persistent_output_tensors;
-    for (uint32_t i = 0; i < input_tensors.size(); i++) {
-        persistent_intermediate_tensors.push_back(output_tensors[2 * i]);
-        persistent_output_tensors.push_back(output_tensors[2 * i + 1]);
-    }
-
     return ring_attention_all_gather_async_multi_core_with_workers(
         input_tensors,
-        persistent_intermediate_tensors,
         target_device,
         forward_device,
         backward_device,
-        persistent_output_tensors,
+        output_tensors,
         this->dim,
         this->num_links,
         this->ring_size,
@@ -208,7 +201,6 @@ namespace {
 
 std::vector<Tensor> ring_attention_all_gather_async_impl(
     const std::vector<Tensor>& input_tensors,
-    std::vector<Tensor>& persistent_intermediate_buffer,
     std::vector<Tensor>& persistent_output_buffer,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -235,7 +227,6 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
 
     std::vector<std::optional<Tensor>> optional_output_tensors;
     for (size_t i = 0; i < persistent_output_buffer.size(); ++i) {
-        optional_output_tensors.push_back(persistent_intermediate_buffer[i]);
         optional_output_tensors.push_back(persistent_output_buffer[i]);
     }
 
@@ -261,7 +252,6 @@ std::vector<Tensor> ring_attention_all_gather_async_impl(
 
 std::vector<Tensor> ring_attention_all_gather_async(
     const std::vector<Tensor>& input_tensors,
-    std::vector<Tensor>& persistent_intermediate_buffer,
     std::vector<Tensor>& persistent_output_buffer,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -271,9 +261,8 @@ std::vector<Tensor> ring_attention_all_gather_async(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    std::vector<Tensor> full_output_tensors = ring_attention_all_gather_async_impl(
+    return ring_attention_all_gather_async_impl(
         input_tensors,
-        persistent_intermediate_buffer,
         persistent_output_buffer,
         dim,
         multi_device_global_semaphore,
@@ -283,11 +272,6 @@ std::vector<Tensor> ring_attention_all_gather_async(
         memory_config,
         topology,
         sub_device_id);
-    std::vector<Tensor> output_tensors;
-    for (uint32_t i = 0; i < input_tensors.size(); i++) {
-        output_tensors.push_back(full_output_tensors.at(2 * i + 1));
-    }
-    return output_tensors;
 }
 
 }  // namespace ccl

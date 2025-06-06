@@ -14,7 +14,6 @@ namespace operations::experimental::ccl {
 struct ExecuteRingAttentionAllGatherAsync {
     static std::vector<ttnn::Tensor> invoke(
         const std::vector<ttnn::Tensor>& input_tensors,
-        std::vector<ttnn::Tensor>& persistent_intermediate_buffer,
         std::vector<ttnn::Tensor>& persistent_output_buffer,
         const int32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,

@@ -38,7 +38,6 @@ using namespace ccl;
 
 tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers(
     const std::vector<Tensor>& input_tensor,
-    std::vector<Tensor>& intermediate_tensor,
     IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -56,7 +55,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     return ring_attention_all_gather_async_multi_core_with_workers_helper(
         program,
         input_tensor,
-        intermediate_tensor,
         target_device,
         forward_device,
         backward_device,
@@ -74,7 +72,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const std::vector<Tensor>& input_tensor,
-    std::vector<Tensor>& intermediate_tensor,
     IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -454,10 +451,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            const auto& input = input_tensors[0];
-            const auto& output = output_tensors[1];
-            const auto& intermed = output_tensors[0];
-
             // update senders
             auto& worker_reader_sender_forward_runtime_args_by_core =
                 GetRuntimeArgs(program, worker_sender_reader_forward_kernel_id);
@@ -481,16 +474,16 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
                 worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + 2 * input_idx] =
                     input_tensors[input_idx].buffer()->address();
                 worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + 2 * input_idx + 1] =
-                    output_tensors[2 * input_idx].buffer()->address();
+                    output_tensors[input_idx].buffer()->address();
                 worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + 2 * input_idx] =
                     input_tensors[input_idx].buffer()->address();
                 worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + 2 * input_idx + 1] =
-                    output_tensors[2 * input_idx].buffer()->address();
+                    output_tensors[input_idx].buffer()->address();
                 // sender writer
                 worker_writer_sender_forward_runtime_args[writer_sender_rt_offset + input_idx] =
-                    output_tensors[2 * input_idx + 1].buffer()->address();
+                    output_tensors[input_idx].buffer()->address();
                 worker_writer_sender_backward_runtime_args[writer_sender_rt_offset + input_idx] =
-                    output_tensors[2 * input_idx + 1].buffer()->address();
+                    output_tensors[input_idx].buffer()->address();
             }
         };
 

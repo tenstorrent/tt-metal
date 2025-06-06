@@ -26,7 +26,6 @@ void bind_ring_attention_all_gather_async(pybind11::module& module, const ccl_op
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const std::vector<ttnn::Tensor>& input_tensor,
-               std::vector<ttnn::Tensor>& persistent_intermediate_buffer,
                std::vector<ttnn::Tensor>& persistent_output_buffer,
                const int32_t dim,
                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -38,7 +37,6 @@ void bind_ring_attention_all_gather_async(pybind11::module& module, const ccl_op
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
-                    persistent_intermediate_buffer,
                     persistent_output_buffer,
                     dim,
                     multi_device_global_semaphore,
@@ -50,7 +48,6 @@ void bind_ring_attention_all_gather_async(pybind11::module& module, const ccl_op
                     subdevice_id);
             },
             py::arg("input_tensor"),
-            py::arg("persistent_intermediate_buffer"),
             py::arg("persistent_output_buffer"),
             py::arg("dim"),
             py::kw_only(),

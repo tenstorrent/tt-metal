@@ -12,7 +12,6 @@ namespace ttnn::operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> ExecuteRingAttentionAllGatherAsync::invoke(
     const std::vector<ttnn::Tensor>& input_tensors,
-    std::vector<ttnn::Tensor>& persistent_intermediate_buffer,
     std::vector<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -24,7 +23,6 @@ std::vector<ttnn::Tensor> ExecuteRingAttentionAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     return ttnn::operations::experimental::ccl::ring_attention_all_gather_async(
         input_tensors,
-        persistent_intermediate_buffer,
         persistent_output_buffer,
         dim,
         multi_device_global_semaphore,
