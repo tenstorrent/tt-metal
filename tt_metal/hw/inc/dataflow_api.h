@@ -776,7 +776,7 @@ FORCE_INLINE void noc_async_write_set_state(
 #ifdef ARCH_BLACKHOLE
     // Handles writing to PCIe
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_BRCST_EXCLUDE, 0);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_BRCST_EXCLUDE, 0);
 #endif
     NOC_CMD_BUF_WRITE_REG(
         noc,
