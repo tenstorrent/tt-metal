@@ -162,7 +162,7 @@ struct OpPerformanceModelGeneral {
         float noc_l1_bisection_bw = (arch == ARCH::WORMHOLE_B0) ? 512.0 : 786.0;
 
         auto tensor_ns = [peak_dram_bw, noc_l1_bisection_bw](const Tensor& t) {
-            int size_bytes = t.volume() * t.element_size();
+            int size_bytes = t.physical_volume() * t.element_size();
             if (t.memory_config().is_dram()) {
                 return size_bytes / peak_dram_bw / 1024 / 1024 / 1024 * 1000 * 1000 * 1000;
             } else if (t.memory_config().is_l1()) {
@@ -173,27 +173,27 @@ struct OpPerformanceModelGeneral {
         };
 
         for (const auto& t : input_tensors) {
-            this->inputs_bytes.push_back(t.volume() * t.element_size());
+            this->inputs_bytes.push_back(t.physical_volume() * t.element_size());
             if (tensor_ns(t) > this->ideal_bandwidth_ns) {
                 this->ideal_bandwidth_ns = tensor_ns(t);
             }
         }
         if constexpr (std::is_same_v<OutputTensors, Tensors>) {
             for (const auto& t : output_tensors) {
-                this->outputs_bytes.push_back(t.volume() * t.element_size());
+                this->outputs_bytes.push_back(t.physical_volume() * t.element_size());
                 if (tensor_ns(t) > this->ideal_bandwidth_ns) {
                     this->ideal_bandwidth_ns = tensor_ns(t);
                 }
             }
         } else if constexpr (std::is_same_v<OutputTensors, Tensor>) {
-            this->outputs_bytes.push_back(output_tensors.volume() * output_tensors.element_size());
+            this->outputs_bytes.push_back(output_tensors.physical_volume() * output_tensors.element_size());
         } else {
             for (const auto& ot : output_tensors) {
                 if (!ot.has_value()) {
                     continue;
                 }
                 auto& t = ot.value();
-                this->outputs_bytes.push_back(t.volume() * t.element_size());
+                this->outputs_bytes.push_back(t.physical_volume() * t.element_size());
                 if (tensor_ns(t) > this->ideal_bandwidth_ns) {
                     this->ideal_bandwidth_ns = tensor_ns(t);
                 }

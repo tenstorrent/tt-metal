@@ -23,7 +23,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     std::optional<bool> inplace,
     std::optional<ttnn::Layout> output_layout,
     std::optional<int> num_out_blocks) {
-    if (input_tensor.get_layout() == Layout::TILE and inplace.has_value()) {
+    if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),
             "In-place operation not supported: Tile layout requires non-inplace tensors. (inplace={})",
@@ -31,12 +31,12 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     }
 
     if (output_layout.has_value() and inplace.has_value()) {
-        if (output_layout != input_tensor.get_layout()) {
+        if (output_layout != input_tensor.layout()) {
             TT_FATAL(
                 !inplace.value(),
                 "In-place operation not allowed: Input and output tensor layouts differ. (input_layout={}, "
                 "output_layout={})",
-                input_tensor.get_layout(),
+                input_tensor.layout(),
                 output_layout.value());
         }
     }
@@ -50,7 +50,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         "Unsupported memory layout: Input tensor must be width-sharded, but it is not. (memory_layout={})",
         input_tensor.memory_config().memory_layout());
 
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
         input_shape.rank() == 4, "Invalid tensor shape: Input tensor must have rank 4. (rank={})", input_shape.rank());
 
@@ -60,7 +60,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         input_shape[-1],
         num_groups);
 
-    const auto& input_padded_shape = input_tensor.get_padded_shape();
+    const auto& input_padded_shape = input_tensor.padded_shape();
     const auto nhw = input_padded_shape[0] * input_padded_shape[1] * input_padded_shape[2];
     TT_FATAL(
         (nhw % ttnn::types::TILE_SIZE) == 0,
@@ -69,11 +69,11 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         ttnn::types::TILE_SIZE);
 
     // For 0V tensors
-    if (input_tensor.get_logical_volume() == 0) [[unlikely]] {
+    if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
     }
 
-    const auto output_dtype = dtype.value_or(input_tensor.get_dtype());
+    const auto output_dtype = dtype.value_or(input_tensor.dtype());
 
     const std::optional<ttnn::Tensor>& gamma =
         weight.has_value() ? std::optional<ttnn::Tensor>(ttnn::unsqueeze_to_4D(weight.value())) : std::nullopt;
@@ -91,7 +91,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
             .im_data_format = DataType::BFLOAT16,
             .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
-            .output_layout = output_layout.value_or(input_tensor.get_layout())};
+            .output_layout = output_layout.value_or(input_tensor.layout())};
         return operation::run(
                    GroupNorm{
                        .eps = epsilon,
@@ -108,7 +108,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
             .im_data_format = DataType::BFLOAT16,
             .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
-            .output_layout = output_layout.value_or(input_tensor.get_layout()),
+            .output_layout = output_layout.value_or(input_tensor.layout()),
             .num_out_blocks = num_out_blocks.value_or(1)};
         return operation::run(
                    GroupNorm{

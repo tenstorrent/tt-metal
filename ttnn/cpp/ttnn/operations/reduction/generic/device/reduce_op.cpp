@@ -41,7 +41,7 @@ void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to reduce need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
-    TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to reduce must be tilized");
+    TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to reduce must be tilized");
     if (this->dim == ReduceOpDim::H) {
         if (input_tensor.memory_config().is_sharded()) {
             TT_FATAL(
@@ -79,8 +79,8 @@ std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Ten
     // TODO: Remove usage of input/output padded shape
     // - Get output alignment from input alignment and output dtype, layout, mem_config
     // - Get shard spec from output strides (logical shape + alignment)?
-    auto output_shape = input_tensor.get_logical_shape();
-    auto output_padded_shape = input_tensor.get_padded_shape();
+    auto output_shape = input_tensor.logical_shape();
+    auto output_padded_shape = input_tensor.padded_shape();
     switch (this->dim) {
         case ReduceOpDim::H:
             output_shape[2] = 1;
@@ -134,7 +134,7 @@ operation::ProgramWithCallbacks Reduce::create_program(
 ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
-    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
+    uint32_t num_tiles = input_tensor.physical_volume() / TILE_HW;
     if (this->dim == ReduceOpDim::H) {
         return ReduceOpParallelizationStrategy::MULTI_CORE_H;
     } else if (this->dim == ReduceOpDim::W) {
@@ -159,7 +159,7 @@ Tensor reduce_min(
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
     Tensor input = input_tensor;
-    if (input.get_layout() == Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE) {
+    if (input.layout() == Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE) {
         input = ttnn::operations::unary_backward::change_layout_to_tile(input, output_mem_config);
     }
     Tensor n_input_tensor = ttnn::neg(input, output_mem_config);
@@ -203,7 +203,7 @@ Tensor reduce(
             device = input_tensor.device();
         }
         auto input_tensor_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape());
+            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
         auto formatted_input_tensor = input_tensor;
         if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(
                 input_tensor, input_tensor_pad_shape)) {
@@ -216,7 +216,7 @@ Tensor reduce(
                                              ReduceOpDim::W,
                                              1.0,
                                              output_mem_config,
-                                             output_dtype.value_or(input_tensor.get_dtype()),
+                                             output_dtype.value_or(input_tensor.dtype()),
                                              config},
                                          {formatted_input_tensor})
                                          .at(0);
@@ -226,7 +226,7 @@ Tensor reduce(
                        ReduceOpDim::H,
                        scaler,
                        output_mem_config,
-                       output_dtype.value_or(input_tensor.get_dtype()),
+                       output_dtype.value_or(input_tensor.dtype()),
                        config},
                    {output_tensor})
             .at(0);
@@ -237,7 +237,7 @@ Tensor reduce(
                        reduce_dim,
                        scaler,
                        output_mem_config,
-                       output_dtype.value_or(input_tensor.get_dtype()),
+                       output_dtype.value_or(input_tensor.dtype()),
                        config},
                    {input_tensor},
                    {},

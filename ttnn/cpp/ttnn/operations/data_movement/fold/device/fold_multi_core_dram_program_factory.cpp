@@ -31,9 +31,9 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
-    const uint32_t batch_size = input_tensor.get_logical_shape()[0];
-    const uint32_t input_height = input_tensor.get_logical_shape()[1];
-    const uint32_t input_width = input_tensor.get_logical_shape()[2];
+    const uint32_t batch_size = input_tensor.logical_shape()[0];
+    const uint32_t input_height = input_tensor.logical_shape()[1];
+    const uint32_t input_width = input_tensor.logical_shape()[2];
 
     // Get compute grid size and buffer pointers
     auto compute_grid_size = device->compute_with_storage_grid_size();
@@ -41,7 +41,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     ttnn::Shape output_padded_shape = output.padded_shape();
@@ -54,9 +54,9 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 
     // Calculate memory layout parameters
     auto stick_nbytes =
-        output_padded_shape[3] * tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype()));
+        output_padded_shape[3] * tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output.dtype()));
     uint32_t ntiles_per_row = tt::div_up(input_padded_shape[-1], TILE_WIDTH);
-    uint32_t ntiles = input_tensor.volume() / TILE_HW;
+    uint32_t ntiles = input_tensor.physical_volume() / TILE_HW;
     uint32_t num_blocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_row);
 
     tt::log_debug("ntiles_per_row: {}, ntiles: {}, num_blocks: {}", ntiles_per_row, ntiles, num_blocks);
@@ -231,15 +231,15 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
-    const uint32_t batch_size = input_tensor.get_logical_shape()[0];
-    const uint32_t input_height = input_tensor.get_logical_shape()[1];
-    const uint32_t input_width = input_tensor.get_logical_shape()[2];
+    const uint32_t batch_size = input_tensor.logical_shape()[0];
+    const uint32_t input_height = input_tensor.logical_shape()[1];
+    const uint32_t input_width = input_tensor.logical_shape()[2];
 
     Buffer* src0_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     // Calculate total input work
@@ -251,8 +251,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     uint32_t num_cores_y = compute_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-    tt::log_debug("input_tensor_shape: {}", input_tensor.get_padded_shape());
-    tt::log_debug("output_tensor_shape: {}", output.get_padded_shape());
+    tt::log_debug("input_tensor_shape: {}", input_tensor.padded_shape());
+    tt::log_debug("output_tensor_shape: {}", output.padded_shape());
 
     // Calculate work per core based on input dimensions
     uint32_t work_per_core = (total_input_work + num_cores_total - 1) / num_cores_total;
@@ -271,7 +271,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     uint32_t cb_src0_index = tt::CBIndex::c_0;
 
     // Calculate buffer sizes
-    uint32_t stick_nbytes = input_tensor.get_padded_shape()[3] * tt::datum_size(cb_data_format);
+    uint32_t stick_nbytes = input_tensor.padded_shape()[3] * tt::datum_size(cb_data_format);
     // align to DRAM read alignment.
     uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, hal::get_dram_alignment());
 
@@ -335,7 +335,7 @@ Fold::MultiCoreDRAMFold::cached_program_t Fold::MultiCoreDRAMFold::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    if (tensor_args.input_tensor.get_layout() == Layout::TILE) {
+    if (tensor_args.input_tensor.layout() == Layout::TILE) {
         tt::log_debug("Fold operation with DRAM tiled input");
         return fold_multi_core_tiled_interleaved(
             tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);

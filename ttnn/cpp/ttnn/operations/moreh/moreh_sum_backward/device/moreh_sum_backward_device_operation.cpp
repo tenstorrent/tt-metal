@@ -26,10 +26,10 @@ void MorehSumBackwardOperation::validate_inputs(
     }
 
     check_tensor(input, "moreh_sum_backward", "input");
-    const auto& input_shape = input.value().get_padded_shape();
-    auto input_shape_wo_padding = input.value().get_logical_shape();
+    const auto& input_shape = input.value().padded_shape();
+    auto input_shape_wo_padding = input.value().logical_shape();
     auto input_rank = input_shape.rank();
-    auto output_grad_shape_wo_padding = output_grad.get_logical_shape();
+    auto output_grad_shape_wo_padding = output_grad.logical_shape();
 
     // validate output_grad shape
     if (keepdim) {
@@ -76,7 +76,7 @@ void MorehSumBackwardOperation::validate_inputs(
 
     // validate input_grad shape
     if (input_grad.has_value()) {
-        const auto& input_grad_shape = input_grad.value().get_padded_shape();
+        const auto& input_grad_shape = input_grad.value().padded_shape();
         TT_FATAL(input_shape == input_grad_shape, "both shape between input and input_grad should be the same");
     }
 }
@@ -99,12 +99,12 @@ void MorehSumBackwardOperation::validate_on_program_cache_hit(
 MorehSumBackwardOperation::spec_return_value_t MorehSumBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad.has_value()) {
-        return tensor_args.input_grad->get_tensor_spec();
+        return tensor_args.input_grad->tensor_spec();
     }
     TT_FATAL(tensor_args.input.has_value(), "input tensor should not be std::nullopt.");
     return TensorSpec(
-        tensor_args.input->get_logical_shape(),
-        TensorLayout(tensor_args.input->get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+        tensor_args.input->logical_shape(),
+        TensorLayout(tensor_args.input->dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
 MorehSumBackwardOperation::tensor_return_value_t MorehSumBackwardOperation::create_output_tensors(

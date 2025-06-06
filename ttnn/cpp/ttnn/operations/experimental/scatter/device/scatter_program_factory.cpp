@@ -20,19 +20,19 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     Program program{};
 
     const auto& input_tensor{tensor_args.input_tensor};
-    const auto& input_shape{input_tensor.get_padded_shape()};
+    const auto& input_shape{input_tensor.padded_shape()};
     const auto& input_rank{input_shape.rank()};
     const auto& index_tensor{tensor_args.index_tensor};
-    const auto& index_shape{index_tensor.get_padded_shape()};
+    const auto& index_shape{index_tensor.padded_shape()};
     const auto& index_rank{index_shape.rank()};
     const auto& src_tensor{tensor_args.src_tensor};
-    const auto& src_shape{src_tensor.get_padded_shape()};
+    const auto& src_shape{src_tensor.padded_shape()};
     const auto& src_rank{src_shape.rank()};
 
-    const tt::DataFormat input_tensor_cb_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
-    const tt::DataFormat index_tensor_cb_data_format = datatype_to_dataformat_converter(index_tensor.get_dtype());
-    const tt::DataFormat src_tensor_cb_data_format = datatype_to_dataformat_converter(src_tensor.get_dtype());
-    const tt::DataFormat output_tensor_cb_data_format = datatype_to_dataformat_converter(output_tensor.get_dtype());
+    const tt::DataFormat input_tensor_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    const tt::DataFormat index_tensor_cb_data_format = datatype_to_dataformat_converter(index_tensor.dtype());
+    const tt::DataFormat src_tensor_cb_data_format = datatype_to_dataformat_converter(src_tensor.dtype());
+    const tt::DataFormat output_tensor_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
     const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
     const uint32_t index_tensor_tile_size = tile_size(index_tensor_cb_data_format);
@@ -49,10 +49,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t src_tensor_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
     const uint32_t output_tensor_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
 
-    const uint32_t num_input_tiles = input_tensor.volume() / TILE_HW;
-    const uint32_t num_index_tiles = index_tensor.volume() / TILE_HW;
-    const uint32_t num_src_tiles = src_tensor.volume() / TILE_HW;
-    const uint32_t num_output_tiles = output_tensor.volume() / TILE_HW;
+    const uint32_t num_input_tiles = input_tensor.physical_volume() / TILE_HW;
+    const uint32_t num_index_tiles = index_tensor.physical_volume() / TILE_HW;
+    const uint32_t num_src_tiles = src_tensor.physical_volume() / TILE_HW;
+    const uint32_t num_output_tiles = output_tensor.physical_volume() / TILE_HW;
 
     const uint32_t logical_index_height = index_shape[0] * index_shape[1] * index_shape[2];
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
@@ -83,17 +83,17 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t src_tiles = NUM_CB_TILE_UNITS * ONE_TILE;
     const uint32_t out_tiles = NUM_CB_TILE_UNITS * ONE_TILE;
 
-    auto cb_input{create_cb(program, input_tensor.get_dtype(), ScatterCB::INPUT, all_cores, input_tiles)};
-    auto cb_index{create_cb(program, index_tensor.get_dtype(), ScatterCB::INDEX, all_cores, index_tiles)};
-    auto cb_src{create_cb(program, src_tensor.get_dtype(), ScatterCB::SRC, all_cores, src_tiles)};
-    auto cb_dst{create_cb(program, output_tensor.get_dtype(), ScatterCB::DST, all_cores, out_tiles)};
+    auto cb_input{create_cb(program, input_tensor.dtype(), ScatterCB::INPUT, all_cores, input_tiles)};
+    auto cb_index{create_cb(program, index_tensor.dtype(), ScatterCB::INDEX, all_cores, index_tiles)};
+    auto cb_src{create_cb(program, src_tensor.dtype(), ScatterCB::SRC, all_cores, src_tiles)};
+    auto cb_dst{create_cb(program, output_tensor.dtype(), ScatterCB::DST, all_cores, out_tiles)};
 
     constexpr const char* reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/scatter/device/kernels/dataflow/reader_scatter.cpp";
     constexpr const char* writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/scatter/device/kernels/dataflow/writer_scatter.cpp";
 
-    const auto& tile_spec = input_tensor.get_tensor_spec().tile();
+    const auto& tile_spec = input_tensor.tensor_spec().tile();
 
     const std::vector<uint32_t> compile_time_args{
         {input_tensor_is_dram,
@@ -109,12 +109,12 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
          static_cast<uint32_t>(ScatterCB::SRC),
          static_cast<uint32_t>(ScatterCB::DST),
          Wt_input,
-         index_tensor.get_logical_shape()[-1],
+         index_tensor.logical_shape()[-1],
          logical_index_height,
          tile_spec.get_width() / tile_spec.get_face_shape()[1],
          tile_spec.get_height() / tile_spec.get_face_shape()[0],
          Wt_index,
-         input_tensor.get_logical_shape()[-2],
+         input_tensor.logical_shape()[-2],
          Ht,
          total_number_of_cores,
          compute_with_storage_grid_size.x,

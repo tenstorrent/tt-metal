@@ -37,8 +37,8 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     const CoreRange allCores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     auto core_range = allCores;
 
-    auto input_shape = input.get_logical_shape();
-    auto output_shape = output.get_logical_shape();
+    auto input_shape = input.logical_shape();
+    auto output_shape = output.logical_shape();
 
     std::array<uint32_t, 5> new_input_shape{};
     std::array<uint32_t, 5> new_output_shape{};
@@ -71,16 +71,16 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         index_info[dim].is_defined = true;
         index_info[dim].address = index_tensors[i].buffer()->address();
         index_info[dim].is_dram = is_dram(index_tensors[i]);
-        index_info[dim].unit_size = index.get_padded_shape()[-1] * index.element_size();
+        index_info[dim].unit_size = index.padded_shape()[-1] * index.element_size();
     }
 
-    uint32_t index_size = index_tensors.front().get_padded_shape()[-1];
+    uint32_t index_size = index_tensors.front().padded_shape()[-1];
 
     uint32_t input_unit_size = input_5d_shape[-1] * input_5d.element_size();
     uint32_t output_unit_size = input_unit_size;
 
     // split work
-    uint32_t num_units = output.volume() / output_shape[-1];
+    uint32_t num_units = output.physical_volume() / output_shape[-1];
 
     uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
@@ -91,9 +91,9 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     Program program = Program();
 
     // create circular buffers
-    auto src_cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
-    auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].get_dtype());
-    auto output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    auto src_cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
+    auto output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
     auto src_cb_index = CBIndex::c_0;
     auto rounded_input_page_size = round_up_to_mul32(input_unit_size);

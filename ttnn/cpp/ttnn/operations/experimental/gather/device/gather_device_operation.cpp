@@ -13,8 +13,8 @@ constexpr uint32_t WT_THRESHOLD = 60;
 GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Calculate Wt to decide which program factory to use
-    const auto input_tensor_shape = tensor_args.input_tensor.get_padded_shape();
-    const auto input_index_tensor_shape = tensor_args.input_index_tensor.get_padded_shape();
+    const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
+    const auto input_index_tensor_shape = tensor_args.input_index_tensor.padded_shape();
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const uint32_t Wt_input = input_tensor_shape[3] / tile_width;
     const uint32_t Wt_index = input_index_tensor_shape[3] / tile_width;
@@ -34,9 +34,9 @@ void GatherDeviceOperation::validate_on_program_cache_hit(
 void GatherDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Validate shapes of input and output tensors
-    const auto input_tensor_shape = tensor_args.input_tensor.get_logical_shape();
+    const auto input_tensor_shape = tensor_args.input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor_shape.rank();
-    const auto input_index_tensor_shape = tensor_args.input_index_tensor.get_logical_shape();
+    const auto input_index_tensor_shape = tensor_args.input_index_tensor.logical_shape();
     const auto input_index_tensor_rank = input_index_tensor_shape.rank();
 
     TT_FATAL(
@@ -46,7 +46,7 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         input_index_tensor_rank);
 
     if (tensor_args.output_tensor.has_value()) {
-        const auto output_tensor_shape = tensor_args.output_tensor.value().get_logical_shape();
+        const auto output_tensor_shape = tensor_args.output_tensor.value().logical_shape();
         TT_FATAL(
             output_tensor_shape == input_index_tensor_shape,
             "Output tensor shape must be the same as index tensor shape. Got output tensor shape: {} and index "
@@ -73,13 +73,13 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         attributes.output_mem_config.is_sharded());
 
     TT_FATAL(
-        tensor_args.input_tensor.get_layout() == Layout::TILE,
+        tensor_args.input_tensor.layout() == Layout::TILE,
         "The input tensor must be in tiled format. Current layout: {}",
-        tensor_args.input_tensor.get_layout());
+        tensor_args.input_tensor.layout());
     TT_FATAL(
-        tensor_args.input_index_tensor.get_layout() == Layout::TILE,
+        tensor_args.input_index_tensor.layout() == Layout::TILE,
         "The input index tensor must be in tiled format. Current layout: {}",
-        tensor_args.input_index_tensor.get_layout());
+        tensor_args.input_index_tensor.layout());
 
     TT_FATAL(
         (tensor_args.input_tensor.buffer() != nullptr) && (tensor_args.input_index_tensor.buffer() != nullptr),
@@ -99,13 +99,13 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
 GatherDeviceOperation::spec_return_value_t GatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensor.has_value()) {
-        return tensor_args.output_tensor.value().get_tensor_spec();
+        return tensor_args.output_tensor.value().tensor_spec();
     }
     // Create output tensor specs
-    const auto input_index_tensor_shape = tensor_args.input_index_tensor.get_logical_shape();
+    const auto input_index_tensor_shape = tensor_args.input_index_tensor.logical_shape();
     const auto tensor_specs = TensorSpec(
         input_index_tensor_shape,
-        TensorLayout(tensor_args.input_tensor.get_dtype(), PageConfig(Layout::TILE), attributes.output_mem_config));
+        TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(Layout::TILE), attributes.output_mem_config));
     return tensor_specs;
 }
 

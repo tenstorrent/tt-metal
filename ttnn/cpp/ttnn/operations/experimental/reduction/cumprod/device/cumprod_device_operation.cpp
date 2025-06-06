@@ -23,7 +23,7 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
 
     if (optional_out.has_value()) {
         const auto computed_output_shape{compute_output_specs(attributes, tensor_args).logical_shape()};
-        const auto preallocated_output_shape = optional_out.value().get_logical_shape();
+        const auto preallocated_output_shape = optional_out.value().logical_shape();
         TT_FATAL(
             computed_output_shape == preallocated_output_shape,
             "The shapes of the input and the preallocated tensors are not equal.\n"
@@ -34,11 +34,11 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
     }
 
     TT_FATAL(
-        ((dim >= -static_cast<decltype(dim)>(input_tensor.get_padded_shape().rank())) &&
-         (dim < static_cast<decltype(dim)>(input_tensor.get_padded_shape().rank()))),
+        ((dim >= -static_cast<decltype(dim)>(input_tensor.padded_shape().rank())) &&
+         (dim < static_cast<decltype(dim)>(input_tensor.padded_shape().rank()))),
         "The requested cumulation axis is {}, while the input thensor has rank {}.",
         dim,
-        input_tensor.get_padded_shape().rank());
+        input_tensor.padded_shape().rank());
 
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
@@ -54,9 +54,9 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!input_tensor.is_sharded(), "The ttnn.cumprod operation does not support sharded input tensors.");
 
     TT_FATAL(
-        input_tensor.get_layout() == Layout::TILE,
+        input_tensor.layout() == Layout::TILE,
         "The provided input tensor has a non-tile layout: {}.",
-        magic_enum::enum_name(input_tensor.get_layout()));
+        magic_enum::enum_name(input_tensor.layout()));
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -73,18 +73,17 @@ void CumprodDeviceOperation::validate_on_program_cache_hit(
 CumprodDeviceOperation::spec_return_value_t CumprodDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_out.has_value()) {
-        return tensor_args.optional_out->get_tensor_spec();
+        return tensor_args.optional_out->tensor_spec();
     }
 
     auto output_layout{Layout::TILE};
     if (attributes.output_memory_config.is_sharded()) {
-        output_layout = tensor_args.input_tensor.get_layout();
+        output_layout = tensor_args.input_tensor.layout();
     }
 
     const auto output_shape{tensor_args.input_tensor.logical_shape()};
     return TensorSpec{
-        output_shape,
-        TensorLayout{tensor_args.input_tensor.get_dtype(), output_layout, attributes.output_memory_config}};
+        output_shape, TensorLayout{tensor_args.input_tensor.dtype(), output_layout, attributes.output_memory_config}};
 }
 
 CumprodDeviceOperation::tensor_return_value_t CumprodDeviceOperation::create_output_tensors(

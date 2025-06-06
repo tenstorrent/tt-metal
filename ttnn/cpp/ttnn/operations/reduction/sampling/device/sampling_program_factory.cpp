@@ -24,10 +24,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_values_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
     tt::DataFormat input_indices_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(input_indices_tensor.get_dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(input_indices_tensor.dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
 
     uint32_t input_values_tile_size = tile_size(input_values_cb_data_format);
@@ -41,11 +41,11 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     bool input_indices_is_dram = input_indices_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool output_is_dram = output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    uint32_t num_input_values_tiles = input_values_tensor.volume() / TILE_HW;
-    uint32_t num_input_indices_tiles = input_indices_tensor.volume() / TILE_HW;
+    uint32_t num_input_values_tiles = input_values_tensor.physical_volume() / TILE_HW;
+    uint32_t num_input_indices_tiles = input_indices_tensor.physical_volume() / TILE_HW;
     auto device = input_values_tensor.device();
 
-    auto input_shape = input_values_tensor.get_logical_shape();
+    auto input_shape = input_values_tensor.logical_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
     auto num_cores = Ht * TILE_HEIGHT;

@@ -62,8 +62,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
-    auto in0_tile = in0.get_tensor_spec().tile();
-    auto in1_tile = in1.get_tensor_spec().tile();
+    auto in0_tile = in0.tensor_spec().tile();
+    auto in1_tile = in1.tensor_spec().tile();
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
     auto in1_tile_shape = in1_tile.get_tile_shape();
@@ -496,18 +496,18 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
     uint32_t per_core_N,
     bool fuse_batch,
     bool untilize_out) {
-    const auto& ashape = a.get_padded_shape();
-    const auto& bshape = b.get_padded_shape();
-    auto in0_tile_shape = a.get_tensor_spec().tile().get_tile_shape();
-    auto in1_tile_shape = b.get_tensor_spec().tile().get_tile_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
+    auto in0_tile_shape = a.tensor_spec().tile().get_tile_shape();
+    auto in1_tile_shape = b.tensor_spec().tile().get_tile_shape();
 
     TT_FATAL(
         (bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2),
         "Bcast batch not supported for this parallelization");
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());    // in0
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());    // in1
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());        // in0
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());        // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype);  // output
 
     tt_metal::IDevice* device = a.device();
@@ -534,7 +534,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
 
-    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile_shape[1];
+    uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile_shape[1];
 
     // TODO: Generalize
     TT_FATAL(!fuse_batch, "Only fuse_batch=false is supported for optimized bmm!");

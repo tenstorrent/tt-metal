@@ -64,7 +64,7 @@ void test_tensor_on_device(
         }
     }
 
-    EXPECT_EQ(tensor.get_padded_shape(), layout.compute_padded_shape(input_shape));
+    EXPECT_EQ(tensor.padded_shape(), layout.compute_padded_shape(input_shape));
     tensor.deallocate();
 }
 

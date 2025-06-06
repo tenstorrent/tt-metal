@@ -26,7 +26,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const uint32_t channel_size = operation_attributes.channel_size;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto target_shape = target.get_padded_shape();
+    auto target_shape = target.padded_shape();
     const bool weight_has_value = weight.has_value();
     auto H = target_shape[-2];
     auto W = target_shape[-1];
@@ -34,7 +34,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     auto Wt = W / tt::constants::TILE_WIDTH;
 
     // copy TILE per core
-    uint32_t units_to_divide = target.volume() / H / W * (Ht * Wt);
+    uint32_t units_to_divide = target.physical_volume() / H / W * (Ht * Wt);
 
     tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
@@ -49,8 +49,8 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     Program program = Program();
 
     // create circular buffers
-    const auto target_data_format = tt_metal::datatype_to_dataformat_converter(target.get_dtype());
-    const auto data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    const auto target_data_format = tt_metal::datatype_to_dataformat_converter(target.dtype());
+    const auto data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     const auto target_tile_size = tt_metal::detail::TileSize(target_data_format);

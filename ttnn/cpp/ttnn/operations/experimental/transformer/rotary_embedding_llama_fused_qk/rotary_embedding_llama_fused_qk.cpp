@@ -23,8 +23,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> RotaryEmbeddingLlamaFusedQKOperation::inv
 
     tt::tt_metal::MemoryConfig q_output_memory_config = q_input_tensor.memory_config();
     tt::tt_metal::MemoryConfig k_output_memory_config = k_input_tensor.memory_config();
-    bool row_major_QK =
-        q_input_tensor.get_layout() == Layout::ROW_MAJOR && k_input_tensor.get_layout() == Layout::ROW_MAJOR;
+    bool row_major_QK = q_input_tensor.layout() == Layout::ROW_MAJOR && k_input_tensor.layout() == Layout::ROW_MAJOR;
     auto output_tensors = tt::tt_metal::operation::run(
         tt::tt_metal::RotaryEmbeddingLlamaFusedQK{
             q_output_memory_config, k_output_memory_config, kernel_config_val, row_major_QK},

@@ -208,7 +208,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     const uint32_t cb_pages = all_to_all_detail::TRIPLE_BUFFER_MULTIPLIER * pages_per_packet;
 
     // Create buffers
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto [sender_buffer, header_buffer] =
         all_to_all_detail::create_sender_buffers(program, sender_worker_core_range, cb_pages, page_size, data_format);
     auto receiver_buffer = all_to_all_detail::create_receiver_buffer(
@@ -380,10 +380,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         receiver_reader_kernel_config);
 
     // Determine output shape and fracturing
-    const auto input_shape = input_tensor.get_padded_shape();
+    const auto input_shape = input_tensor.padded_shape();
     const auto in_row_tiles = input_shape[2] / tt::constants::TILE_HEIGHT;
     const auto in_col_tiles = input_shape[3] / tt::constants::TILE_WIDTH;
-    auto output_shape = output_buffer.get_padded_shape();
+    auto output_shape = output_buffer.padded_shape();
     const auto out_row_tiles = output_shape[2] / tt::constants::TILE_HEIGHT;
     const auto out_col_tiles = output_shape[3] / tt::constants::TILE_WIDTH;
 

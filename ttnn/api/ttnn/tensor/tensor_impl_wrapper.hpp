@@ -26,11 +26,11 @@ auto dispatch(DataType dtype, Func&& func, Args&&... args) {
 
 #define AS_LAMBDA(func) []<typename T>(auto&&... args) { return func<T>(std::forward<decltype(args)>(args)...); }
 
-#define WRAP_FUNCTION(func)                                                                                         \
-    template <typename... Args>                                                                                     \
-    auto func##_wrapper(Args&&... args) {                                                                           \
-        return dispatch(                                                                                            \
-            std::get<0>(std::forward_as_tuple(args...)).get_dtype(), AS_LAMBDA(func), std::forward<Args>(args)...); \
+#define WRAP_FUNCTION(func)                                                                                     \
+    template <typename... Args>                                                                                 \
+    auto func##_wrapper(Args&&... args) {                                                                       \
+        return dispatch(                                                                                        \
+            std::get<0>(std::forward_as_tuple(args...)).dtype(), AS_LAMBDA(func), std::forward<Args>(args)...); \
     }
 
 WRAP_FUNCTION(to_host)

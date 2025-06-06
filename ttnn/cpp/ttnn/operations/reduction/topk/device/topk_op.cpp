@@ -19,8 +19,7 @@ static inline bool verify_multi_core_cost(
     uint32_t k,
     const CoreRangeSet& core_range_set) {
     auto device = input_tensors.at(0).device();
-    tt::DataFormat value_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).get_dtype());
+    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
 
     uint32_t value_tile_size = tile_size(value_cb_data_format);
@@ -58,8 +57,7 @@ static inline bool verify_single_core_cost(const std::vector<Tensor>& input_tens
     uint32_t output_cb_tile_count = Ktiles;
 
     auto device = input_tensors.at(0).device();
-    tt::DataFormat value_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).get_dtype());
+    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
 
     uint32_t value_tile_size = tile_size(value_cb_data_format);
@@ -79,7 +77,7 @@ namespace ttnn::operations::reduction {
 
 void TopK::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    auto input_shape = input_tensors.at(0).get_padded_shape();
+    auto input_shape = input_tensors.at(0).padded_shape();
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
 
     TT_FATAL(
@@ -92,7 +90,7 @@ void TopK::validate_with_output_tensors(
         input_shape[0] * input_shape[1] * input_shape[2]);
 
     TT_FATAL(this->output_mem_config.is_sharded() == false, "Sharded implementation not supported yet");
-    TT_FATAL(input_tensors.at(0).get_layout() == Layout::TILE, "The input must be in tiled format");
+    TT_FATAL(input_tensors.at(0).layout() == Layout::TILE, "The input must be in tiled format");
 
     bool can_run = false;
 
@@ -123,15 +121,15 @@ std::vector<TensorSpec> TopK::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (output_tensors.size() == 2) {
         if (output_tensors.at(0).has_value() && output_tensors.at(1).has_value()) {
-            return {output_tensors[0]->get_tensor_spec(), output_tensors[1]->get_tensor_spec()};
+            return {output_tensors[0]->tensor_spec(), output_tensors[1]->tensor_spec()};
         }
     }
     const auto& input_tensor = input_tensors.at(0);
-    auto output_shape = input_tensors.at(0).get_logical_shape();
+    auto output_shape = input_tensors.at(0).logical_shape();
     output_shape[-1] = this->k;
 
     auto values_spec =
-        TensorSpec(output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
+        TensorSpec(output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), output_mem_config));
     auto index_spec =
         TensorSpec(output_shape, TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), output_mem_config));
     return {values_spec, index_spec};
@@ -156,13 +154,12 @@ operation::ProgramWithCallbacks TopK::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     bool multicore_supported = true;
-    multicore_supported &= (input_tensor.get_padded_shape()[dim] >= topk_utils::multi_core_min_width);
+    multicore_supported &= (input_tensor.padded_shape()[dim] >= topk_utils::multi_core_min_width);
 
-    auto input_shape = input_tensors.at(0).get_padded_shape();
+    auto input_shape = input_tensors.at(0).padded_shape();
     auto device = input_tensors.at(0).device();
 
-    tt::DataFormat value_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).get_dtype());
+    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
     uint32_t value_tile_size = tile_size(value_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);

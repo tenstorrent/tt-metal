@@ -22,13 +22,13 @@ void MorehNllLossStep2DeviceOperation::validate_inputs(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "intput_tensor to nll_loss need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "intput_tensor to nll_loss need to be allocated in buffers on device!");
-    TT_FATAL((input_tensor.get_layout() == Layout::TILE), "intput_tensor to nll_loss must be tilized");
-    TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16, "input tensor type must be bfloat16");
+    TT_FATAL((input_tensor.layout() == Layout::TILE), "intput_tensor to nll_loss must be tilized");
+    TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "input tensor type must be bfloat16");
 
     TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE, "target_tensor to nll_loss need to be on device!");
     TT_FATAL(target_tensor.buffer() != nullptr, "target_tensor to nll_loss need to be allocated in buffers on device!");
-    TT_FATAL((target_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
-    TT_FATAL(target_tensor.get_dtype() == DataType::INT32, "target tensor type must be int32");
+    TT_FATAL((target_tensor.layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
+    TT_FATAL(target_tensor.dtype() == DataType::INT32, "target tensor type must be int32");
 
     if (weight_tensor.has_value()) {
         TT_FATAL(
@@ -38,9 +38,8 @@ void MorehNllLossStep2DeviceOperation::validate_inputs(
             weight_tensor.value().buffer() != nullptr,
             "weight_tensor to nll_loss need to be allocated in buffers on device!");
         TT_FATAL(
-            (weight_tensor.value().get_layout() == Layout::TILE),
-            "weight_tensor to nll_loss must be in row major layout");
-        TT_FATAL(weight_tensor.value().get_dtype() == DataType::BFLOAT16, "weight tensor type must be bfloat16");
+            (weight_tensor.value().layout() == Layout::TILE), "weight_tensor to nll_loss must be in row major layout");
+        TT_FATAL(weight_tensor.value().dtype() == DataType::BFLOAT16, "weight tensor type must be bfloat16");
     }
 
     if (divisor_tensor.has_value()) {
@@ -50,8 +49,8 @@ void MorehNllLossStep2DeviceOperation::validate_inputs(
         TT_FATAL(
             divisor_tensor.value().buffer() != nullptr,
             "divisor_tensor to nll_loss need to be allocated in buffers on device!");
-        TT_FATAL((divisor_tensor.value().get_layout() == Layout::TILE), "divisor_tensor to nll_loss must be tilized");
-        TT_FATAL(divisor_tensor.value().get_dtype() == DataType::BFLOAT16, "divisor tensor type must be bfloat16");
+        TT_FATAL((divisor_tensor.value().layout() == Layout::TILE), "divisor_tensor to nll_loss must be tilized");
+        TT_FATAL(divisor_tensor.value().dtype() == DataType::BFLOAT16, "divisor tensor type must be bfloat16");
     }
 }
 
@@ -68,14 +67,14 @@ void MorehNllLossStep2DeviceOperation::validate_on_program_cache_hit(
 MorehNllLossStep2DeviceOperation::spec_return_value_t MorehNllLossStep2DeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (operation_attributes.reduction == NONE && tensor_args.output_tensor.has_value()) {
-        return tensor_args.output_tensor->get_tensor_spec();
+        return tensor_args.output_tensor->tensor_spec();
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.get_padded_shape();
-    auto input_shape_without_padding = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.padded_shape();
+    auto input_shape_without_padding = input_tensor.logical_shape();
     auto input_rank = input_shape.rank();
-    auto dtype = tensor_args.input_tensor.get_dtype();
+    auto dtype = tensor_args.input_tensor.dtype();
     Layout layout{Layout::TILE};
 
     auto C = input_shape[1];

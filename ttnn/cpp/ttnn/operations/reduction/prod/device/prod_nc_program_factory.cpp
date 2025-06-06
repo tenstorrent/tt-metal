@@ -28,11 +28,11 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    const auto input_shape = input.get_padded_shape();
-    const auto input_shape_without_padding = input.get_logical_shape();
+    const auto input_shape = input.padded_shape();
+    const auto input_shape_without_padding = input.logical_shape();
 
     const auto N = input_shape[0];
     const auto C = input_shape[1];
@@ -42,7 +42,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     const auto CHtWt = C * Ht * Wt;
     const auto num_reduce_input_tile = input_shape[dim];
     const auto input_tile_offset = (dim == 0) ? (CHtWt) : (HtWt);
-    const auto num_output_tiles = output.volume() / TILE_HW;
+    const auto num_output_tiles = output.physical_volume() / TILE_HW;
 
     log_debug(LogTest, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
     log_debug(

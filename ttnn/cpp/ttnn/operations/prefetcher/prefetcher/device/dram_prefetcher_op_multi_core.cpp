@@ -53,19 +53,19 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tensors.begin(), tensors.end(), std::back_inserter(tensor_buffers), [](const auto& t) { return t.buffer(); });
 
     /* Tiles */
-    tt::tt_metal::Tile tensor_addrs_tile = tensor_addrs.get_tensor_spec().tile();
+    tt::tt_metal::Tile tensor_addrs_tile = tensor_addrs.tensor_spec().tile();
     std::vector<tt::tt_metal::Tile> tensor_tiles;
     tensor_tiles.reserve(tensors.size());
     std::transform(tensors.begin(), tensors.end(), std::back_inserter(tensor_tiles), [](const auto& t) {
-        return t.get_tensor_spec().tile();
+        return t.tensor_spec().tile();
     });
 
     /* Dataformats */
-    tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.get_dtype());
+    tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.dtype());
     std::vector<tt::DataFormat> tensor_data_formats;
     tensor_data_formats.reserve(tensors.size());
     std::transform(tensors.begin(), tensors.end(), std::back_inserter(tensor_data_formats), [](const auto& t) {
-        return tt::tt_metal::datatype_to_dataformat_converter(t.get_dtype());
+        return tt::tt_metal::datatype_to_dataformat_converter(t.dtype());
     });
 
     Program program{};

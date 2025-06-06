@@ -871,7 +871,7 @@ bool RunLocalTestWithMultiInputReaders(
     auto second_cb_index = tt::CB::c_in1;
 
     auto output_tensor_dest_device = devices.at(output_tensor_dest_device_index);
-    TT_ASSERT(input_tensor0.get_logical_shape()[-2] != 1);
+    TT_ASSERT(input_tensor0.logical_shape()[-2] != 1);
 
     bool is_fabric_mcast = std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args);
 
@@ -1741,10 +1741,10 @@ void RunFabricMcastFullTensorPropagateTest(
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to_layout(layout);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-    ASSERT_EQ(input_tensor0.get_logical_shape(), tensor_shape);
-    ASSERT_EQ(input_tensor1.get_logical_shape(), tensor_shape);
-    ASSERT_EQ(output_tensor0.get_logical_shape(), tensor_shape);
-    ASSERT_EQ(output_tensor1.get_logical_shape(), tensor_shape);
+    ASSERT_EQ(input_tensor0.logical_shape(), tensor_shape);
+    ASSERT_EQ(input_tensor1.logical_shape(), tensor_shape);
+    ASSERT_EQ(output_tensor0.logical_shape(), tensor_shape);
+    ASSERT_EQ(output_tensor1.logical_shape(), tensor_shape);
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
