@@ -91,6 +91,20 @@ jobs:
             if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
               pip install -r ${{ github.workspace }}/models/tt_transformers/requirements.txt
             fi
+            # Health check loop
+            for i in {1..10}; do
+              echo "Health check attempt $i"
+              if tt-smi-metal -r 0,1,2,3 && ./build/test/tt_metal/tt_fabric/test_system_health; then
+                echo "Health checks passed"
+                break
+              fi
+              if [ $i -eq 10 ]; then
+                echo "Health checks failed after 10 attempts"
+                exit 1
+              fi
+              echo "Health checks failed, retrying..."
+              sleep 5
+            done
             ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
