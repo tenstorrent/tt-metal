@@ -10,7 +10,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import comp_allclose_and_pcc
 
 
-def is_supported(tensor_rank, dim, ttnn_dtype):
+def is_supported(shape, dim, ttnn_dtype):
+    tensor_rank = len(shape)
+
+    if dim < tensor_rank:
+        accumulation_length = shape[dim]
+        if ttnn_dtype == ttnn.bfloat16 and accumulation_length > 10000:
+            return False  # for bfloat16, accmulation errors can happen easily on long tensor
+
     if ttnn_dtype == ttnn.float32 or ttnn_dtype == ttnn.bfloat16:
         return True
 
@@ -70,8 +77,9 @@ def is_supported(tensor_rank, dim, ttnn_dtype):
         ((2, 3, 4, 5, 33, 33), 3),
         ((2, 3, 4, 5, 33, 33), 4),
         ((2, 3, 4, 5, 33, 33), 5),
-        # ([1, 151936], -1),
-        # ([1, 19], -1)
+        ([8192, 16, 32, 32], 1),
+        ([1, 151936], -1),
+        ([1, 19], -1),
     ],
 )
 @pytest.mark.parametrize(
@@ -97,9 +105,8 @@ def test_cumsum(size, dim, dtypes, device):
 
     expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
-    tensor_rank = len(size)
     # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
-    if not is_supported(tensor_rank, dim, expected_output_dtype):
+    if not is_supported(size, dim, expected_output_dtype):
         return
 
     output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
@@ -151,7 +158,7 @@ def test_cumsum(size, dim, dtypes, device):
         ([2, 3, 5, 33, 128], 0),
         ([2, 3, 5, 33, 128], 1),
         ([2, 3, 5, 33, 128], 2),
-        # ([1, 151936], -1),
+        ([1, 151936], -1),
     ],
 )
 @pytest.mark.parametrize(
@@ -176,6 +183,9 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 
     # For now, test_cumsum_with_preallocated_output ony support bfloat16 and float32
     if expected_output_dtype == ttnn.int32 or expected_output_dtype == ttnn.uint32:
+        return
+
+    if not is_supported(size, dim, expected_output_dtype):
         return
 
     preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=ttnn_dtype, layout=ttnn.Layout.TILE)
