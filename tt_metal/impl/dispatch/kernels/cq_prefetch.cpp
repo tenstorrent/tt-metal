@@ -34,55 +34,56 @@ static_assert((sizeof(CQPrefetchHToPrefetchDHeader) & (CQ_PREFETCH_CMD_BARE_MIN_
 
 using prefetch_q_entry_type = uint16_t;
 
-constexpr uint32_t downstream_cb_base = get_compile_time_arg_val(0);
-constexpr uint32_t downstream_cb_log_page_size = get_compile_time_arg_val(1);
-constexpr uint32_t downstream_cb_pages = get_compile_time_arg_val(2);
-constexpr uint32_t my_downstream_cb_sem_id = get_compile_time_arg_val(3);
-constexpr uint32_t downstream_cb_sem_id = get_compile_time_arg_val(4);
+// Use named defines instead of get_compile_time_arg_val indices
+constexpr uint32_t downstream_cb_base = DOWNSTREAM_CB_BASE;
+constexpr uint32_t downstream_cb_log_page_size = DOWNSTREAM_CB_LOG_PAGE_SIZE;
+constexpr uint32_t downstream_cb_pages = DOWNSTREAM_CB_PAGES;
+constexpr uint32_t my_downstream_cb_sem_id = MY_DOWNSTREAM_CB_SEM_ID;
+constexpr uint32_t downstream_cb_sem_id = DOWNSTREAM_CB_SEM_ID;
 
 // unused for prefetch_d
-constexpr uint32_t pcie_base = get_compile_time_arg_val(5);
-constexpr uint32_t pcie_size = get_compile_time_arg_val(6);
-constexpr uint32_t prefetch_q_base = get_compile_time_arg_val(7);
-constexpr uint32_t prefetch_q_size = get_compile_time_arg_val(8);
-constexpr uint32_t prefetch_q_rd_ptr_addr = get_compile_time_arg_val(9);
-constexpr uint32_t prefetch_q_pcie_rd_ptr_addr = get_compile_time_arg_val(10);
+constexpr uint32_t pcie_base = PCIE_BASE;
+constexpr uint32_t pcie_size = PCIE_SIZE;
+constexpr uint32_t prefetch_q_base = PREFETCH_Q_BASE;
+constexpr uint32_t prefetch_q_size = PREFETCH_Q_SIZE;
+constexpr uint32_t prefetch_q_rd_ptr_addr = PREFETCH_Q_RD_PTR_ADDR;
+constexpr uint32_t prefetch_q_pcie_rd_ptr_addr = PREFETCH_Q_PCIE_RD_PTR_ADDR;
 
-constexpr uint32_t cmddat_q_base = get_compile_time_arg_val(11);
-constexpr uint32_t cmddat_q_size = get_compile_time_arg_val(12);
+constexpr uint32_t cmddat_q_base = CMDDAT_Q_BASE;
+constexpr uint32_t cmddat_q_size = CMDDAT_Q_SIZE;
 
 // unused for prefetch_h
-constexpr uint32_t scratch_db_base = get_compile_time_arg_val(13);
-constexpr uint32_t scratch_db_size = get_compile_time_arg_val(14);
-constexpr uint32_t my_downstream_sync_sem_id = get_compile_time_arg_val(15);
+constexpr uint32_t scratch_db_base = SCRATCH_DB_BASE;
+constexpr uint32_t scratch_db_size = SCRATCH_DB_SIZE;
+constexpr uint32_t my_downstream_sync_sem_id = DOWNSTREAM_SYNC_SEM_ID;
 
 // prefetch_d specific
-constexpr uint32_t cmddat_q_pages = get_compile_time_arg_val(16);
-constexpr uint32_t my_upstream_cb_sem_id = get_compile_time_arg_val(17);
-constexpr uint32_t upstream_cb_sem_id = get_compile_time_arg_val(18);
-constexpr uint32_t cmddat_q_log_page_size = get_compile_time_arg_val(19);
-constexpr uint32_t cmddat_q_blocks = get_compile_time_arg_val(20);
+constexpr uint32_t cmddat_q_pages = CMDDAT_Q_PAGES;
+constexpr uint32_t my_upstream_cb_sem_id = MY_UPSTREAM_CB_SEM_ID;
+constexpr uint32_t upstream_cb_sem_id = UPSTREAM_CB_SEM_ID;
+constexpr uint32_t cmddat_q_log_page_size = CMDDAT_Q_LOG_PAGE_SIZE;
+constexpr uint32_t cmddat_q_blocks = CMDDAT_Q_BLOCKS;
 
 // used for prefetch_d <--> dispatch_s data path
-constexpr uint32_t dispatch_s_buffer_base = get_compile_time_arg_val(21);
-constexpr uint32_t my_dispatch_s_cb_sem_id = get_compile_time_arg_val(22);
-constexpr uint32_t downstream_dispatch_s_cb_sem_id = get_compile_time_arg_val(23);
-constexpr uint32_t dispatch_s_buffer_size = get_compile_time_arg_val(24);
-constexpr uint32_t dispatch_s_cb_log_page_size = get_compile_time_arg_val(25);
+constexpr uint32_t dispatch_s_buffer_base = DISPATCH_S_BUFFER_BASE;
+constexpr uint32_t my_dispatch_s_cb_sem_id = MY_DISPATCH_S_CB_SEM_ID;
+constexpr uint32_t downstream_dispatch_s_cb_sem_id = DOWNSTREAM_DISPATCH_S_CB_SEM_ID;
+constexpr uint32_t dispatch_s_buffer_size = DISPATCH_S_BUFFER_SIZE;
+constexpr uint32_t dispatch_s_cb_log_page_size = DISPATCH_S_CB_LOG_PAGE_SIZE;
 
 // used for fd on fabric
-constexpr uint32_t downstream_mesh_id = get_compile_time_arg_val(26);
-constexpr uint32_t downstream_dev_id = get_compile_time_arg_val(27);
-constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(28);
-constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(29);
-constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(30);
-constexpr uint32_t outbound_eth_chan = get_compile_time_arg_val(31);
-constexpr uint32_t client_interface_addr = get_compile_time_arg_val(32);
+constexpr uint32_t downstream_mesh_id = DOWNSTREAM_MESH_ID;
+constexpr uint32_t downstream_dev_id = DOWNSTREAM_DEV_ID;
+constexpr uint32_t upstream_mesh_id = UPSTREAM_MESH_ID;
+constexpr uint32_t upstream_dev_id = UPSTREAM_DEV_ID;
+constexpr uint32_t fabric_router_noc_xy = FABRIC_ROUTER_NOC_XY;
+constexpr uint32_t outbound_eth_chan = OUTBOUND_ETH_CHAN;
+constexpr uint32_t client_interface_addr = CLIENT_INTERFACE_ADDR;
 
-constexpr uint32_t ringbuffer_size = get_compile_time_arg_val(33);
+constexpr uint32_t ringbuffer_size = RINGBUFFER_SIZE;
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(34);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(35);
+constexpr uint32_t is_d_variant = IS_D_VARIANT;
+constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -1434,7 +1435,7 @@ bool process_cmd(
 
         default:
             //  DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " <<
-            //  cmddat_q_base << ENDL();
+            //                           cmddat_q_base << ENDL();
             //  DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
             //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
             //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
