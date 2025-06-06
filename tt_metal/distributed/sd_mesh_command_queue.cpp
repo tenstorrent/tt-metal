@@ -50,6 +50,7 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t index)
 }
 
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    TT_FATAL(id_ == 0, "Mesh workloads can only be enqueued on command queue with id 0");
     if (!blocking) {
         log_warning(
             tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload exection.", __FUNCTION__);
