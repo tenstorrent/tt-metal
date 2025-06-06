@@ -64,7 +64,7 @@ template <
     uint32_t num_faces_h,
     uint32_t face_h,
     uint32_t face_w>
-void fill_pad_face(T* tile_ptr, uint32_t fill_value) {
+void fill_pad_face(T* tile_ptr, T fill_value) {
     // Calculate face offset
     constexpr uint32_t face_offset = (face_h * num_faces_w + face_w) * FACE_HW;
     auto face_ptr = tile_ptr + face_offset;
@@ -131,7 +131,7 @@ template <
     uint32_t num_elements_unpadded_h,
     uint32_t num_faces_w = TILE_WIDTH / FACE_WIDTH,
     uint32_t num_faces_h = TILE_HEIGHT / FACE_HEIGHT>
-void fill_pad_tile(uint32_t l1_tile_ptr, uint32_t fill_value) {
+void fill_pad_tile(uint32_t l1_tile_ptr, T fill_value) {
     auto tile_ptr = reinterpret_cast<T*>(l1_tile_ptr);
 
     // Face 0, 0
