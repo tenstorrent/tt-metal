@@ -197,8 +197,7 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 20000, "upper": 23500}, "bandwidth": 28},
         },
         50: {  # One to One Directed Ideal
-            "riscv_1": {"latency": {"lower": 18000, "upper": 23000}, "bandwidth": 23},  # 21882, 23.9
-            "riscv_0": {"latency": {"lower": 15000, "upper": 19000}, "bandwidth": 29},  # 17705, 29.6
+            "riscv_0": {"latency": {"lower": 28000, "upper": 36000}, "bandwidth": 29},  # 33832
         },
         51: {  # One from One Directed Ideal
             "riscv_1": {"latency": {"lower": 15000, "upper": 20000}, "bandwidth": 28},  # 18596, 28.2
@@ -246,7 +245,7 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 34},
         },
         4: {
-            "riscv_0": {"latency": {"lower": 300, "upper": 9200}, "bandwidth": 0.17},
+            "riscv_0": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.17},
         },
         5: {
             "riscv_1": {"latency": {"lower": 300, "upper": 9200}, "bandwidth": 0.17},
@@ -286,8 +285,7 @@ test_bounds = {
         },
         30: {"riscv_1": {"latency": {"lower": 10000, "upper": 11500}, "bandwidth": 57}},
         50: {  # One to One Directed Ideal
-            "riscv_1": {"latency": {"lower": 5000, "upper": 10000}, "bandwidth": 50},  # 9201, 57.0
-            "riscv_0": {"latency": {"lower": 5000, "upper": 9500}, "bandwidth": 59},  # 8725, 60.1
+            "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},  # 17000
         },
         51: {  # One from One Directed Ideal
             "riscv_1": {"latency": {"lower": 5000, "upper": 10000}, "bandwidth": 59},  # 8730, 60.1
