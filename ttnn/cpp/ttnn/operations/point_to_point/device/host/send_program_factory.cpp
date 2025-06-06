@@ -61,8 +61,9 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
         compute_aligned_packet_dims(input_tensor.get_dtype(), input_page_size_bytes, input_num_pages, l1_alignment);
 
-    // distribute work
-    const auto use_cores = mesh_device->compute_with_storage_grid_size();
+    // In principal this should work on multiple cores but fabric does not seem to support multiple cores/link
+    // const auto use_cores = mesh_device->compute_with_storage_grid_size();
+    const CoreCoord use_cores = {1, 1};
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(use_cores, total_packets);
