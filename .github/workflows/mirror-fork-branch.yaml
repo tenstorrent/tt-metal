@@ -24,6 +24,9 @@ on:
           `mirror/<fork_owner>/<branch>`.
         required: false
 
+permissions:
+  contents: write
+
 jobs:
   mirror-fork-branch:
     runs-on: ubuntu-latest
