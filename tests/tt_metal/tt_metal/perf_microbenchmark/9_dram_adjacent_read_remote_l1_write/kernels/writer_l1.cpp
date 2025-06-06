@@ -46,7 +46,7 @@ void kernel_main() {
                 l1_read_addr += page_size * num_pages_w_per_receiver;  // Stride read pointer to start of second core
             }
 
-            noc_async_write_one_packet_set_state(
+            noc_async_write_set_state<page_size>(
                 l1_noc_write_addr_for_receiver_core, page_size, noc, vc);  // Set state to write a page to noc/vc
 
             for (uint32_t h = 0; h < num_tiles_h; ++h) {  // Iterate over page rows per receiver core

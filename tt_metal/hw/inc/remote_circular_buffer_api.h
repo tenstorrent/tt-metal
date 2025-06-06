@@ -332,7 +332,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
             NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]), DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1])));
         uint64_t dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
 
-        noc_async_write_one_packet_set_state<non_posted>(dest_noc_addr, coalesced_page_size, noc);
+        noc_async_write_set_state<1, non_posted>(dest_noc_addr, coalesced_page_size, noc);
 
         for (uint32_t h = 0; h < num_rows; ++h) {
             uint32_t prev_src_addr = src_addr;
