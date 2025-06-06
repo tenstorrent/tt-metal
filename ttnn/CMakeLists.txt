@@ -96,6 +96,7 @@ target_link_libraries(
         xtensor
         FlatBuffers::FlatBuffers
         Boost::algorithm
+        OpenMP::OpenMP_CXX
 )
 install(TARGETS ttnn_core LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 

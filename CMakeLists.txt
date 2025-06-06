@@ -220,6 +220,10 @@ add_library(TT::CommonPCH ALIAS metal_common_pch)
 file(GENERATE OUTPUT metal_common_pch.cpp CONTENT "/*dummy pch file*/\n")
 target_sources(metal_common_pch PRIVATE metal_common_pch.cpp)
 
+# TODO: re-enable after figuring out OpenMP version mismatch.
+set(CMAKE_DISABLE_PRECOMPILE_HEADERS ON)
+find_package(OpenMP REQUIRED)
+
 target_precompile_headers(
     metal_common_pch
     PUBLIC
