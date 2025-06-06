@@ -5,7 +5,12 @@
 import torch
 import ttnn
 from models.experimental.maptr.reference.resnet import ResNet
-from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_parameters, fold_batch_norm2d_into_conv2d
+from models.experimental.maptr.reference.fpn import FPN
+from ttnn.model_preprocessing import (
+    infer_ttnn_module_args,
+    preprocess_model_parameters,
+    fold_batch_norm2d_into_conv2d,
+)
 
 
 def custom_preprocessor(model, name):
@@ -152,6 +157,23 @@ def custom_preprocessor(model, name):
                 )
                 bias = bias.reshape((1, 1, 1, -1))
                 parameters["res_model"]["layer4_0"]["downsample"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+    if isinstance(model, FPN):
+        parameters["fpn"] = {}
+        parameters["fpn"]["lateral_convs"] = {}
+        parameters["fpn"]["lateral_convs"]["conv"] = {}
+        parameters["fpn"]["lateral_convs"]["conv"]["weight"] = ttnn.from_torch(
+            model.lateral_convs.conv.weight, dtype=ttnn.float32
+        )
+        bias = model.lateral_convs.conv.bias.reshape((1, 1, 1, -1))
+        parameters["fpn"]["lateral_convs"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+
+        parameters["fpn"]["fpn_convs"] = {}
+        parameters["fpn"]["fpn_convs"]["conv"] = {}
+        parameters["fpn"]["fpn_convs"]["conv"]["weight"] = ttnn.from_torch(
+            model.fpn_convs.conv.weight, dtype=ttnn.float32
+        )
+        bias = model.fpn_convs.conv.bias.reshape((1, 1, 1, -1))
+        parameters["fpn"]["fpn_convs"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
 
     return parameters
 
@@ -168,5 +190,4 @@ def create_maptr_model_parameters(model: ResNet, input_tensor, device=None):
     assert parameters is not None
     for key in parameters.conv_args.keys():
         parameters.conv_args[key].module = getattr(model, key)
-
     return parameters

@@ -1,7 +1,5 @@
 import torch.nn as nn
 
-import torch.nn as nn
-
 
 class ConvModule(nn.Module):
     def __init__(
@@ -60,20 +58,16 @@ class FPN(nn.Module):
         self.lateral_convs = nn.ModuleList()
         self.fpn_convs = nn.ModuleList()
         self.fp16_enabled = True
+        self.lateral_convs = ConvModule(in_channels[0], out_channels, kernel_size=1, stride=1)
+        self.fpn_convs = ConvModule(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
 
-        for i in range(self.start_level, self.backbone_end_level):
-            l_conv = ConvModule(in_channels[i], out_channels, kernel_size=1, stride=1)
-            fpn_conv = ConvModule(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
-
-            self.lateral_convs.append(l_conv)
-            self.fpn_convs.append(fpn_conv)
+        # self.lateral_convs.append(l_conv)
+        # self.fpn_convs.append(fpn_conv)
 
     def forward(self, inputs):
         assert len(inputs) == len(self.in_channels)
 
         # build the Laterals
-        laterals = [lateral_conv(inputs[i + self.start_level]) for i, lateral_conv in enumerate(self.lateral_convs)]
-        used_backbone_levels = len(laterals)
-        outs = [self.fpn_convs[i](laterals[i]) for i in range(used_backbone_levels)]
-
+        laterals = self.lateral_convs(inputs[0])
+        outs = [self.fpn_convs(laterals)]
         return tuple(outs)
