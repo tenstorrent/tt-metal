@@ -35,20 +35,20 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
     if (is_32bit) {
         UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb, false)));
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(true, false)));
-        MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, false, icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, false, icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
         UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(icb, true)));
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)));
-        MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, true, icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, true, icb)));
     }
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(icb, icb)));
 #endif
 
-    PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
 
 /**
@@ -63,13 +63,13 @@ ALWI void transpose_wh_init_short(uint32_t icb) {
     if (is_32bit)
     {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(true, false)));
-        MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, false, icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, false, icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     }
     else
     {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)));
-        MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, true, icb)));
+        MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, true, icb)));
     }
 
 #endif
@@ -101,11 +101,11 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
     if (is_32bit) {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, itile, false)));
         UNPACK((llk_unpack_set_srcb_dummy_valid()));
-        MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(idst)));
+        MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(idst)));
         MATH((llk_math_transpose_dest<false, true>(idst)));
     } else {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)));
-        MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(idst)));
+        MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst)));
     }
 #endif
 }
