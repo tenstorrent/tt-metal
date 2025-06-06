@@ -102,16 +102,16 @@ void kernel_main() {
     uint32_t slices_received = 0;
     uint32_t slices_expected = 0;
     uint32_t writes_expected = 0;
-    if (topology == Topology::Linear) {
-        if (direction == 1) {
+    if constexpr (topology == Topology::Linear) {
+        if constexpr (direction == 1) {
             slices_expected = num_targets_forward_direction;
             writes_expected = num_targets_backward_direction ? num_targets_forward_direction : 0;
         } else {
             slices_expected = num_targets_backward_direction;
             writes_expected = num_targets_forward_direction ? num_targets_backward_direction : 0;
         }
-    } else if (topology == Topology::Ring) {
-        if (direction == 1) {
+    } else if constexpr (topology == Topology::Ring) {
+        if constexpr (direction == 1) {
             slices_expected = num_targets_backward_direction;
             writes_expected = num_targets_backward_direction - 1;
         } else {
@@ -136,7 +136,7 @@ void kernel_main() {
 
         int sender_chip_id;
         uint32_t actual_sender_chip_id;
-        if (direction == 1) {
+        if constexpr (direction == 1) {
             sender_chip_id = my_chip_id + slices_received;
             actual_sender_chip_id = (sender_chip_id >= (int)ring_size) ? sender_chip_id - ring_size : sender_chip_id;
         } else {
@@ -144,7 +144,7 @@ void kernel_main() {
             actual_sender_chip_id = (sender_chip_id < 0) ? ring_size + sender_chip_id : sender_chip_id;
         }
 
-        if (fuse_op) {
+        if constexpr (fuse_op) {
             // Signal matmul to go
             op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
         }

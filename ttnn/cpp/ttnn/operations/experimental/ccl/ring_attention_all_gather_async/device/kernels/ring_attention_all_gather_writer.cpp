@@ -115,9 +115,9 @@ void kernel_main() {
                         uint32_t tile_id = tile_id_start + row_offset + col_idx + j;
                         uint64_t noc0_dest_noc_addr =
                             get_noc_addr(tile_id, output_addrgens[input_idx], 0 /*offset*/, 0 /*noc_id*/);
-                        if (direction == 1) {
+                        if constexpr (direction == 1) {
                             noc_async_write_tile(tile_id, output_addrgens[input_idx], l1_read_addr);
-                            if (num_targets_backward_direction) {
+                            if constexpr (num_targets_backward_direction) {
                                 write_and_advance_local_read_address_for_fabric_write_backward(
                                     noc0_dest_noc_addr,
                                     pkt_hdr,
@@ -128,7 +128,7 @@ void kernel_main() {
                                 l1_read_addr += output_page_size * contig_pages_advanced;
                             }
                         } else {
-                            if (num_targets_forward_direction) {
+                            if constexpr (num_targets_forward_direction) {
                                 write_and_advance_local_read_address_for_fabric_write_forward(
                                     noc0_dest_noc_addr,
                                     pkt_hdr,
@@ -149,6 +149,13 @@ void kernel_main() {
         }
     }
 
+    noc_async_write_barrier();
+    // increment locally
+    if constexpr (fuse_op && direction == 1) {
+        // Synchronize and signal that the local tensor slice is available
+        op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
+    }
+
     // 2. unicast output ready semaphore
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
@@ -158,15 +165,15 @@ void kernel_main() {
         static_cast<uint16_t>(1),  // increment 1
         32});
     // Write the unicast packet
-    if (direction == 1) {
-        if (num_targets_backward_direction) {
+    if constexpr (direction == 1) {
+        if constexpr (num_targets_backward_direction) {
             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
             pkt_hdr_sem_inc->to_chip_unicast(1);
             fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
         }
     } else {
-        if (num_targets_forward_direction) {
+        if constexpr (num_targets_forward_direction) {
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
             pkt_hdr_sem_inc->to_chip_unicast(1);
             fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
@@ -174,21 +181,15 @@ void kernel_main() {
         }
     }
 
-    // increment locally
-    if (fuse_op && direction == 1) {
-        // Synchronize and signal that the local tensor slice is available
-        op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
-    }
-
     uint32_t writes_expected = 0;
-    if (topology == Topology::Linear) {
-        if (direction == 1 && num_targets_backward_direction) {
+    if constexpr (topology == Topology::Linear) {
+        if constexpr (direction == 1 && num_targets_backward_direction) {
             writes_expected = num_targets_forward_direction;
-        } else if (direction == 0 && num_targets_forward_direction) {
+        } else if constexpr (direction == 0 && num_targets_forward_direction) {
             writes_expected = num_targets_backward_direction;
         }
-    } else if (topology == Topology::Ring) {
-        if (direction == 1) {
+    } else if constexpr (topology == Topology::Ring) {
+        if constexpr (direction == 1) {
             writes_expected = num_targets_backward_direction - 1;
         } else {
             writes_expected = num_targets_forward_direction - 1;
@@ -209,7 +210,7 @@ void kernel_main() {
 
         int slice_chip_id;
         uint32_t actual_slice_chip_id;
-        if (direction == 1) {
+        if constexpr (direction == 1) {
             slice_chip_id = my_chip_id + slice_writes + 1;
             actual_slice_chip_id = (slice_chip_id >= (int)ring_size) ? slice_chip_id - ring_size : slice_chip_id;
         } else {
@@ -235,7 +236,7 @@ void kernel_main() {
                                 output_addrgens[input_idx],
                                 0 /*offset*/,
                                 0 /*noc_id*/);
-                            if (direction == 1) {
+                            if constexpr (direction == 1) {
                                 write_and_advance_local_read_address_for_fabric_write_backward(
                                     noc0_dest_noc_addr,
                                     pkt_hdr,
@@ -261,7 +262,7 @@ void kernel_main() {
         }
 
         // 2. unicast output ready semaphore forward
-        if (direction == 1) {
+        if constexpr (direction == 1) {
             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
             pkt_hdr_sem_inc->to_chip_unicast(1);
             fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
