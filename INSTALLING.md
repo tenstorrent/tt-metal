@@ -178,7 +178,7 @@ docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstor
 
 - For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64).
 
-- Continue to [You Are All Set!](#you-are-all-set)
+- You are all set! Try some [TT-NN Basic Examples](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) next.
 
 ---
 
@@ -215,7 +215,7 @@ To try our pre-built models in `models/`, you must:
 
 ### You are All Set!
 
-#### To verify your installation, try executing a programming example:
+#### To verify your installation (for source or wheel installation only), try executing a programming example:
 
 - First, set the following environment variables:
 
