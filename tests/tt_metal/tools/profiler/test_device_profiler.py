@@ -48,6 +48,7 @@ def set_env_vars(**kwargs):
         "doDispatchCores": "TT_METAL_DEVICE_PROFILER_DISPATCH=1 ",
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
         "dispatchFromEth": "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ",
+        "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
@@ -56,16 +57,21 @@ def set_env_vars(**kwargs):
     return envVarsStr
 
 
-def run_gtest_profiler_test(testbin, testname, doSync=False):
+# returns True if test passed, False if test was SKIPPED
+def run_gtest_profiler_test(testbin, testname, doSync=False, enable_noc_tracing=False, skip_get_device_data=False):
     clear_profiler_runtime_artifacts()
-    envVars = set_env_vars(doSync=doSync)
+    envVars = set_env_vars(doSync=doSync, enable_noc_tracing=enable_noc_tracing)
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testbin} --gtest_filter={testname}"
     print()
     logger.info(f"Running: {testCommand}")
     output = subprocess.check_output(testCommand, stderr=subprocess.STDOUT, shell=True).decode("UTF-8")
     print(output)
     if "SKIPPED" not in output:
-        get_device_data()
+        if not skip_get_device_data:
+            get_device_data()
+        return True
+    else:
+        return False
 
 
 def run_device_profiler_test(
@@ -447,18 +453,26 @@ def test_fabric_event_profiler():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
 
-    testCommand = f"build/{PROG_EXMP_DIR}/test_fabric_event_profiler"
-    clear_profiler_runtime_artifacts()
-    nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
-    command = f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand}"
-    ret_code = os.waitstatus_to_exitcode(os.system(command))
-
-    RETCODE_INCOMPATIBLE_DEVICE = 95
-    if ret_code == RETCODE_INCOMPATIBLE_DEVICE:
-        logger.warning(f"fabric event profiler test skipped because device doesn't support fabric.")
+    # test that current device has a valid fabric API connection
+    sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    sanity_check_test_name = "Fabric1DFixture.TestUnicastConnAPI"
+    sanity_check_succeeded = run_gtest_profiler_test(
+        sanity_check_test_bin, sanity_check_test_name, skip_get_device_data=True
+    )
+    if not sanity_check_succeeded:
+        logger.info("Device does not have testable fabric connections, skipping ...")
         return
-    else:
-        assert ret_code == 0, f"test command '{testCommand}' returned unsuccessfully"
+
+    # if device supports fabric API, test fabric event profiler
+    test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    test_name = "Fabric1DFixture.TestUnicastRawWithTracing"
+    nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+    try:
+        not_skipped = run_gtest_profiler_test(test_bin, test_name, False, True)
+        assert not_skipped, f"gtest command '{test_bin}' was skipped unexpectedly"
+    except subprocess.CalledProcessError as e:
+        ret_code = e.returncode
+        assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
 
     expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
     assert os.path.isfile(
