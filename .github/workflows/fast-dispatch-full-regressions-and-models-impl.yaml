@@ -87,7 +87,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, yolov4, whisper, yolov8s_world, yolov9c, stable_diffusion_xl_base, vgg_unet, ufld_v2, mobilenetv2, functional_vanilla_unet, yolov10, openpdn_mnist, yolov8x, vit,sentence_bert]
+        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, yolov4, whisper, yolov8s_world, yolov9c, stable_diffusion_xl_base, vgg_unet, ufld_v2, mobilenetv2, functional_vanilla_unet, yolov10, yolov12, openpdn_mnist, yolov8x, vit,sentence_bert]
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     defaults:
       run:

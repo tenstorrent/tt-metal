@@ -53,6 +53,8 @@ run_python_model_tests_wormhole_b0() {
 
     #Yolov10
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/yolov10/test_ttnn_yolov10.py::test_yolov10x
+    #Yolov12
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/yolov12x/tests/pcc/test_ttnn_yolov12x.py -k "pretrained_weight_false"
 
     # ViT-base
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/vit/test_ttnn_optimized_sharded_vit_wh.py
