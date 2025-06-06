@@ -541,6 +541,11 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                             // This entry represents mesh to itself, should not be used by FW
                             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id] =
                                 src_chan_id;
+                        } else if (target_direction == RoutingDirection::NONE) {
+                            // This entry represents a mesh to mesh connection that is not reachable
+                            // Set to an invalid channel id
+                            this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id] =
+                                eth_chan_magic_values::INVALID_DIRECTION;
                         } else if (target_direction == direction) {
                             // This entry represents an outgoing eth channel
                             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id] =
@@ -911,6 +916,10 @@ std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(
             } else if (src_chip_id != dst_chip_id) {
                 // Intra-mesh routing
                 next_chan_id = this->intra_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_chip_id];
+            }
+            if (next_chan_id == eth_chan_magic_values::INVALID_DIRECTION) {
+                // The complete route b/w src and dst not found, probably some eth cores are reserved along the path
+                return std::nullopt;
             }
             if (src_chan_id != next_chan_id) {
                 continue;
