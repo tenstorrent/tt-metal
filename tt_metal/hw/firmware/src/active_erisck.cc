@@ -23,12 +23,10 @@
 #include <kernel_includes.hpp>
 #include <stdint.h>
 
-uint32_t kernel_launch(uint32_t kernel_base_addr) {
+extern "C" uint32_t kernel_launch() {
     mark_stack_usage();
-    extern uint32_t __kernel_init_local_l1_base[];
-    extern uint32_t __fw_export_text_end[];
-    do_crt1((uint32_t tt_l1_ptr*)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base -
-                                  (uint32_t)__fw_export_text_end));
+    extern uint32_t __kernel_data_lma[];
+    do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
 
     noc_local_state_init(NOC_INDEX);
 
