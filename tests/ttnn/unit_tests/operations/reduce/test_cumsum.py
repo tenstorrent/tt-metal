@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@ import pytest
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import comp_allclose_and_pcc
 
 
 def is_supported(tensor_rank, dim, ttnn_dtype):
@@ -61,6 +62,16 @@ def is_supported(tensor_rank, dim, ttnn_dtype):
         ([2, 3, 5, 33, 128], 0),
         ([2, 3, 5, 33, 128], 1),
         ([2, 3, 5, 33, 128], 2),
+        ([2, 3, 5, 33, 128], 3),
+        ([2, 3, 5, 33, 128], 4),
+        ((2, 3, 4, 5, 33, 33), 0),
+        ((2, 3, 4, 5, 33, 33), 1),
+        ((2, 3, 4, 5, 33, 33), 2),
+        ((2, 3, 4, 5, 33, 33), 3),
+        ((2, 3, 4, 5, 33, 33), 4),
+        ((2, 3, 4, 5, 33, 33), 5),
+        # ([1, 151936], -1),
+        # ([1, 19], -1)
     ],
 )
 @pytest.mark.parametrize(
@@ -140,6 +151,7 @@ def test_cumsum(size, dim, dtypes, device):
         ([2, 3, 5, 33, 128], 0),
         ([2, 3, 5, 33, 128], 1),
         ([2, 3, 5, 33, 128], 2),
+        # ([1, 151936], -1),
     ],
 )
 @pytest.mark.parametrize(

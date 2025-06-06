@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,9 @@ struct CumSumOperation {
         const Tensor& input,
         int64_t dim,
         std::optional<ttnn::DataType> dtype = std::nullopt,
-        std::optional<Tensor> preallocated_output = std::nullopt);
+        std::optional<Tensor> preallocated_output = std::nullopt,
+        std::optional<bool> flip = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::reduction
@@ -25,4 +27,5 @@ struct CumSumOperation {
 namespace ttnn::experimental {
 constexpr auto cumsum = decorators::
     register_operation<"ttnn::experimental::cumsum", ttnn::operations::experimental::reduction::CumSumOperation>();
+
 }  // namespace ttnn::experimental

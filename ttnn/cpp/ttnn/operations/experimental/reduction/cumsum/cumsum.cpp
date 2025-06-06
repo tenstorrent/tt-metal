@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,9 @@ Tensor CumSumOperation::invoke(
     const Tensor& input_tensor,
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    std::optional<bool> flip,
+    const std::optional<MemoryConfig>& memory_config) {
     const auto& input_shape = input_tensor.get_logical_shape();
     int tensor_rank = input_shape.rank();
 
@@ -49,12 +51,6 @@ Tensor CumSumOperation::invoke(
     }
 
     if (tensor_rank == 0 || adjusted_input_tensor.get_logical_volume() == 0) {  // empty input tensor => nothing to do
-
-        if (optional_output_tensor.has_value()) {
-            auto& out_tensor = optional_output_tensor.value();
-            out_tensor.tensor_attributes->get_storage() =
-                optional_output_tensor.value().tensor_attributes->get_storage();
-        }
 
         return adjusted_input_tensor;
     }
@@ -102,7 +98,7 @@ Tensor CumSumOperation::invoke(
         }
 
         // Compute cumsum on permuted tensor (now accumulation is on dim=0)
-        Tensor output_tensor = ttnn::prim::cumsum(queue_id, permuted_tensor, 0, dtype, opt_output);
+        Tensor output_tensor = ttnn::prim::cumsum(queue_id, permuted_tensor, 0, dtype, opt_output, flip);
 
         // Apply backward permutation to restore initial shape
         output_tensor = ttnn::permute(output_tensor, permutation, output_tensor.memory_config());
@@ -121,7 +117,7 @@ Tensor CumSumOperation::invoke(
     }
 
     // For other dimensions, proceed with original cumsum
-    return ttnn::prim::cumsum(queue_id, adjusted_input_tensor, dim, dtype, optional_output_tensor);
+    return ttnn::prim::cumsum(queue_id, adjusted_input_tensor, dim, dtype, optional_output_tensor, flip);
 }
 
 }  // namespace ttnn::operations::experimental::reduction

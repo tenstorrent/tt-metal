@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@ namespace ttnn::operations::experimental::reduction {
 struct CumSumDeviceOperation {
     struct operation_attributes_t {
         const int64_t dim;  // axis to perform cumsum on (must be `-tensor.dim <= dim < tensor.dim`)
+        const bool flip;
         const tt::tt_metal::DataType dtype = tt::tt_metal::DataType::INVALID;
     };
 
@@ -28,8 +29,14 @@ struct CumSumDeviceOperation {
     using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct SingleCore {
-        struct shared_variables_t {};
+    struct ProgramFactory {
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle cumsum_reader_kernel_id;
+            tt::tt_metal::KernelHandle cumsum_writer_kernel_id;
+
+            std::size_t num_cores;
+            std::size_t num_cores_y;
+        };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
@@ -44,7 +51,7 @@ struct CumSumDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<SingleCore>;
+    using program_factory_t = std::variant<ProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -58,7 +65,8 @@ struct CumSumDeviceOperation {
         const Tensor& input_tensor,
         int64_t dim,
         std::optional<ttnn::DataType> dtype,
-        std::optional<Tensor> preallocated_output);
+        std::optional<Tensor> preallocated_output,
+        const std::optional<bool> flip);
 };
 
 }  // namespace ttnn::operations::experimental::reduction

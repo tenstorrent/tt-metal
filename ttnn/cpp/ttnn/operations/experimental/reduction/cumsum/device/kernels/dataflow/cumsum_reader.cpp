@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,10 +12,14 @@
 
 void kernel_main() {
     uint32_t input_dram_base_addr = get_arg_val<uint32_t>(0);  // input base addr (DRAM)
-    uint32_t tiles_per_row = get_arg_val<uint32_t>(1);         // number of tiles in a row / along axis
-    uint32_t product_high_dims = get_arg_val<uint32_t>(2);
-    uint32_t product_low_dims = get_arg_val<uint32_t>(3);
-    uint32_t HtWt = get_arg_val<uint32_t>(4);
+    uint32_t start_row = get_arg_val<uint32_t>(1);
+    uint32_t num_rows = get_arg_val<uint32_t>(2);
+    uint32_t tiles_per_row = get_arg_val<uint32_t>(3);  // number of tiles in a row / along axis
+    uint32_t product_high_dims = get_arg_val<uint32_t>(4);
+    uint32_t product_low_dims = get_arg_val<uint32_t>(5);
+    uint32_t HtWt = get_arg_val<uint32_t>(6);
+
+    uint32_t flip = get_compile_time_arg_val(0);
 
     constexpr uint32_t cb_out = tt::CBIndex::c_0;
     constexpr uint32_t cb_zero = tt::CBIndex::c_2;
@@ -46,21 +50,26 @@ void kernel_main() {
 
     fill_cb_with_value(cb_zero, scaler.u);
 
-    for (unsigned i0 = 0; i0 < product_low_dims; i0++) {
-        for (unsigned i1 = 0; i1 < product_high_dims * HtWt; i1++) {
-            for (unsigned j = 0; j < tiles_per_row; j++) {
-                uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, product_low_dims, product_high_dims, HtWt);
-
-                cb_reserve_back(cb_out, 1);
-
-                // Read tile
-                uint32_t data_sram_addr = get_write_ptr(cb_out);
-                noc_async_read_tile(tileid, dram_input_addrg, data_sram_addr);
-                noc_async_read_barrier();
-
-                // Write tile
-                cb_push_back(cb_out, 1);
+    for (uint32_t i = start_row; i < start_row + num_rows; i++) {
+        uint32_t i0 = i / (product_high_dims * HtWt);
+        uint32_t i1 = i % (product_high_dims * HtWt);
+        for (uint32_t j = 0; j < tiles_per_row; j++) {
+            uint32_t tile_j = j;
+            if (flip) {
+                tile_j = tiles_per_row - j - 1;
             }
+
+            uint32_t tileid = get_tile_id(i0, i1, tile_j, tiles_per_row, product_low_dims, product_high_dims, HtWt);
+
+            cb_reserve_back(cb_out, 1);
+
+            // Read tile
+            uint32_t data_sram_addr = get_write_ptr(cb_out);
+            noc_async_read_tile(tileid, dram_input_addrg, data_sram_addr);
+            noc_async_read_barrier();
+
+            // Write tile
+            cb_push_back(cb_out, 1);
         }
     }
 }
