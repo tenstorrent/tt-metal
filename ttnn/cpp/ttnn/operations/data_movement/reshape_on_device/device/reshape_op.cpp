@@ -30,7 +30,7 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
         "Reshape does not currently support sharding. Use ttnn::reshape for reshaping sharded inputs");
 
     if (input_tensor_a.layout() == Layout::TILE) {
-        TT_FATAL(input_tensor_a.padded_volume() % TILE_HW == 0, "Error");
+        TT_FATAL(input_tensor_a.physical_volume() % TILE_HW == 0, "Error");
     } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
         uint32_t ROW_MAJOR_WIDTH = 8;
         TT_FATAL(

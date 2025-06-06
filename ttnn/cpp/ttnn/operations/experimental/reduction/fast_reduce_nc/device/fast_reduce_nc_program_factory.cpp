@@ -63,7 +63,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
         extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile = input_shape[dim];
-    const auto num_output_tiles = output.padded_volume() / TILE_HW;
+    const auto num_output_tiles = output.physical_volume() / TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
     // choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8

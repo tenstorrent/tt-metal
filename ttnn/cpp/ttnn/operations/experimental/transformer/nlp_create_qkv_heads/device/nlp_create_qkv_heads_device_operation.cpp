@@ -33,7 +33,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     if (input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.shard_spec().value().shape[0] ==
-                input_tensor.padded_volume() / input_tensor.padded_shape()[-1],
+                input_tensor.physical_volume() / input_tensor.padded_shape()[-1],
             "Error");
         TT_FATAL(
             operation_attributes.output_mem_config.is_sharded() &&
@@ -90,7 +90,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(input_tensor.is_sharded(), "Error");
             TT_FATAL(
                 input_tensor_kv.shard_spec().value().shape[0] ==
-                    input_tensor_kv.padded_volume() / input_tensor_kv.padded_shape()[-1],
+                    input_tensor_kv.physical_volume() / input_tensor_kv.padded_shape()[-1],
                 "Error");
             TT_FATAL(input_tensor_kv.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
             TT_FATAL(input_tensor_kv.shard_spec().value().shape[1] == 2 * operation_attributes.head_dim, "Error");

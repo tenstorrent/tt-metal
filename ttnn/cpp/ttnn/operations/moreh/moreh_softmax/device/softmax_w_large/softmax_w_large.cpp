@@ -27,7 +27,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
-    auto num = input.padded_volume() / H / W;
+    auto num = input.physical_volume() / H / W;
 
     uint32_t num_kernel_rows = num * Ht;
     uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;

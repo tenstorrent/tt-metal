@@ -389,7 +389,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     auto W = target_shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
-    auto num_inner_tile = target.padded_volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
+    auto num_inner_tile = target.physical_volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
     const auto input_shape_without_padding = input.logical_shape();
     const auto origin_N = input_shape_without_padding[0];
@@ -403,7 +403,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     uint32_t core_h = grid.y;
 
     // copy TILE per loop
-    uint32_t units_to_divide = target.padded_volume() / H / W * Ht * Wt;
+    uint32_t units_to_divide = target.physical_volume() / H / W * Ht * Wt;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);

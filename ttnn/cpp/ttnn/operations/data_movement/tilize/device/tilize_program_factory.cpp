@@ -38,11 +38,11 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    uint32_t num_tiles = a.padded_volume() / TILE_HW;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
     auto width = a.padded_shape()[-1];
     uint32_t stick_s = width;
-    uint32_t num_sticks = a.padded_volume() / width;
+    uint32_t num_sticks = a.physical_volume() / width;
     uint32_t stick_size = stick_s * a.element_size();  // Assuming bfloat16 dataformat
 
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
@@ -447,7 +447,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
 
     uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
 
-    int32_t ntiles = a.padded_volume() / TILE_HW;
+    int32_t ntiles = a.physical_volume() / TILE_HW;
     uint32_t ntiles_per_block = a.padded_shape()[-1] / TILE_WIDTH;
     uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
     uint32_t block_size_nbytes = a.padded_shape()[-1] * a.element_size();
@@ -634,7 +634,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    uint32_t num_tiles = input.padded_volume() / TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / TILE_HW;
 
     tt::tt_metal::IDevice* device = input.device();
 

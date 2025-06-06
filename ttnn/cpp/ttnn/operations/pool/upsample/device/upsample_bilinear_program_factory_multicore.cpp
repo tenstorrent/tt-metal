@@ -84,8 +84,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     uint32_t output_stick_nbytes = output.padded_shape()[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
 
-    uint32_t output_nsticks = output.padded_volume() / output.padded_shape()[-1];
-    uint32_t input_nsticks = input.padded_volume() / input.padded_shape()[-1];
+    uint32_t output_nsticks = output.physical_volume() / output.padded_shape()[-1];
+    uint32_t input_nsticks = input.physical_volume() / input.padded_shape()[-1];
 
     uint32_t in_w = input.padded_shape()[2];
     uint32_t out_w = output.padded_shape()[2];

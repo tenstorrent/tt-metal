@@ -56,7 +56,7 @@ void LayerNorm::validate(
             TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
                 (gamma.value().padded_shape()[-1] == TILE_WIDTH &&
-                 gamma.value().padded_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
+                 gamma.value().physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
                 "Error");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -80,7 +80,7 @@ void LayerNorm::validate(
             TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
                 (beta.value().padded_shape()[-1] == TILE_WIDTH &&
-                 beta.value().padded_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
+                 beta.value().physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
                 "Error");
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -141,7 +141,7 @@ void LayerNorm::validate(
 
                 // tensor shape
                 const auto shape = a.padded_shape();
-                uint32_t M = a.padded_volume() / shape[-1];
+                uint32_t M = a.physical_volume() / shape[-1];
                 uint32_t K = shape[-1];
                 uint32_t Mt = M / TILE_WIDTH;
                 uint32_t Kt = K / TILE_WIDTH;

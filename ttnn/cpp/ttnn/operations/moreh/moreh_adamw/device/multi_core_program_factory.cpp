@@ -29,7 +29,7 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
     uint32_t step = operation_attributes.step;
     bool amsgrad = operation_attributes.amsgrad;
 
-    uint32_t num_units = param_in.padded_volume() / tt::constants::TILE_HW;
+    uint32_t num_units = param_in.physical_volume() / tt::constants::TILE_HW;
 
     const std::optional<Tensor>& max_exp_avg_sq_in = tensor_args.max_exp_avg_sq_in;
 

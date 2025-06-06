@@ -132,7 +132,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     ////////////////////////////////////////////////////////////////////////////
     tt::DataFormat cb_data_format{datatype_to_dataformat_converter(output.dtype())};
     const auto single_tile_size{tt::tt_metal::detail::TileSize(cb_data_format)};
-    const auto num_output_tiles{output.padded_volume() / tt::constants::TILE_HW};
+    const auto num_output_tiles{output.physical_volume() / tt::constants::TILE_HW};
 
     // input tensor
     const auto& input_shape = input.padded_shape();

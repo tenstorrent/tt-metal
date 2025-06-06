@@ -42,7 +42,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     const auto CHtWt = C * Ht * Wt;
     const auto num_reduce_input_tile = input_shape[dim];
     const auto input_tile_offset = (dim == 0) ? (CHtWt) : (HtWt);
-    const auto num_output_tiles = output.padded_volume() / TILE_HW;
+    const auto num_output_tiles = output.physical_volume() / TILE_HW;
 
     log_debug(LogTest, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
     log_debug(

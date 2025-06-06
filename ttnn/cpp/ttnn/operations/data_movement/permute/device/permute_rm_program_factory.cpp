@@ -62,7 +62,7 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_pages_to_read = 2;
 
-    uint32_t num_rows = input_tensor.padded_volume() / input_tensor.logical_shape()[-1];
+    uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
 
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -209,7 +209,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     uint32_t W_stride = output_strides[x_dim];
 
     uint32_t N = operation_attributes.dims.size();
-    uint32_t num_rows = input_tensor.padded_volume() / input_tensor.logical_shape()[-1];
+    uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
 
     // treat the input tensor as 3D with rows * x_blocks * w_blocks
     uint32_t x_blocks = tt::div_up(X, x_block_size);

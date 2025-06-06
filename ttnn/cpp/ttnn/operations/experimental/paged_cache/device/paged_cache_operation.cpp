@@ -122,7 +122,7 @@ void PagedUpdateCacheDeviceOperation::validate(
             TT_FATAL(input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
             TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1], "Error");
             TT_FATAL(
-                (input_tensor.padded_volume() / input_tensor.padded_shape()[-1]) %
+                (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) %
                         input_tensor.shard_spec().value().shape[0] ==
                     0,
                 "Error");
@@ -226,7 +226,7 @@ void PagedUpdateCacheDeviceOperation::validate(
         validateFillOperation(input_tensors.at(0), input_tensors.at(1), input_tensors.at(2), this->batch_idx_fallback);
         if (this->batch_idx_tensor_opt.has_value()) {
             const auto& tensor = this->batch_idx_tensor_opt.value();
-            TT_FATAL(tensor.padded_volume() == 1, "Batch idx tensor must have a single element");
+            TT_FATAL(tensor.physical_volume() == 1, "Batch idx tensor must have a single element");
             TT_FATAL(
                 tensor.dtype() == DataType::UINT32 || tensor.dtype() == DataType::INT32,
                 "Batch idx tensor must be an integer type");

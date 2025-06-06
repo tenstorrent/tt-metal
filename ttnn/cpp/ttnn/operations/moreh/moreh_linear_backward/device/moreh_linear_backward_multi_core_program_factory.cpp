@@ -37,7 +37,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
         do_mask_w ? output_grad_shape_wo_padding[-1] % constants::TILE_WIDTH : constants::TILE_WIDTH;
 
     const auto& output_grad_shape = output_grad.padded_shape();
-    uint32_t batch_num = output_grad.padded_volume() / output_grad_shape[-2] / output_grad_shape[-1];
+    uint32_t batch_num = output_grad.physical_volume() / output_grad_shape[-2] / output_grad_shape[-1];
     uint32_t Ht = output_grad_shape[-2] / constants::TILE_HEIGHT;
     uint32_t Wt = output_grad_shape[-1] / constants::TILE_WIDTH;
     uint32_t num_tiles = batch_num * Ht;

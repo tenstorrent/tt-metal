@@ -61,7 +61,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     const auto shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
-    const uint32_t NC = a.padded_volume() / HW;
+    const uint32_t NC = a.physical_volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
     const auto& a_dtype = a.dtype();
@@ -110,7 +110,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     auto a_addr = a.buffer()->address();
     auto dst_addr = output.buffer()->address();
 
-    uint32_t num_tiles = a.padded_volume() / TILE_HW;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

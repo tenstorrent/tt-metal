@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
     bool convert_dtype = input_cb_data_format != output_cb_data_format;
 
     uint32_t num_units =
-        tilized ? output.padded_volume() / TILE_HW : output.padded_volume() / output.padded_shape()[-1];
+        tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.padded_shape()[-1];
 
     tt::tt_metal::IDevice* device = output.device();
 

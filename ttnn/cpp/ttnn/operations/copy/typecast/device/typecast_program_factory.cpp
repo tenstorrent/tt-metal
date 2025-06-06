@@ -32,7 +32,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
 
-    uint32_t num_tiles = input.padded_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
     tt::tt_metal::IDevice* device = input.device();
 
@@ -208,7 +208,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
 
     tt::tt_metal::IDevice* device = input.device();
 
-    uint32_t ntiles = input.padded_volume() / tt::constants::TILE_HW;
+    uint32_t ntiles = input.physical_volume() / tt::constants::TILE_HW;
     uint32_t ncores = sub_core_grids->num_cores();
 
     TT_FATAL(ncores != 0, "number of cores cannot be 0");

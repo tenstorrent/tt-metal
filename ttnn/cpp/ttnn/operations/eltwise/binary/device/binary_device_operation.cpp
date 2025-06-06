@@ -331,10 +331,10 @@ operation::OpPerformanceModelGeneral<BinaryDeviceOperation::tensor_return_value_
 
     uint32_t total_bytes = 0;
     std::vector<Tensor> input_tensors = {input_tensor_a};
-    total_bytes += input_tensor_a.padded_volume() * input_tensor_a.element_size();
+    total_bytes += input_tensor_a.physical_volume() * input_tensor_a.element_size();
     if (input_tensor_b.has_value()) {
         input_tensors.push_back(*input_tensor_b);
-        total_bytes += input_tensor_b->padded_volume() * input_tensor_b->element_size();
+        total_bytes += input_tensor_b->physical_volume() * input_tensor_b->element_size();
     }
     uint32_t ideal_eltwise_cycles = total_bytes / 80 / num_cores;
 

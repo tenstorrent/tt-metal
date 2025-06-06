@@ -44,7 +44,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         u_fill_value.f32 = std::get<float>(fill_value);
     }
 
-    auto num_rows = input.padded_volume() / input.logical_shape()[-1];
+    auto num_rows = input.physical_volume() / input.logical_shape()[-1];
     Program program{};
     IDevice* device = input.device();
 
@@ -62,7 +62,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     uint32_t input_unit_size = input.logical_shape()[-1] * input.element_size();
     uint32_t rounded_input_unit_size = round_up_to_mul32(input_unit_size);
 
-    uint32_t index_unit_size = index.padded_volume() * index.element_size();
+    uint32_t index_unit_size = index.physical_volume() * index.element_size();
     uint32_t rounded_index_unit_size = round_up_to_mul32(index_unit_size);
 
     uint32_t output_unit_size = output.logical_shape()[-1] * output.element_size();
@@ -106,7 +106,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         (std::uint32_t)src_cb_index,
         (std::uint32_t)index_cb_index,
         (std::uint32_t)(dim == n - 1),
-        (std::uint32_t)index.padded_volume()};
+        (std::uint32_t)index.physical_volume()};
 
     auto reader_kernel_id = CreateKernel(
         program,

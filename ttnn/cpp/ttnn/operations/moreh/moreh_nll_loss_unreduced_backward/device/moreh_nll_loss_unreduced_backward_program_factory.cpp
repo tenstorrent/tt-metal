@@ -35,7 +35,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
-    uint32_t units_to_divide = input_grad.padded_volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
+    uint32_t units_to_divide = input_grad.physical_volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
@@ -164,7 +164,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
-    uint32_t units_to_divide = input_grad.padded_volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
+    uint32_t units_to_divide = input_grad.physical_volume() / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
@@ -282,7 +282,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto W = input_grad_shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
-    auto num_inner_tile = target.padded_volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
+    auto num_inner_tile = target.physical_volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
 
@@ -290,7 +290,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
-    uint32_t units_to_divide = input_grad.padded_volume() / H / W * Ht * Wt;
+    uint32_t units_to_divide = input_grad.physical_volume() / H / W * Ht * Wt;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);

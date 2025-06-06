@@ -80,7 +80,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     uint32_t output_unit_size = input_unit_size;
 
     // split work
-    uint32_t num_units = output.padded_volume() / output_shape[-1];
+    uint32_t num_units = output.physical_volume() / output_shape[-1];
 
     uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;

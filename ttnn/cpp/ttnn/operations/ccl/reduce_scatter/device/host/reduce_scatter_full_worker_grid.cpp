@@ -658,7 +658,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     std::unique_ptr<ttnn::ccl::CclOpTensorConfig> output_tensor_config =
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
     // // The input tensor is fractured by ring_size so we divi
-    std::size_t input_tensor_n_elems_per_slice = input_tensor.padded_volume() / ring_size;
+    std::size_t input_tensor_n_elems_per_slice = input_tensor.physical_volume() / ring_size;
     std::size_t input_tensor_num_units_per_tensor_slice =
         input_tensor_n_elems_per_slice / (tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT);
 

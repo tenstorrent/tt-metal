@@ -31,7 +31,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     uint32_t input_unit_size = compute_unit_size(input, input_data_format);
     uint32_t output_unit_size = compute_unit_size(output, output_data_format);
     uint32_t num_units =
-        tilized ? output.padded_volume() / TILE_HW : output.padded_volume() / output.logical_shape()[-1];
+        tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.logical_shape()[-1];
 
     auto compute_with_storage_grid_size = output.device()->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

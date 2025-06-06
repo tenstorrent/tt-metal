@@ -74,7 +74,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     uint32_t page_size = input.buffer()->page_size();
 
     uint32_t num_pages =
-        tilized ? output.padded_volume() / TILE_HW : output.padded_volume() / output.padded_shape()[-1];
+        tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.padded_shape()[-1];
     tt::tt_metal::IDevice* device = output.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;

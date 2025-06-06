@@ -241,7 +241,7 @@ static Tensor fill_first_val_into_tensor(
     const Layout layout,
     IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{}) {
-    auto physical_volume = input_tensor.padded_volume();
+    auto physical_volume = input_tensor.physical_volume();
     auto output_buffer = std::vector<T>(physical_volume);
     auto input_cpu_tensor = input_tensor.cpu();
     tt::stl::Span<const T> host_buffer = tt::tt_metal::host_buffer::get_as<T>(input_cpu_tensor);
@@ -394,7 +394,7 @@ static Tensor manual_insertion(
     const MemoryConfig& output_mem_config = MemoryConfig{}) {
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
-        padded_shape[0] * padded_shape[1] * padded_shape[2] * padded_shape[3] == input_tensor.padded_volume(),
+        padded_shape[0] * padded_shape[1] * padded_shape[2] * padded_shape[3] == input_tensor.physical_volume(),
         "Required shape volume must match old shape volume");
     auto input_cpu_tensor = input_tensor.cpu();
     auto output = Tensor(

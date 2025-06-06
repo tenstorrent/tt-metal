@@ -146,7 +146,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
 
         const auto& input = inputs.at(i);
         const auto input_addr = input.buffer()->address();
-        const auto num_tiles = static_cast<uint32_t>(input.padded_volume()) / tt::constants::TILE_HW;
+        const auto num_tiles = static_cast<uint32_t>(input.physical_volume()) / tt::constants::TILE_HW;
         const auto [origin_h, origin_w] = origin_hw_vec.at(i);
 
         // reader

@@ -55,7 +55,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
         inner_size *= input_shape[i];
     }
 
-    const auto units_to_divide = output.padded_volume() / constants::TILE_HW;
+    const auto units_to_divide = output.physical_volume() / constants::TILE_HW;
 
     auto program = CreateProgram();
 

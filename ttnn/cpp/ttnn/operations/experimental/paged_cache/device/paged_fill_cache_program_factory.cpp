@@ -68,7 +68,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
         batch_idx_buffer_addr = tensor.buffer()->address();
         batch_idx_data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
         batch_idx_stick_size_B = tensor.element_size();
-        TT_FATAL(tensor.padded_volume() == 1, "batch_idx_tensor must contain a single element.");
+        TT_FATAL(tensor.physical_volume() == 1, "batch_idx_tensor must contain a single element.");
         batch_idx_is_dram = tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     }
 

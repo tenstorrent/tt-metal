@@ -21,7 +21,7 @@ AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(const Tens
     }
 
     std::size_t eth_l1_capacity = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
-    std::size_t tensor_size_bytes = input_tensor.padded_volume() * input_tensor.element_size();
+    std::size_t tensor_size_bytes = input_tensor.physical_volume() * input_tensor.element_size();
     // This is currently a guestimate. We need a lot more hard data to identify where this dividing line is.
     bool perf_degradation_from_full_tensor_mode = tensor_size_bytes > (2 * eth_l1_capacity);
     if (perf_degradation_from_full_tensor_mode) {

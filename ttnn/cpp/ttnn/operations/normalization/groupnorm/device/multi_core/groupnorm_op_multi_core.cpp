@@ -425,10 +425,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().buffer()->address() : 0;
     // num tiles for a, gamma, beta
-    uint32_t num_tiles = a.padded_volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().padded_volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().padded_volume() / TILE_HW : 0;
-    uint32_t num_input_mask_tiles = input_mask.has_value() ? input_mask.value().padded_volume() / TILE_HW : 0;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_input_mask_tiles = input_mask.has_value() ? input_mask.value().physical_volume() / TILE_HW : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -1098,15 +1098,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
 
         if (gamma.has_value()) {
             gamma_tile_start_id = (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) %
-                                  (gamma.value().padded_volume() / TILE_WIDTH);
+                                  (gamma.value().physical_volume() / TILE_WIDTH);
         }
         if (beta.has_value()) {
-            beta_tile_start_id =
-                (beta_tile_start_id + gamma_beta_num_cols_tile_per_core) % (beta.value().padded_volume() / TILE_WIDTH);
+            beta_tile_start_id = (beta_tile_start_id + gamma_beta_num_cols_tile_per_core) %
+                                 (beta.value().physical_volume() / TILE_WIDTH);
         }
         if (input_mask.has_value()) {
             input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) %
-                                       (input_mask.value().padded_volume() / TILE_HW);
+                                       (input_mask.value().physical_volume() / TILE_HW);
         }
     }
 
@@ -1386,10 +1386,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().buffer()->address() : 0;
     // num tiles for a, gamma, beta
-    uint32_t num_tiles = a.padded_volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().padded_volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().padded_volume() / TILE_HW : 0;
-    uint32_t num_input_mask_tiles = input_mask.has_value() ? input_mask.value().padded_volume() / TILE_HW : 0;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_input_mask_tiles = input_mask.has_value() ? input_mask.value().physical_volume() / TILE_HW : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -2486,15 +2486,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
         if (gamma.has_value()) {
             gamma_tile_start_id = (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) %
-                                  (gamma.value().padded_volume() / TILE_WIDTH);
+                                  (gamma.value().physical_volume() / TILE_WIDTH);
         }
         if (beta.has_value()) {
-            beta_tile_start_id =
-                (beta_tile_start_id + gamma_beta_num_cols_tile_per_core) % (beta.value().padded_volume() / TILE_WIDTH);
+            beta_tile_start_id = (beta_tile_start_id + gamma_beta_num_cols_tile_per_core) %
+                                 (beta.value().physical_volume() / TILE_WIDTH);
         }
         if (input_mask.has_value()) {
             input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) %
-                                       (input_mask.value().padded_volume() / TILE_HW);
+                                       (input_mask.value().physical_volume() / TILE_HW);
         }
     }
     auto override_runtime_args_callback =

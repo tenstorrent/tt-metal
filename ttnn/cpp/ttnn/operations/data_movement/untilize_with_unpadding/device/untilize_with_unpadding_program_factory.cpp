@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    int32_t num_tiles = a.padded_volume() / TILE_HW;
+    int32_t num_tiles = a.physical_volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
@@ -674,7 +674,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.padded_volume() / input_shape[-1] / TILE_HEIGHT;
+    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
 
     uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
@@ -914,7 +914,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     uint32_t ncores = all_cores.num_cores();
     uint32_t ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
-    uint32_t batch = a.padded_volume() / (a.padded_shape()[-2] * a.padded_shape()[-1]);
+    uint32_t batch = a.physical_volume() / (a.padded_shape()[-2] * a.padded_shape()[-1]);
     uint32_t ntiles_per_batch = ntiles_per_block * nblocks_per_core / batch;
 
     num_rows_block = out_shard_spec.shape[0];
@@ -923,7 +923,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     last_block_row_size_unpadded = block_row_size - (tt::round_up(output.padded_shape()[-1], out_shard_spec.shape[1]) -
                                                      output.padded_shape()[-1]) *
                                                         output.element_size();
-    uint32_t num_output_rows = output.padded_volume() / output.padded_shape()[-1];
+    uint32_t num_output_rows = output.physical_volume() / output.padded_shape()[-1];
     num_output_rows_unpadded =
         num_rows_block - (tt::round_up(num_output_rows, out_shard_spec.shape[0]) - num_output_rows);
     if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {

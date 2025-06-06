@@ -28,7 +28,7 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
     uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
 
     // NOTE: There is an assumption that number of tiles in grad_output is the same as in input
-    uint32_t num_tiles = input.padded_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
     tt::tt_metal::IDevice* device = input.device();
 
@@ -158,7 +158,7 @@ void GeluBackwardProgramFactory::override_runtime_arguments(
     auto& compute_runtime_args = GetRuntimeArgs(program, gelu_bw_compute_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, gelu_bw_writer_kernel_id);
 
-    uint32_t num_tiles = input.padded_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     tt::tt_metal::IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();

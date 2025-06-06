@@ -189,7 +189,7 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     uint32_t single_tile_size_in = tt::tt_metal::detail::TileSize(data_fmt_in);
     uint32_t single_tile_size_out = tt::tt_metal::detail::TileSize(data_fmt_out);
 
-    uint32_t num_tiles = input.padded_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

@@ -47,7 +47,7 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
 
     IDevice* device = a.device();
 
-    uint32_t ntiles = a.padded_volume() / TILE_HW;
+    uint32_t ntiles = a.physical_volume() / TILE_HW;
     uint32_t ncores = sub_core_grids.num_cores();
     for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
         if (ntiles % ncores == 0) {
@@ -230,7 +230,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     auto grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t ntiles = a.padded_volume() / TILE_HW;
+    uint32_t ntiles = a.physical_volume() / TILE_HW;
     uint32_t ncores_x = grid_size.x;
     uint32_t ncores_y = grid_size.y;
     // uint32_t ncores_x = 2;
@@ -755,7 +755,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
 
-    uint32_t ntiles = a.padded_volume() / TILE_HW;
+    uint32_t ntiles = a.physical_volume() / TILE_HW;
     uint32_t stick_s = a.padded_shape()[-1];
     uint32_t ntiles_per_block = a.padded_shape()[-1] / TILE_WIDTH;
     uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
@@ -843,7 +843,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         last_block_row_size_unpadded = block_row_size - (tt::round_up(output.padded_shape()[-1], shard_spec.shape[1]) -
                                                          output.padded_shape()[-1]) *
                                                             output.element_size();
-        uint32_t num_output_rows = output.padded_volume() / output.padded_shape()[-1];
+        uint32_t num_output_rows = output.physical_volume() / output.padded_shape()[-1];
         num_output_rows_unpadded =
             num_rows_block - (tt::round_up(num_output_rows, shard_spec.shape[0]) - num_output_rows);
         end_core = (*shard_spec.grid.ranges().begin()).end_coord;
@@ -1214,9 +1214,9 @@ operation::ProgramWithCallbacks untilize_single_core(
     uint32_t tile_width = tile_shape[1];
     uint32_t tile_volume = tile_height * tile_width;
 
-    uint32_t num_tiles = a.padded_volume() / tile_volume;
+    uint32_t num_tiles = a.physical_volume() / tile_volume;
 
-    uint32_t num_blocks_across_height = a.padded_volume() / a.padded_shape()[-1] / tile_height;
+    uint32_t num_blocks_across_height = a.physical_volume() / a.padded_shape()[-1] / tile_height;
     uint32_t num_columns_of_blocks = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -1248,8 +1248,8 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     uint32_t num_blocks_per_column_row = num_tiles_per_column_row / num_tiles_per_block;
     uint32_t single_block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
-    uint32_t num_total_sticks = a.padded_volume() / a.padded_shape()[-1] * num_columns_of_blocks;
-    uint32_t stick_size = a.padded_volume() * output.element_size() / num_total_sticks;
+    uint32_t num_total_sticks = a.physical_volume() / a.padded_shape()[-1] * num_columns_of_blocks;
+    uint32_t stick_size = a.physical_volume() * output.element_size() / num_total_sticks;
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();

@@ -97,7 +97,7 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
             QKV_memcfg.memory_layout());
         TT_FATAL(
             input_tensor.shard_spec().value().shape[0] ==
-                input_tensor.padded_volume() / input_tensor.padded_shape()[-1],
+                input_tensor.physical_volume() / input_tensor.padded_shape()[-1],
             "Shard shape must be correct");
         TT_FATAL(
             input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,

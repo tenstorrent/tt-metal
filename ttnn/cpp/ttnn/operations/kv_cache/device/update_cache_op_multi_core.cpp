@@ -50,11 +50,11 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     tt::log_debug("Wbytes: {}", Wbytes);
     tt::log_debug("Wt: {}", Wt);
 
-    uint32_t cache_total_num_tiles = cache_tensor.padded_volume() / TILE_HW;
+    uint32_t cache_total_num_tiles = cache_tensor.physical_volume() / TILE_HW;
     uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.padded_shape()[0];
     uint32_t cache_head_num_tiles = cache_batch_num_tiles / cache_tensor.padded_shape()[1];
 
-    uint32_t num_tiles = input_tensor.padded_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
 
     uint32_t B = input_tensor.padded_shape()[-2];
     uint32_t Bcache = cache_tensor.padded_shape()[0];

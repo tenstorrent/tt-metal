@@ -510,7 +510,7 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
     auto view = logical_shape.view();
     std::vector<uint32_t> torch_shape(view.begin(), view.end());
     auto tensor = [&]() {
-        if (tt_tensor.padded_volume() == 0) {
+        if (tt_tensor.physical_volume() == 0) {
             auto pytorch_empty = torch.attr("empty");
             return pytorch_empty(torch_shape, py::arg("dtype") = torch_dtype);
         }
@@ -1449,13 +1449,13 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             // TODO: Rename to physical_volume
             "volume",
-            [](const Tensor& self) { return self.padded_volume(); },
+            [](const Tensor& self) { return self.physical_volume(); },
             R"doc(
             Get the volume of the tensor.
 
             .. code-block:: python
 
-                volume = tt_tensor.padded_volume()
+                volume = tt_tensor.physical_volume()
 
         )doc")
         .def(

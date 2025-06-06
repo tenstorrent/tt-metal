@@ -93,13 +93,13 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     uint32_t St = cache_tensor.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.padded_shape()[-1] * sizeof(float)
                                        : cache_tensor.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
-    uint32_t cache_total_num_tiles = cache_tensor.padded_volume() / TILE_HW;
+    uint32_t cache_total_num_tiles = cache_tensor.physical_volume() / TILE_HW;
     uint32_t cache_batch_num_tiles =
         share_cache ? 0
                     : cache_total_num_tiles /
                           cache_tensor.padded_shape()[0];  // if share cache, we can set cache batch num tiles to 0
                                                            // so batch offset would be 0 in future calculations
-    uint32_t num_tiles = input_tensor.padded_volume() / TILE_HW;
+    uint32_t num_tiles = input_tensor.physical_volume() / TILE_HW;
     uint32_t B = input_tensor.padded_shape()[1];
     uint32_t num_heads = cache_tensor.padded_shape()[1];
 

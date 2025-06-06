@@ -34,7 +34,7 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor>& inp
     auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
     // Need at least fused_batch_heads cores to unpad into sharded tensor
     TT_FATAL(fused_batch_heads <= core_grid.x * core_grid.y, "Error");
-    TT_FATAL(input_tensor_a.padded_volume() % TILE_HW == 0, "Error");
+    TT_FATAL(input_tensor_a.physical_volume() % TILE_HW == 0, "Error");
     TT_FATAL(
         (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->output_tensor_start[-2] % TILE_HEIGHT == 0),
         "Can only unpad tilized tensor with full tiles");

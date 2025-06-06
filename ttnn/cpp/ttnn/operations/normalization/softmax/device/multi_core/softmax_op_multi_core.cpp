@@ -46,7 +46,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     bool numeric_stable) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto shape = input_tensor.padded_shape();
-    uint32_t W = shape[-1], H = (input_tensor.padded_volume() / (shape[0] * shape[-1])), NC = shape[0];
+    uint32_t W = shape[-1], H = (input_tensor.physical_volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H * W;
 
     bool mask_padded_data = false;
@@ -104,7 +104,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
 
-    uint32_t num_tiles = input_tensor.padded_volume() / TILE_HW;
+    uint32_t num_tiles = input_tensor.physical_volume() / TILE_HW;
 
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
@@ -409,7 +409,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 output_tensors.size() == 1 ? output_tensors.at(0).buffer()->address() : src_buffer_address;
 
             const auto shape = input_tensors.at(0).padded_shape();
-            uint32_t W = shape[-1], H = (input_tensors.at(0).padded_volume() / (shape[0] * shape[-1])), NC = shape[0];
+            uint32_t W = shape[-1], H = (input_tensors.at(0).physical_volume() / (shape[0] * shape[-1])), NC = shape[0];
             uint32_t HW = H * W;
 
             uint32_t Wt = W / TILE_WIDTH;
@@ -424,7 +424,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 num_datum_padded = W - W_unpadded;
             }
 
-            int32_t num_tiles = input_tensors.at(0).padded_volume() / TILE_HW;
+            int32_t num_tiles = input_tensors.at(0).physical_volume() / TILE_HW;
             uint32_t block_size =
                 fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
@@ -664,7 +664,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
     // num tiles
-    uint32_t num_tiles = input_tensor.padded_volume() / TILE_HW;
+    uint32_t num_tiles = input_tensor.physical_volume() / TILE_HW;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

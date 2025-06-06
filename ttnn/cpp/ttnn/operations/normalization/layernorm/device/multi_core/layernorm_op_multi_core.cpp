@@ -99,7 +99,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     const auto shape = a.padded_shape();
     uint32_t W = shape[-1], H = shape[-2];
     uint32_t HW = H * W;
-    uint32_t NC = a.padded_volume() / HW;
+    uint32_t NC = a.physical_volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
     const auto& a_dtype = a.dtype();
@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
 
-    uint32_t num_tensor_tiles = a.padded_volume() / TILE_HW;
+    uint32_t num_tensor_tiles = a.physical_volume() / TILE_HW;
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -161,16 +161,16 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
-    uint32_t num_tiles = a.padded_volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().padded_volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().padded_volume() / TILE_HW : 0;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
     // For bert, tensor is packed as RM with width 32
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().padded_volume() / TILE_WIDTH : 0;
+        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
     }
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().padded_volume() / TILE_WIDTH : 0;
+        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -620,7 +620,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     // tensor shape
     const auto shape = a.padded_shape();
-    uint32_t M = a.padded_volume() / shape[-1];
+    uint32_t M = a.physical_volume() / shape[-1];
     uint32_t K = shape[-1];
     uint32_t Mt = M / TILE_WIDTH;
     uint32_t Kt = K / TILE_WIDTH;
@@ -692,9 +692,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     // num tiles for a, gamma, beta
-    uint32_t num_tiles = a.padded_volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().padded_volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().padded_volume() / TILE_HW : 0;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

@@ -32,7 +32,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     auto* src1_buffer = input.buffer();
     auto* src2_buffer = other.buffer();
 
-    uint32_t num_tiles = input.padded_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     float scaler = 1.0f;
     const auto& a_shape_wo_padding = input.logical_shape();
     uint32_t pad_h = a_shape_wo_padding[2] % tt::constants::TILE_HEIGHT;

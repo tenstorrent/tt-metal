@@ -46,7 +46,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
 
     auto program = CreateProgram();
 
-    auto units_to_divide = input.padded_volume() / W / H * Wt;
+    auto units_to_divide = input.physical_volume() / W / H * Wt;
 
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 

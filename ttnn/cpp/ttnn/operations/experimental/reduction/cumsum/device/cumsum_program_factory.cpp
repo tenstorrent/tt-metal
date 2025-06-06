@@ -70,10 +70,10 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         tensor_rank >= 3, "Device operation only support 3D tensor and above: received tensor of rank {}", tensor_rank);
 
     TT_FATAL(
-        input_tensor.buffer()->size() == input_tensor.padded_volume() * input_tensor.element_size(),
+        input_tensor.buffer()->size() == input_tensor.physical_volume() * input_tensor.element_size(),
         "Input tensor size ({}) does not match expected volume ({})",
         input_tensor.buffer()->size(),
-        input_tensor.padded_volume() * input_tensor.element_size());
+        input_tensor.physical_volume() * input_tensor.element_size());
 
     TT_FATAL(input_tensor.logical_volume() > 0, "Input must not be empty");
 
@@ -144,7 +144,7 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
             .defines = defines_kernel_args});
 
     // Parameters setup
-    uint32_t num_tiles = output_tensor.padded_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = output_tensor.physical_volume() / tt::constants::TILE_HW;
     const uint32_t xy_volume = tensor_shape[tensor_rank - 1] * tensor_shape[tensor_rank - 2];  // W * H
     const uint32_t num_tiles_per_row = tensor_shape[dim];     // each row contains N independent tiles
     const uint32_t num_rows = num_tiles / num_tiles_per_row;  // total number of rows in tensor

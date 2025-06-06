@@ -285,7 +285,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     auto num_cores_total = cores.size();
 
-    auto total_num_input_sticks = input_tensor.padded_volume() / input_shape[-1];
+    auto total_num_input_sticks = input_tensor.physical_volume() / input_shape[-1];
     const auto num_sticks_per_core = shard_spec.shape[0];
     // issue more reads before calling barrier
     const uint32_t num_sticks_per_core_read =
@@ -364,7 +364,7 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     auto input_shape = input.logical_shape();
     auto output_shape = output.logical_shape();
 
-    uint32_t num_unpadded_sticks = input.padded_volume() / input_shape[-1];
+    uint32_t num_unpadded_sticks = input.physical_volume() / input_shape[-1];
 
     TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
     TT_FATAL(
@@ -380,7 +380,7 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     tt::log_debug("Input cores = {}", input_cores);
     tt::log_debug("Input shard spec = {}", shard_spec);
 
-    auto total_num_input_sticks = input.padded_volume() / input_shape[-1];
+    auto total_num_input_sticks = input.physical_volume() / input_shape[-1];
     auto num_input_sticks_per_core = shard_spec.shape[0];
 
     uint32_t output_row_size_bytes = output_shape[-1] * output.element_size();
@@ -506,7 +506,7 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     const auto output_padded_shape = output.padded_shape();
     const auto input_padded_shape = input.padded_shape();
 
-    uint32_t num_unpadded_sticks = input.padded_volume() / input.padded_shape()[-1];
+    uint32_t num_unpadded_sticks = input.physical_volume() / input.padded_shape()[-1];
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -618,7 +618,7 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
             uint32_t num_cores_x = compute_with_storage_grid_size.x;
             uint32_t num_cores_y = compute_with_storage_grid_size.y;
             uint32_t num_cores_total = num_cores_x * num_cores_y;
-            uint32_t num_unpadded_sticks = src_tensor.padded_volume() / src_tensor.padded_shape()[-1];
+            uint32_t num_unpadded_sticks = src_tensor.physical_volume() / src_tensor.padded_shape()[-1];
             auto
                 [num_cores,
                  all_cores,

@@ -34,7 +34,7 @@ MorehNormOperation::ProgramFactoryNCOther::cached_program_t MorehNormOperation::
     const auto Wt = W / tt::constants::TILE_WIDTH;
 
     const auto num_reduced_tiles_along_dim = input_shape[dim];
-    const auto num_output_tiles = output.padded_volume() / tt::constants::TILE_HW;
+    const auto num_output_tiles = output.physical_volume() / tt::constants::TILE_HW;
 
     uint32_t outer_stride{1};
     for (int64_t j = dim; j < input_rank; ++j) {

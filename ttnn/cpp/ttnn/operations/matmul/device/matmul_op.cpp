@@ -441,7 +441,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const bool all_dram_interleaved) {
     auto device = input_tensor_a.device();
     auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());
-    uint32_t M = fuse_batch ? input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1]
+    uint32_t M = fuse_batch ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                             : input_tensor_a.padded_shape()[-2];
     uint32_t K = input_tensor_a.padded_shape()[-1];
     uint32_t N = input_tensor_b.padded_shape()[-1];
@@ -871,7 +871,7 @@ MatmulProgramConfig get_matmul_program_config(
                 per_core_N_equals_subblock_w_constraint = true;
             }
 
-            uint32_t M = input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+            uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
             uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
             uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
             auto shard_shape = input_tensor_a.shard_spec().value().shape;
@@ -939,7 +939,7 @@ MatmulProgramConfig get_matmul_program_config(
                 per_core_N_equals_subblock_w_constraint = true;
             }
 
-            uint32_t M = input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+            uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
             uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
             uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
 
@@ -1001,7 +1001,7 @@ MatmulProgramConfig get_matmul_program_config(
             per_core_N_equals_subblock_w_constraint = true;
         }
 
-        uint32_t M = input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+        uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
         uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
         uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
 
@@ -1758,7 +1758,7 @@ void Matmul::validate(
                             input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
                             "Error: Shard orientation must be ROW_MAJOR.");
                         uint32_t M = (program_config.fuse_batch
-                                          ? input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1]
+                                          ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                                           : input_tensor_a.padded_shape()[-2]) /
                                      in0_tile_shape[0];
                         uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
@@ -1793,7 +1793,7 @@ void Matmul::validate(
                             "Error: Output memory layout must be WIDTH_SHARDED. Provided tensor memory layout: {}",
                             this->output_mem_config.memory_layout());
                         uint32_t M = (program_config.fuse_batch
-                                          ? input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1]
+                                          ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                                           : input_tensor_a.padded_shape()[-2]) /
                                      in0_tile_shape[0];
                         uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
@@ -1846,7 +1846,7 @@ void Matmul::validate(
                             input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
                             "Error: Shard orientation must be ROW_MAJOR.");
                         uint32_t M = (program_config.fuse_batch
-                                          ? input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1]
+                                          ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                                           : input_tensor_a.padded_shape()[-2]) /
                                      in0_tile_shape[0];
                         uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
@@ -1868,7 +1868,7 @@ void Matmul::validate(
                             this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                             "Error: Output memory layout must be HEIGHT_SHARDED.");
                         uint32_t M = (program_config.fuse_batch
-                                          ? input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1]
+                                          ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                                           : input_tensor_a.padded_shape()[-2]) /
                                      in0_tile_shape[0];
                         uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
@@ -1898,7 +1898,7 @@ void Matmul::validate(
                 TT_FATAL(
                     input_tensor_a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
                 TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
-                uint32_t M = input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+                uint32_t M = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                 uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                 uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
                 uint32_t per_core_M = program_config.per_core_M;
@@ -1940,7 +1940,8 @@ void Matmul::validate(
                 if (input_tensor_a.memory_config().is_sharded()) {
                     TT_FATAL(program_config.fuse_batch, "Error");
                     auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
-                    uint32_t M = input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+                    uint32_t M =
+                        input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                     uint32_t K = input_tensor_a.padded_shape()[-1] / in0_tile_shape[1];
                     uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                     uint32_t per_core_M = program_config.per_core_M;
@@ -2012,7 +2013,8 @@ void Matmul::validate(
 
                 if (this->output_mem_config.is_sharded()) {
                     TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED, "Error");
-                    uint32_t M = input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+                    uint32_t M =
+                        input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
@@ -2027,7 +2029,7 @@ void Matmul::validate(
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
                 uint32_t M = input_tensor_a.padded_shape()[-2] / in0_tile_shape[0];
                 uint32_t total_M =
-                    input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+                    input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                 uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                 uint32_t K = input_tensor_a.padded_shape()[-1];
                 uint32_t per_core_M = program_config.per_core_M;
@@ -2191,10 +2193,10 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
             [&](const auto& program_config) -> std::vector<TensorSpec> {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
                 if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                    uint32_t M =
-                        (program_config.fuse_batch ? input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1]
-                                                   : input_tensor_a.padded_shape()[-2]) /
-                        in0_tile_shape[0];
+                    uint32_t M = (program_config.fuse_batch
+                                      ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
+                                      : input_tensor_a.padded_shape()[-2]) /
+                                 in0_tile_shape[0];
                     uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
@@ -2228,7 +2230,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
                                          MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                    uint32_t M = input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+                    uint32_t M =
+                        input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
 
                     uint32_t per_core_M = program_config.per_core_M;
@@ -2253,7 +2256,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         output_shape,
                         TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                    uint32_t M = input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+                    uint32_t M =
+                        input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
@@ -2280,7 +2284,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         output_shape,
                         TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
                 } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
-                    uint32_t M = input_tensor_a.padded_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
+                    uint32_t M =
+                        input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;

@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = input.padded_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        uint32_t num_units_height = input.padded_volume() / input.padded_shape()[-1] / TILE_HEIGHT / num_slices;
+        uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
             num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
@@ -72,7 +72,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = input.padded_shape()[-1] * input.element_size();
         num_units_offset = 1;
-        uint32_t num_units_height = input.padded_volume() / input.padded_shape()[-1];
+        uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         // TODO: Use a different variable name. Units refers to pages, but this is being used as size

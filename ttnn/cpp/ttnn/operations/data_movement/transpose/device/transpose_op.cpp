@@ -41,9 +41,9 @@ void Transpose::validate(const std::vector<Tensor>& input_tensors) const {
             TILE_HEIGHT,
             TILE_WIDTH);
         TT_FATAL(
-            input_tensor.padded_volume() % TILE_HW == 0,
+            input_tensor.physical_volume() % TILE_HW == 0,
             "Tiled tensor volume {} must be a multiple of TILE HEIGHT * TILE WIDTH",
-            input_tensor.padded_volume(),
+            input_tensor.physical_volume(),
             TILE_HW);
     }
     uint32_t ROW_MAJOR_STICK_WIDTH = 16;

@@ -21,7 +21,7 @@ void Downsample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to downsample need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only downsample tile major data");
 
-    TT_FATAL(input_tensor_a.padded_volume() % TILE_HW == 0, "Error");
+    TT_FATAL(input_tensor_a.physical_volume() % TILE_HW == 0, "Error");
     TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Error");
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||

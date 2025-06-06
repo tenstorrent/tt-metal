@@ -359,11 +359,11 @@ operation::ProgramWithCallbacks downsample_single_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Sanity check of output size
-    TT_ASSERT(output.padded_volume() % TILE_HW == 0);
+    TT_ASSERT(output.physical_volume() % TILE_HW == 0);
     uint32_t unpadded_input_volume = img_batch_size * img_height * img_width;
-    TT_ASSERT(a.padded_volume() >= unpadded_input_volume);
+    TT_ASSERT(a.physical_volume() >= unpadded_input_volume);
     uint32_t unpadded_output_volume = ceil((double)unpadded_input_volume / (double)(img_stride_h * img_stride_w));
-    TT_ASSERT(output.padded_volume() >= unpadded_output_volume);
+    TT_ASSERT(output.physical_volume() >= unpadded_output_volume);
 
     uint32_t ncores_x_full_grid = device->compute_with_storage_grid_size().x;
     auto [num_cores_height_sliced, num_cores_width_sliced] = get_num_cores_height_width_sliced(

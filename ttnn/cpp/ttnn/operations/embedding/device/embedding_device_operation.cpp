@@ -36,7 +36,7 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
             TT_FATAL(shard_spec.has_value(), "Sharded memory config must have a shard spec");
             TT_FATAL(shard_spec->shape[0] % TILE_HEIGHT == 0, "Shard height {} must be a multiple of tile height {} to have the output tensor tilized", shard_spec->shape[0], TILE_HEIGHT);
             TT_FATAL(shard_spec->shape[1] % TILE_WIDTH == 0, "Shard width {} must be a multiple of tile width {} to have the output tensor tilized", shard_spec->shape[1], TILE_WIDTH);
-            TT_FATAL(a.padded_volume() % shard_spec->shape[0] == 0, "Input tensor volume {} must be a multiple of shard height {}", a.padded_volume(), shard_spec->shape[0]);
+            TT_FATAL(a.physical_volume() % shard_spec->shape[0] == 0, "Input tensor volume {} must be a multiple of shard height {}", a.physical_volume(), shard_spec->shape[0]);
             TT_FATAL(weights.padded_shape()[-1] % shard_spec->shape[1] == 0, "Number of columns in table {} must be factor of shard width {}", weights.padded_shape()[-1], shard_spec->shape[1]);
         }
     } else {

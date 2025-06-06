@@ -23,7 +23,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     uint32_t pixel_size = input.padded_shape()[-1] * input.element_size();
-    uint32_t num_pixels = input.padded_volume() / input.padded_shape()[-1];
+    uint32_t num_pixels = input.physical_volume() / input.padded_shape()[-1];
 
     // chunk consists of channel values of stride_w neighboring pixels along the W dimension
     uint32_t width = input.padded_shape()[2];

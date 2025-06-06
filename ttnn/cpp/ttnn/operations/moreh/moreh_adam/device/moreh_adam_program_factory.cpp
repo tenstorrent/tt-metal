@@ -38,7 +38,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
 
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    uint32_t num_tiles = param_in.padded_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = param_in.physical_volume() / tt::constants::TILE_HW;
 
     Program program{};
 

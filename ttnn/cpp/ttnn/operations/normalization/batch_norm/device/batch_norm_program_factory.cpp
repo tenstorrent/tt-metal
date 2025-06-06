@@ -43,7 +43,7 @@ void set_or_update_runtime_arguments(
     const auto [bN, bC, bHt, bWt] = extract_shape_dims(batch_mean_tensor);
     const auto [cN, cC, cHt, cWt] = extract_shape_dims(c);
 
-    uint32_t num_output_tiles = c.padded_volume() / c.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = c.physical_volume() / c.tensor_spec().tile().get_tile_hw();
 
     constexpr bool row_major = true;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -157,7 +157,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     uint32_t e_single_tile_size = tt_metal::detail::TileSize(e_data_format);
     uint32_t f_single_tile_size = tt_metal::detail::TileSize(f_data_format);
 
-    uint32_t num_output_tiles = output.padded_volume() / output.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
 
     // we parallelize the computation across the output tiles
     constexpr bool row_major = true;

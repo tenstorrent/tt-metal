@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor& a, Tensor&
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    uint32_t num_tensor_tiles = a.padded_volume() / TILE_HW;
+    uint32_t num_tensor_tiles = a.physical_volume() / TILE_HW;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -186,7 +186,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor& a, Tensor&
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
         uint32_t num_cores_total = num_cores_x * num_cores_y;
-        uint32_t num_tensor_tiles = src_tensor.padded_volume() / TILE_HW;
+        uint32_t num_tensor_tiles = src_tensor.physical_volume() / TILE_HW;
 
         auto
             [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -428,8 +428,8 @@ void override_runtime_args_mc_hc_tiled_interleaved(
 
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     auto tile_hw = (tile_shape[0] * tile_shape[1]);
-    uint32_t num_tensor_tiles = input_tensor.padded_volume() / tile_hw;
-    uint32_t num_output_tiles = output_tensor.padded_volume() / tile_hw;
+    uint32_t num_tensor_tiles = input_tensor.physical_volume() / tile_hw;
+    uint32_t num_output_tiles = output_tensor.physical_volume() / tile_hw;
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2],
              C = input_tensor.logical_shape()[1], N = input_tensor.logical_shape()[0];
     bool needs_padding = C % tile_shape[0] != 0;
@@ -517,8 +517,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
     auto tile = a.tensor_spec().tile();
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
-    uint32_t num_tensor_tiles = a.padded_volume() / (tile_shape[0] * tile_shape[1]);
-    uint32_t num_output_tiles = output.padded_volume() / (tile_shape[0] * tile_shape[1]);
+    uint32_t num_tensor_tiles = a.physical_volume() / (tile_shape[0] * tile_shape[1]);
+    uint32_t num_output_tiles = output.physical_volume() / (tile_shape[0] * tile_shape[1]);
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0];
     bool needs_padding = (C % tile_shape[1] != 0) && pad_value.has_value();
     uint32_t padded_num_tensor_tiles =
@@ -632,7 +632,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     }
     uint32_t sub_tile_line_bytes = 16 * a.element_size();
 
-    uint32_t num_tensor_tiles = a.padded_volume() / TILE_HW;
+    uint32_t num_tensor_tiles = a.physical_volume() / TILE_HW;
     const auto& a_shape = a.logical_shape();
     uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t NCH = N * C * H;
@@ -805,7 +805,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
 
         uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-        uint32_t num_tensor_tiles = src_tensor.padded_volume() / TILE_HW;
+        uint32_t num_tensor_tiles = src_tensor.physical_volume() / TILE_HW;
 
         uint32_t H = src_tensor.logical_shape()[2], C = src_tensor.logical_shape()[1],
                  N = src_tensor.logical_shape()[0];
@@ -1319,7 +1319,7 @@ void override_runtime_args_wh(
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
 
-    uint32_t num_tensor_tiles = input_tensor.padded_volume() / TILE_HW;
+    uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
     auto HtWt = Ht * Wt;
 
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
@@ -1518,7 +1518,7 @@ void override_runtime_args_wh_rm(
 }
 
 operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor& output) {
-    uint32_t num_tensor_tiles = a.padded_volume() / TILE_HW;
+    uint32_t num_tensor_tiles = a.physical_volume() / TILE_HW;
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0],
              NC = a.logical_shape()[1] * a.logical_shape()[0];
     bool row_major = a.layout() == Layout::ROW_MAJOR;
@@ -1717,7 +1717,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
         uint32_t num_cores_total = num_cores_x * num_cores_y;
-        uint32_t num_tensor_tiles = src_tensor.padded_volume() / TILE_HW;
+        uint32_t num_tensor_tiles = src_tensor.physical_volume() / TILE_HW;
         uint32_t NC = src_tensor.logical_shape()[1] * src_tensor.logical_shape()[0];
         bool row_major = src_tensor.layout() == Layout::ROW_MAJOR;
 
@@ -1772,7 +1772,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     const auto tile = a.tensor_spec().tile();
     const uint32_t tile_hw = tile.get_tile_hw();
-    int32_t num_tiles = a.padded_volume() / tile_hw;
+    int32_t num_tiles = a.physical_volume() / tile_hw;
 
     tt::tt_metal::IDevice* device = a.device();
 
@@ -1911,7 +1911,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
 
         const auto tile = src_tensor.tensor_spec().tile();
         const uint32_t tile_hw = tile.get_tile_hw();
-        int32_t num_tiles = src_tensor.padded_volume() / tile_hw;
+        int32_t num_tiles = src_tensor.physical_volume() / tile_hw;
 
         uint32_t num_tiles_per_shard = shard_spec.numel() / tile_hw;
 

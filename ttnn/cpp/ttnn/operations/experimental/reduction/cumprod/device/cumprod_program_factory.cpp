@@ -65,7 +65,7 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
         (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
 
     const uint32_t tiles_per_row{input_tensor.padded_shape()[dim]};
-    const uint32_t num_rows_total{input_tensor.padded_volume() / tt::constants::TILE_HW / tiles_per_row};
+    const uint32_t num_rows_total{input_tensor.physical_volume() / tt::constants::TILE_HW / tiles_per_row};
     const uint32_t input_tile_offset{calc_input_tile_offset(input_shape, dim)};
 
     const auto

@@ -34,7 +34,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     auto Wt = W / tt::constants::TILE_WIDTH;
 
     // copy TILE per core
-    uint32_t units_to_divide = target.padded_volume() / H / W * (Ht * Wt);
+    uint32_t units_to_divide = target.physical_volume() / H / W * (Ht * Wt);
 
     tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();

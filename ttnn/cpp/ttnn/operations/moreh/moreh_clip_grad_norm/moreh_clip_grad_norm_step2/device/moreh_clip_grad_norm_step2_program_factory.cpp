@@ -38,7 +38,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto num_tiles = tmp_pow_sum.padded_volume() / tt::constants::TILE_HW;
+    const auto num_tiles = tmp_pow_sum.physical_volume() / tt::constants::TILE_HW;
 
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(1.0f / norm_type);
 

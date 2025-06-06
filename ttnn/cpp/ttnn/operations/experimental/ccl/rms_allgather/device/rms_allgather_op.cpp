@@ -89,7 +89,7 @@ void RMSAllGather::validate(
             TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
                 (gamma.value().padded_shape()[-1] == input_width &&
-                 gamma.value().padded_volume() / input_width == a.padded_shape()[-1] / input_width),
+                 gamma.value().physical_volume() / input_width == a.padded_shape()[-1] / input_width),
                 "Error");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
@@ -139,7 +139,7 @@ void RMSAllGather::validate(
 
                 // tensor shape
                 const auto shape = a.padded_shape();
-                uint32_t M = a.padded_volume() / shape[-1];
+                uint32_t M = a.physical_volume() / shape[-1];
                 uint32_t K = shape[-1];
 
                 uint32_t Mt = M / input_height;

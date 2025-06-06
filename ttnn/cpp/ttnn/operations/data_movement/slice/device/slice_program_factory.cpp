@@ -155,7 +155,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    uint32_t num_unpadded_sticks = output.padded_volume() / output.padded_shape()[-1];
+    uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -265,7 +265,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
             uint32_t num_cores_x = compute_with_storage_grid_size.x;
             uint32_t num_cores_y = compute_with_storage_grid_size.y;
             uint32_t num_cores_total = num_cores_x * num_cores_y;
-            uint32_t num_unpadded_sticks = dst_tensor.padded_volume() / dst_tensor.padded_shape()[-1];
+            uint32_t num_unpadded_sticks = dst_tensor.physical_volume() / dst_tensor.padded_shape()[-1];
             auto
                 [num_cores,
                  all_cores,
@@ -368,7 +368,7 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
 
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
 
-    uint32_t pages = output.padded_volume() / output_shape[-1];
+    uint32_t pages = output.physical_volume() / output_shape[-1];
     tt::tt_metal::SetRuntimeArgs(
         program,
         unary_writer_kernel_id,
@@ -583,8 +583,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    uint32_t num_padded_sticks = a.padded_volume() / a.padded_shape()[-1];
-    uint32_t num_unpadded_sticks = output.padded_volume() / output.padded_shape()[-1];
+    uint32_t num_padded_sticks = a.physical_volume() / a.padded_shape()[-1];
+    uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
     // stick sizes
     uint32_t W_padded = a.logical_shape()[-1];
@@ -858,7 +858,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    uint32_t num_unpadded_tiles = output.padded_volume() / TILE_HW;
+    uint32_t num_unpadded_tiles = output.physical_volume() / TILE_HW;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -943,7 +943,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
                                               const std::vector<Tensor>& output_tensors) mutable {
         const Tensor& src_tensor = input_tensors[0];
         const Tensor& dst_tensor = output_tensors[0];
-        uint32_t num_unpadded_tiles = dst_tensor.padded_volume() / TILE_HW;
+        uint32_t num_unpadded_tiles = dst_tensor.physical_volume() / TILE_HW;
 
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
         uint32_t num_cores_y = compute_with_storage_grid_size.y;

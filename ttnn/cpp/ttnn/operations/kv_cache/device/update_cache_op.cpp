@@ -79,7 +79,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
             TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1], "Error");
             // Require even work division for now
             TT_FATAL(
-                (input_tensor.padded_volume() / input_tensor.padded_shape()[-1]) %
+                (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) %
                         input_tensor.shard_spec().value().shape[0] ==
                     0,
                 "Error");

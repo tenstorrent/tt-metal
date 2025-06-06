@@ -28,7 +28,7 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
-    uint32_t num_tiles = input.padded_volume() / shape[dim] / H / W * Ht * Wt;
+    uint32_t num_tiles = input.physical_volume() / shape[dim] / H / W * Ht * Wt;
 
     uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;

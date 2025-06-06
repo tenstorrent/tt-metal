@@ -48,7 +48,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
 
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
-    auto units_to_divide = input.padded_volume() / W / H * Ht;
+    auto units_to_divide = input.physical_volume() / W / H * Ht;
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores_wt_core_range(core_range, units_to_divide);
 

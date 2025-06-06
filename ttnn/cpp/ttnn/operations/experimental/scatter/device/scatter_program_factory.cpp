@@ -49,10 +49,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t src_tensor_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
     const uint32_t output_tensor_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
 
-    const uint32_t num_input_tiles = input_tensor.padded_volume() / TILE_HW;
-    const uint32_t num_index_tiles = index_tensor.padded_volume() / TILE_HW;
-    const uint32_t num_src_tiles = src_tensor.padded_volume() / TILE_HW;
-    const uint32_t num_output_tiles = output_tensor.padded_volume() / TILE_HW;
+    const uint32_t num_input_tiles = input_tensor.physical_volume() / TILE_HW;
+    const uint32_t num_index_tiles = index_tensor.physical_volume() / TILE_HW;
+    const uint32_t num_src_tiles = src_tensor.physical_volume() / TILE_HW;
+    const uint32_t num_output_tiles = output_tensor.physical_volume() / TILE_HW;
 
     const uint32_t logical_index_height = index_shape[0] * index_shape[1] * index_shape[2];
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;

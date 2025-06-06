@@ -18,14 +18,14 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
-    TT_FATAL(input_tensor_a.padded_volume() % tt::constants::TILE_HW == 0, "Error");
+    TT_FATAL(input_tensor_a.physical_volume() % tt::constants::TILE_HW == 0, "Error");
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1, "Error");
             TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
             TT_FATAL(
-                input_tensor_a.padded_volume() /
+                input_tensor_a.physical_volume() /
                         (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
                     1,
                 "Can only write unbatched output interleaved");
@@ -50,7 +50,7 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
             } else {
                 TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
                 TT_FATAL(
-                    input_tensor_a.padded_volume() /
+                    input_tensor_a.physical_volume() /
                             (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
                         1,
                     "Can only write unbatched output interleaved");

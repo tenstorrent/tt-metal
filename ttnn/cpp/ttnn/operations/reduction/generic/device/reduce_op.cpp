@@ -134,7 +134,7 @@ operation::ProgramWithCallbacks Reduce::create_program(
 ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
-    uint32_t num_tiles = input_tensor.padded_volume() / TILE_HW;
+    uint32_t num_tiles = input_tensor.physical_volume() / TILE_HW;
     if (this->dim == ReduceOpDim::H) {
         return ReduceOpParallelizationStrategy::MULTI_CORE_H;
     } else if (this->dim == ReduceOpDim::W) {

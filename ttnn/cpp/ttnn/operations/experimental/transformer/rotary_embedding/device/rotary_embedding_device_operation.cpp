@@ -46,7 +46,7 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1], "Error");
         // Require even work division for now
         TT_FATAL(
-            (input_tensor.padded_volume() / input_tensor.padded_shape()[-1]) %
+            (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) %
                     input_tensor.shard_spec().value().shape[0] ==
                 0,
             "Error");
@@ -73,7 +73,7 @@ std::vector<ttnn::TensorSpec> RotaryEmbedding::compute_output_specs(const std::v
         if (input_tensor.is_sharded()) {
             shard_spec = input_tensor.shard_spec().value();
         } else {
-            uint32_t num_blocks = input_tensor.padded_volume() / input_tensor.padded_shape()[-1] / TILE_HEIGHT;
+            uint32_t num_blocks = input_tensor.physical_volume() / input_tensor.padded_shape()[-1] / TILE_HEIGHT;
             auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
             uint32_t num_grid_cores = core_grid.x * core_grid.y;
             uint32_t num_cores = 0;

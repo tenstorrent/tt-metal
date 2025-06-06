@@ -242,7 +242,7 @@ void set_or_update_runtime_arguments(
     const uint32_t tile_height = c.tensor_spec().tile().get_height();
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
-    const uint32_t c_num_tiles = c.padded_volume() / tile_hw;
+    const uint32_t c_num_tiles = c.physical_volume() / tile_hw;
     uint32_t c_shard_height{}, c_shard_width{}, num_shards_per_width{};
 
     ShardShapeGenerator a_shard_shape_generator;

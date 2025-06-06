@@ -49,7 +49,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = output.padded_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        num_units_height = output.padded_volume() / output.padded_shape()[-1] / TILE_HEIGHT / num_slices;
+        num_units_height = output.physical_volume() / output.padded_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
@@ -62,7 +62,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
         num_units_per_row = output.padded_shape()[-1] * output.element_size();
         num_units_offset = 1;
-        num_units_height = input.padded_volume() / input.padded_shape()[-1];
+        num_units_height = input.physical_volume() / input.padded_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =

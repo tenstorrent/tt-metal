@@ -48,7 +48,7 @@ void set_or_update_runtime_arguments(
     const auto [iN, iC, iHt, iWt] = extract_shape_dims(input);
     const auto [oN, oC, oHt, oWt] = extract_shape_dims(output);
 
-    uint32_t num_output_tiles = output.padded_volume() / output.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
 
     constexpr bool row_major = true;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -149,7 +149,7 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
 
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_data_format);
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
-    uint32_t num_output_tiles = output.padded_volume() / output.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
 
     // Device Setup
     auto* device = input.device();

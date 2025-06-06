@@ -27,7 +27,7 @@ uint32_t get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& padded_
     uint32_t start_offset = 0;
     const auto& shape = tensor.padded_shape();
 
-    uint32_t num_pages = tensor.padded_volume();
+    uint32_t num_pages = tensor.physical_volume();
     if (tensor.layout() == Layout::TILE) {
         num_pages /= tt::constants::TILE_HW;
     } else {
@@ -50,7 +50,7 @@ static uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& pad
 
     if (tensor.padded_shape().rank() >= 2) {
         const auto& shape = tensor.padded_shape();
-        uint32_t num_pages = tensor.padded_volume() / shape[-1];
+        uint32_t num_pages = tensor.physical_volume() / shape[-1];
         uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
         start_offset = get_upper_start_offset(tensor, padded_slice_start);
         start_offset += padded_slice_start[-2];
@@ -224,7 +224,7 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    uint32_t num_unpadded_sticks = output.padded_volume() / output.padded_shape()[-1];
+    uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

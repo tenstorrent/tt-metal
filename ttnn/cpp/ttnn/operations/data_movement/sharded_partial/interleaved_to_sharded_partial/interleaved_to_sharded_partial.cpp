@@ -31,7 +31,7 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
             if constexpr (std::is_same_v<GridType, CoreCoord>) {
                 grid_size = grid;
                 uint32_t num_cores = 0;
-                uint32_t total_height = input_tensor.padded_volume() / input_tensor.padded_shape()[-1];
+                uint32_t total_height = input_tensor.physical_volume() / input_tensor.padded_shape()[-1];
                 total_height /= num_slices;
 
                 uint32_t total_width = input_tensor.padded_shape()[-1];

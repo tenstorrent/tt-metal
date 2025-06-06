@@ -316,7 +316,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
 
     // setup runtime arguments for data movement kernels
     uint32_t num_cores_total = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-    uint32_t num_tiles = device_input_tensor_a.padded_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = device_input_tensor_a.physical_volume() / tt::constants::TILE_HW;
     bool row_major = true;
     auto [num_cores, _, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles, row_major);

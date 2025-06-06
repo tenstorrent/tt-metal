@@ -56,7 +56,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto stick_nbytes =
         output_padded_shape[3] * tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output.dtype()));
     uint32_t ntiles_per_row = tt::div_up(input_padded_shape[-1], TILE_WIDTH);
-    uint32_t ntiles = input_tensor.padded_volume() / TILE_HW;
+    uint32_t ntiles = input_tensor.physical_volume() / TILE_HW;
     uint32_t num_blocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_row);
 
     tt::log_debug("ntiles_per_row: {}, ntiles: {}, num_blocks: {}", ntiles_per_row, ntiles, num_blocks);

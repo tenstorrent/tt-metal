@@ -87,7 +87,7 @@ Tensor ScatterOperation::invoke(
 
     // transposition case size growth check
     if (!input_tensor_is_dim_last_idx) {
-        const int64_t original_volume = static_cast<int64_t>(input_tensor.padded_volume());
+        const int64_t original_volume = static_cast<int64_t>(input_tensor.physical_volume());
         ttnn::Shape new_shape = input_tensor.logical_shape();
         std::swap(new_shape[dim], new_shape[-1]);
         const int64_t tile_width = input_tensor.tensor_spec().tile().get_width();

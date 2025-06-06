@@ -32,7 +32,7 @@ MorehNormOperation::ProgramFactoryHOther::cached_program_t MorehNormOperation::P
     const auto Ht = H / tt::constants::TILE_HEIGHT;
     const auto Wt = W / tt::constants::TILE_WIDTH;
 
-    const auto num_units = input.padded_volume() / H / W * Wt;
+    const auto num_units = input.physical_volume() / H / W * Wt;
 
     const auto origin_h = input.logical_shape()[-2];
 

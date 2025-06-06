@@ -61,7 +61,7 @@ void LayerNormPostAllGather::validate(
             TT_FATAL(gamma_tensor.layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
                 (gamma_tensor.padded_shape()[-1] == TILE_WIDTH &&
-                 gamma_tensor.padded_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
+                 gamma_tensor.physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
                 "Error");
             TT_FATAL(
                 gamma_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -87,7 +87,7 @@ void LayerNormPostAllGather::validate(
                 TT_FATAL(beta_tensor.layout() == Layout::ROW_MAJOR, "Error");
                 TT_FATAL(
                     (beta_tensor.padded_shape()[-1] == TILE_WIDTH &&
-                     beta_tensor.padded_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
+                     beta_tensor.physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
                     "Error");
                 TT_FATAL(
                     beta_tensor.buffer() != nullptr,

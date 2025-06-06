@@ -71,7 +71,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    int32_t num_tiles = output.padded_volume() / TILE_HW;
+    int32_t num_tiles = output.physical_volume() / TILE_HW;
 
     auto true_input_shape = a.padded_shape();
     auto true_output_shape = output.padded_shape();
@@ -528,7 +528,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_blocks = output.padded_volume() / output.padded_shape()[-1] / TILE_HEIGHT;
+    uint32_t num_blocks = output.physical_volume() / output.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
 
     uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
@@ -737,7 +737,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
 
     auto all_cores = output_shard_spec.grid;
 
-    uint32_t num_batches = output.padded_volume() / (output.padded_shape()[-2] * output.padded_shape()[-1]);
+    uint32_t num_batches = output.physical_volume() / (output.padded_shape()[-2] * output.padded_shape()[-1]);
 
     uint32_t num_input_rows = input_shard_spec.shape[0];
     uint32_t input_shard_width_bytes = input_shard_spec.shape[1] * a.element_size();

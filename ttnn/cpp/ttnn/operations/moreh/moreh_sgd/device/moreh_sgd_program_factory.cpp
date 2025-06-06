@@ -34,7 +34,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     auto shape = param_in.logical_shape();
     auto H = shape[-2];
     auto W = shape[-1];
-    auto num = param_in.padded_volume() / H / W;
+    auto num = param_in.physical_volume() / H / W;
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 

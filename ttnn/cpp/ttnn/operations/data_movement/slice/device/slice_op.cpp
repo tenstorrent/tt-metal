@@ -20,7 +20,7 @@ get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
     uint32_t start_offset = 0;
     const auto& shape = tensor.padded_shape();
 
-    uint32_t num_pages = tensor.padded_volume();
+    uint32_t num_pages = tensor.physical_volume();
     if (tensor.layout() == Layout::TILE) {
         num_pages /= tt::constants::TILE_HW;
     } else {
@@ -40,7 +40,7 @@ get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
 
 uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start) {
     using namespace tt::constants;
-    uint32_t num_input_pages = input_tensor.padded_volume() / (TILE_HW);
+    uint32_t num_input_pages = input_tensor.physical_volume() / (TILE_HW);
     const auto& shape = input_tensor.padded_shape();
     uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
     uint32_t num_pages_width = num_input_pages / (upper_dims_compressed * (shape[-2] / TILE_HEIGHT));
@@ -57,7 +57,7 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 
     if (tensor.padded_shape().rank() >= 2) {
         const auto& shape = tensor.padded_shape();
-        uint32_t num_pages = tensor.padded_volume() / shape[-1];
+        uint32_t num_pages = tensor.physical_volume() / shape[-1];
         uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
         start_offset = get_upper_start_offset(tensor, slice_start);
         start_offset += slice_start[-2];
@@ -109,7 +109,7 @@ void SliceDeviceOperation::validate_with_output_tensors(
             this->slice_end.rank());
     }
     if (input_tensor_a.layout() == Layout::TILE) {
-        TT_FATAL(input_tensor_a.padded_volume() % TILE_HW == 0, "Error");
+        TT_FATAL(input_tensor_a.physical_volume() % TILE_HW == 0, "Error");
         TT_FATAL(
             (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->slice_start[-2] % TILE_HEIGHT == 0),
             "Can only slice tilized tensor with height begin index aligned to tiles");
