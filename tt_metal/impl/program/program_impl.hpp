@@ -77,7 +77,7 @@ struct KernelGroup {
         uint32_t programmable_core_type_index,
         kernel_id_array_t kernel_ids,
         bool erisc_is_idle,
-        uint32_t max_local_cb_end_index,
+        uint32_t local_cb_mask,
         uint32_t min_remote_cb_start_index,
         const CoreRangeSet& new_ranges);
 
