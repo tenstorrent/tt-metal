@@ -37,7 +37,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb) {
  * Perform the untilize operation on a block of tiles. This simply loops over the provided block size.
  */
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
-ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb) {
+ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH((llk_math_wait_for_dest_available()));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
@@ -45,10 +45,11 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb)
                 (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, c)));
             MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(c)));
         }
+
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
 
         PACK((llk_packer_wait_for_math_done()));
-        PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb)));
+        PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, FACE_R_DIM, 4, block_c_index)));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
 }
