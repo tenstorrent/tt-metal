@@ -40,6 +40,7 @@ def generate_golden(operation, operand1, operand2, data_format):
         MathOperation.SfpuElwadd: tensor1_float + tensor2_float,
         MathOperation.SfpuElwsub: tensor1_float - tensor2_float,
         MathOperation.SfpuElwmul: tensor1_float * tensor2_float,
+        MathOperation.SfpuXlogy: torch.xlogy(tensor1_float, tensor2_float),
     }
 
     if operation not in operations:
@@ -77,6 +78,7 @@ all_params = generate_params(
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwmul,
+        MathOperation.SfpuXlogy,
     ],
 )
 param_ids = generate_param_ids(all_params)
