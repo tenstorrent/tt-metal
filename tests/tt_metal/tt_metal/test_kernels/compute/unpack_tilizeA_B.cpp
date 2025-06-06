@@ -18,13 +18,13 @@ inline void tilizeA_B_binary_init(
     MATH((llk_math_hw_configure_disaggregated(icb0, icb1)));
     MATH((llk_math_eltwise_binary_init<ELWADD, NONE>(0 /*transpose*/, 0 /*acc_to_dest*/)));
 
-    PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>(ocb)));
 }
 
 inline void add_tiles_math(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    MATH((llk_math_eltwise_binary<ELWADD, NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, DST_ACCUM_MODE>(
+    MATH((llk_math_eltwise_binary<ELWADD, NONE, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         icb0, icb1, idst)));
 }
 
