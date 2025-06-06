@@ -80,6 +80,8 @@ target_sources(
             api/tt-metalium/program.hpp
             api/tt-metalium/program_cache.hpp
             api/tt-metalium/program_descriptors.hpp
+            api/tt-metalium/profiler_optional_metadata.hpp
+            api/tt-metalium/profiler_types.hpp
             api/tt-metalium/runtime_args_data.hpp
             api/tt-metalium/semaphore.hpp
             api/tt-metalium/shape.hpp
