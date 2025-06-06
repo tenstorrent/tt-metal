@@ -22,20 +22,7 @@ set(DISTRIBUTED_SRC
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
 
-set(FLATBUFFER_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/mesh_coordinate.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/socket_peer_descriptor.fbs
-)
-
-set(FLATBUFFER_INCLUDES
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${PROJECT_SOURCE_DIR}/tt_metal/impl/flatbuffer
-)
-
-foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
-    GENERATE_FBS_HEADER(${FBS_FILE} ${FLATBUFFER_INCLUDES})
-    list(APPEND DISTRIBUTED_SRC ${FBS_GENERATED_HEADER_FILE})
-endforeach()
+set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/socket_peer_descriptor.fbs)
 
 # Check if distributed compute is enabled
 if(NOT DEFINED ENABLE_DISTRIBUTED)
@@ -90,6 +77,11 @@ endif()
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
+foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE} TARGET distributed)
+    target_sources(distributed PRIVATE ${FBS_GENERATED_HEADER_FILE})
+endforeach()
+
 target_link_libraries(
     distributed
     PUBLIC
@@ -100,10 +92,17 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
 )
+add_dependencies(distributed metalium_GeneratedHeaders)
 
 if(USE_MPI)
     target_link_libraries(distributed PRIVATE OpenMPI::MPI)
     target_compile_definitions(distributed PRIVATE OPEN_MPI="1")
 endif()
 
-target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
+target_include_directories(
+    distributed
+    SYSTEM
+    PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
+        ${CMAKE_BINARY_DIR}/tt_metal/flatbuffers
+)

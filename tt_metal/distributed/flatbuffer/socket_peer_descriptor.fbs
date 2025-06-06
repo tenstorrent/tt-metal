@@ -1,4 +1,4 @@
-include "mesh_coordinate.fbs";
+include "tt-metalium/serialized_descriptors/mesh_coordinate.fbs";
 
 namespace tt.tt_metal.distributed.flatbuffer;
 

@@ -15,6 +15,24 @@ set_target_properties(
             Metalium
 )
 
+set(FLATBUFFER_SCHEMAS api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs)
+
+include(flatbuffers)
+set(ALL_GENERATED_HEADERS)
+foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE} TARGET TT::Metalium)
+    list(APPEND ALL_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
+endforeach()
+
+target_sources(tt_metal PRIVATE ${ALL_GENERATED_HEADERS})
+
+add_custom_target(
+    metalium_GeneratedHeaders
+    DEPENDS
+        ${ALL_GENERATED_HEADERS}
+    COMMENT "Generating all FlatBuffer headers"
+)
+
 target_sources(
     tt_metal
     PRIVATE

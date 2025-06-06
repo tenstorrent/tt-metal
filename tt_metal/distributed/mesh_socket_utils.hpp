@@ -23,8 +23,8 @@ enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };
 // For multi-host sockets, this struct is serialized to a FlatBuffer and sent over the network to the peer endpoint.
 struct SocketPeerDescriptor {
     SocketConfig config;
-    DeviceAddr config_buffer_address;
-    DeviceAddr data_buffer_address;
+    DeviceAddr config_buffer_address = 0;
+    DeviceAddr data_buffer_address = 0;
     std::vector<uint32_t> mesh_ids;
     std::vector<uint32_t> chip_ids;
 };

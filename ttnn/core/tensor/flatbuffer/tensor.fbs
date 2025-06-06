@@ -1,6 +1,6 @@
 include "tensor_spec.fbs";
 include "mesh_shape.fbs";
-include "mesh_coordinate.fbs";
+include "tt-metalium/serialized_descriptors/mesh_coordinate.fbs";
 
 namespace ttnn.flatbuffer;
 

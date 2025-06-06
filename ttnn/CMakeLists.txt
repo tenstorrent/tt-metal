@@ -38,7 +38,7 @@ set(TENSOR_FLATBUFFER_INCLUDES
 
 set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
 foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
-    GENERATE_FBS_HEADER(${FBS_FILE} ${TENSOR_FLATBUFFER_INCLUDES})
+    GENERATE_FBS_HEADER(${FBS_FILE} TARGET TT::NN::Core)
     list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
 endforeach()
 
@@ -97,7 +97,7 @@ target_include_directories(
     SYSTEM
     PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
-        ${CMAKE_BINARY_DIR}/tt_metal/distributed/flatbuffers
+        ${CMAKE_BINARY_DIR}/tt_metal/flatbuffers
 )
 target_link_libraries(
     ttnn_core
