@@ -127,8 +127,8 @@ ALWI void mm_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t t
  // clang-format on
 ALWI void mm_init_short_with_dt(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca, const uint32_t transpose = 0) {
-    UNPACK((llk_unpack_reconfig_data_format_srca(c_in_old_srca, in1_cb_id)));
-    MATH((llk_math_reconfig_data_format_srca(c_in_old_srca, in1_cb_id)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
     mm_init_short(in0_cb_id, in1_cb_id, transpose);
 }
 
@@ -257,8 +257,8 @@ ALWI void mm_block_init_short_with_dt(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
-    UNPACK((llk_unpack_reconfig_data_format_srca(old_in1_cb_id, in1_cb_id)));
-    MATH((llk_math_reconfig_data_format_srca(old_in1_cb_id, in1_cb_id)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
 }
 

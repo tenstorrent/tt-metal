@@ -125,8 +125,8 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
           true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_icb)));
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
-    UNPACK((llk_unpack_reconfig_data_format_srca(old_icb, new_icb)));
-    MATH((llk_math_reconfig_data_format_srca(old_icb, new_icb)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
     UNPACK((llk_unpack_tilize_init(new_icb, block)));
 
 #ifdef ARCH_BLACKHOLE
@@ -214,8 +214,8 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
  */
 ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(old_icb)));
-    UNPACK((llk_unpack_reconfig_data_format_srca(old_icb, new_icb)));
-    MATH((llk_math_reconfig_data_format_srca(old_icb, new_icb)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init(ocb)));
 #endif
