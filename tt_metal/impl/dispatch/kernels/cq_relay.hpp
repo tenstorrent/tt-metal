@@ -7,14 +7,19 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "cq_common.hpp"
-#include "fabric/hw/inc/tt_fabric_mux.hpp"
-#include "fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "risc_attribs.h"
 #include "debug/waypoint.h"
 #include "noc/noc_parameters.h"
 
 #if !defined(FD_CORE_TYPE)
 #define FD_CORE_TYPE 0
+#endif
+
+#if !defined(FABRIC_2D)
+#define FABRIC_2D 0
 #endif
 
 template <uint32_t mux_num_buffers_per_channel, uint32_t mux_channel_buffer_size_bytes, uint32_t header_rb>
@@ -42,13 +47,20 @@ public:
         uint32_t worker_buffer_index_sem,
         uint32_t mux_status_address,
         uint32_t local_mux_status_address,
+        uint32_t my_dev_id,
+        uint32_t to_dev_id,
+        uint32_t to_mesh_id,
+        uint32_t ew_dim,
+        uint32_t router_direction,
+        uint32_t packet_header_addr,
+        uint8_t num_hops,
         uint8_t downstream_cmd_buf>
     FORCE_INLINE void init(uint64_t downstream_noc_addr) {
         WAYPOINT("FMCW");
 #if defined(FABRIC_RELAY)
         edm.template init<fd_core_type>(
             true /*connected_to_persistent_fabric*/,
-            0, /* ignored, direction */
+            router_direction,
             mux_x,
             mux_y,
             mux_channel_base_address,
@@ -67,6 +79,19 @@ public:
 
         tt::tt_fabric::wait_for_fabric_endpoint_ready(mux_x, mux_y, mux_status_address, local_mux_status_address);
         tt::tt_fabric::fabric_client_connect<mux_num_buffers_per_channel>(edm);
+
+        if constexpr (FABRIC_2D) {
+            tt::tt_fabric::fabric_set_unicast_route(
+                (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
+                (eth_chan_directions)edm.direction,
+                my_dev_id,
+                to_dev_id,
+                to_mesh_id,
+                ew_dim);
+        } else {
+            auto header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
+            header->to_chip_unicast(num_hops);
+        }
 #else
         init_write_state_only<noc_index, downstream_cmd_buf>(downstream_noc_addr);
 #endif
@@ -99,11 +124,10 @@ public:
 #endif
     }
 
-    template <uint8_t noc_idx, uint8_t num_hops, bool count = true>
+    template <uint8_t noc_idx, bool count = true>
     FORCE_INLINE void write_inline(uint64_t dst, uint32_t val) {
 #if defined(FABRIC_RELAY)
         auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
-        packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
         packet_header->to_noc_unicast_inline_write(
             tt::tt_fabric::NocUnicastInlineWriteCommandHeader{.noc_address = dst, .value = val});
         // Use the fabric_atomic_inc helper to send the header
@@ -117,7 +141,7 @@ public:
 #endif
     }
 
-    template <uint8_t noc_idx, uint8_t num_hops, bool wait, uint8_t downstream_cmd_buf, bool count = true>
+    template <uint8_t noc_idx, bool wait, uint8_t downstream_cmd_buf, bool count = true>
     FORCE_INLINE void write_any_len(uint32_t data_ptr, uint64_t dst_ptr, uint32_t length) {
 #if defined(FABRIC_RELAY)
         // Writing to a HEADER only buffer is wrong. This function requires a FULL SIZE buffer
@@ -125,7 +149,6 @@ public:
         constexpr uint32_t k_FabricMaxBurstSize = mux_channel_buffer_size_bytes - sizeof(PACKET_HEADER_TYPE);
 
         auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
-        packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
         while (length > k_FabricMaxBurstSize) {
             packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_ptr}, k_FabricMaxBurstSize);
 
@@ -151,10 +174,10 @@ public:
 #endif
     }
 
-    template <uint8_t noc_idx, uint8_t num_hops, bool wait, uint8_t downstream_cmd_buf, bool count = true>
+    template <uint8_t noc_idx, bool wait, uint8_t downstream_cmd_buf, bool count = true>
     FORCE_INLINE void write(uint32_t data_ptr, uint64_t dst_ptr, uint32_t length) {
 #if defined(FABRIC_RELAY)
-        write_any_len<noc_idx, num_hops, wait, downstream_cmd_buf, count>(data_ptr, dst_ptr, length);
+        write_any_len<noc_idx, wait, downstream_cmd_buf, count>(data_ptr, dst_ptr, length);
 #else
         if constexpr (wait) {
             cq_noc_async_write_with_state<
@@ -176,14 +199,13 @@ public:
 #endif
     }
 
-    template <uint8_t noc_idx, uint32_t dest_noc_xy, uint32_t dest_sem_id, uint8_t num_hops>
+    template <uint8_t noc_idx, uint32_t dest_noc_xy, uint32_t dest_sem_id>
     FORCE_INLINE void release_pages(uint16_t n) {
 #if defined(FABRIC_RELAY)
         auto sem_addr = get_semaphore<fd_core_type>(dest_sem_id);
         uint64_t noc_dest_addr = get_noc_addr_helper(dest_noc_xy, sem_addr);
 
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
-        packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
         packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             noc_dest_addr,
             n,
@@ -199,7 +221,6 @@ public:
         uint32_t downstream_noc_idx,
         uint32_t downstream_noc_xy,
         uint32_t downstream_sem_id,
-        uint8_t num_hops,
         bool wait,
         uint8_t downstream_cmd_buf>
     FORCE_INLINE void write_atomic_inc_any_len(uint32_t data_ptr, uint64_t dst_ptr, uint32_t length, uint16_t n) {
@@ -209,7 +230,6 @@ public:
         constexpr uint32_t k_FabricMaxBurstSize = mux_channel_buffer_size_bytes - sizeof(PACKET_HEADER_TYPE);
 
         auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
-        packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
         while (length > k_FabricMaxBurstSize) {
             packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_ptr}, k_FabricMaxBurstSize);
 
@@ -231,8 +251,8 @@ public:
 
         tt::tt_fabric::fabric_async_write<mux_num_buffers_per_channel>(edm, packet_header, data_ptr, length);
 #else
-        write_any_len<downstream_noc_idx, num_hops, wait, downstream_cmd_buf>(data_ptr, dst_ptr, length);
-        release_pages<downstream_noc_idx, downstream_noc_xy, downstream_sem_id, num_hops>(n);
+        write_any_len<downstream_noc_idx, wait, downstream_cmd_buf>(data_ptr, dst_ptr, length);
+        release_pages<downstream_noc_idx, downstream_noc_xy, downstream_sem_id>(n);
 #endif
     }
 };

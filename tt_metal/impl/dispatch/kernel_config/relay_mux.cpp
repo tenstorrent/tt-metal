@@ -74,7 +74,7 @@ void RelayMux::GenerateStaticConfigs() {
         mux_config_core);
     mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args();
 
-    log_debug(
+    log_info(
         tt::LogMetal,
         "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {}",
         device_->id(),

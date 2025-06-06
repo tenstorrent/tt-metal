@@ -83,10 +83,18 @@ constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(48);
 constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(49);
 constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(50);
 
-constexpr uint32_t num_hops = get_compile_time_arg_val(51);
+constexpr uint8_t num_hops = static_cast<uint8_t>(get_compile_time_arg_val(51));
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(52);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(53);
+constexpr uint32_t my_dev_id = get_compile_time_arg_val(52);
+constexpr uint32_t ew_dim = get_compile_time_arg_val(53);
+constexpr uint32_t to_mesh_id = get_compile_time_arg_val(54);
+constexpr uint32_t to_dev_id = get_compile_time_arg_val(55);
+constexpr uint32_t router_direction = get_compile_time_arg_val(56);
+
+constexpr bool is_2d_fabric = static_cast<bool>(FABRIC_2D);
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(57);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(58);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -255,8 +263,7 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
                         upstream_noc_xy,
                         upstream_dispatch_cb_sem_id,
                         dispatch_cb_pages_per_block,
-                        dispatch_cb_blocks,
-                        num_hops>(relay_client, block_noc_writes_to_clear, rd_block_idx);
+                        dispatch_cb_blocks>(relay_client, block_noc_writes_to_clear, rd_block_idx);
                 }
             }
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
@@ -362,7 +369,7 @@ void relay_to_next_cb(
 
         if constexpr (preamble_size > 0) {
             uint32_t flag;
-            relay_client.write_inline<my_noc_index, num_hops>(
+            relay_client.write_inline<my_noc_index>(
                 get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr),
                 xfer_size + preamble_size + not_end_of_cmd);
             downstream_cb_data_ptr += preamble_size;
@@ -379,7 +386,7 @@ void relay_to_next_cb(
                 if (rd_block_idx == dispatch_cb_blocks - 1) {
                     ASSERT(cb_fence == dispatch_cb_end);
                     if (orphan_size != 0) {
-                        relay_client.write<my_noc_index, num_hops, true, NCRISC_WR_CMD_BUF>(
+                        relay_client.write<my_noc_index, true, NCRISC_WR_CMD_BUF>(
                             data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), orphan_size);
                         length -= orphan_size;
                         xfer_size -= orphan_size;
@@ -408,13 +415,9 @@ void relay_to_next_cb(
             cb_fence += n_pages * dispatch_cb_page_size;
         }
 
-        relay_client.write_atomic_inc_any_len<
-            my_noc_index,
-            downstream_noc_xy,
-            downstream_cb_sem_id,
-            num_hops,
-            true,
-            NCRISC_WR_CMD_BUF>(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), xfer_size, 1);
+        relay_client
+            .write_atomic_inc_any_len<my_noc_index, downstream_noc_xy, downstream_cb_sem_id, true, NCRISC_WR_CMD_BUF>(
+                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), xfer_size, 1);
 
         length -= xfer_size;
         data_ptr += xfer_size;
@@ -503,8 +506,7 @@ void process_write_linear(
                         upstream_noc_xy,
                         upstream_dispatch_cb_sem_id,
                         dispatch_cb_pages_per_block,
-                        dispatch_cb_blocks,
-                        num_hops>(relay_client, block_noc_writes_to_clear, rd_block_idx);
+                        dispatch_cb_blocks>(relay_client, block_noc_writes_to_clear, rd_block_idx);
                 }
             }
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
@@ -1303,7 +1305,8 @@ static inline bool process_cmd_h(
 
 void kernel_main() {
 #if defined(FABRIC_RELAY)
-    DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start (fabric relay)" << ENDL();
+    DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
+           << ")" << ENDL();
 #else
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
 #endif
@@ -1368,6 +1371,13 @@ void kernel_main() {
             fabric_worker_buffer_index_sem,
             fabric_mux_status_address,
             my_fabric_sync_status_addr,
+            my_dev_id,
+            to_dev_id,
+            to_mesh_id,
+            ew_dim,
+            router_direction,
+            fabric_header_rb_base,
+            num_hops,
             NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
 #endif
     }
@@ -1384,8 +1394,7 @@ void kernel_main() {
                     upstream_noc_index,
                     upstream_noc_xy,
                     upstream_dispatch_cb_sem_id,
-                    dispatch_cb_pages_per_block,
-                    num_hops>(
+                    dispatch_cb_pages_per_block>(
                     relay_client,
                     cmd_ptr,
                     cb_fence,
@@ -1428,8 +1437,7 @@ void kernel_main() {
             upstream_noc_index,
             upstream_noc_xy,
             upstream_dispatch_cb_sem_id,
-            dispatch_cb_pages_per_block,
-            num_hops>(relay_client, block_noc_writes_to_clear);
+            dispatch_cb_pages_per_block>(relay_client, block_noc_writes_to_clear);
     } else {
         cb_block_release_pages<
             upstream_noc_index,
@@ -1442,7 +1450,7 @@ void kernel_main() {
     uint32_t npages =
         dispatch_cb_pages_per_block - ((block_next_start_addr[rd_block_idx] - cmd_ptr) >> dispatch_cb_log_page_size);
     if (is_h_variant && !is_d_variant) {
-        relay_client.release_pages<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id, num_hops>(npages);
+        relay_client.release_pages<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>(npages);
     } else {
         cb_release_pages<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>(npages);
     }
