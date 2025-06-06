@@ -206,9 +206,6 @@ def run_ring_attention_all_gather_impl(
             logger.info(f"{output}, iteration {i}, tensor {j}")
             assert eq, f"{i}{j} FAILED ag: {output}"
 
-            # print(f"AG TORCH TENSOR {torch_ag_out_tensors[j]}")
-            # print(f"AG TT TENSOR {tt_ag_out}")
-
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
 
@@ -240,8 +237,8 @@ def run_ring_attention_all_gather_impl(
         "dim2_1input",
         "dim31input_batches",
         "dim21input_batches",
-        "dim2_2input_batches",
-        "dim2_2input_batches_yaxis",
+        "dim2_2input_batches_rp2",
+        "dim2_2input_batches_rp4_yaxis",
     ],
 )
 @pytest.mark.parametrize(
@@ -313,3 +310,116 @@ def test_ring_attention_all_gather(
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
+
+    # ttnn.close_mesh_device(submesh_device)
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, ag_output_shape, ag_num_inputs, rp_dim, rp_axis, rp_factor, up_factor, layout, ag_input_dtype",
+    [
+        (8, 1, [1, 5, 4096, 64], 2, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 1, [1, 5, 4096, 64], 2, 2, 0, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "dim2_2input_batches",
+        "dim2_2input_batches_yaxis",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 1),
+    ],
+    ids=["check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    ids=[
+        # "ring ",
+        "line",
+    ],
+    indirect=["device_params"],
+)
+def test_ring_attention_all_gather_program_cache(
+    mesh_device,
+    num_devices,
+    ag_output_shape,
+    ag_num_inputs,
+    rp_dim,
+    rp_axis,
+    rp_factor,
+    up_factor,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    num_iters,
+    use_program_cache,
+    all_gather_topology,
+):
+    submesh_shape = [0, 0]
+    submesh_shape[rp_axis] = rp_factor
+    submesh_shape[1 - rp_axis] = up_factor
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+
+    dummy_tensors = []
+    for i in range(3):
+        dummy_tensors.append(
+            ttnn.from_torch(
+                torch.rand(ag_output_shape),
+                device=submesh_device,
+                layout=layout,
+                dtype=ag_input_dtype,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    submesh_device, mesh_shape=tuple(submesh_device.shape), dims=[None, None]
+                ),
+            )
+        )
+        run_ring_attention_all_gather_impl(
+            submesh_device,
+            num_devices,
+            ag_output_shape,
+            ag_num_inputs,
+            rp_dim,
+            rp_axis,
+            rp_factor,
+            up_factor,
+            num_links,
+            ag_input_dtype,
+            layout,
+            mem_config_input,
+            mem_config_ag,
+            use_program_cache=use_program_cache,
+            all_gather_topology=all_gather_topology,
+            enable_trace=enable_trace,
+            num_iters=num_iters,
+        )
+        ttnn.synchronize_device(submesh_device)
+
+    assert submesh_device.num_program_cache_entries() == 1
+    ttnn.close_mesh_device(submesh_device)
