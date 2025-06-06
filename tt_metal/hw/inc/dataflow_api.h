@@ -553,11 +553,11 @@ FORCE_INLINE void noc_async_read_set_state(uint64_t src_noc_addr, uint32_t size,
 /**
  * Initiates an asynchronous read from a specified source node located at NOC
  * coordinates (x,y) at a local address (encoded as a uint64_t using \a
- * get_noc_addr function) and sets the state for the read operation. This function
- * must be preceded by a call to \a noc_async_read_with_state. This function
- * is used to issue the actual read request after the state has been set up.
- * \a noc_async_read can be used instead if the state preservation is not
- * needed. Also, see \a noc_async_read_barrier.
+ * get_noc_addr function). This function must be preceded by a call to
+ * \a noc_async_read_set_state. This function is used to issue the actual
+ * read request after the state has been set up. \a noc_async_read can be
+ * used instead if the state preservation is not needed. Also, see
+ * \a noc_async_read_barrier.
  *
  * Return value: None
  *
@@ -737,7 +737,9 @@ inline void noc_async_write_multicast(
 // clang-format off
 /**
  * Sets the stateful registers for an asynchronous write from a source address in L1 memory on the
- * Tensix core executing this function call. This function sets the state for
+ * Tensix core executing this function call to a specified destination node
+ * located at NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function sets the state for
  * \a noc_async_write_with_state, which will issue the actual write request.
  * \a noc_async_write can be used instead if the state preservation is not
  * needed. Also, see \a noc_async_write_barrier.
@@ -774,6 +776,7 @@ FORCE_INLINE void noc_async_write_set_state(
 #ifdef ARCH_BLACKHOLE
     // Handles writing to PCIe
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_BRCST_EXCLUDE, 0);
 #endif
     NOC_CMD_BUF_WRITE_REG(
         noc,
@@ -786,32 +789,94 @@ FORCE_INLINE void noc_async_write_set_state(
     }
 }
 
-// TODO: write docs
-// this issues only a single packet with cmd buf state with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
-template <bool non_posted = true>
-FORCE_INLINE void noc_async_write_one_packet_with_state(
-    std::uint32_t src_local_l1_addr, std::uint32_t dst_noc_addr, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
+// clang-format off
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call to a specified destination node
+ * located at NOC coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function must be preceded by a call to
+ * \a noc_async_write_with_state. This function issues the actual write request
+ * after the state has been set up. \a noc_async_write can be used instead if the
+ * state preservation is not needed. Also, see \a noc_async_write_barrier.
+ *
+ * Return value: None
+ *
+ * | Argument                          | Description                                        | Data type | Valid range         | required |
+ * |-----------------------------------|----------------------------------------------------|-----------|-------------------- |----------|
+ * | src_local_l1_addr                 | Address in local L1 memory on source core          | uint32_t  | 0..1MB              | True     |
+ * | dst_local_l1_addr                 | Address in local L1 memory on destination core     | uint32_t  | 0..1MB              | True     |
+ * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB              | True     |
+ * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1              | False    |
+ * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number | False    |
+ * | non_posted (template argument)    | Whether ack response is required or not            | bool      | true or false       | False    |
+ */
+// clang-format on
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1, bool non_posted = true>
+FORCE_INLINE void noc_async_write_with_state(
+    uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, static_cast<uint64_t>(dst_local_l1_addr), 0, -1);
 
-    if constexpr (non_posted) {
-        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+    // In order to sanitize, need to grab full noc addr + xfer size from state.
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_l1_addr, src_local_l1_addr, size);
+
+    if constexpr (max_page_size > NOC_MAX_BURST_SIZE) {
+        while (size > NOC_MAX_BURST_SIZE) {
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                if constexpr (!non_posted) {
+                    inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+                } else {
+                    inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                    inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);  // num_dests
+                }
+            }
+
+            WAYPOINT("RP6W");
+            while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+            WAYPOINT("RP6D");
+
+            NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
+            NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
+            NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+            NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+            if constexpr (noc_mode == DM_DEDICATED_NOC) {
+                if (!non_posted) {
+                    noc_posted_writes_num_issued[noc] += 1;
+                } else {
+                    noc_nonposted_writes_num_issued[noc] += 1;
+                    noc_nonposted_writes_acked[noc] += 1;  // num_dests
+                }
+            }
+            size -= NOC_MAX_BURST_SIZE;
+            src_local_l1_addr += NOC_MAX_BURST_SIZE;
+            dst_local_l1_addr += NOC_MAX_BURST_SIZE;
+        }
+    }
+
+    // left-over packet
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (!non_posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        } else {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);  // num_dests
         }
     }
     WAYPOINT("NWPW");
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
 
-    // In order to sanitize, need to grab full noc addr + xfer size from state.
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_noc_addr, src_local_l1_addr);
-
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dst_noc_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);
+    if constexpr (max_page_size > NOC_MAX_BURST_SIZE) {
+        NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
+    }
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
-    if constexpr (non_posted) {
-        if constexpr (noc_mode == DM_DEDICATED_NOC) {
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if (!non_posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;  // num_dests
         }

@@ -339,7 +339,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
             for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
                 dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
 
-                noc_async_write_one_packet_with_state<non_posted>(src_addr, dest_noc_addr, noc);
+                noc_async_write_with_state<1, non_posted>(src_addr, dest_noc_addr, coalesced_page_size, noc);
 
                 src_addr += coalesced_page_size;
                 dest_addr += coalesced_page_size;

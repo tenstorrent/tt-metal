@@ -52,7 +52,8 @@ void kernel_main() {
             for (uint32_t h = 0; h < num_tiles_h; ++h) {  // Iterate over page rows per receiver core
                 for (uint32_t w = 0; w < num_pages_w_per_receiver;
                      ++w) {  // Iterate over page columns per receiver core
-                    noc_async_write_one_packet_with_state(l1_read_addr, l1_noc_write_addr_for_receiver_core, noc);
+                    noc_async_write_with_state<page_size>(
+                        l1_read_addr, l1_noc_write_addr_for_receiver_core, page_size, noc);
                     l1_read_addr += page_size;
                     l1_noc_write_addr_for_receiver_core += page_size;
                 }

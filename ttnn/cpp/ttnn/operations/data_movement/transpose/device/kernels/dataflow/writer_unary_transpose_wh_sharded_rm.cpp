@@ -31,7 +31,7 @@ void kernel_main() {
                 uint32_t l1_read_addr = get_read_ptr(cb_out);
                 uint32_t W_curr = w == Wt - 1 ? W_per_tile_last : W_per_tile;
                 for (uint32_t w_datum = 0; w_datum < W_curr; ++w_datum) {
-                    noc_async_write_one_packet_with_state(l1_read_addr, write_noc_addr);
+                    noc_async_write_with_state<stick_size_bytes>(l1_read_addr, write_noc_addr);
                     l1_read_addr += l1_read_offset_bytes;
                     write_noc_addr += stick_size_bytes;
                 }
