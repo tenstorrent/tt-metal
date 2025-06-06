@@ -29,6 +29,7 @@ enum class AllGatherAsyncVersion {
     GENERIC = 0,
     MINIMAL_INTERLEAVED_32 = 1,
     LLAMA_MINIMAL_SHARDED = 2,
+    MINIMAL_INTERLEAVED_ANY = 3,
 };
 
 struct AllGatherAsync {
@@ -38,7 +39,7 @@ struct AllGatherAsync {
     const uint32_t ring_size;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
-    const GlobalSemaphore semaphore;
+    const std::vector<GlobalSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
 
@@ -49,7 +50,7 @@ struct AllGatherAsync {
         uint32_t ring_size,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
-        GlobalSemaphore semaphore,
+        std::vector<GlobalSemaphore> semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<uint32_t> cluster_axis) :
         devices(std::move(devices)),
@@ -88,6 +89,9 @@ struct AllGatherAsync {
         const ttnn::MeshCoordinate& coord,
         const std::vector<Tensor>& input_tensors,
         std::vector<Tensor>& output_tensors) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 
     AllGatherAsyncVersion select_version(const Tensor& input_tensor) const;
@@ -99,7 +103,8 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_workers_per_link,
     bool persistent_fabric_mode,
     IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord core_grid_offset = CoreCoord(0, 0));
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
     IDevice* target_device,
@@ -126,6 +131,37 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_any_any(
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    IDevice* target_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_any_any_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    IDevice* target_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    const CoreCoord core_grid_offset = CoreCoord(0, 0));
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
     IDevice* target_device,
@@ -147,7 +183,18 @@ namespace ccl {
 Tensor all_gather_async(
     const Tensor& input_tensor,
     const uint32_t dim,
-    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+
+Tensor all_gather_async(
+    const Tensor& input_tensor,
+    Tensor& persistent_intermediate_buffer,
+    Tensor& persistent_output_buffer,
+    const uint32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
@@ -156,7 +203,7 @@ Tensor all_gather_async(
 std::vector<Tensor> all_gather_async(
     const std::vector<Tensor>& input_tensors,
     const uint32_t dim,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
@@ -168,7 +215,7 @@ Tensor all_gather_async(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
-    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
@@ -180,7 +227,7 @@ std::vector<Tensor> all_gather_async(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
     const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,

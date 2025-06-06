@@ -79,7 +79,8 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_workers_per_link,
     bool persistent_fabric_mode,
     IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord core_grid_offset) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     if (persistent_fabric_mode) {
@@ -103,8 +104,9 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
             auto end = cr.end_coord;
             for (size_t y = start.y; y <= end.y; y++) {
                 for (size_t x = start.x; x <= end.x; x++) {
-                    sender_worker_core_range =
-                        sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
+                    sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
                     if (sender_worker_core_range.num_cores() == num_workers_preferred) {
                         break;
                     }

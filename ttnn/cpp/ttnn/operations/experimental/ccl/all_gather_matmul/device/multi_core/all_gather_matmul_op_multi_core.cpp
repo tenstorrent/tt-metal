@@ -231,7 +231,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
-        ttnn::experimental::ccl::MatmulFusedOpSignaler();
+        ttnn::experimental::ccl::MatmulFusedOpSignaler(ttnn::experimental::ccl::MatmulFusedOpSignalerType::ALL_GATHER);
     matmul_fused_op_signaler->init_all_gather(
         num_transfers,
         ring_size,
