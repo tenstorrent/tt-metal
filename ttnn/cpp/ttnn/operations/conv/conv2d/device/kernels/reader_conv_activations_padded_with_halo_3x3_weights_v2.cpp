@@ -69,7 +69,7 @@ void kernel_main() {
 
     static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
     // set_state uses just x/y from the get_noc_addr, addr is ignored
-    noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+    noc_async_read_set_state<coalesced_read_bytes>(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     uint32_t start_reader_idx = 0;

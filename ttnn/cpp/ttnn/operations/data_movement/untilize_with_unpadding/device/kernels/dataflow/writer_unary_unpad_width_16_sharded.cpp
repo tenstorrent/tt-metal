@@ -25,7 +25,7 @@ void kernel_main() {
 
     static_assert(quarter_tile_size_in_bytes <= NOC_MAX_BURST_SIZE);
     // set_state uses just x/y from the get_noc_addr, addr is ignored
-    noc_async_read_one_packet_set_state(get_noc_addr(l1_write_addr), quarter_tile_size_in_bytes);
+    noc_async_read_set_state<quarter_tile_size_in_bytes>(get_noc_addr(l1_write_addr), quarter_tile_size_in_bytes);
 
     for (uint32_t i = 0; i < batches_of_8; i++) {
         cb_wait_front(cb_id_untilize_out, 8);

@@ -142,7 +142,7 @@ void kernel_main() {
     // set_state uses just x/y from the get_noc_addr, addr is ignored
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
-    noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+    noc_async_read_set_state<coalesced_read_bytes>(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
 
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;

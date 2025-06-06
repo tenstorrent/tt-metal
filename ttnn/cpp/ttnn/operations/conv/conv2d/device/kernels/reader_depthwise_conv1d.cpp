@@ -92,7 +92,7 @@ void kernel_main() {
 
         // static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
         //  set_state uses just x/y from the get_noc_addr, addr is ignored
-        noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+        noc_async_read_set_state<coalesced_read_bytes>(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
         uint32_t start_reader_idx = 0;
         for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
 #ifdef SPLIT_READER
@@ -158,7 +158,7 @@ void kernel_main() {
 
         // static_assert(conv_act_c_read_bytes <= NOC_MAX_BURST_SIZE);
         //  set_state uses just x/y from the get_noc_addr, addr is ignored
-        noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), conv_act_c_read_bytes);
+        noc_async_read_set_state<conv_act_c_read_bytes>(get_noc_addr(act_l1_read_addr), conv_act_c_read_bytes);
 
         uint32_t start_reader_idx = 0;
         for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {

@@ -137,7 +137,7 @@ void kernel_main() {
     constexpr uint32_t stride_h_bytes = (conv_act_size_w)*conv_act_c_bytes * dilation_h;
 
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
-    noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), conv_act_c_read_bytes);
+    noc_async_read_set_state<1>(get_noc_addr(act_l1_read_addr), conv_act_c_read_bytes);
 
     // Reset reader_idx to finish act_block_h_datums
     for (uint32_t block_h_index = 0; block_h_index < act_num_blocks_h; block_h_index++) {

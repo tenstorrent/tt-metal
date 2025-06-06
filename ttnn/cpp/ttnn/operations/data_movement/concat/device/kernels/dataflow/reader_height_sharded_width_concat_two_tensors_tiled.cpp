@@ -43,7 +43,7 @@ void kernel_main() {
         cb_wait_front(input0_transpose_cb, input0_num_tiles_width);
 
         uint32_t l1_read_addr = base_l1_read_addr_0;
-        noc_async_read_one_packet_set_state(noc_addr_0, input0_stride);
+        noc_async_read_set_state<input0_stride>(noc_addr_0, input0_stride);
 
         uint32_t l1_write_addr = base_l1_write_addr;
         for (uint32_t j = 0; j < groups; j++) {
@@ -58,7 +58,7 @@ void kernel_main() {
         cb_wait_front(input1_transpose_cb, input1_num_tiles_width);
 
         l1_read_addr = base_l1_read_addr_1;
-        noc_async_read_one_packet_set_state(noc_addr_1, input1_stride);
+        noc_async_read_set_state<input1_stride>(noc_addr_1, input1_stride);
 
         l1_write_addr = base_l1_write_addr + input0_stride;
         for (uint32_t j = 0; j < groups; j++) {

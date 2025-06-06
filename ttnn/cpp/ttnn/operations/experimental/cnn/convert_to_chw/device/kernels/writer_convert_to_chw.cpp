@@ -20,7 +20,7 @@ void kernel_main() {
 
     cb_reserve_back(cb_out, 1);
     const uint32_t base_l1_write_addr = get_write_ptr(cb_out);
-    noc_async_read_one_packet_set_state(get_noc_addr(get_read_ptr(cb_in_transpose)), STICK_SIZE);
+    noc_async_read_set_state<STICK_SIZE>(get_noc_addr(get_read_ptr(cb_in_transpose)), STICK_SIZE);
 
     const uint32_t channel_size = total_tiles * STICK_SIZE;
 

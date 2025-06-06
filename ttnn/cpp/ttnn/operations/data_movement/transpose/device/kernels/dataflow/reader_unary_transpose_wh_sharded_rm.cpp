@@ -17,12 +17,12 @@ void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in = tt::CBIndex::c_24;
 
-    const uint32_t stick_size_bytes = W_size_bytes;
+    constexpr uint32_t stick_size_bytes = W_size_bytes;
 
     uint32_t l1_read_addr = get_read_ptr(cb_in0);
     uint64_t read_noc_addr = get_noc_addr(l1_read_addr);
 
-    noc_async_read_one_packet_set_state(read_noc_addr, stick_size_bytes);
+    noc_async_read_set_state<stick_size_bytes>(read_noc_addr, stick_size_bytes);
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         for (uint32_t h = 0; h < Ht; ++h) {

@@ -488,29 +488,47 @@ inline void noc_async_read(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ,src_noc_addr,size, -1);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size, -1);
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
 
     ncrisc_noc_fast_read_any_len<noc_mode, max_page_size <= NOC_MAX_BURST_SIZE>(
         noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
 }
 
-// TODO: write docs
-// this issues only a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
-FORCE_INLINE
-void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
+// clang-format off
+/**
+ * Sets the stateful registers for an asynchronous read from a specified source node located at NOC
+ * coordinates (x,y) at a local address (encoded as a uint64_t using \a
+ * get_noc_addr function). This function is used to set up the state for
+ * \a noc_async_read_with_state, which will issue the actual read request.
+ * \a noc_async_read can be used instead if the state preservation is not
+ * needed. Also, see \a noc_async_read_barrier.
+ *
+ * The source node can be either a DRAM bank, a Tensix core or a PCIe controller.
+ *
+ * Return value: None
+ *
+ * | Argument                          | Description                                        | Data type | Valid range                              | required |
+ * |-----------------------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
+ * | src_noc_addr                      | Encoding of the source NOC location (x,y)+address  | uint64_t  | DOX-TODO (ref to explain valid coords)   | True     |
+ * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | True     |
+ * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                                   | False    |
+ * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number                      | False    |
+ */
+// clang-format on
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
+FORCE_INLINE void noc_async_read_set_state(uint64_t src_noc_addr, uint32_t size, uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, -1);
 
-    WAYPOINT("RP3W");
+    WAYPOINT("RP5W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RP3D");
+    WAYPOINT("RP5D");
 
-    WAYPOINT("NASW");
-
+    WAYPOINT("NAUW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         uint32_t noc_rd_cmd_field =
             NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
@@ -525,9 +543,11 @@ void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32
         read_cmd_buf,
         NOC_TARG_ADDR_COORDINATE,
         (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
 
-    WAYPOINT("NASD");
+    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
+    }
+    WAYPOINT("NAUD");
 }
 
 // TODO: write docs
@@ -569,39 +589,6 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
 }
 
 // TODO: write docs
-FORCE_INLINE
-void noc_async_read_set_state(std::uint64_t src_noc_addr, uint8_t noc = noc_index) {
-    /*
-        Read requests - use static VC
-        Read responses - assigned VCs dynamically
-    */
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE,src_noc_addr,0,-1);
-
-    WAYPOINT("RP5W");
-    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RP5D");
-
-    WAYPOINT("NAUW");
-
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
-        NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
-    }
-#ifdef ARCH_BLACKHOLE
-    // Handles reading from PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & 0x1000000F);
-#endif
-    NOC_CMD_BUF_WRITE_REG(
-        noc,
-        read_cmd_buf,
-        NOC_TARG_ADDR_COORDINATE,
-        (uint32_t)(src_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-
-    WAYPOINT("NAUD");
-}
-
-// TODO: write docs
 template <bool inc_num_issued = true>
 FORCE_INLINE void noc_async_read_with_state(
     std::uint32_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
@@ -609,7 +596,7 @@ FORCE_INLINE void noc_async_read_with_state(
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE,src_noc_addr,size,-1);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE, src_noc_addr, size, -1);
 
     WAYPOINT("NAVW");
 

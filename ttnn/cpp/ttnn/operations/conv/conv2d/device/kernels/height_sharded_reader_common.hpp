@@ -17,7 +17,7 @@ FORCE_INLINE void zero_out_tiles() {
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     uint32_t write_addr = get_write_ptr(cb_id);
 
-    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
+    noc_async_read_set_state<MEM_ZEROS_SIZE>(zeros_noc_addr, MEM_ZEROS_SIZE);
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
         noc_async_read_one_packet_with_state(zeros_noc_addr, write_addr);
         write_addr += MEM_ZEROS_SIZE;
