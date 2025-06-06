@@ -338,6 +338,26 @@ public:
     // return enum for connection type, Internal, QSFP, Other, Unknown
     bool is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) const;
 
+    // Check if ANY chip in the cluster supports intermesh links
+    bool contains_intermesh_links() const;
+
+    // Check if a specific chip has intermesh links configured
+    bool has_intermesh_links(chip_id_t chip_id) const;
+
+    // Get intermesh ethernet links for a specific chip
+    // Returns: vector of (eth_core, channel)
+    const std::vector<std::pair<CoreCoord, uint32_t>>& get_intermesh_eth_links(chip_id_t chip_id) const;
+
+    // Get all intermesh ethernet links in the system
+    // Returns: map of chip_id -> vector of (eth_core, channel)
+    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, uint32_t>>>& get_all_intermesh_eth_links() const;
+
+    // Check if a specific ethernet core is an intermesh link
+    bool is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const;
+
+    // If the ethernet core is an intermesh link, probe to see if it is trained
+    bool is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const;
+
 private:
     void detect_arch_and_target();
     void generate_cluster_descriptor();
@@ -357,6 +377,12 @@ private:
     void reserve_ethernet_cores_for_tunneling();
 
     void initialize_ethernet_sockets();
+
+    // Initialize internal map of chip_id to intermesh ethernet links
+    void initialize_intermesh_eth_links();
+
+    // Check if intermesh is enabled by reading SPI ROM config from first chip
+    bool is_intermesh_enabled() const;
 
     // Disable ethernet cores that retrain
     // This should be removed when we handle retraining or dropped links in control plane properly
@@ -392,6 +418,7 @@ private:
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_pcie_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
+    std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, uint32_t>>> intermesh_eth_links_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     ClusterType cluster_type_ = ClusterType::INVALID;
