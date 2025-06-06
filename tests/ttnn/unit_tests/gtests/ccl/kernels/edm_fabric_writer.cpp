@@ -469,4 +469,5 @@ void kernel_main() {
         fabric_connection.close();
     }
     noc_async_write_barrier();
+    DPRINT << "DONE\n";
 }
