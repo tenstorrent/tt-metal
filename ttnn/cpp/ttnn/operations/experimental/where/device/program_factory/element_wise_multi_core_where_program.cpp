@@ -5,6 +5,8 @@
 
 #include "ttnn/operations/experimental/where/device/program_factory/element_wise_multi_core_where_program.hpp"
 #include "ttnn/operations/experimental/where/device/program_factory/elemwise_factory_common.hpp"
+#include "ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_reader_kernel_args.hpp"
+#include "ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_writer_kernel_args.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -20,117 +22,116 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     const where_ttt_args::operation_attributes_type& operation_attributes,
     const where_ttt_args::tensor_args_type& tensor_args,
     where_ttt_args::tensor_return_value_type& tensor_return_value) {
+    using namespace ttnn::kernel::eltwise::where_args;
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::constants;
 
-    const auto& a = tensor_args.input_tensor_a;
-    const auto& b = tensor_args.input_tensor_b;
-    const auto& c = tensor_args.input_tensor_c;
+    const auto& conditional_tensor = tensor_args.input_tensor_a;
+    const auto& true_values_tensor = tensor_args.input_tensor_b;
+    const auto& false_values_tensor = tensor_args.input_tensor_c;
     auto& output = tensor_return_value;
 
     Program program{};
-    IDevice* device = a.device();
     const auto& all_device_cores = operation_attributes.worker_grid;
 
-    // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
-    uint32_t src0_bank_id = 0;
-    uint32_t src1_bank_id = 0;
-    uint32_t src2_bank_id = 0;
-    uint32_t dst_bank_id = 0;
+    TT_ASSERT(
+        conditional_tensor.get_dtype() == true_values_tensor.get_dtype(),
+        "Mismatched data types: 'conditional_tensor' and 'true_values_tensor' must have the same dtype.");
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
-    tt::DataFormat src2_cb_data_format = tt_metal::datatype_to_dataformat_converter(c.get_dtype());
-    uint32_t src2_single_tile_size = tt_metal::detail::TileSize(src2_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
+    TT_ASSERT(
+        conditional_tensor.get_dtype() == false_values_tensor.get_dtype(),
+        "Mismatched data types: 'conditional_tensor' and 'false_values_tensor' must have the same dtype.");
+
+    TT_ASSERT(
+        conditional_tensor.get_dtype() == output.get_dtype(),
+        "Mismatched data types: 'conditional_tensor' and 'output' must have the same dtype.");
+
+    TT_ASSERT(
+        conditional_tensor.get_dtype() == DataType::BFLOAT16,
+        "Invalid data type: expected BFLOAT16 for 'conditional_tensor'.");
+
+    uint32_t single_tile_size =
+        tt_metal::detail::TileSize(tt_metal::datatype_to_dataformat_converter(conditional_tensor.get_dtype()));
+    constexpr uint32_t num_input_tiles = 1;
 
     /* Use L1 circular buffers to set input and output buffers that the compute engine will use */
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
-    constexpr uint32_t num_input_tiles = 1;
     auto cb_src0_config = tt::tt_metal::CircularBufferConfig(
-                              num_input_tiles * src0_single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-                              .set_page_size(src0_cb_index, src0_single_tile_size);
+                              num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+                              .set_page_size(src0_cb_index, single_tile_size);
     CBHandle cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
     auto cb_src1_config = tt::tt_metal::CircularBufferConfig(
-                              num_input_tiles * src1_single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
-                              .set_page_size(src1_cb_index, src1_single_tile_size);
+                              num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
+                              .set_page_size(src1_cb_index, single_tile_size);
     CBHandle cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
     constexpr uint32_t src2_cb_index = tt::CBIndex::c_2;
     auto cb_src2_config = tt::tt_metal::CircularBufferConfig(
-                              num_input_tiles * src2_single_tile_size, {{src2_cb_index, tt::DataFormat::Float16_b}})
-                              .set_page_size(src2_cb_index, src2_single_tile_size);
+                              num_input_tiles * single_tile_size, {{src2_cb_index, tt::DataFormat::Float16_b}})
+                              .set_page_size(src2_cb_index, single_tile_size);
     CBHandle cb_src2 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src2_config);
 
     constexpr uint32_t src3_cb_index = tt::CBIndex::c_3;
     auto cb_src3_config = tt::tt_metal::CircularBufferConfig(
-                              num_input_tiles * src2_single_tile_size, {{src3_cb_index, tt::DataFormat::Float16_b}})
-                              .set_page_size(src3_cb_index, src2_single_tile_size);
+                              num_input_tiles * single_tile_size, {{src3_cb_index, tt::DataFormat::Float16_b}})
+                              .set_page_size(src3_cb_index, single_tile_size);
     CBHandle cb_src3 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src3_config);
 
     constexpr uint32_t src4_cb_index = tt::CBIndex::c_4;
     auto cb_src4_config = tt::tt_metal::CircularBufferConfig(
-                              num_input_tiles * src2_single_tile_size, {{src4_cb_index, tt::DataFormat::Float16_b}})
-                              .set_page_size(src4_cb_index, src2_single_tile_size);
+                              num_input_tiles * single_tile_size, {{src4_cb_index, tt::DataFormat::Float16_b}})
+                              .set_page_size(src4_cb_index, single_tile_size);
     CBHandle cb_src4 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src4_config);
 
     constexpr uint32_t src5_cb_index = tt::CBIndex::c_5;
     auto cb_src5_config = tt::tt_metal::CircularBufferConfig(
-                              num_input_tiles * src2_single_tile_size, {{src5_cb_index, tt::DataFormat::Float16_b}})
-                              .set_page_size(src5_cb_index, src2_single_tile_size);
+                              num_input_tiles * single_tile_size, {{src5_cb_index, tt::DataFormat::Float16_b}})
+                              .set_page_size(src5_cb_index, single_tile_size);
     CBHandle cb_src5 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src5_config);
 
     constexpr uint32_t src6_cb_index = tt::CBIndex::c_6;
     auto cb_src6_config = tt::tt_metal::CircularBufferConfig(
-                              num_input_tiles * src2_single_tile_size, {{src6_cb_index, tt::DataFormat::Float16_b}})
-                              .set_page_size(src6_cb_index, src2_single_tile_size);
+                              num_input_tiles * single_tile_size, {{src6_cb_index, tt::DataFormat::Float16_b}})
+                              .set_page_size(src6_cb_index, single_tile_size);
     CBHandle cb_src6 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src6_config);
 
     constexpr uint32_t output_cb_index = tt::CBIndex::c_7;
     constexpr uint32_t num_output_tiles = 2;
     auto cb_output_config = tt::tt_metal::CircularBufferConfig(
-                                num_output_tiles * dst_single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
-                                .set_page_size(output_cb_index, dst_single_tile_size);
+                                num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
+                                .set_page_size(output_cb_index, single_tile_size);
     CBHandle cb_output = CreateCircularBuffer(program, all_device_cores, cb_output_config);
 
-    std::map<string, string> reader_defines;
-    bool block_or_width_sharded = false;
-    bool src0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src1_is_dram = b.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src2_is_dram = c.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)src0_is_dram,
-        (std::uint32_t)src1_is_dram,
-        (std::uint32_t)src2_is_dram,
-        (std::uint32_t)block_or_width_sharded};
-
-    std::map<string, string> writer_defines;
-    tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    CompileTimeReaderKernelArgs reader_compile_time_args = {
+        .cond_tensor_cb = src0_cb_index,
+        .true_tensor_cb = src1_cb_index,
+        .false_tensor_cb = src2_cb_index,
+        .is_cond_tensor_in_dram = conditional_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM,
+        .is_true_tensor_in_dram = true_values_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM,
+        .is_false_tensor_in_dram = false_values_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM};
 
     /* Specify data movement kernels for reading/writing data to/from DRAM */
+    std::map<string, string> reader_defines;
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_reader_kernel.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+        tt_metal::ReaderDataMovementConfig(ttnn::kernel_utils::to_vector(reader_compile_time_args), reader_defines));
 
+    tt_metal::Buffer* dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    CompileTimeWriterKernelArgs writer_compile_time_args = {
+        .cb_dst = output_cb_index, .is_dst_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM};
+    std::map<string, string> writer_defines;
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_writer_kernel.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+        tt_metal::WriterDataMovementConfig(ttnn::kernel_utils::to_vector(writer_compile_time_args), writer_defines));
 
-    /* Set the parameters that the compute kernel will use */
-    std::vector<uint32_t> compute_kernel_args = {};
     /* Use the add_tiles operation in the compute kernel */
     KernelHandle compute_kernel_id = CreateKernel(
         program,
@@ -140,10 +141,18 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
-            .compile_args = compute_kernel_args});
+            .compile_args = {}});
 
     set_eltwise_ternary_runtime_args<true>(
-        program, a, b, c, output, reader_kernel_id, writer_kernel_id, compute_kernel_id, all_device_cores);
+        program,
+        conditional_tensor,
+        true_values_tensor,
+        false_values_tensor,
+        output,
+        reader_kernel_id,
+        writer_kernel_id,
+        compute_kernel_id,
+        all_device_cores);
     return {
         std::move(program),
         {reader_kernel_id,
@@ -154,10 +163,10 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
          cb_src2,
          cb_output,
          all_device_cores,
-         src0_single_tile_size,
-         src1_single_tile_size,
-         src2_single_tile_size,
-         dst_single_tile_size}};
+         single_tile_size,
+         single_tile_size,
+         single_tile_size,
+         single_tile_size}};
 }
 
 void ElementWiseMultiCoreWhereProgram::override_runtime_arguments(

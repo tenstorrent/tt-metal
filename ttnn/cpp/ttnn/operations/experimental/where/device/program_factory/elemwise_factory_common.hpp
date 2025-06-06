@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include "ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_reader_kernel_args.hpp"
+#include "ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_writer_kernel_args.hpp"
+#include "ttnn/operations/experimental/where/device/kernel/compute/elemwise_where_kernel_args.hpp"
+
 #include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/work_split.hpp>
@@ -26,6 +30,8 @@ inline void set_eltwise_ternary_runtime_args(
     const tt::tt_metal::KernelHandle writer_kernel_id,
     const tt::tt_metal::KernelHandle eltwise_ternary_kernel_id,
     const CoreRangeSet& all_device_cores) {
+    using namespace ttnn::kernel::eltwise::where_args;
+    using namespace ttnn::kernel_utils;
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::constants;
@@ -58,9 +64,12 @@ inline void set_eltwise_ternary_runtime_args(
                   num_cores_total, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major)
             : corerange_to_cores(all_device_cores, {}, row_major);
 
-    std::vector<std::vector<uint32_t>> ternary_reader_args{cores.size(), std::vector<uint32_t>(7)};
-    std::vector<std::vector<uint32_t>> eltwise_ternary_args{cores.size(), std::vector<uint32_t>(2)};
-    std::vector<std::vector<uint32_t>> unary_writer_args{cores.size(), std::vector<uint32_t>(3)};
+    std::vector<std::vector<uint32_t>> reader_args_array{
+        cores.size(), std::vector<uint32_t>{amount_of_fields<ElemwiseReaderKernelArgs>(), 0}};
+    std::vector<std::vector<uint32_t>> compute_args_array{
+        cores.size(), std::vector<uint32_t>(amount_of_fields<ElemwiseComputeKernelArgs>(), 0)};
+    std::vector<std::vector<uint32_t>> writer_args_array{
+        cores.size(), std::vector<uint32_t>(amount_of_fields<ElemwiseWriterKernelArgs>(), 0)};
 
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& cached_eltwise_args = GetRuntimeArgs(program, eltwise_ternary_kernel_id);
@@ -97,29 +106,40 @@ inline void set_eltwise_ternary_runtime_args(
             continue;
         }
 
-        ternary_reader_args[i] = {
-            a.buffer()->address(), b.buffer()->address(), c.buffer()->address(), num_tiles_per_core, num_tiles_read};
-        eltwise_ternary_args[i] = {block_cnt_per_core, block_size_per_core};
-        unary_writer_args[i] = {output.buffer()->address(), num_tiles_per_core, num_tiles_read};
+        ElemwiseReaderKernelArgs read_kern_args = {
+            .cond_tensor_base_addr = a.buffer()->address(),
+            .true_tensor_base_addr = b.buffer()->address(),
+            .false_tensor_base_addr = c.buffer()->address(),
+            .num_tiles = num_tiles_per_core,
+            .tile_ofs = num_tiles_read};
 
+        ElemwiseComputeKernelArgs compute_kern_args = {
+            .per_core_block_cnt = block_cnt_per_core, .per_core_block_size = block_size_per_core};
+
+        ElemwiseWriterKernelArgs write_kern_args = {
+            .dst_base_addr = output.buffer()->address(), .num_tiles = num_tiles_per_core, .tile_ofs = num_tiles_read};
+
+        reader_args_array[i] = to_vector(read_kern_args);
+        compute_args_array[i] = to_vector(compute_kern_args);
+        writer_args_array[i] = to_vector(write_kern_args);
         if constexpr (!initialize_args) {
             auto& core_reader_args = cached_reader_args.at(core.x).at(core.y);
-            std::ranges::copy(ternary_reader_args[i], core_reader_args.data());
+            std::ranges::copy(reader_args_array[i], core_reader_args.data());
 
             auto& core_eltwise_args = cached_eltwise_args.at(core.x).at(core.y);
-            std::ranges::copy(eltwise_ternary_args[i], core_eltwise_args.data());
+            std::ranges::copy(compute_args_array[i], core_eltwise_args.data());
 
             auto& core_writer_args = cached_writer_args.at(core.x).at(core.y);
-            std::ranges::copy(unary_writer_args[i], core_writer_args.data());
+            std::ranges::copy(writer_args_array[i], core_writer_args.data());
         }
 
         num_tiles_read += num_tiles_per_core;
     }
 
     if constexpr (initialize_args) {
-        SetRuntimeArgs(program, reader_kernel_id, cores, ternary_reader_args);
-        SetRuntimeArgs(program, eltwise_ternary_kernel_id, cores, eltwise_ternary_args);
-        SetRuntimeArgs(program, writer_kernel_id, cores, unary_writer_args);
+        SetRuntimeArgs(program, reader_kernel_id, cores, reader_args_array);
+        SetRuntimeArgs(program, eltwise_ternary_kernel_id, cores, compute_args_array);
+        SetRuntimeArgs(program, writer_kernel_id, cores, writer_args_array);
     }
 }
 

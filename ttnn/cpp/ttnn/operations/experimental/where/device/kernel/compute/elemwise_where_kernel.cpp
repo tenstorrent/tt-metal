@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-// #include <coroutine>
 
-#include <cstdint>
+#include "elemwise_where_kernel_args.hpp"
+#include "cpp/kernel/kernel_utils.hpp"
+
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/cb_api.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -71,13 +72,14 @@ constexpr auto cb_out0 = tt::CBIndex::c_7;
 
 namespace NAMESPACE {
 void MAIN {
-    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
-    uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
+    using namespace ttnn::kernel_utils;
+    using namespace ttnn::kernel::eltwise::where_args;
+    auto args = make_runtime_struct_from_args<ElemwiseComputeKernelArgs>();
 
     unary_op_init_common(cb_true_values, cb_out0);
     copy_tile_to_dst_init_short(cb_true_values);
 
-    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+    for (uint32_t block_index = 0; block_index < args.per_core_block_cnt; block_index++) {
         cb_wait_front(cb_cond, 1);
 
         sfpu_unary_op(cb_cond, cb_3, []() {
@@ -92,17 +94,17 @@ void MAIN {
 
         cb_pop_front(cb_cond, 1);
 
-        sfpu_binary_op(cb_true_values, cb_3, cb_5, per_core_block_size, [](uint32_t i) {
+        sfpu_binary_op(cb_true_values, cb_3, cb_5, args.per_core_block_size, [](uint32_t i) {
             ckernel::mul_binary_tile_init();
             ckernel::mul_binary_tile(i * 2, i * 2 + 1);
         });
 
-        sfpu_binary_op(cb_false_values, cb_4, cb_6, per_core_block_size, [](uint32_t i) {
+        sfpu_binary_op(cb_false_values, cb_4, cb_6, args.per_core_block_size, [](uint32_t i) {
             ckernel::mul_binary_tile_init();
             ckernel::mul_binary_tile(i * 2, i * 2 + 1);
         });
 
-        sfpu_binary_op(cb_5, cb_6, cb_out0, per_core_block_size, [](uint32_t i) {
+        sfpu_binary_op(cb_5, cb_6, cb_out0, args.per_core_block_size, [](uint32_t i) {
             ckernel::add_binary_tile_init();
             ckernel::add_binary_tile(i * 2, i * 2 + 1);
         });
